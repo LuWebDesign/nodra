@@ -3,6 +3,12 @@ import { boundsOf, hitTest, type Bounds } from "@nodra/geometry";
 
 export interface DragGeometry { readonly position: PointMm; readonly size: { readonly width: number; readonly height: number } }
 
+export type DrawingTool = "rectangle" | "ellipse" | "line";
+
+export function isDrawingTool(tool: string): tool is DrawingTool {
+  return tool === "rectangle" || tool === "ellipse" || tool === "line";
+}
+
 export function movementExceedsThreshold(start: PointMm, end: PointMm, threshold = 3): boolean {
   if (![start.x, start.y, end.x, end.y, threshold].every(Number.isFinite) || threshold < 0) throw new Error("movement coordinates and threshold must be finite");
   return Math.hypot(end.x - start.x, end.y - start.y) >= threshold;
