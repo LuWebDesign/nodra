@@ -1,10 +1,10 @@
-import { useEffect, useMemo, useRef, useState, type PointerEvent, type WheelEvent } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent, type WheelEvent } from "react";
 import { elementId, layerId, type DocumentSnapshot, type Element, type ElementId, type PointMm } from "@nodra/domain";
 import { addToSelection, beginGesture, cancelGesture, clearSelection, commitGesture, createElement, createEditor, deleteElement, dispatch, moveElements, previewGesture, redo, resizeElement, select, selectForPointerDown, undo, updateElement, updateElementStyles, updatePage } from "@nodra/editor-core";
 import { resizeHandle, rotatedResizeHandles, type ResizeHandle } from "@nodra/geometry";
 import { DebouncedAutosave, DexieProjectRepository, requestStoragePersistence } from "@nodra/persistence";
 import { renderSvg } from "@nodra/renderer-svg";
-import { clientPointToCanvas, isDrawingTool, marqueeSelection, movementExceedsThreshold, normalizeBounds, normalizeDrag, pagePointToCanvas, pickElement, screenDeltaToMm, screenPointToMm, selectionFrame, zoomAtPoint } from "./interaction.js";
+import { centerPageInCanvas, clientPointToCanvas, isDrawingTool, marqueeSelection, movementExceedsThreshold, normalizeBounds, normalizeDrag, pagePointToCanvas, pickElement, screenDeltaToMm, screenPointToMm, selectionFrame, zoomAtPoint } from "./interaction.js";
 import { formatMm, geometryPatch, geometryValue, type GeometryField, type PropertyElement } from "./propertyBar.js";
 import { useDocumentStore, usePersistenceStore, useUiStore, useViewportStore, type Tool } from "./stores.js";
 
@@ -33,8 +33,34 @@ export function App() {
   const canvas = useRef<HTMLDivElement>(null);
   const editorRef = useRef(editor);
   const interaction = useRef<ActiveInteraction | undefined>(undefined);
+  const viewportInteracted = useRef(false);
+  const centeredViewport = useRef<string | undefined>(undefined);
   editorRef.current = editor;
   useEffect(() => { const on = () => setOnline(true); const off = () => setOnline(false); addEventListener("online", on); addEventListener("offline", off); void requestStoragePersistence(); void repository.getProject(document.id).then((result) => { if (result.ok) { setEditor(createEditor(result.revision.document)); persist.set("recovered", "Revisión local recuperada"); } }); return () => { removeEventListener("online", on); removeEventListener("offline", off); void repository.close(); }; }, [repository]);
+  useLayoutEffect(() => {
+    if (viewportInteracted.current || !canvas.current) return;
+    const key = `${document.id}:${document.revision}:${document.page.width}:${document.page.height}`;
+    const center = () => {
+      if (viewportInteracted.current || centeredViewport.current === key || !canvas.current) return;
+      const { width, height } = canvas.current.getBoundingClientRect();
+      if (width <= 0 || height <= 0) return;
+      setPanMm(centerPageInCanvas({ width, height }, document.page, useViewportStore.getState().zoom));
+      centeredViewport.current = key;
+    };
+    center();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(center);
+    observer.observe(canvas.current);
+    return () => observer.disconnect();
+  }, [document.id, document.revision, document.page.width, document.page.height, setPanMm]);
+  useEffect(() => {
+    const target = canvas.current;
+    if (!target) return;
+    const markInteracted = () => { viewportInteracted.current = true; };
+    target.addEventListener("pointerdown", markInteracted, true);
+    target.addEventListener("wheel", markInteracted, true);
+    return () => { target.removeEventListener("pointerdown", markInteracted, true); target.removeEventListener("wheel", markInteracted, true); };
+  }, []);
   useEffect(() => { persist.set(online ? "saving" : "offline", online ? "Guardando localmente" : "Sin conexión — la edición permanece local"); autosave.schedule({ id: document.id, name: "Diseño sin título", updatedAt: Date.now() }, document); void autosave.flush().then((result) => { if (result?.ok) persist.set("saved", "Guardado localmente"); }); }, [document, online]);
   const rendered = renderSvg(document, { zoom: 1, panMm: { x: 0, y: 0 } });
   const selectedElements = selection.map((selectedId) => document.elements.find((element) => element.id === selectedId)).filter((element): element is Element => Boolean(element));
