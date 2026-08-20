@@ -9,6 +9,7 @@ export default defineConfig({
       "@nodra/renderer-svg": new URL("./packages/renderer-svg/src/index.ts", import.meta.url).pathname,
       "@nodra/editor-core": new URL("./packages/editor-core/src/index.ts", import.meta.url).pathname,
       "@nodra/ui": new URL("./packages/ui/src/index.ts", import.meta.url).pathname,
+      "@nodra/persistence": new URL("./packages/persistence/src/index.ts", import.meta.url).pathname,
     },
   },
   test: {

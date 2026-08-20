@@ -24,6 +24,7 @@
       "@nodra/renderer-svg": ["packages/renderer-svg/src/index.ts"]
       ,"@nodra/editor-core": ["packages/editor-core/src/index.ts"]
       ,"@nodra/ui": ["packages/ui/src/index.ts"]
+      ,"@nodra/persistence": ["packages/persistence/src/index.ts"]
     },
     "types": ["node"],
     "noEmit": true

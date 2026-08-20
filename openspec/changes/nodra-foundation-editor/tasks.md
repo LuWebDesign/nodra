@@ -42,7 +42,7 @@ Chain strategy: stacked-to-main
 
 ## Phase 3: Persistence and Shell
 
-- [ ] 3.1 Create `packages/persistence/src` repository port, Dexie adapter, revision-safe debounce/retry, recovery, and migration registry; test corrupt/obsolete records.
+- [x] 3.1 Create `packages/persistence/src` repository port, Dexie adapter, revision-safe debounce/retry, recovery, and migration registry; test corrupt/obsolete records.
 - [ ] 3.2 Create `apps/web` composition root, Design canvas, Zustand adapter stores, PWA/offline shell, recovery indication, and hardware-execution refusal.
 
 ## Phase 4: Documentation and Verification
