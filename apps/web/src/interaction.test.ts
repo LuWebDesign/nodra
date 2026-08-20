@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createDocument, elementId, layerId } from "@nodra/domain";
-import { MAX_ZOOM, MIN_ZOOM, normalizeBounds, normalizeDrag, screenDeltaToMm, screenPointToMm, containsBounds, elementsContainedBy, pickElement, zoomAtPoint } from "./interaction.js";
+import { MAX_ZOOM, MIN_ZOOM, normalizeBounds, normalizeDrag, pagePointToScreen, screenDeltaToMm, screenPointToMm, containsBounds, elementsContainedBy, pickElement, zoomAtPoint } from "./interaction.js";
 
 describe("screenDeltaToMm", () => {
   it("converts screen movement using the current zoom", () => {
@@ -34,10 +34,17 @@ describe("drag geometry", () => {
     expect(screenPointToMm({ x: 130, y: 80 }, { x: 10, y: 20 }, 2, { x: 5, y: 7 })).toEqual({ x: 65, y: 37 });
   });
 
+  it("converts page coordinates once for overlays inside the scaled page", () => {
+    expect(pagePointToScreen({ x: 12, y: 18 }, 3)).toEqual({ x: 36, y: 54 });
+    expect(() => pagePointToScreen({ x: 1, y: 1 }, 0)).toThrow("zoom must be positive");
+  });
+
   it("normalizes and contains marquee bounds", () => {
     const marquee = normalizeBounds({ x: 20, y: 15 }, { x: 5, y: 2 });
     expect(marquee).toEqual({ x: 5, y: 2, width: 15, height: 13 });
     expect(containsBounds(marquee, { x: 6, y: 3, width: 2, height: 2 })).toBe(true);
+    expect(containsBounds(marquee, { x: 4, y: 3, width: 2, height: 2 })).toBe(false);
+    expect(containsBounds(normalizeBounds({ x: 5, y: 2 }, { x: 20, y: 15 }), { x: 6, y: 3, width: 2, height: 2 })).toBe(true);
   });
 
   it("picks the topmost visible element and ignores hidden layers", () => {

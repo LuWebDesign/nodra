@@ -8,6 +8,12 @@ export function screenDeltaToMm(delta: PointMm, zoom: number): PointMm {
   return { x: delta.x / zoom, y: delta.y / zoom };
 }
 
+/** Converts canonical page coordinates into coordinates relative to the scaled page layer. */
+export function pagePointToScreen(point: PointMm, zoom: number): PointMm {
+  if (!Number.isFinite(zoom) || zoom <= 0) throw new Error("zoom must be positive");
+  return { x: point.x * zoom, y: point.y * zoom };
+}
+
 export function screenPointToMm(point: PointMm, origin: PointMm, zoom: number, panMm: PointMm): PointMm {
   if (!Number.isFinite(zoom) || zoom <= 0) throw new Error("zoom must be positive");
   return { x: (point.x - origin.x) / zoom + panMm.x, y: (point.y - origin.y) / zoom + panMm.y };
