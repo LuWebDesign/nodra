@@ -1,9 +1,17 @@
 import { describe, expect, it } from "vitest";
 import { createDocument, elementId, layerId } from "@nodra/domain";
-import { clientPointToCanvas, isDrawingTool, marqueeSelection, MAX_ZOOM, MIN_ZOOM, movementExceedsThreshold, normalizeBounds, normalizeDrag, pagePointToCanvas, pagePointToScreen, screenDeltaToMm, screenPointToMm, containsBounds, elementsContainedBy, pickElement, pointerDownIntent, selectionFrame, zoomAtPoint } from "./interaction.js";
+import { centerPageInCanvas, clientPointToCanvas, INITIAL_ZOOM, isDrawingTool, marqueeSelection, MAX_ZOOM, MIN_ZOOM, movementExceedsThreshold, normalizeBounds, normalizeDrag, pagePointToCanvas, pagePointToScreen, screenDeltaToMm, screenPointToMm, containsBounds, elementsContainedBy, pickElement, pointerDownIntent, selectionFrame, zoomAtPoint } from "./interaction.js";
 import { geometryPatch, geometryValue } from "./propertyBar.js";
 
 describe("canvas coordinates", () => {
+  it("centers the default 1200x900 page in a measured canvas", () => {
+    expect(centerPageInCanvas({ width: 360, height: 270 }, { width: 1200, height: 900 }, INITIAL_ZOOM)).toEqual({ x: expect.closeTo(0), y: expect.closeTo(0) });
+  });
+
+  it("centers a recovered custom page without assuming default dimensions", () => {
+    expect(centerPageInCanvas({ width: 1000, height: 700 }, { width: 800, height: 500 }, 1)).toEqual({ x: -100, y: -100 });
+  });
+
   it("keeps the raw pointer position in canvas-local pixels", () => {
     expect(clientPointToCanvas({ x: 130, y: 80 }, { left: 10, top: 20 })).toEqual({ x: 120, y: 60 });
   });
@@ -75,8 +83,17 @@ describe("zoomAtPoint", () => {
     expect(screenPointToMm({ x: 100, y: 60 }, { x: 0, y: 0 }, result.zoom, result.panMm)).toEqual({ x: 60, y: 50 });
   });
   it("clamps to the documented zoom range", () => {
+    expect(INITIAL_ZOOM).toBe(0.3);
     expect(zoomAtPoint(2, { x: 0, y: 0 }, { x: 0, y: 0 }, 0).zoom).toBe(MIN_ZOOM);
     expect(zoomAtPoint(2, { x: 0, y: 0 }, { x: 0, y: 0 }, 99).zoom).toBe(MAX_ZOOM);
+  });
+
+  it("keeps an anchored point stable while zooming out from negative pan", () => {
+    const before = { x: 420, y: 280 };
+    const result = zoomAtPoint(1, { x: -300, y: -200 }, before, 0.3);
+    expect(screenPointToMm(before, { x: 0, y: 0 }, result.zoom, result.panMm)).toEqual({ x: 120, y: 80 });
+    expect(result.panMm.x).toBeCloseTo(-1280);
+    expect(result.panMm.y).toBeCloseTo(-853.3333333333334);
   });
 });
 

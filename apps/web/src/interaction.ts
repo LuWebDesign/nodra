@@ -53,8 +53,15 @@ export function screenPointToMm(point: PointMm, origin: PointMm, zoom: number, p
   return { x: (point.x - origin.x) / zoom + panMm.x, y: (point.y - origin.y) / zoom + panMm.y };
 }
 
-export const MIN_ZOOM = 0.5;
+export const ZOOM_100_PERCENT = 3;
+export const INITIAL_ZOOM = ZOOM_100_PERCENT / 10;
+export const MIN_ZOOM = INITIAL_ZOOM;
 export const MAX_ZOOM = 8;
+
+export function centerPageInCanvas(canvas: { readonly width: number; readonly height: number }, page: { readonly width: number; readonly height: number }, zoom: number): PointMm {
+  if (![canvas.width, canvas.height, page.width, page.height, zoom].every(Number.isFinite) || canvas.width <= 0 || canvas.height <= 0 || page.width <= 0 || page.height <= 0 || zoom <= 0) throw new Error("canvas, page, and zoom dimensions must be positive");
+  return { x: (page.width - canvas.width / zoom) / 2, y: (page.height - canvas.height / zoom) / 2 };
+}
 
 export function zoomAtPoint(zoom: number, panMm: PointMm, pointPx: PointMm, nextZoom: number): { readonly zoom: number; readonly panMm: PointMm } {
   if (![zoom, nextZoom, panMm.x, panMm.y, pointPx.x, pointPx.y].every(Number.isFinite) || zoom <= 0) throw new Error("zoom values and coordinates must be finite and positive where applicable");
