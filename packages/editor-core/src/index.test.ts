@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createDocument, elementId, layerId, type RectangleElement } from "@nodra/domain";
-import { beginGesture, commitGesture, createEditor, createElement, dispatch, moveElement, previewGesture, redo, reorderLayer, select, setLayerVisibility, undo } from "./index.js";
+import { addToSelection, beginGesture, clearSelection, commitGesture, createEditor, createElement, dispatch, moveElement, moveElements, previewGesture, redo, removeFromSelection, reorderLayer, resizeElement, select, selectForPointerDown, setLayerVisibility, toggleSelection, undo } from "./index.js";
 
 const rectangle: RectangleElement = { type: "rectangle", id: elementId("r1"), layerId: layerId("default"), position: { x: 1, y: 2 }, size: { width: 10, height: 5 }, rotation: 0, style: { stroke: "#000", strokeWidth: 1 } };
 const document = createDocument("doc", [{ id: layerId("default"), name: "Default", visible: true, order: 0 }]);
@@ -24,6 +24,16 @@ describe("editor core", () => {
     expect(state.document.elements[0]).toMatchObject({ position: { x: 4, y: 6 } });
     expect(undo(state).document.elements[0]).toMatchObject({ position: { x: 1, y: 2 } });
   });
+  it("commits a resize position and size as one history entry", () => {
+    let state = dispatch(createEditor(document), createElement(rectangle));
+    state = beginGesture(state);
+    state = previewGesture(state, resizeElement(rectangle.id, { x: 4, y: 5 }, { width: 20, height: 12 }));
+    state = previewGesture(state, resizeElement(rectangle.id, { x: 6, y: 7 }, { width: 22, height: 14 }));
+    state = commitGesture(state);
+    expect(state.undo).toHaveLength(2);
+    expect(state.document.elements[0]).toMatchObject({ position: { x: 6, y: 7 }, size: { width: 22, height: 14 } });
+    expect(undo(state).document.elements[0]).toMatchObject({ position: rectangle.position, size: rectangle.size });
+  });
 
   it("undoes and redoes, then invalidates redo after a new edit", () => {
     let state = dispatch(createEditor(document), createElement(rectangle));
@@ -41,5 +51,39 @@ describe("editor core", () => {
     state = dispatch(state, reorderLayer(second.id, 0));
     expect(state.document.layers[0]).toMatchObject({ id: second.id, visible: false, order: 0 });
     expect(document.layers[0]?.visible).toBe(true);
+  });
+
+  it("provides deduplicated, known selection helpers", () => {
+    let state = dispatch(createEditor(document), createElement(rectangle));
+    state = addToSelection(state, [rectangle.id, rectangle.id, "unknown" as never]);
+    expect(state.selection).toEqual([rectangle.id]);
+    expect(toggleSelection(state, rectangle.id).selection).toEqual([]);
+    expect(removeFromSelection(state, [rectangle.id]).selection).toEqual([]);
+    expect(clearSelection(state).selection).toEqual([]);
+  });
+
+  it("preserves an existing selection for an unmodified pointer-down move", () => {
+    let state = createEditor({ ...document, elements: [rectangle, { ...rectangle, id: elementId("r2"), position: { x: 20, y: 2 } }] });
+    state = select(state, [rectangle.id, elementId("r2")]);
+
+    expect(selectForPointerDown(state, rectangle.id, false)).toBe(state);
+    expect(selectForPointerDown(state, rectangle.id, false).selection).toEqual([rectangle.id, elementId("r2")]);
+    expect(selectForPointerDown(state, rectangle.id, true).selection).toEqual([elementId("r2")]);
+    expect(selectForPointerDown(state, elementId("r2"), true).selection).toEqual([rectangle.id]);
+    expect(selectForPointerDown(select(state, [rectangle.id]), elementId("r2"), false).selection).toEqual([elementId("r2")]);
+  });
+
+  it("moves multiple shapes and lines atomically", () => {
+    const line = { type: "line" as const, id: elementId("line"), layerId: layerId("default"), start: { x: 0, y: 0 }, end: { x: 3, y: 4 }, rotation: 0, style: rectangle.style };
+    let state = createEditor({ ...document, elements: [rectangle, line] });
+    state = beginGesture(state);
+    state = previewGesture(state, moveElements([rectangle.id, line.id, rectangle.id], { x: 2, y: -1 }));
+    state = commitGesture(state);
+    expect(state.undo).toHaveLength(1);
+    expect(state.document.elements).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: rectangle.id, position: { x: 3, y: 1 } }),
+      expect.objectContaining({ id: line.id, start: { x: 2, y: -1 }, end: { x: 5, y: 3 } }),
+    ]));
+    expect(undo(state).document.elements).toEqual([rectangle, line]);
   });
 });

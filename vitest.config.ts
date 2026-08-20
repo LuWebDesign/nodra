@@ -1,4 +1,4 @@
-import { defineConfig } from "vitest/config";
+import { configDefaults, defineConfig } from "vitest/config";
 
 export default defineConfig({
   resolve: {
@@ -13,8 +13,8 @@ export default defineConfig({
     },
   },
   test: {
-    include: ["**/*.test.ts", "**/*.test.tsx"],
-    exclude: ["node_modules", "dist", ".build", "test-results"],
+    include: ["packages/*/src/**/*.test.ts", "packages/*/src/**/*.test.tsx", "apps/*/src/**/*.test.ts", "apps/*/src/**/*.test.tsx"],
+    exclude: [...configDefaults.exclude, "**/node_modules/**", "**/dist/**", ".build", "test-results"],
     passWithNoTests: true,
     pool: "forks",
   },
