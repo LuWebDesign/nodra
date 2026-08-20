@@ -1,9 +1,15 @@
-import type { DocumentSnapshot, ElementId, PointMm } from "@nodra/domain";
+import type { DocumentSnapshot, Element, ElementId, PointMm } from "@nodra/domain";
 import { boundsOf, hitTest, type Bounds } from "@nodra/geometry";
 
 export interface DragGeometry { readonly position: PointMm; readonly size: { readonly width: number; readonly height: number } }
 
 export type DrawingTool = "rectangle" | "ellipse" | "line";
+
+export type PointerDownIntent = "draw" | "select";
+
+export function pointerDownIntent(tool: string, hit: ElementId | undefined): PointerDownIntent {
+  return isDrawingTool(tool) && hit === undefined ? "draw" : "select";
+}
 
 export function isDrawingTool(tool: string): tool is DrawingTool {
   return tool === "rectangle" || tool === "ellipse" || tool === "line";
@@ -28,6 +34,12 @@ export function clientPointToCanvas(client: PointMm, rect: { readonly left: numb
 export function pagePointToCanvas(point: PointMm, zoom: number, panMm: PointMm): PointMm {
   if (!Number.isFinite(zoom) || zoom <= 0) throw new Error("zoom must be positive");
   return { x: (point.x - panMm.x) * zoom, y: (point.y - panMm.y) * zoom };
+}
+
+export function selectionFrame(element: Element, zoom: number, panMm: PointMm): { readonly left: number; readonly top: number; readonly width: number; readonly height: number } {
+  const bounds = boundsOf(element);
+  const topLeft = pagePointToCanvas({ x: bounds.x, y: bounds.y }, zoom, panMm);
+  return { left: topLeft.x - (bounds.width === 0 ? 1 : 0), top: topLeft.y - (bounds.height === 0 ? 1 : 0), width: Math.max(2, bounds.width * zoom), height: Math.max(2, bounds.height * zoom) };
 }
 
 /** Converts canonical page coordinates into coordinates relative to the scaled page layer. */

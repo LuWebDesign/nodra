@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createDocument, elementId, layerId } from "@nodra/domain";
-import { clientPointToCanvas, isDrawingTool, marqueeSelection, MAX_ZOOM, MIN_ZOOM, movementExceedsThreshold, normalizeBounds, normalizeDrag, pagePointToCanvas, pagePointToScreen, screenDeltaToMm, screenPointToMm, containsBounds, elementsContainedBy, pickElement, zoomAtPoint } from "./interaction.js";
+import { clientPointToCanvas, isDrawingTool, marqueeSelection, MAX_ZOOM, MIN_ZOOM, movementExceedsThreshold, normalizeBounds, normalizeDrag, pagePointToCanvas, pagePointToScreen, screenDeltaToMm, screenPointToMm, containsBounds, elementsContainedBy, pickElement, pointerDownIntent, selectionFrame, zoomAtPoint } from "./interaction.js";
 import { geometryPatch, geometryValue } from "./propertyBar.js";
 
 describe("canvas coordinates", () => {
@@ -36,6 +36,18 @@ describe("drawing tool routing", () => {
     expect(["rectangle", "ellipse", "line"].every(isDrawingTool)).toBe(true);
     expect(isDrawingTool("select")).toBe(false);
     expect(isDrawingTool("pan")).toBe(false);
+  });
+
+  it("selects an existing object on click but keeps drawing available for a drag", () => {
+    expect(pointerDownIntent("rectangle", elementId("existing"))).toBe("select");
+    expect(pointerDownIntent("ellipse", elementId("existing"))).toBe("select");
+    expect(pointerDownIntent("line", elementId("existing"))).toBe("select");
+    expect(pointerDownIntent("rectangle", undefined)).toBe("draw");
+  });
+
+  it("projects every selected object frame into canvas space and keeps line frames visible", () => {
+    const line = { type: "line" as const, id: elementId("frame-line"), layerId: layerId("frame"), start: { x: 12, y: 20 }, end: { x: 12, y: 40 }, rotation: 0, style: { stroke: "#000", strokeWidth: 1 } };
+    expect(selectionFrame(line, 3, { x: 10, y: 10 })).toEqual({ left: 5, top: 30, width: 2, height: 60 });
   });
 });
 
