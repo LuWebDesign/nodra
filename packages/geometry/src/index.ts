@@ -1,0 +1,55 @@
+import type { Element, EllipseElement, PointMm, RectangleElement, SizeMm } from "@nodra/domain";
+
+export interface Bounds { readonly x: number; readonly y: number; readonly width: number; readonly height: number }
+export interface Viewport { readonly zoom: number; readonly panMm: PointMm }
+export interface PointPx { readonly x: number; readonly y: number }
+
+const TAU = Math.PI * 2;
+const assertFinite = (value: number, name: string): void => { if (!Number.isFinite(value)) throw new Error(`${name} must be finite`); };
+const assertPositive = (value: number, name: string): void => { assertFinite(value, name); if (value <= 0) throw new Error(`${name} must be positive`); };
+const rotate = (point: PointMm, angle: number): PointMm => ({ x: point.x * Math.cos(angle) - point.y * Math.sin(angle), y: point.x * Math.sin(angle) + point.y * Math.cos(angle) });
+
+export function validateSize(size: SizeMm): SizeMm {
+  assertPositive(size.width, "width"); assertPositive(size.height, "height"); return { ...size };
+}
+
+export function transformPoint(point: PointMm, origin: PointMm, rotation: number, scale: PointMm = { x: 1, y: 1 }): PointMm {
+  assertFinite(rotation, "rotation"); assertFinite(scale.x, "scale.x"); assertFinite(scale.y, "scale.y");
+  const scaled = { x: point.x * scale.x, y: point.y * scale.y }; const turned = rotate(scaled, rotation);
+  return { x: origin.x + turned.x, y: origin.y + turned.y };
+}
+
+function corners(element: RectangleElement | EllipseElement): PointMm[] {
+  const half = { x: element.size.width / 2, y: element.size.height / 2 };
+  const center = { x: element.position.x + half.x, y: element.position.y + half.y };
+  return [transformPoint({ x: -half.x, y: -half.y }, center, element.rotation), transformPoint({ x: half.x, y: -half.y }, center, element.rotation), transformPoint({ x: half.x, y: half.y }, center, element.rotation), transformPoint({ x: -half.x, y: half.y }, center, element.rotation)];
+}
+
+export function boundsOf(element: Element): Bounds {
+  if (element.type === "line") {
+    return { x: Math.min(element.start.x, element.end.x), y: Math.min(element.start.y, element.end.y), width: Math.abs(element.end.x - element.start.x), height: Math.abs(element.end.y - element.start.y) };
+  }
+  const points = corners(element); const xs = points.map((point) => point.x); const ys = points.map((point) => point.y);
+  return { x: Math.min(...xs), y: Math.min(...ys), width: Math.max(...xs) - Math.min(...xs), height: Math.max(...ys) - Math.min(...ys) };
+}
+
+const distanceToSegment = (point: PointMm, start: PointMm, end: PointMm): number => {
+  const dx = end.x - start.x; const dy = end.y - start.y; const lengthSquared = dx * dx + dy * dy;
+  if (lengthSquared === 0) throw new Error("Line endpoints must differ");
+  const t = Math.max(0, Math.min(1, ((point.x - start.x) * dx + (point.y - start.y) * dy) / lengthSquared));
+  return Math.hypot(point.x - (start.x + t * dx), point.y - (start.y + t * dy));
+};
+
+export function hitTest(element: Element, point: PointMm, toleranceMm = 0): boolean {
+  assertFinite(toleranceMm, "toleranceMm"); if (toleranceMm < 0) throw new Error("toleranceMm must not be negative");
+  if (element.type === "line") return distanceToSegment(point, element.start, element.end) <= toleranceMm;
+  const center = { x: element.position.x + element.size.width / 2, y: element.position.y + element.size.height / 2 };
+  const local = rotate({ x: point.x - center.x, y: point.y - center.y }, -element.rotation);
+  if (element.type === "rectangle") return Math.abs(local.x) <= element.size.width / 2 + toleranceMm && Math.abs(local.y) <= element.size.height / 2 + toleranceMm;
+  const rx = element.size.width / 2 + toleranceMm; const ry = element.size.height / 2 + toleranceMm;
+  return (local.x * local.x) / (rx * rx) + (local.y * local.y) / (ry * ry) <= 1;
+}
+
+export function mmToScreen(point: PointMm, viewport: Viewport): PointPx { assertPositive(viewport.zoom, "zoom"); return { x: (point.x - viewport.panMm.x) * viewport.zoom, y: (point.y - viewport.panMm.y) * viewport.zoom }; }
+export function screenToMm(point: PointPx, viewport: Viewport): PointMm { assertPositive(viewport.zoom, "zoom"); return { x: point.x / viewport.zoom + viewport.panMm.x, y: point.y / viewport.zoom + viewport.panMm.y }; }
+export function normalizeAngle(angle: number): number { assertFinite(angle, "angle"); return ((angle % TAU) + TAU) % TAU; }

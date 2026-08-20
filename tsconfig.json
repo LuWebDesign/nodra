@@ -16,8 +16,10 @@
     "esModuleInterop": true,
     "skipLibCheck": true,
     "allowJs": true,
+    "baseUrl": ".",
+    "paths": { "@nodra/domain": ["packages/domain/src/index.ts"] },
     "types": ["node"],
     "noEmit": true
   },
-  "include": ["*.config.ts", "eslint.config.mjs"]
+  "include": ["*.config.ts", "eslint.config.mjs", "packages/**/*.ts"]
 }

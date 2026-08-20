@@ -30,9 +30,9 @@ Chain strategy: stacked-to-main
 ## Phase 1: Foundation and Contracts
 
 - [x] 1.1 Create `package.json`, `pnpm-workspace.yaml`, lockfile, strict TypeScript/Vitest/Playwright configs, and CI quality gates.
-- [ ] 1.2 Create `packages/domain/src` immutable document, layer, primitive, transform, metadata, ID, and revision contracts.
-- [ ] 1.3 Create `packages/validation/src` Zod schemas/results for versions, finite geometry, references, metadata, and unsupported payloads.
-- [ ] 1.4 Create `packages/geometry/src` mm/top-left bounds, transforms, hit testing, and viewport conversion; test degenerate rejection.
+- [x] 1.2 Create `packages/domain/src` immutable document, layer, primitive, transform, metadata, ID, and revision contracts.
+- [x] 1.3 Create `packages/validation/src` Zod schemas/results for versions, finite geometry, references, metadata, and unsupported payloads.
+- [x] 1.4 Create `packages/geometry/src` mm/top-left bounds, transforms, hit testing, and viewport conversion; test degenerate rejection.
 
 ## Phase 2: Rendering and Editing
 

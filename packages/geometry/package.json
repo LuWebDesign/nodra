@@ -1,0 +1,9 @@
+{
+  "name": "@nodra/geometry",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": { "test": "vitest run" },
+  "dependencies": { "@nodra/domain": "workspace:*" },
+  "exports": { ".": "./src/index.ts" }
+}

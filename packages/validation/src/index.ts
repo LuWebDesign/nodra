@@ -1,0 +1,41 @@
+import { z } from "zod";
+import type { DocumentSnapshot } from "@nodra/domain";
+
+const finite = z.number().finite();
+const nonEmptyId = z.string().min(1);
+const point = z.object({ x: finite, y: finite }).strict();
+const size = z.object({ width: finite.gt(0), height: finite.gt(0) }).strict();
+const style = z.object({ stroke: z.string().min(1), fill: z.string().min(1).optional(), strokeWidth: finite.gt(0) }).strict();
+const operation = z.object({ operation: z.enum(["cut", "engrave", "score"]), order: finite.int().nonnegative(), power: finite.min(0).max(100).optional(), speed: finite.gt(0).optional() }).strict();
+const common = { id: nonEmptyId, layerId: nonEmptyId, rotation: finite, style, operation: operation.optional() };
+const rectangle = z.object({ ...common, type: z.literal("rectangle"), position: point, size }).strict();
+const ellipse = z.object({ ...common, type: z.literal("ellipse"), position: point, size }).strict();
+const line = z.object({ ...common, type: z.literal("line"), start: point, end: point }).strict().superRefine((value, ctx) => {
+  if (value.start.x === value.end.x && value.start.y === value.end.y) ctx.addIssue({ code: "custom", message: "Line endpoints must differ", path: ["end"] });
+});
+export const elementSchema = z.discriminatedUnion("type", [rectangle, ellipse, line]);
+export const layerSchema = z.object({ id: nonEmptyId, name: z.string().min(1), visible: z.boolean(), order: finite.int().nonnegative() }).strict();
+export const documentSchema = z.object({ schemaVersion: z.literal(1), id: nonEmptyId, revision: finite.int().nonnegative(), origin: z.literal("top-left"), units: z.literal("mm"), layers: z.array(layerSchema), elements: z.array(elementSchema) }).strict().superRefine((value, ctx) => {
+  const layerIds = new Set(value.layers.map((layer) => layer.id));
+  for (const [index, element] of value.elements.entries()) if (!layerIds.has(element.layerId)) ctx.addIssue({ code: "custom", message: "Element references an unknown layer", path: ["elements", index, "layerId"] });
+});
+export type ValidationIssue = { readonly path: readonly (string | number)[]; readonly message: string };
+export type ValidationResult = { readonly success: true; readonly data: DocumentSnapshot } | { readonly success: false; readonly issues: readonly ValidationIssue[]; readonly error: string };
+
+export function validateDocument(input: unknown): ValidationResult {
+  const result = documentSchema.safeParse(input);
+  if (result.success) return { success: true, data: result.data as unknown as DocumentSnapshot };
+  const issues = result.error.issues.map((issue) => ({ path: issue.path.filter((part): part is string | number => typeof part === "string" || typeof part === "number"), message: issue.message }));
+  return { success: false, issues, error: issues.map((issue) => `${issue.path.join(".") || "document"}: ${issue.message}`).join("; ") };
+}
+
+export function serializeDocument(document: DocumentSnapshot): string {
+  const checked = validateDocument(document);
+  if (!checked.success) throw new Error(`Cannot serialize invalid document: ${checked.error}`);
+  return JSON.stringify(checked.data);
+}
+
+export function parseDocument(input: string): ValidationResult {
+  try { return validateDocument(JSON.parse(input) as unknown); }
+  catch { return { success: false, issues: [{ path: [], message: "Malformed JSON" }], error: "document: Malformed JSON" }; }
+}
