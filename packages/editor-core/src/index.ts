@@ -15,6 +15,7 @@ import {
 import { validateDocument } from "@nodra/validation";
 
 export type ElementPatch = { readonly position?: PointMm; readonly size?: SizeMm; readonly rotation?: number; readonly style?: VisualStyle; readonly operation?: OperationMetadata; readonly start?: PointMm; readonly end?: PointMm };
+export type StylePatch = { readonly stroke?: string; readonly fill?: string | null; readonly strokeWidth?: number };
 export type EditorCommand = { readonly name: string; readonly apply: (document: DocumentSnapshot) => CommandResult };
 export type CommandResult = { readonly success: true; readonly document: DocumentSnapshot } | { readonly success: false; readonly error: string };
 export interface Transaction { readonly command: string; readonly before: DocumentSnapshot; readonly after: DocumentSnapshot }
@@ -85,6 +86,27 @@ export const moveElements = (ids: readonly ElementId[], delta: PointMm): EditorC
 
 export const resizeElement = (id: ElementId, position: PointMm, size: SizeMm): EditorCommand => updateElement(id, { position, size });
 export const rotateElement = (id: ElementId, rotation: number): EditorCommand => updateElement(id, { rotation });
+
+export const updateElementStyles = (ids: readonly ElementId[], patch: StylePatch): EditorCommand => ({
+  name: `style:${[...new Set(ids)].join(",")}`,
+  apply: (document) => {
+    const selected = new Set(ids);
+    const known = document.elements.filter((element) => selected.has(element.id));
+    if (known.length !== selected.size) return { success: false, error: "One or more elements were not found" };
+    if (known.length === 0) return { success: false, error: "No elements selected" };
+    return replaceElements(document, document.elements.map((element) => {
+      if (!selected.has(element.id)) return element;
+      const style = { ...element.style, ...patch } as VisualStyle & { fill?: string | null };
+      if (patch.fill === null) delete style.fill;
+      return { ...element, style } as Element;
+    }));
+  },
+});
+
+export const updatePage = (width: number, height: number): EditorCommand => ({
+  name: "page-size",
+  apply: (document) => result({ ...document, page: { width, height }, revision: nextRevision(document.revision) }),
+});
 
 export const setLayerVisibility = (id: LayerId, visible: boolean): EditorCommand => ({
   name: `layer-visibility:${id}`,

@@ -71,7 +71,7 @@ export function renderSvg(document: unknown, viewport: unknown): RenderResult {
   const orderedLayers = new Map([...checked.data.layers].sort((a, b) => a.order - b.order).map((layer, index) => [layer.id, index]));
   elements.sort((a, b) => (orderedLayers.get(a.layerId) ?? 0) - (orderedLayers.get(b.layerId) ?? 0));
   const contents = elements.map((element) => renderElement(element, checkedViewport.data)).join("");
-  return { success: true, svg: `<svg xmlns="http://www.w3.org/2000/svg" data-units="mm"><g>${contents}</g></svg>`, renderedElementIds: elements.map((element) => element.id) };
+  return { success: true, svg: `<svg xmlns="http://www.w3.org/2000/svg" data-units="mm" width="${number(checked.data.page.width)}" height="${number(checked.data.page.height)}" viewBox="0 0 ${number(checked.data.page.width)} ${number(checked.data.page.height)}"><g>${contents}</g></svg>`, renderedElementIds: elements.map((element) => element.id) };
 }
 
 export const svgRenderer: SvgRenderer = { render: renderSvg };

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createDocument, elementId, layerId, type RectangleElement } from "@nodra/domain";
-import { addToSelection, beginGesture, clearSelection, commitGesture, createEditor, createElement, dispatch, moveElement, moveElements, previewGesture, redo, removeFromSelection, reorderLayer, resizeElement, select, selectForPointerDown, setLayerVisibility, toggleSelection, undo } from "./index.js";
+import { addToSelection, beginGesture, clearSelection, commitGesture, createEditor, createElement, dispatch, moveElement, moveElements, previewGesture, redo, removeFromSelection, reorderLayer, resizeElement, select, selectForPointerDown, setLayerVisibility, toggleSelection, undo, updateElementStyles } from "./index.js";
 
 const rectangle: RectangleElement = { type: "rectangle", id: elementId("r1"), layerId: layerId("default"), position: { x: 1, y: 2 }, size: { width: 10, height: 5 }, rotation: 0, style: { stroke: "#000", strokeWidth: 1 } };
 const document = createDocument("doc", [{ id: layerId("default"), name: "Default", visible: true, order: 0 }]);
@@ -85,5 +85,18 @@ describe("editor core", () => {
       expect.objectContaining({ id: line.id, start: { x: 2, y: -1 }, end: { x: 5, y: 3 } }),
     ]));
     expect(undo(state).document.elements).toEqual([rectangle, line]);
+  });
+
+  it("updates fill and stroke for the complete selection in one undoable transaction", () => {
+    const ellipse = { type: "ellipse" as const, id: elementId("ellipse"), layerId: layerId("default"), position: { x: 20, y: 2 }, size: { width: 8, height: 6 }, rotation: 0, style: { stroke: "#111", fill: "#fff", strokeWidth: 1 } };
+    let state = createEditor({ ...document, elements: [rectangle, ellipse] });
+    state = select(state, [rectangle.id, ellipse.id]);
+    state = dispatch(state, updateElementStyles(state.selection, { fill: null, stroke: "#f00" }));
+
+    expect(state.undo).toHaveLength(1);
+    expect(state.document.elements[0]?.style).toEqual({ stroke: "#f00", strokeWidth: 1 });
+    expect(state.document.elements[1]?.style).toEqual({ stroke: "#f00", strokeWidth: 1 });
+    expect(undo(state).document.elements).toEqual([rectangle, ellipse]);
+    expect(redo(undo(state)).document.elements[0]?.style).toEqual({ stroke: "#f00", strokeWidth: 1 });
   });
 });
