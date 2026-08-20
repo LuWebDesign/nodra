@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createDocument, elementId, layerId } from "@nodra/domain";
-import { normalizeBounds, normalizeDrag, screenDeltaToMm, screenPointToMm, containsBounds, elementsContainedBy, pickElement } from "./interaction.js";
+import { MAX_ZOOM, MIN_ZOOM, normalizeBounds, normalizeDrag, screenDeltaToMm, screenPointToMm, containsBounds, elementsContainedBy, pickElement, zoomAtPoint } from "./interaction.js";
 
 describe("screenDeltaToMm", () => {
   it("converts screen movement using the current zoom", () => {
@@ -9,6 +9,18 @@ describe("screenDeltaToMm", () => {
 
   it("rejects an invalid zoom", () => {
     expect(() => screenDeltaToMm({ x: 1, y: 1 }, 0)).toThrow("zoom must be positive");
+  });
+});
+
+describe("zoomAtPoint", () => {
+  it("keeps the document point beneath the cursor fixed", () => {
+    const result = zoomAtPoint(2, { x: 10, y: 20 }, { x: 100, y: 60 }, 4);
+    expect(result.zoom).toBe(4);
+    expect(screenPointToMm({ x: 100, y: 60 }, { x: 0, y: 0 }, result.zoom, result.panMm)).toEqual({ x: 60, y: 50 });
+  });
+  it("clamps to the documented zoom range", () => {
+    expect(zoomAtPoint(2, { x: 0, y: 0 }, { x: 0, y: 0 }, 0).zoom).toBe(MIN_ZOOM);
+    expect(zoomAtPoint(2, { x: 0, y: 0 }, { x: 0, y: 0 }, 99).zoom).toBe(MAX_ZOOM);
   });
 });
 
@@ -37,5 +49,16 @@ describe("drag geometry", () => {
     const checked = { ...document, elements: [rectangle, hiddenRectangle] };
     expect(pickElement(checked, { x: 5, y: 5 }, 3)).toBe(rectangle.id);
     expect(elementsContainedBy(checked, { x: -1, y: -1, width: 20, height: 20 })).toEqual([rectangle.id]);
+  });
+
+  it("hit-tests an existing shape independently of the active drawing tool", () => {
+    const layer = { id: layerId("active-tool"), name: "Active tool", visible: true, order: 0 };
+    const document = createDocument("doc-active-tool", [layer]);
+    const rectangle = { type: "rectangle" as const, id: elementId("active-rectangle"), layerId: layer.id, position: { x: 10, y: 10 }, size: { width: 20, height: 10 }, rotation: 0, style: { stroke: "#000", strokeWidth: 1 } };
+    const checked = { ...document, elements: [rectangle] };
+
+    for (const activeTool of ["rectangle", "ellipse", "line"] as const) {
+      expect(pickElement(checked, { x: 15, y: 15 }, 3), activeTool).toBe(rectangle.id);
+    }
   });
 });

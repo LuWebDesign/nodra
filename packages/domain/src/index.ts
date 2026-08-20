@@ -1,4 +1,4 @@
-export const CURRENT_SCHEMA_VERSION = 1 as const;
+export const CURRENT_SCHEMA_VERSION = 2 as const;
 
 export type SchemaVersion = typeof CURRENT_SCHEMA_VERSION;
 export type DocumentId = string & { readonly __brand: "DocumentId" };
@@ -68,6 +68,7 @@ export interface DocumentSnapshot {
   readonly revision: Revision;
   readonly origin: "top-left";
   readonly units: "mm";
+  readonly page: SizeMm;
   readonly layers: readonly Layer[];
   readonly elements: readonly Element[];
 }
@@ -78,7 +79,7 @@ export const elementId = (value: string): ElementId => value as ElementId;
 export const revision = (value: number): Revision => value as Revision;
 
 export function createDocument(id: string, layers: readonly Layer[] = []): DocumentSnapshot {
-  return { schemaVersion: CURRENT_SCHEMA_VERSION, id: documentId(id), revision: revision(0), origin: "top-left", units: "mm", layers: [...layers], elements: [] };
+  return { schemaVersion: CURRENT_SCHEMA_VERSION, id: documentId(id), revision: revision(0), origin: "top-left", units: "mm", page: { width: 1200, height: 900 }, layers: [...layers], elements: [] };
 }
 
 export function nextRevision(value: Revision): Revision {
