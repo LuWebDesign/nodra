@@ -3,9 +3,25 @@ import { boundsOf, hitTest, type Bounds } from "@nodra/geometry";
 
 export interface DragGeometry { readonly position: PointMm; readonly size: { readonly width: number; readonly height: number } }
 
+export function movementExceedsThreshold(start: PointMm, end: PointMm, threshold = 3): boolean {
+  if (![start.x, start.y, end.x, end.y, threshold].every(Number.isFinite) || threshold < 0) throw new Error("movement coordinates and threshold must be finite");
+  return Math.hypot(end.x - start.x, end.y - start.y) >= threshold;
+}
+
 export function screenDeltaToMm(delta: PointMm, zoom: number): PointMm {
   if (!Number.isFinite(zoom) || zoom <= 0) throw new Error("zoom must be positive");
   return { x: delta.x / zoom, y: delta.y / zoom };
+}
+
+/** Converts a pointer client coordinate into pixels local to the canvas element. */
+export function clientPointToCanvas(client: PointMm, rect: { readonly left: number; readonly top: number }): PointMm {
+  return { x: client.x - rect.left, y: client.y - rect.top };
+}
+
+/** Converts canonical page coordinates into pixels relative to the canvas. */
+export function pagePointToCanvas(point: PointMm, zoom: number, panMm: PointMm): PointMm {
+  if (!Number.isFinite(zoom) || zoom <= 0) throw new Error("zoom must be positive");
+  return { x: (point.x - panMm.x) * zoom, y: (point.y - panMm.y) * zoom };
 }
 
 /** Converts canonical page coordinates into coordinates relative to the scaled page layer. */
@@ -53,4 +69,8 @@ export function pickElement(document: DocumentSnapshot, point: PointMm, zoom: nu
 export function elementsContainedBy(document: DocumentSnapshot, marquee: Bounds): ElementId[] {
   const visible = new Set(document.layers.filter((layer) => layer.visible).map((layer) => layer.id));
   return document.elements.filter((element) => visible.has(element.layerId) && containsBounds(marquee, boundsOf(element))).map((element) => element.id);
+}
+
+export function marqueeSelection(document: DocumentSnapshot, start: PointMm, end: PointMm): ElementId[] {
+  return elementsContainedBy(document, normalizeBounds(start, end));
 }
