@@ -4,6 +4,8 @@ import { VitePWA } from "vite-plugin-pwa";
 
 export default defineConfig({
   plugins: [react(), VitePWA({ registerType: "autoUpdate", manifest: { name: "Nodra Editor", short_name: "Nodra", theme_color: "#11151d", background_color: "#11151d", display: "standalone", icons: [] }, workbox: { navigateFallback: "/index.html" } })],
+  server: { host: "0.0.0.0" },
+  preview: { host: "0.0.0.0" },
   resolve: { alias: {
     "@nodra/domain": new URL("../../packages/domain/src/index.ts", import.meta.url).pathname,
     "@nodra/editor-core": new URL("../../packages/editor-core/src/index.ts", import.meta.url).pathname,

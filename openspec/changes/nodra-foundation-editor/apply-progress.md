@@ -5,8 +5,8 @@
 - Change: `nodra-foundation-editor`
 - Mode: Standard Mode (`strict_tdd: false`; no test runner existed at initialization)
 - Delivery: stacked-to-main chained PR slice
-- Current work unit: 5 / task 3.1
-- Runtime attempt token: `sha256:1339490e9a03899a2f4dbf0e2b9107893e8d89f883eedc3c3c3510512562b993`
+- Current work unit: 6 / task 3.2
+- Runtime attempt token: `sha256:0dc6b872702e64b86c13ca77fe93948df1989e1d7e077b8a66c63b5b7fbb67bc`
 
 ## Completed Tasks
 
@@ -18,7 +18,7 @@
 - [x] 2.2 Create editor-core commands and history.
 - [x] 2.3 Create UI components.
 - [x] 3.1 Create persistence and recovery.
-- [ ] 3.2 Create the web shell.
+- [x] 3.2 Create the web shell.
 - [ ] 4.1 Create planning documentation and ADRs.
 - [ ] 4.2 Add Playwright product smoke coverage.
 
@@ -26,9 +26,9 @@
 
 | Evidence | Result |
 |---|---|
-| Focused test/quality command and exact result | Work units 1–4 evidence remains above. Work unit 5: `npm exec --yes pnpm@10.15.1 -- --filter @nodra/persistence test` — exit 0; 1 test file passed, 6 tests passed. `npm exec --yes pnpm@10.15.1 -- typecheck` — exit 0. `npm exec --yes pnpm@10.15.1 -- lint` — exit 0. |
-| Runtime harness command/scenario and exact result | Work units 2–4 evidence remains above. Work unit 5: N/A — no `apps/web` shell, browser composition root, or Playwright runtime exists in this batch; IndexedDB behavior is covered with `fake-indexeddb` in the focused package tests, while reload/offline product flows are deferred to tasks 3.2 and 4.2. |
-| Rollback boundary | Work units 2–4 evidence remains above. Work unit 5: revert `packages/persistence`, its `packages/persistence` lockfile importer, and the persistence path aliases in `tsconfig.json`/`vitest.config.ts`; this removes only the repository/autosave/recovery adapter and its test/config wiring. |
+| Focused test/quality command and exact result | Work units 1–4 evidence remains above. Work unit 5 evidence remains above. Work unit 6: `npm exec --yes pnpm@10.15.1 -- typecheck` — exit 0; `npm exec --yes pnpm@10.15.1 -- lint` — exit 0; `npm exec --yes pnpm@10.15.1 -- --filter @nodra/editor-core test` — exit 0; 1 file and 4 tests passed; `npm exec --yes pnpm@10.15.1 -- --filter @nodra/web build` — exit 0; Vite bundle and PWA service worker generated. |
+| Runtime harness command/scenario and exact result | Work units 2–4 evidence remains above. Work unit 5 evidence remains above. Work unit 6: `npm exec --yes pnpm@10.15.1 -- --filter @nodra/web preview --host 127.0.0.1` followed by `curl --fail --silent http://127.0.0.1:4173/ | grep -q 'Nodra Editor'` — exit 0; built app shell served successfully. Full Playwright product coverage remains task 4.2. |
+| Rollback boundary | Work units 2–4 evidence remains above. Work unit 5 evidence remains above. Work unit 6: revert `apps/web/`, web-related root/package manifest and lockfile entries, `tsconfig` app inclusion, `eslint` generated-output ignore, and the shell-required `deleteElement` editor-core command. |
 
 ## Notes
 
@@ -38,3 +38,4 @@
 - Work unit 4 exposes immutable command dispatch and transaction history, transient gesture previews with one committed history entry, selection/layer operations, redo invalidation, and typed stateless UI view contracts including an explicit inert Prepare placeholder.
 - Work unit 1 evidence remains cumulative above; persistence, PWA, shell, ADR, and E2E product flows remain unimplemented.
 - Work unit 5 provides a browser-independent Dexie repository, explicit record migration registry, validated newest-revision recovery, stale-write protection, debounced retry-safe autosave status, and non-blocking storage persistence capability detection. PWA, shell, ADR, and E2E product flows remain unimplemented.
+- Work unit 6 provides the first Vite/React shell with separate Zustand UI/document/selection/viewport/persistence stores, renderer-svg canvas composition, Design tools and property editing, keyboard move/delete/undo/redo, layer visibility, Dexie recovery/autosave status, honest Prepare placeholder, and generated PWA app-shell caching. ADRs and comprehensive Playwright coverage remain intentionally deferred.
