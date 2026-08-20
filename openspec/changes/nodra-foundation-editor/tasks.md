@@ -37,8 +37,8 @@ Chain strategy: stacked-to-main
 ## Phase 2: Rendering and Editing
 
 - [x] 2.1 Create `packages/renderer-svg/src` snapshot/viewport renderer with bounded unsupported/invalid results and immutability tests.
-- [ ] 2.2 Create `packages/editor-core/src` commands, transactions, selection, layers, gesture preview/commit, undo/redo, and redo invalidation tests.
-- [ ] 2.3 Create `packages/ui/src` stateless toolbar, properties, layers, viewport, persistence status, and inert Prepare components.
+- [x] 2.2 Create `packages/editor-core/src` commands, transactions, selection, layers, gesture preview/commit, undo/redo, and redo invalidation tests.
+- [x] 2.3 Create `packages/ui/src` stateless toolbar, properties, layers, viewport, persistence status, and inert Prepare components.
 
 ## Phase 3: Persistence and Shell
 

@@ -7,6 +7,8 @@ export default defineConfig({
       "@nodra/geometry": new URL("./packages/geometry/src/index.ts", import.meta.url).pathname,
       "@nodra/validation": new URL("./packages/validation/src/index.ts", import.meta.url).pathname,
       "@nodra/renderer-svg": new URL("./packages/renderer-svg/src/index.ts", import.meta.url).pathname,
+      "@nodra/editor-core": new URL("./packages/editor-core/src/index.ts", import.meta.url).pathname,
+      "@nodra/ui": new URL("./packages/ui/src/index.ts", import.meta.url).pathname,
     },
   },
   test: {

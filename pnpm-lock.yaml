@@ -35,6 +35,15 @@ importers:
 
   packages/domain: {}
 
+  packages/editor-core:
+    dependencies:
+      '@nodra/domain':
+        specifier: workspace:*
+        version: link:../domain
+      '@nodra/validation':
+        specifier: workspace:*
+        version: link:../validation
+
   packages/geometry:
     dependencies:
       '@nodra/domain':
@@ -52,6 +61,8 @@ importers:
       '@nodra/validation':
         specifier: workspace:*
         version: link:../validation
+
+  packages/ui: {}
 
   packages/validation:
     dependencies:

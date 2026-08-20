@@ -22,6 +22,8 @@
       "@nodra/geometry": ["packages/geometry/src/index.ts"],
       "@nodra/validation": ["packages/validation/src/index.ts"],
       "@nodra/renderer-svg": ["packages/renderer-svg/src/index.ts"]
+      ,"@nodra/editor-core": ["packages/editor-core/src/index.ts"]
+      ,"@nodra/ui": ["packages/ui/src/index.ts"]
     },
     "types": ["node"],
     "noEmit": true
