@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createDocument, elementId, layerId } from "@nodra/domain";
-import { clientPointToCanvas, marqueeSelection, MAX_ZOOM, MIN_ZOOM, movementExceedsThreshold, normalizeBounds, normalizeDrag, pagePointToCanvas, pagePointToScreen, screenDeltaToMm, screenPointToMm, containsBounds, elementsContainedBy, pickElement, zoomAtPoint } from "./interaction.js";
+import { clientPointToCanvas, isDrawingTool, marqueeSelection, MAX_ZOOM, MIN_ZOOM, movementExceedsThreshold, normalizeBounds, normalizeDrag, pagePointToCanvas, pagePointToScreen, screenDeltaToMm, screenPointToMm, containsBounds, elementsContainedBy, pickElement, zoomAtPoint } from "./interaction.js";
 import { geometryPatch, geometryValue } from "./propertyBar.js";
 
 describe("canvas coordinates", () => {
@@ -28,6 +28,14 @@ describe("pointer movement threshold", () => {
     expect(movementExceedsThreshold({ x: 10, y: 10 }, { x: 10, y: 10 })).toBe(false);
     expect(movementExceedsThreshold({ x: 10, y: 10 }, { x: 12, y: 11 })).toBe(false);
     expect(movementExceedsThreshold({ x: 10, y: 10 }, { x: 13, y: 10 })).toBe(true);
+  });
+});
+
+describe("drawing tool routing", () => {
+  it("recognizes drawing tools without consulting object hit testing", () => {
+    expect(["rectangle", "ellipse", "line"].every(isDrawingTool)).toBe(true);
+    expect(isDrawingTool("select")).toBe(false);
+    expect(isDrawingTool("pan")).toBe(false);
   });
 });
 
