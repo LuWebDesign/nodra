@@ -3,6 +3,8 @@ import type { Element, EllipseElement, PointMm, RectangleElement, SizeMm } from 
 export interface Bounds { readonly x: number; readonly y: number; readonly width: number; readonly height: number }
 export interface Viewport { readonly zoom: number; readonly panMm: PointMm }
 export interface PointPx { readonly x: number; readonly y: number }
+export type ResizeCorner = "nw" | "ne" | "se" | "sw";
+export interface ResizeGeometry { readonly position: PointMm; readonly size: SizeMm }
 
 const TAU = Math.PI * 2;
 const assertFinite = (value: number, name: string): void => { if (!Number.isFinite(value)) throw new Error(`${name} must be finite`); };
@@ -19,10 +21,29 @@ export function transformPoint(point: PointMm, origin: PointMm, rotation: number
   return { x: origin.x + turned.x, y: origin.y + turned.y };
 }
 
-function corners(element: RectangleElement | EllipseElement): PointMm[] {
+export function rotatedCorners(element: RectangleElement | EllipseElement): readonly [PointMm, PointMm, PointMm, PointMm] {
   const half = { x: element.size.width / 2, y: element.size.height / 2 };
   const center = { x: element.position.x + half.x, y: element.position.y + half.y };
   return [transformPoint({ x: -half.x, y: -half.y }, center, element.rotation), transformPoint({ x: half.x, y: -half.y }, center, element.rotation), transformPoint({ x: half.x, y: half.y }, center, element.rotation), transformPoint({ x: -half.x, y: half.y }, center, element.rotation)];
+}
+
+const corners = rotatedCorners;
+
+export function resizeCorner(element: RectangleElement | EllipseElement, corner: ResizeCorner, pointer: PointMm, minimumSize = 1): ResizeGeometry {
+  assertPositive(minimumSize, "minimumSize");
+  assertFinite(pointer.x, "pointer.x"); assertFinite(pointer.y, "pointer.y");
+  const half = { x: element.size.width / 2, y: element.size.height / 2 };
+  const center = { x: element.position.x + half.x, y: element.position.y + half.y };
+  const localPointer = rotate({ x: pointer.x - center.x, y: pointer.y - center.y }, -element.rotation);
+  const signs = corner === "nw" ? { x: -1, y: -1 } : corner === "ne" ? { x: 1, y: -1 } : corner === "se" ? { x: 1, y: 1 } : { x: -1, y: 1 };
+  const anchor = { x: signs.x * -half.x, y: signs.y * -half.y };
+  const width = Math.max(minimumSize, Math.abs(localPointer.x - anchor.x));
+  const height = Math.max(minimumSize, Math.abs(localPointer.y - anchor.y));
+  const minX = localPointer.x < anchor.x ? anchor.x - width : anchor.x;
+  const minY = localPointer.y < anchor.y ? anchor.y - height : anchor.y;
+  const localCenter = { x: minX + width / 2, y: minY + height / 2 };
+  const worldCenter = { x: center.x + rotate(localCenter, element.rotation).x, y: center.y + rotate(localCenter, element.rotation).y };
+  return { position: { x: worldCenter.x - width / 2, y: worldCenter.y - height / 2 }, size: { width, height } };
 }
 
 export function boundsOf(element: Element): Bounds {

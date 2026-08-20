@@ -68,7 +68,22 @@ export const moveElement = (id: ElementId, delta: PointMm): EditorCommand => ({
   },
 });
 
-export const resizeElement = (id: ElementId, size: SizeMm): EditorCommand => updateElement(id, { size });
+export const moveElements = (ids: readonly ElementId[], delta: PointMm): EditorCommand => ({
+  name: `move:${[...new Set(ids)].join(",")}`,
+  apply: (document) => {
+    const selected = new Set(ids);
+    const known = document.elements.filter((element) => selected.has(element.id));
+    if (known.length !== selected.size) return { success: false, error: "One or more elements were not found" };
+    if (known.length === 0) return { success: false, error: "No elements selected" };
+    return replaceElements(document, document.elements.map((element) => {
+      if (!selected.has(element.id)) return element;
+      if (element.type === "line") return { ...element, start: { x: element.start.x + delta.x, y: element.start.y + delta.y }, end: { x: element.end.x + delta.x, y: element.end.y + delta.y } };
+      return { ...element, position: { x: element.position.x + delta.x, y: element.position.y + delta.y } };
+    }));
+  },
+});
+
+export const resizeElement = (id: ElementId, position: PointMm, size: SizeMm): EditorCommand => updateElement(id, { position, size });
 export const rotateElement = (id: ElementId, rotation: number): EditorCommand => updateElement(id, { rotation });
 
 export const setLayerVisibility = (id: LayerId, visible: boolean): EditorCommand => ({
@@ -98,9 +113,20 @@ export const addLayer = (layer: Layer): EditorCommand => ({
 });
 
 export function createEditor(document: DocumentSnapshot): EditorState { return { document, selection: [], undo: [], redo: [], gesture: undefined }; }
-export function select(state: EditorState, ids: readonly ElementId[]): EditorState {
+const knownSelection = (state: EditorState, ids: readonly ElementId[]): ElementId[] => {
   const known = new Set(state.document.elements.map((element) => element.id));
-  return { ...state, selection: ids.filter((id) => known.has(id)) };
+  return [...new Set(ids)].filter((id) => known.has(id));
+};
+export function select(state: EditorState, ids: readonly ElementId[]): EditorState {
+  return { ...state, selection: knownSelection(state, ids) };
+}
+export const replaceSelection = select;
+export function addToSelection(state: EditorState, ids: readonly ElementId[]): EditorState { return select(state, [...state.selection, ...ids]); }
+export function removeFromSelection(state: EditorState, ids: readonly ElementId[]): EditorState { const removed = new Set(ids); return select(state, state.selection.filter((id) => !removed.has(id))); }
+export function toggleSelection(state: EditorState, id: ElementId): EditorState { return state.selection.includes(id) ? removeFromSelection(state, [id]) : addToSelection(state, [id]); }
+export function selectForPointerDown(state: EditorState, id: ElementId, shiftKey: boolean): EditorState {
+  if (shiftKey) return toggleSelection(state, id);
+  return state.selection.includes(id) ? state : select(state, [id]);
 }
 export function clearSelection(state: EditorState): EditorState { return { ...state, selection: [] }; }
 
