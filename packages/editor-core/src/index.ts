@@ -40,6 +40,13 @@ export const createElement = (element: Element): EditorCommand => ({
     : replaceElements(document, [...document.elements, { ...element }]),
 });
 
+export const deleteElement = (id: ElementId): EditorCommand => ({
+  name: `delete:${id}`,
+  apply: (document) => document.elements.some((element) => element.id === id)
+    ? replaceElements(document, document.elements.filter((element) => element.id !== id))
+    : { success: false, error: `Element not found: ${id}` },
+});
+
 export const updateElement = (id: ElementId, patch: ElementPatch): EditorCommand => ({
   name: `update:${id}`,
   apply: (document) => {
