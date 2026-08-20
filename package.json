@@ -9,7 +9,7 @@
     "pnpm": ">=10.15.1 <11"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.build.json && vite build",
+    "build": "tsc -p tsconfig.build.json && pnpm --filter @nodra/web build",
     "lint": "eslint . --max-warnings=0",
     "test": "vitest run",
     "test:e2e": "playwright test --pass-with-no-tests",
