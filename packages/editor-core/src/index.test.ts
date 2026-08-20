@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createDocument, elementId, layerId, type RectangleElement } from "@nodra/domain";
-import { addToSelection, beginGesture, clearSelection, commitGesture, createEditor, createElement, dispatch, moveElement, moveElements, previewGesture, redo, removeFromSelection, reorderLayer, resizeElement, select, selectForPointerDown, setLayerVisibility, toggleSelection, undo, updateElementStyles } from "./index.js";
+import { addToSelection, beginGesture, clearSelection, commitGesture, createEditor, createElement, dispatch, moveElement, moveElements, previewGesture, redo, removeFromSelection, reorderLayer, resizeElement, select, selectForPointerDown, setLayerVisibility, toggleSelection, undo, updateElement, updateElementStyles } from "./index.js";
 
 const rectangle: RectangleElement = { type: "rectangle", id: elementId("r1"), layerId: layerId("default"), position: { x: 1, y: 2 }, size: { width: 10, height: 5 }, rotation: 0, style: { stroke: "#000", strokeWidth: 1 } };
 const document = createDocument("doc", [{ id: layerId("default"), name: "Default", visible: true, order: 0 }]);
@@ -33,6 +33,15 @@ describe("editor core", () => {
     expect(state.undo).toHaveLength(2);
     expect(state.document.elements[0]).toMatchObject({ position: { x: 6, y: 7 }, size: { width: 22, height: 14 } });
     expect(undo(state).document.elements[0]).toMatchObject({ position: rectangle.position, size: rectangle.size });
+  });
+
+  it("updates exact shape geometry in one command and rejects invalid sizes", () => {
+    let state = dispatch(createEditor(document), createElement(rectangle));
+    state = dispatch(state, updateElement(rectangle.id, { position: { x: 12.125, y: 8.5 }, size: { width: 25.75, height: 4.25 } }));
+    expect(state.document.elements[0]).toMatchObject({ position: { x: 12.125, y: 8.5 }, size: { width: 25.75, height: 4.25 } });
+    expect(state.undo).toHaveLength(2);
+    const rejected = dispatch(state, updateElement(rectangle.id, { size: { width: 0, height: -1 } }));
+    expect(rejected).toBe(state);
   });
 
   it("undoes and redoes, then invalidates redo after a new edit", () => {
