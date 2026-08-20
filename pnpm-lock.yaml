@@ -41,6 +41,18 @@ importers:
         specifier: workspace:*
         version: link:../domain
 
+  packages/renderer-svg:
+    dependencies:
+      '@nodra/domain':
+        specifier: workspace:*
+        version: link:../domain
+      '@nodra/geometry':
+        specifier: workspace:*
+        version: link:../geometry
+      '@nodra/validation':
+        specifier: workspace:*
+        version: link:../validation
+
   packages/validation:
     dependencies:
       '@nodra/domain':

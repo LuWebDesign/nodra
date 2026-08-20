@@ -1,0 +1,13 @@
+{
+  "name": "@nodra/renderer-svg",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": { "test": "vitest run" },
+  "dependencies": {
+    "@nodra/domain": "workspace:*",
+    "@nodra/geometry": "workspace:*",
+    "@nodra/validation": "workspace:*"
+  },
+  "exports": { ".": "./src/index.ts" }
+}

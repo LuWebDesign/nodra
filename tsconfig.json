@@ -17,7 +17,12 @@
     "skipLibCheck": true,
     "allowJs": true,
     "baseUrl": ".",
-    "paths": { "@nodra/domain": ["packages/domain/src/index.ts"] },
+    "paths": {
+      "@nodra/domain": ["packages/domain/src/index.ts"],
+      "@nodra/geometry": ["packages/geometry/src/index.ts"],
+      "@nodra/validation": ["packages/validation/src/index.ts"],
+      "@nodra/renderer-svg": ["packages/renderer-svg/src/index.ts"]
+    },
     "types": ["node"],
     "noEmit": true
   },
