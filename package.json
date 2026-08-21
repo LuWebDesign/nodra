@@ -12,7 +12,7 @@
     "build": "tsc -p tsconfig.build.json && corepack pnpm --filter @nodra/web build",
     "lint": "eslint . --max-warnings=0",
     "test": "vitest run",
-    "test:e2e": "playwright test --pass-with-no-tests",
+    "test:e2e": "corepack pnpm exec playwright install chromium && corepack pnpm exec playwright test --pass-with-no-tests",
     "test:all": "corepack pnpm test && corepack pnpm test:e2e",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
