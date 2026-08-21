@@ -21,7 +21,7 @@ type ActiveInteraction = {
   pointerId: number;
   lastX: number;
   lastY: number;
-  kind: "move" | "pan" | "draw" | "deferred-draw" | "resize" | "rotate" | "marquee";
+  kind: "move" | "pan" | "draw" | "resize" | "rotate" | "marquee";
   ids?: readonly ElementId[];
   dragged: boolean;
   start?: PointMm;
@@ -281,7 +281,8 @@ export function App() {
       event.currentTarget.setPointerCapture(event.pointerId);
       const anchor = selectedNodeAnchor(nodeHit, next.selection);
       if (isDrawingTool(tool) && !anchor) {
-        interaction.current = { pointerId: event.pointerId, lastX: event.clientX, lastY: event.clientY, kind: "deferred-draw", ids: [id()], start: point, startClient: { x: event.clientX, y: event.clientY }, dragged: false, shiftKey: event.shiftKey, tool };
+        setEditorState(beginGesture(next));
+        interaction.current = { pointerId: event.pointerId, lastX: event.clientX, lastY: event.clientY, kind: "draw", ids: [id()], start: point, startClient: { x: event.clientX, y: event.clientY }, dragged: false, shiftKey: event.shiftKey, tool };
       } else {
         setEditorState(beginGesture(next));
         interaction.current = { pointerId: event.pointerId, lastX: event.clientX, lastY: event.clientY, kind: "move", ids: next.selection, ...(anchor ? { anchor } : {}), startClient: { x: event.clientX, y: event.clientY }, dragged: false, shiftKey: event.shiftKey };
@@ -306,10 +307,6 @@ export function App() {
     setCursorPoint(canvasPointAt(event));
     const active = interaction.current;
     if (!active || active.pointerId !== event.pointerId) return;
-    if (active.kind === "deferred-draw" && active.startClient && movementExceedsThreshold(active.startClient, { x: event.clientX, y: event.clientY })) {
-      setEditorState(beginGesture(editorRef.current));
-      active.kind = "draw";
-    }
     if (active.kind === "marquee" && active.start && active.startClient) {
       if (!movementExceedsThreshold(active.startClient, { x: event.clientX, y: event.clientY })) return;
       active.dragged = true;
@@ -374,8 +371,6 @@ export function App() {
       setEditorState(commitGesture(previewGestureFromBase(editorRef.current, active.ids.length === 1 && active.element ? rotateElement(active.element.id, rotation) : rotateElementsAroundCenter(active.ids, rotation - (active.element?.rotation ?? 0)))));
     } else if (["resize", "rotate", "move"].includes(active.kind)) {
       setEditorState(cancelled ? cancelGesture(editorRef.current) : commitGesture(editorRef.current));
-    } else if (active.kind === "deferred-draw") {
-      // Selection was applied on pointer-down; a click creates no gesture.
     } else if (active.kind === "draw") {
       const end = active.start ? pointAt(event) : undefined;
       const zeroLengthLine = active.tool === "line" && active.start && end && active.start.x === end.x && active.start.y === end.y;
@@ -570,7 +565,7 @@ export function App() {
       if (!selectedElements.length || !Number.isFinite(distance) || distance < 0 || !Number.isInteger(count) || count < 1) return;
       setEditorState(dispatch(editorRef.current, duplicateElements(selection, transformDirection, distance, count)));
     };
-      return <section className="inspector-card transform-card"><div className="panel-title">REPRODUCCIÓN DIRECCIONAL</div><div className="transform-layout"><div className="direction-grid" role="group" aria-label="Dirección de reproducción" aria-describedby="transform-direction-description" onPointerEnter={showDirectionTooltip} onPointerDown={showDirectionTooltip} onFocusCapture={showDirectionTooltip}>{transformDirections.map(({ direction, label, marker }) => <button key={direction} type="button" className={transformDirection === direction ? "direction-button active" : "direction-button"} aria-label={label} aria-pressed={transformDirection === direction} onClick={() => { showDirectionTooltip(); setTransformDirection(direction); }}><span aria-hidden="true">{marker}</span></button>)}<span id="transform-direction-description" className={directionTooltipVisible ? "direction-tooltip visible" : "direction-tooltip"} role="tooltip">Crea copias separadas por el espacio indicado. El centro superpone la copia.</span></div><div className="transform-fields"><label className="field"><span>Distancia (mm)</span><input inputMode="decimal" aria-label="Distancia entre copias en milímetros" value={drafts[distanceKey] ?? "10"} onChange={(event) => setDrafts((current) => ({ ...current, [distanceKey]: event.target.value }))} /></label><label className="field"><span>Copias</span><input inputMode="numeric" aria-label="Cantidad de copias" value={drafts[countKey] ?? "1"} onChange={(event) => setDrafts((current) => ({ ...current, [countKey]: event.target.value }))} /></label><button type="button" className="transform-action" disabled={!selectedElements.length} onClick={duplicate}>Reproducir</button></div></div></section>;
+      return <section className="inspector-card transform-card"><div className="panel-title">REPRODUCCIÓN DIRECCIONAL</div><div className="transform-layout"><div className="direction-grid" role="group" aria-label="Dirección de reproducción" aria-describedby="transform-direction-description" onPointerEnter={showDirectionTooltip} onPointerDown={showDirectionTooltip} onFocusCapture={showDirectionTooltip}>{transformDirections.map(({ direction, label, marker }) => <button key={direction} type="button" className={transformDirection === direction ? "direction-button active" : "direction-button"} aria-label={label} aria-pressed={transformDirection === direction} onClick={() => { showDirectionTooltip(); setTransformDirection(direction); }}><span aria-hidden="true">{marker}</span></button>)}<span id="transform-direction-description" className={directionTooltipVisible ? "direction-tooltip visible" : "direction-tooltip"} role="tooltip">Crea copias separadas por el espacio indicado. El centro superpone la copia.</span></div><div className="transform-fields"><label className="field"><span>Distancia (mm)</span><input inputMode="decimal" aria-label="Distancia entre copias en milímetros" value={drafts[distanceKey] ?? "10"} onChange={(event) => setDrafts((current) => ({ ...current, [distanceKey]: event.target.value }))} /></label><label className="field"><span>Copias</span><input inputMode="numeric" aria-label="Cantidad de copias" value={drafts[countKey] ?? "1"} onChange={(event) => setDrafts((current) => ({ ...current, [countKey]: event.target.value }))} /></label><button type="button" aria-label="Reproducir copias" className="transform-action" disabled={!selectedElements.length} onClick={duplicate}>Reproducir</button></div></div></section>;
   };
   const mirrorButton = (axis: FlipAxis) => {
     const label = axis === "horizontal" ? "Espejo horizontal" : "Espejo vertical";
