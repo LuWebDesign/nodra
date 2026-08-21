@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { boundsOf, hitTest, mmToScreen, realGeometryNodes, resizeHandle, screenToMm, validateSize } from "./index.js";
+import { boundsOf, degreesToRadians, elementCenter, hitTest, mmToScreen, radiansToDegrees, realGeometryNodes, resizeHandle, rotatedLineEndpoints, rotationFromDrag, rotationHandlePoints, screenToMm, validateSize } from "./index.js";
 import { elementId, layerId } from "@nodra/domain";
 
 const style = { stroke: "#000", strokeWidth: 0.2 };
@@ -61,5 +61,29 @@ describe("canonical millimetre geometry", () => {
     expect(realGeometryNodes(line).map(({ point }) => point)).toEqual([line.start, { x: 4, y: 5 }, line.end]);
     const ellipse = { type: "ellipse" as const, id: elementId("ellipse-nodes"), layerId: layerId("l"), position: { x: 10, y: 20 }, size: { width: 20, height: 10 }, rotation: Math.PI / 2, style };
     expect(realGeometryNodes(ellipse).map(({ point }) => point)).toEqual([{ x: 20, y: 25 }, { x: 25, y: 25 }, { x: 20, y: 35 }, { x: 15, y: 25 }, { x: 20, y: 15 }]);
+  });
+  it("normalizes angle conversion and crosses the angle branch without jumping", () => {
+    expect(radiansToDegrees(degreesToRadians(-90))).toBeCloseTo(270);
+    expect(radiansToDegrees(degreesToRadians(450))).toBeCloseTo(90);
+    expect(rotationFromDrag(0, { x: 0, y: 0 }, { x: -1, y: 0.01 }, { x: -1, y: -0.01 })).toBeCloseTo(0.02, 3);
+    expect(radiansToDegrees(rotationFromDrag(degreesToRadians(8), { x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: 0 }, Math.PI / 12))).toBeCloseTo(15);
+  });
+  it("places shape handles outside corners and line handles beyond visual endpoints", () => {
+    const shapeHandles = rotationHandlePoints(rectangle, 5);
+    expect(shapeHandles).toHaveLength(4);
+    expect(Math.hypot(shapeHandles[0]!.x - 20, shapeHandles[0]!.y - 25)).toBeGreaterThan(Math.hypot(10, 5));
+    const line = { type: "line" as const, id: elementId("rotation-handles"), layerId: layerId("l"), start: { x: 0, y: 0 }, end: { x: 10, y: 0 }, rotation: Math.PI / 2, style };
+    expect(elementCenter(line)).toEqual({ x: 5, y: 0 });
+    expect(rotationHandlePoints(line, 2)).toEqual([{ x: 5, y: -7 }, { x: 5, y: 7 }]);
+  });
+  it("uses visually rotated line endpoints for bounds, hits, and stable nodes", () => {
+    const line = { type: "line" as const, id: elementId("rotated-line"), layerId: layerId("l"), start: { x: 0, y: 0 }, end: { x: 10, y: 0 }, rotation: Math.PI / 2, style };
+    const [start, end] = rotatedLineEndpoints(line);
+    expect(start).toEqual({ x: 5, y: -5 });
+    expect(end).toEqual({ x: 5, y: 5 });
+    expect(boundsOf(line)).toEqual({ x: 5, y: -5, width: 0, height: 10 });
+    expect(hitTest(line, { x: 5, y: 4 }, 0.01)).toBe(true);
+    expect(hitTest(line, { x: 9, y: 0 }, 0.01)).toBe(false);
+    expect(realGeometryNodes(line)).toEqual([{ kind: "endpoint", point: start }, { kind: "center", point: { x: 5, y: 0 } }, { kind: "endpoint", point: end }]);
   });
 });

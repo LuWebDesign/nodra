@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createDocument, elementId, layerId } from "@nodra/domain";
-import { centerPageInCanvas, clientPointToCanvas, hoveredSelectionCenter, INITIAL_ZOOM, isDrawingTool, marqueeSelection, MAX_ZOOM, MIN_ZOOM, movementExceedsThreshold, normalizeBounds, normalizeDrag, pagePointToCanvas, pagePointToScreen, screenDeltaToMm, screenPointToMm, containsBounds, elementsContainedBy, pickElement, pickNode, pointerDownIntent, selectedNodeAnchor, selectionCenter, selectionFrame, snapMoveDelta, zoomAtPoint } from "./interaction.js";
+import { canActivateRotation, centerPageInCanvas, clientPointToCanvas, hoveredSelectionCenter, INITIAL_ZOOM, isDrawingTool, marqueeSelection, MAX_ZOOM, MIN_ZOOM, movementExceedsThreshold, normalizeBounds, normalizeDrag, pagePointToCanvas, pagePointToScreen, screenDeltaToMm, screenPointToMm, containsBounds, elementsContainedBy, pickElement, pickNode, pointerDownIntent, selectedNodeAnchor, selectionCenter, selectionFrame, snapMoveDelta, zoomAtPoint } from "./interaction.js";
 import { geometryPatch, geometryValue } from "./propertyBar.js";
 
 describe("canvas coordinates", () => {
@@ -56,6 +56,13 @@ describe("pointer movement threshold", () => {
 });
 
 describe("drawing tool routing", () => {
+  it("activates rotation only for an already-selected single hit in the select tool", () => {
+    const selected = elementId("selected");
+    expect(canActivateRotation("select", [selected], selected)).toBe(true);
+    expect(canActivateRotation("select", [selected, elementId("other")], selected)).toBe(false);
+    expect(canActivateRotation("select", [selected], undefined)).toBe(false);
+    expect(canActivateRotation("rectangle", [selected], selected)).toBe(false);
+  });
   it("recognizes drawing tools without consulting object hit testing", () => {
     expect(["rectangle", "ellipse", "line"].every(isDrawingTool)).toBe(true);
     expect(isDrawingTool("select")).toBe(false);

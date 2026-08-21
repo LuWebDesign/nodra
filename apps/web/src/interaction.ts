@@ -9,6 +9,11 @@ export interface NodeHit { readonly elementId: ElementId; readonly nodeIndex: nu
 export type DrawingTool = "rectangle" | "ellipse" | "line";
 
 export type PointerDownIntent = "draw" | "select";
+export type TransformMode = "resize" | "rotate";
+
+export function canActivateRotation(tool: string, selectedIds: readonly ElementId[], hit: ElementId | undefined): boolean {
+  return tool === "select" && selectedIds.length === 1 && hit === selectedIds[0];
+}
 
 export function pointerDownIntent(tool: string, hit: ElementId | undefined): PointerDownIntent {
   return isDrawingTool(tool) && hit === undefined ? "draw" : "select";
