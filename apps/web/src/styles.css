@@ -45,10 +45,12 @@
 .inspector-radius-card .field { justify-content:space-between; }
 .inspector-radius-card .field input { max-width:130px; }
 .shape-operation-buttons { display:grid; grid-template-columns:repeat(3,1fr); gap:6px; }
-.shape-operation-buttons button { padding:7px 4px; color:var(--text); background:var(--bg); border:1px solid var(--line); border-radius:4px; font-size:11px; }
+.shape-operation-button { position:relative; padding:7px 4px; color:var(--text); background:var(--bg); border:1px solid var(--line); border-radius:4px; font-size:11px; }
+.shape-operation-button:hover,.shape-operation-button:focus-visible { color:var(--accent); border-color:var(--accent); }
+.shape-operation-description { position:absolute; z-index:7; top:calc(100% + 7px); left:50%; width:220px; padding:7px 9px; color:var(--text); background:var(--panel-raised); border:1px solid var(--line); border-radius:4px; box-shadow:0 6px 18px #0008; font-size:11px; font-weight:400; line-height:1.35; text-align:left; pointer-events:none; opacity:0; transform:translate(-50%, -4px); transition:opacity .12s ease,transform .12s ease; }
+.shape-operation-button:hover .shape-operation-description,.shape-operation-button:focus-visible .shape-operation-description { opacity:1; transform:translate(-50%, 0); }
 .shape-operation-buttons button:disabled { cursor:not-allowed; opacity:.45; }
 .shape-operation-group { display:flex; align-items:center; gap:9px; min-width:0; margin-left:8px; padding-left:14px; border-left:1px solid var(--line); }
-.shape-operation-copy { flex:0 1 168px; min-width:0; }
+.shape-operation-copy { flex:0 0 auto; min-width:0; }
 .shape-operation-copy .panel-title { margin:0; font-size:9px; white-space:nowrap; }
-.shape-operation-copy .muted { margin:2px 0 0; font-size:9px; line-height:1.2; }
 .shape-operation-group .shape-operation-buttons { flex:0 0 auto; }

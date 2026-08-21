@@ -545,8 +545,12 @@ export function App() {
     };
 
   const shapeOperations = () => <div className="shape-operation-group" role="group" aria-label="Operaciones de forma">
-    <div className="shape-operation-copy"><div className="panel-title">OPERACIONES DE FORMA</div><p className="muted">Solo se aplican a objetos cerrados. Recortar usa el primero como cortador y el segundo como objetivo.</p></div>
-    <div className="shape-operation-buttons"><button type="button" disabled={!selectedElements.length || selectedElements.some((element) => element.type === "line")} onClick={() => applyShapeOperation("weld")}>Soldar</button><button type="button" disabled={selectedElements.length !== 2 || selectedElements.some((element) => element.type === "line")} onClick={() => applyShapeOperation("subtract")}>Recortar</button><button type="button" disabled={!selectedElements.length || selectedElements.some((element) => element.type === "line")} onClick={() => applyShapeOperation("outline")}>Crear límites</button></div>
+    <div className="shape-operation-copy"><div className="panel-title">OPERACIONES DE FORMA</div></div>
+    <div className="shape-operation-buttons">
+      <button type="button" className="shape-operation-button" aria-label="Soldar" title="Combinar los objetos cerrados seleccionados en una sola forma." aria-description="Combinar los objetos cerrados seleccionados en una sola forma." disabled={!selectedElements.length || selectedElements.some((element) => element.type === "line")} onClick={() => applyShapeOperation("weld")}>Soldar<span className="shape-operation-description" role="tooltip">Combinar los objetos cerrados seleccionados en una sola forma.</span></button>
+      <button type="button" className="shape-operation-button" aria-label="Recortar" title="Usar el primer objeto seleccionado como cortador y cortar el segundo objeto seleccionado." aria-description="Usar el primer objeto seleccionado como cortador y cortar el segundo objeto seleccionado." disabled={selectedElements.length !== 2 || selectedElements.some((element) => element.type === "line")} onClick={() => applyShapeOperation("subtract")}>Recortar<span className="shape-operation-description" role="tooltip">Usar el primer objeto seleccionado como cortador y cortar el segundo objeto seleccionado.</span></button>
+      <button type="button" className="shape-operation-button" aria-label="Crear límites" title="Crear un contorno real alrededor de los objetos cerrados seleccionados." aria-description="Crear un contorno real alrededor de los objetos cerrados seleccionados." disabled={!selectedElements.length || selectedElements.some((element) => element.type === "line")} onClick={() => applyShapeOperation("outline")}>Crear límites<span className="shape-operation-description" role="tooltip">Crear un contorno real alrededor de los objetos cerrados seleccionados.</span></button>
+    </div>
   </div>;
 
   const aspectLockButton = () => {
