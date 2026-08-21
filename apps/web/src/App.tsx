@@ -68,7 +68,7 @@ export function App() {
   const viewportInteracted = useRef(false);
   const centeredViewport = useRef<string | undefined>(undefined);
   const recoveredNotice = useRef(false);
-  const directionTooltipTimer = useRef<ReturnType<typeof setTimeout>>();
+  const directionTooltipTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   editorRef.current = editor;
 
   useEffect(() => () => {
@@ -280,9 +280,12 @@ export function App() {
       if (!next.selection.includes(hit)) return;
       event.currentTarget.setPointerCapture(event.pointerId);
       const anchor = selectedNodeAnchor(nodeHit, next.selection);
-      const kind = isDrawingTool(tool) && !anchor ? "deferred-draw" : "move";
-      if (kind === "move") setEditorState(beginGesture(next));
-      interaction.current = { pointerId: event.pointerId, lastX: event.clientX, lastY: event.clientY, kind, ids: next.selection, ...(anchor ? { anchor } : {}), ...(kind === "deferred-draw" ? { start: point, tool, ids: [id()] } : {}), startClient: { x: event.clientX, y: event.clientY }, dragged: false, shiftKey: event.shiftKey };
+      if (isDrawingTool(tool) && !anchor) {
+        interaction.current = { pointerId: event.pointerId, lastX: event.clientX, lastY: event.clientY, kind: "deferred-draw", ids: [id()], start: point, startClient: { x: event.clientX, y: event.clientY }, dragged: false, shiftKey: event.shiftKey, tool };
+      } else {
+        setEditorState(beginGesture(next));
+        interaction.current = { pointerId: event.pointerId, lastX: event.clientX, lastY: event.clientY, kind: "move", ids: next.selection, ...(anchor ? { anchor } : {}), startClient: { x: event.clientX, y: event.clientY }, dragged: false, shiftKey: event.shiftKey };
+      }
       return;
     }
     event.currentTarget.setPointerCapture(event.pointerId);
