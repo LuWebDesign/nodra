@@ -36,6 +36,8 @@ type ActiveInteraction = {
   center?: PointMm;
 };
 
+type InspectorTab = "properties" | "appearance" | "text";
+
 const toolCursorIcons: Record<Tool, string> = { select: "↖", rectangle: "□", ellipse: "○", line: "╱", pan: "✣" };
 const toolCursorLabels: Record<Tool, string> = { select: "Seleccion", rectangle: "Rectángulo", ellipse: "Elipse", line: "Línea", pan: "Desplazar" };
 
@@ -54,6 +56,7 @@ export function App() {
   const [cursorPoint, setCursorPoint] = useState<PointMm>();
   const [centerHover, setCenterHover] = useState<{ elementId: ElementId; point: PointMm }>();
   const [transformMode, setTransformMode] = useState<TransformMode>("resize");
+  const [inspectorTab, setInspectorTab] = useState<InspectorTab>("properties");
   const repository = useMemo(() => new DexieProjectRepository(), []);
   const autosave = useMemo(() => new DebouncedAutosave(repository), [repository]);
   const canvas = useRef<HTMLDivElement>(null);
@@ -535,11 +538,22 @@ export function App() {
           <span className="canvas-hint">Clic: relleno · clic derecho: contorno · {toolCursorLabels[tool]}</span>
         </div>
       </section>
-      <aside className="inspector">
-        <section><div className="panel-title">PÁGINA</div><div className="preset-row"><button onClick={() => setPage(1200, 900)}>Horizontal</button><button onClick={() => setPage(900, 1200)}>Vertical</button></div><div className="fields"><Field label="W" value={document.page.width} onChange={(value) => setPage(value, document.page.height)} /><Field label="H" value={document.page.height} onChange={(value) => setPage(document.page.width, value)} /></div><label className="grid-toggle"><input type="checkbox" checked={grid} onChange={(event) => setGrid(event.target.checked)} /> Mostrar cuadrícula del espacio de trabajo</label></section>
-        <section><div className="panel-title">APARIENCIA</div><div className="muted">Paleta: clic izquierdo para relleno · clic derecho para contorno</div><div className="palette"><button className="swatch no-fill" aria-label="Sin relleno" title="Sin relleno" onClick={() => applyPalette(null, "fill")} onContextMenu={(event) => event.preventDefault()}>×</button>{palette.map((color) => <button key={color} className="swatch" aria-label={`Color ${color}`} title={`Clic izquierdo: relleno · clic derecho: contorno (${color})`} style={{ background: color }} onClick={() => applyPalette(color, "fill")} onContextMenu={(event) => { event.preventDefault(); applyPalette(color, "stroke"); }} />)}</div></section>
-        <section><div className="panel-title">CAPAS</div>{document.layers.map((layer) => <div className="layer" key={layer.id}><span>{layer.name}</span><span>{layer.visible ? "Visible" : "Oculta"}</span></div>)}</section>
-      </aside>
+       <aside className="inspector">
+         <div className="inspector-tabs" role="tablist" aria-label="Inspector">
+           <button type="button" role="tab" aria-selected={inspectorTab === "properties"} className={inspectorTab === "properties" ? "active" : ""} onClick={() => setInspectorTab("properties")}>Propiedades</button>
+           <button type="button" role="tab" aria-selected={inspectorTab === "appearance"} className={inspectorTab === "appearance" ? "active" : ""} onClick={() => setInspectorTab("appearance")}>Apariencia</button>
+           <button type="button" role="tab" aria-selected={inspectorTab === "text"} className={inspectorTab === "text" ? "active" : ""} onClick={() => setInspectorTab("text")}>Texto</button>
+         </div>
+         <div className="inspector-tab-content" role="tabpanel">
+           {inspectorTab === "properties" && <section className="inspector-card"><div className="panel-title">PÁGINA</div><div className="preset-row"><button onClick={() => setPage(1200, 900)}>Horizontal</button><button onClick={() => setPage(900, 1200)}>Vertical</button></div><div className="fields"><Field label="W" value={document.page.width} onChange={(value) => setPage(value, document.page.height)} /><Field label="H" value={document.page.height} onChange={(value) => setPage(document.page.width, value)} /></div><label className="grid-toggle"><input type="checkbox" checked={grid} onChange={(event) => setGrid(event.target.checked)} /> Mostrar cuadrícula del espacio de trabajo</label></section>}
+           {inspectorTab === "appearance" && <section className="inspector-card"><div className="panel-title">APARIENCIA</div><div className="muted">Paleta: clic izquierdo para relleno · clic derecho para contorno</div><div className="palette"><button className="swatch no-fill" aria-label="Sin relleno" title="Sin relleno" onClick={() => applyPalette(null, "fill")} onContextMenu={(event) => event.preventDefault()}>×</button>{palette.map((color) => <button key={color} className="swatch" aria-label={`Color ${color}`} title={`Clic izquierdo: relleno · clic derecho: contorno (${color})`} style={{ background: color }} onClick={() => applyPalette(color, "fill")} onContextMenu={(event) => { event.preventDefault(); applyPalette(color, "stroke"); }} />)}</div></section>}
+           {inspectorTab === "text" && <section className="inspector-card"><div className="panel-title">TEXTO</div><p className="muted">Las propiedades de texto estarán disponibles en una próxima iteración.</p></section>}
+         </div>
+         <section className="inspector-lower-card"><div className="panel-title">CAPAS</div>{document.layers.map((layer) => <div className="layer" key={layer.id}><span>{layer.name}</span><span>{layer.visible ? "Visible" : "Oculta"}</span></div>)}</section>
+         <section className="inspector-lower-card"><div className="panel-title">OBJETOS</div><p className="muted">Estructura de objetos próximamente.</p></section>
+         <section className="inspector-lower-card"><div className="panel-title">SÍMBOLOS</div><p className="muted">No hay símbolos configurados.</p></section>
+         <section className="inspector-lower-card"><div className="panel-title">VALIDACIÓN DEL DISEÑO</div><p className="muted">La validación del diseño estará disponible próximamente.</p></section>
+       </aside>
     </div>}
     <footer className="statusbar"><span className={`status-dot ${persist.state === "saving" ? "saving" : ""}`} />{persist.message}</footer>
   </main>;
