@@ -54,3 +54,13 @@
 .shape-operation-copy { flex:0 0 auto; min-width:0; }
 .shape-operation-copy .panel-title { margin:0; font-size:9px; white-space:nowrap; }
 .shape-operation-group .shape-operation-buttons { flex:0 0 auto; }
+.direction-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:5px; margin:12px 0; }.direction-button { display:grid; place-items:center; aspect-ratio:1; color:var(--muted); background:var(--bg); border:1px solid var(--line); border-radius:4px; font-size:22px; line-height:1; }.direction-button:hover,.direction-button:focus-visible,.direction-button.active { color:var(--accent); border-color:var(--accent); background:#172b36; }.transform-fields { display:grid; grid-template-columns:1fr 1fr; gap:8px; }.transform-fields .field { display:grid; gap:4px; }.transform-action { width:100%; margin-top:12px; padding:8px; color:#071117; background:var(--accent); border-radius:4px; font-size:11px; font-weight:700; }.transform-action:disabled { cursor:not-allowed; opacity:.45; }
+.transform-card { min-height:0; padding:10px; }
+.transform-card .panel-title { margin-bottom:7px; }
+.transform-card .muted { margin:0; line-height:1.3; }
+.transform-card .direction-grid { gap:4px; margin:8px 0; }
+.transform-card .direction-button { height:38px; aspect-ratio:auto; font-size:18px; }
+.transform-card .transform-fields { gap:6px; }
+.transform-card .transform-fields .field { gap:3px; }
+.transform-card .transform-fields .field input { padding:4px; }
+.transform-card .transform-action { margin-top:8px; padding:6px; }

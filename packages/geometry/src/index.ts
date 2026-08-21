@@ -6,12 +6,22 @@ export interface Viewport { readonly zoom: number; readonly panMm: PointMm }
 export interface PointPx { readonly x: number; readonly y: number }
 export type ResizeHandle = "nw" | "n" | "ne" | "e" | "se" | "s" | "sw" | "w";
 export type GroupHandle = ResizeHandle | "center";
+export type Direction = "north-west" | "north" | "north-east" | "west" | "center" | "east" | "south-west" | "south" | "south-east";
 export type ResizeCorner = Extract<ResizeHandle, "nw" | "ne" | "se" | "sw">;
 export interface ResizeGeometry { readonly position: PointMm; readonly size: SizeMm }
 export type RealGeometryNodeKind = "corner" | "edge-midpoint" | "endpoint" | "center" | "cardinal";
 export interface RealGeometryNode { readonly kind: RealGeometryNodeKind; readonly point: PointMm }
 export const ELLIPSE_APPROXIMATION_SEGMENTS = 64;
 export const ROUNDED_RECTANGLE_APPROXIMATION_SEGMENTS = 8;
+
+export function directionVector(direction: Direction): PointMm {
+  const vectors: Readonly<Record<Direction, PointMm>> = {
+    "north-west": { x: -1, y: -1 }, north: { x: 0, y: -1 }, "north-east": { x: 1, y: -1 },
+    west: { x: -1, y: 0 }, center: { x: 0, y: 0 }, east: { x: 1, y: 0 },
+    "south-west": { x: -1, y: 1 }, south: { x: 0, y: 1 }, "south-east": { x: 1, y: 1 },
+  };
+  return vectors[direction];
+}
 
 const TAU = Math.PI * 2;
 const assertFinite = (value: number, name: string): void => { if (!Number.isFinite(value)) throw new Error(`${name} must be finite`); };

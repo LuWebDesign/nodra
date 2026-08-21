@@ -1,10 +1,10 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent, type PointerEvent, type ReactNode, type WheelEvent } from "react";
 import { createProject, elementId, layerId, pageId, revision, type DocumentSnapshot, type Element, type ElementId, type PointMm, type ProjectSnapshot } from "@nodra/domain";
-import { addToSelection, beginGesture, cancelGesture, clearSelection, commitGesture, createElement, deleteElement, dispatch, flipElements, moveElements, previewGesture, previewGestureFromBase, redo, resizeElement, resizeElements, rotateElement, rotateElementsAroundCenter, select, selectForPointerDown, shapeOperation, undo, updateElement, updateElementStyles, updatePage, type FlipAxis, type ShapeOperation } from "@nodra/editor-core";
-import { boundsOfElements, elementCenter, groupCenter, groupHandlePoints, realGeometryNodes, resizeHandle, rotatedResizeHandles, rotationFromDrag, rotationHandlePoints, type GroupHandle, type ResizeHandle } from "@nodra/geometry";
+import { addToSelection, beginGesture, cancelGesture, clearSelection, commitGesture, createElement, deleteElement, dispatch, duplicateElements, flipElements, moveElements, previewGesture, previewGestureFromBase, redo, resizeElement, resizeElements, rotateElement, rotateElementsAroundCenter, select, selectForPointerDown, shapeOperation, undo, updateElement, updateElementStyles, updatePage, type FlipAxis, type ShapeOperation } from "@nodra/editor-core";
+import { boundsOfElements, elementCenter, groupCenter, groupHandlePoints, realGeometryNodes, resizeHandle, rotatedResizeHandles, rotationFromDrag, rotationHandlePoints, type Direction, type GroupHandle, type ResizeHandle } from "@nodra/geometry";
 import { DebouncedAutosave, DexieProjectRepository, requestStoragePersistence } from "@nodra/persistence";
 import { renderSvg } from "@nodra/renderer-svg";
-import { canActivateRotation, centerPageInCanvas, clientPointToCanvas, hoveredSelectionCenter, isDrawingTool, marqueeSelection, movementExceedsThreshold, normalizeBounds, normalizeDrag, pagePointToCanvas, pickElement, pickNode, screenDeltaToMm, screenPointToMm, selectedNodeAnchor, snapMoveDelta, zoomAtPoint, type NodeHit, type SnapGuide, type TransformMode } from "./interaction.js";
+import { canActivateRotation, centerPageInCanvas, clientPointToCanvas, hoveredSelectionCenter, isDrawingTool, marqueeSelection, movementExceedsThreshold, normalizeBounds, normalizeDrag, pagePointToCanvas, pickElement, pickNode, pointerDownIntent, screenDeltaToMm, screenPointToMm, selectedNodeAnchor, snapMoveDelta, zoomAtPoint, type NodeHit, type SnapGuide, type TransformMode } from "./interaction.js";
 import { aspectGeometryPatch, aspectSize, cornerRadiusPatch, formatMm, geometryValue, rotationDegreesValue, rotationPatch, type GeometryField, type PropertyElement } from "./propertyBar.js";
 import { useDocumentStore, usePersistenceStore, useUiStore, useViewportStore, type Tool } from "./stores.js";
 
@@ -36,7 +36,7 @@ type ActiveInteraction = {
   center?: PointMm;
 };
 
-type InspectorTab = "properties" | "appearance" | "text";
+type InspectorTab = "properties" | "transform" | "text";
 
 const toolCursorIcons: Record<Tool, string> = { select: "↖", rectangle: "□", ellipse: "○", line: "╱", pan: "✣" };
 const toolCursorLabels: Record<Tool, string> = { select: "Seleccion", rectangle: "Rectángulo", ellipse: "Elipse", line: "Línea", pan: "Desplazar" };
@@ -58,6 +58,7 @@ export function App() {
   const [centerHover, setCenterHover] = useState<{ elementId: ElementId; point: PointMm }>();
   const [transformMode, setTransformMode] = useState<TransformMode>("resize");
   const [inspectorTab, setInspectorTab] = useState<InspectorTab>("properties");
+  const [transformDirection, setTransformDirection] = useState<Direction>("center");
   const repository = useMemo(() => new DexieProjectRepository(), []);
   const autosave = useMemo(() => new DebouncedAutosave(repository), [repository]);
   const canvas = useRef<HTMLDivElement>(null);
@@ -65,6 +66,7 @@ export function App() {
   const interaction = useRef<ActiveInteraction | undefined>(undefined);
   const viewportInteracted = useRef(false);
   const centeredViewport = useRef<string | undefined>(undefined);
+  const recoveredNotice = useRef(false);
   editorRef.current = editor;
 
   useEffect(() => {
@@ -77,12 +79,12 @@ export function App() {
       if (!result.ok) return;
       const recovered = "pages" in result.revision.document ? result.revision.document : createProject(result.revision.document);
       setProject(recovered);
+      recoveredNotice.current = true;
       persist.set("recovered", "Revisión local recuperada");
     });
     return () => {
       removeEventListener("online", on);
       removeEventListener("offline", off);
-      void repository.close();
     };
   }, [repository]);
 
@@ -211,9 +213,11 @@ export function App() {
 
   useEffect(() => { if (!interaction.current) setSnapGuide(undefined); }, [editor]);
   useEffect(() => {
-    persist.set(online ? "saving" : "offline", online ? "Guardando localmente" : "Sin conexión — la edición permanece local");
+    const preserveRecoveryNotice = recoveredNotice.current;
+    recoveredNotice.current = false;
+    if (!preserveRecoveryNotice) persist.set(online ? "saving" : "offline", online ? "Guardando localmente" : "Sin conexión — la edición permanece local");
     autosave.schedule({ id: project.id, name: "Diseño sin título", updatedAt: Date.now() }, project);
-    void autosave.flush().then((result) => { if (result?.ok) persist.set("saved", "Guardado localmente"); });
+    void autosave.flush().then((result) => { if (result?.ok && !preserveRecoveryNotice) persist.set("saved", "Guardado localmente"); });
   }, [project, online]);
 
   const rendered = renderSvg(document, { zoom: 1, panMm: { x: 0, y: 0 } });
@@ -258,14 +262,12 @@ export function App() {
     const point = pointAt(event);
     const nodeHit = transformMode === "resize" ? pickNode(editorRef.current.document, point, zoom) : undefined;
     const hit = nodeHit?.elementId ?? pickElement(editorRef.current.document, point, zoom);
-    if (isDrawingTool(tool)) {
-      if (hit) setEditorState(selectForPointerDown(editorRef.current, hit, event.shiftKey));
+    if (isDrawingTool(tool) && pointerDownIntent(tool, hit) === "draw") {
       event.currentTarget.setPointerCapture(event.pointerId);
       setEditorState(beginGesture(editorRef.current));
       interaction.current = { pointerId: event.pointerId, lastX: event.clientX, lastY: event.clientY, kind: "draw", dragged: false, start: point, startClient: { x: event.clientX, y: event.clientY }, tool, ids: [id()] };
       return;
     }
-    if (tool !== "select") return;
     if (hit) {
       const next = selectForPointerDown(editorRef.current, hit, event.shiftKey);
       setEditorState(next);
@@ -529,6 +531,23 @@ export function App() {
     if (next === current) return;
     setEditorState(next);
   };
+  const paletteControls = () => <section className="inspector-card inspector-appearance-card"><div className="panel-title">APARIENCIA</div><div className="muted">Paleta: clic izquierdo para relleno · clic derecho para contorno</div><div className="palette"><button className="swatch no-fill" aria-label="Sin relleno" title="Sin relleno" onClick={() => applyPalette(null, "fill")} onContextMenu={(event) => event.preventDefault()}>×</button>{palette.map((color) => <button key={color} className="swatch" aria-label={`Color ${color}`} title={`Clic izquierdo: relleno · clic derecho: contorno (${color})`} style={{ background: color }} onClick={() => applyPalette(color, "fill")} onContextMenu={(event) => { event.preventDefault(); applyPalette(color, "stroke"); }} />)}</div></section>;
+  const transformDirections: readonly { direction: Direction; label: string; marker: string }[] = [
+    { direction: "north-west", label: "Noroeste", marker: "↖" }, { direction: "north", label: "Norte", marker: "↑" }, { direction: "north-east", label: "Noreste", marker: "↗" },
+    { direction: "west", label: "Oeste", marker: "←" }, { direction: "center", label: "Centro: superponer", marker: "•" }, { direction: "east", label: "Este", marker: "→" },
+    { direction: "south-west", label: "Suroeste", marker: "↙" }, { direction: "south", label: "Sur", marker: "↓" }, { direction: "south-east", label: "Sureste", marker: "↘" },
+  ];
+  const transformControls = () => {
+    const distanceKey = "transform:distance";
+    const countKey = "transform:count";
+    const duplicate = () => {
+      const distance = Number((drafts[distanceKey] ?? "10").trim());
+      const count = Number((drafts[countKey] ?? "1").trim());
+      if (!selectedElements.length || !Number.isFinite(distance) || distance < 0 || !Number.isInteger(count) || count < 1) return;
+      setEditorState(dispatch(editorRef.current, duplicateElements(selection, transformDirection, distance, count)));
+    };
+    return <section className="inspector-card transform-card"><div className="panel-title">REPRODUCCIÓN DIRECCIONAL</div><p className="muted">Crea copias separadas por el espacio indicado. El centro superpone la copia.</p><div className="direction-grid" role="group" aria-label="Dirección de reproducción">{transformDirections.map(({ direction, label, marker }) => <button key={direction} type="button" className={transformDirection === direction ? "direction-button active" : "direction-button"} aria-label={label} aria-pressed={transformDirection === direction} onClick={() => setTransformDirection(direction)}><span aria-hidden="true">{marker}</span></button>)}</div><div className="transform-fields"><label className="field"><span>Distancia</span><input inputMode="decimal" aria-label="Distancia entre copias en milímetros" value={drafts[distanceKey] ?? "10"} onChange={(event) => setDrafts((current) => ({ ...current, [distanceKey]: event.target.value }))} /></label><label className="field"><span>Copias</span><input inputMode="numeric" aria-label="Cantidad de copias" value={drafts[countKey] ?? "1"} onChange={(event) => setDrafts((current) => ({ ...current, [countKey]: event.target.value }))} /></label></div><button type="button" className="transform-action" disabled={!selectedElements.length} onClick={duplicate}>Reproducir copias</button></section>;
+  };
   const mirrorButton = (axis: FlipAxis) => {
     const label = axis === "horizontal" ? "Espejo horizontal" : "Espejo vertical";
     const description = axis === "horizontal" ? "Voltear la selección horizontalmente." : "Voltear la selección verticalmente.";
@@ -607,12 +626,12 @@ export function App() {
        <aside className="inspector">
          <div className="inspector-tabs" role="tablist" aria-label="Inspector">
            <button type="button" role="tab" aria-selected={inspectorTab === "properties"} className={inspectorTab === "properties" ? "active" : ""} onClick={() => setInspectorTab("properties")}>Propiedades</button>
-           <button type="button" role="tab" aria-selected={inspectorTab === "appearance"} className={inspectorTab === "appearance" ? "active" : ""} onClick={() => setInspectorTab("appearance")}>Apariencia</button>
+            <button type="button" role="tab" aria-selected={inspectorTab === "transform"} className={inspectorTab === "transform" ? "active" : ""} onClick={() => setInspectorTab("transform")}>Transformar</button>
            <button type="button" role="tab" aria-selected={inspectorTab === "text"} className={inspectorTab === "text" ? "active" : ""} onClick={() => setInspectorTab("text")}>Texto</button>
          </div>
          <div className="inspector-tab-content" role="tabpanel">
-             {inspectorTab === "properties" && (selectedElements.length === 0 ? <section className="inspector-card"><div className="panel-title">PÁGINA</div><div className="preset-row"><button onClick={() => setPage(1200, 900)}>Horizontal</button><button onClick={() => setPage(900, 1200)}>Vertical</button></div><div className="fields"><Field label="W" value={document.page.width} onChange={(value) => setPage(value, document.page.height)} /><Field label="H" value={document.page.height} onChange={(value) => setPage(document.page.width, value)} /></div><label className="grid-toggle"><input type="checkbox" checked={grid} onChange={(event) => setGrid(event.target.checked)} /> Mostrar cuadrícula del espacio de trabajo</label></section> : <section className="inspector-card inspector-object-card"><div className="panel-title">OBJETO</div>{propertyElement ? <div className="inspector-object-properties">{objectPropertySections(true)}</div> : <><div className="selected-type">{selectedElement?.type === "contour" ? "CONTORNO" : "LÍNEA"}</div><p className="muted">{selectedElement?.type === "contour" ? "Los contornos conservan su geometría real; las dimensiones no están disponibles." : "Las líneas no tienen dimensiones rectangulares."}</p>{selectedElement && rotationField(selectedElement)}</>}</section>)}
-            {inspectorTab === "appearance" && <section className="inspector-card"><div className="panel-title">APARIENCIA</div><div className="muted">Paleta: clic izquierdo para relleno · clic derecho para contorno</div><div className="palette"><button className="swatch no-fill" aria-label="Sin relleno" title="Sin relleno" onClick={() => applyPalette(null, "fill")} onContextMenu={(event) => event.preventDefault()}>×</button>{palette.map((color) => <button key={color} className="swatch" aria-label={`Color ${color}`} title={`Clic izquierdo: relleno · clic derecho: contorno (${color})`} style={{ background: color }} onClick={() => applyPalette(color, "fill")} onContextMenu={(event) => { event.preventDefault(); applyPalette(color, "stroke"); }} />)}</div></section>}
+              {inspectorTab === "properties" && <>{selectedElements.length === 0 ? <section className="inspector-card"><div className="panel-title">PÁGINA</div><div className="preset-row"><button onClick={() => setPage(1200, 900)}>Horizontal</button><button onClick={() => setPage(900, 1200)}>Vertical</button></div><div className="fields"><Field label="W" value={document.page.width} onChange={(value) => setPage(value, document.page.height)} /><Field label="H" value={document.page.height} onChange={(value) => setPage(document.page.width, value)} /></div><label className="grid-toggle"><input type="checkbox" checked={grid} onChange={(event) => setGrid(event.target.checked)} /> Mostrar cuadrícula del espacio de trabajo</label></section> : <section className="inspector-card inspector-object-card"><div className="panel-title">OBJETO</div>{propertyElement ? <div className="inspector-object-properties">{objectPropertySections(true)}</div> : <><div className="selected-type">{selectedElement?.type === "contour" ? "CONTORNO" : "LÍNEA"}</div><p className="muted">{selectedElement?.type === "contour" ? "Los contornos conservan su geometría real; las dimensiones no están disponibles." : "Las líneas no tienen dimensiones rectangulares."}</p>{selectedElement && rotationField(selectedElement)}</>}</section>}{paletteControls()}</>}
+              {inspectorTab === "transform" && transformControls()}
            {inspectorTab === "text" && <section className="inspector-card"><div className="panel-title">TEXTO</div><p className="muted">Las propiedades de texto estarán disponibles en una próxima iteración.</p></section>}
          </div>
          <section className="inspector-lower-card"><div className="panel-title">CAPAS</div>{document.layers.map((layer) => <div className="layer" key={layer.id}><span>{layer.name}</span><span>{layer.visible ? "Visible" : "Oculta"}</span></div>)}</section>

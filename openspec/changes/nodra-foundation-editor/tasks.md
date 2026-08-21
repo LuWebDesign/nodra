@@ -47,5 +47,5 @@ Chain strategy: stacked-to-main
 
 ## Phase 4: Documentation and Verification
 
-- [ ] 4.1 Create `docs/initial-plan.md` and ADRs `0001-vite-react-spa`, `0002-custom-domain-model`, `0003-svg-renderer`, `0004-millimetre-top-left-units`, `0005-offline-indexeddb`, `0006-command-history`.
-- [ ] 4.2 Add Playwright smoke coverage for create-transform-undo, SVG rendering, reload recovery, offline status, and Prepare refusal; run all CI gates.
+- [x] 4.1 Create `docs/initial-plan.md` and ADRs `0001-document-revisions-and-persistence-invariants`, `0002-vite-react-spa`, `0003-custom-domain-model`, `0004-millimetre-top-left-units`, `0005-offline-indexeddb`, `0006-command-history`.
+- [x] 4.2 Add Playwright smoke coverage for create-transform-undo, SVG rendering, reload recovery, offline status, and Prepare refusal; run all CI gates.

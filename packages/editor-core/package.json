@@ -6,6 +6,7 @@
   "scripts": { "test": "vitest run" },
   "dependencies": {
     "@nodra/domain": "workspace:*",
+    "@nodra/geometry": "workspace:*",
     "@nodra/validation": "workspace:*"
   },
   "exports": { ".": "./src/index.ts" }

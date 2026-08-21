@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createDocument, elementId, layerId, type RectangleElement } from "@nodra/domain";
-import { addToSelection, beginGesture, clearSelection, commitGesture, createEditor, createElement, dispatch, flipElements, moveElement, moveElements, previewGesture, previewGestureFromBase, redo, removeFromSelection, reorderLayer, resizeElement, resizeElements, rotateElementsAroundCenter, select, selectForPointerDown, setLayerVisibility, shapeOperation, toggleSelection, undo, updateElement, updateElementStyles } from "./index.js";
+import { addToSelection, beginGesture, clearSelection, commitGesture, createEditor, createElement, dispatch, duplicateElements, flipElements, moveElement, moveElements, previewGesture, previewGestureFromBase, redo, removeFromSelection, reorderLayer, resizeElement, resizeElements, rotateElementsAroundCenter, select, selectForPointerDown, setLayerVisibility, shapeOperation, toggleSelection, undo, updateElement, updateElementStyles } from "./index.js";
+import type { Direction } from "@nodra/geometry";
 
 const rectangle: RectangleElement = { type: "rectangle", id: elementId("r1"), layerId: layerId("default"), position: { x: 1, y: 2 }, size: { width: 10, height: 5 }, cornerRadius: 0, rotation: 0, style: { stroke: "#000", strokeWidth: 1 } };
 const document = createDocument("doc", [{ id: layerId("default"), name: "Default", visible: true, order: 0 }]);
@@ -213,5 +214,46 @@ describe("editor core", () => {
     const undone = undo(state);
     expect(undone.selection).toEqual([rectangle.id, unrelated.id]);
     expect(redo(undone).selection).toEqual([generated?.id]);
+  });
+
+  it("duplicates one object in every page-relative direction with edge spacing", () => {
+    const directions: readonly { direction: Direction; x: number; y: number }[] = [
+      { direction: "north-west", x: -15, y: -10 }, { direction: "north", x: 0, y: -10 }, { direction: "north-east", x: 15, y: -10 },
+      { direction: "west", x: -15, y: 0 }, { direction: "center", x: 0, y: 0 }, { direction: "east", x: 15, y: 0 },
+      { direction: "south-west", x: -15, y: 10 }, { direction: "south", x: 0, y: 10 }, { direction: "south-east", x: 15, y: 10 },
+    ];
+    for (const testCase of directions) {
+      const state = select(createEditor({ ...document, elements: [rectangle] }), [rectangle.id]);
+      const duplicated = dispatch(state, duplicateElements(state.selection, testCase.direction, 5, 1));
+      expect(duplicated.document.elements).toHaveLength(2);
+      expect(duplicated.document.elements[1]).toMatchObject({ position: { x: rectangle.position.x + testCase.x, y: rectangle.position.y + testCase.y }, size: rectangle.size, rotation: rectangle.rotation, style: rectangle.style });
+      expect(duplicated.document.elements[1]?.id).not.toBe(rectangle.id);
+      expect(duplicated.selection).toEqual([duplicated.document.elements[1]!.id]);
+    }
+  });
+
+  it("duplicates multiple geometry types, counts copies, and undoes atomically", () => {
+    const line = { type: "line" as const, id: elementId("duplicate-line"), layerId: rectangle.layerId, start: { x: 1, y: 2 }, end: { x: 4, y: 6 }, rotation: 0, style: rectangle.style };
+    const contour = { type: "contour" as const, id: elementId("duplicate-contour"), layerId: rectangle.layerId, position: { x: 20, y: 2 }, size: { width: 4, height: 3 }, contours: [{ points: [{ x: 20, y: 2 }, { x: 24, y: 2 }, { x: 24, y: 5 }, { x: 20, y: 2 }] }], fillRule: "evenodd" as const, rotation: 0, style: rectangle.style };
+    const state = select(createEditor({ ...document, elements: [rectangle, line, contour] }), [rectangle.id, line.id, contour.id]);
+    const duplicated = dispatch(state, duplicateElements(state.selection, "south-east", 2, 2));
+    expect(duplicated.document.elements).toHaveLength(9);
+    const copiedLine = duplicated.document.elements.find((element) => element.type === "line" && element.id !== line.id);
+    const copiedContour = duplicated.document.elements.find((element) => element.type === "contour" && element.id !== contour.id);
+    expect(copiedLine).toMatchObject({ start: { x: 26, y: 9 }, end: { x: 29, y: 13 } });
+    expect(copiedContour?.type === "contour" ? copiedContour.contours[0]?.points : []).toContainEqual({ x: 45, y: 9 });
+    expect(duplicated.selection).toHaveLength(6);
+    expect(duplicated.undo).toHaveLength(1);
+    const undone = undo(duplicated);
+    expect(undone.document.elements).toEqual([rectangle, line, contour]);
+    expect(undone.selection).toEqual(state.selection);
+    expect(redo(undone).selection).toHaveLength(6);
+  });
+
+  it("rejects invalid duplication input without mutation or history", () => {
+    const state = select(createEditor({ ...document, elements: [rectangle] }), [rectangle.id]);
+    expect(dispatch(state, duplicateElements(state.selection, "east", -1, 1))).toBe(state);
+    expect(dispatch(state, duplicateElements(state.selection, "east", 1, 0))).toBe(state);
+    expect(dispatch(state, duplicateElements(state.selection, "east", 1, 1.5))).toBe(state);
   });
 });
