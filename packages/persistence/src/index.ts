@@ -137,15 +137,21 @@ export class DexieProjectRepository implements ProjectRepository {
   async saveProject(metadata: ProjectMetadata, document: DocumentSnapshot | ProjectSnapshot): Promise<SaveResult> {
     const checked = isProjectInput(document) ? validateProject(document) : validateDocument(document);
     if (!checked.success) return { ok: false, status: "failed", revision: document.revision, error: checked.error };
+    if (checked.data.id !== metadata.id) return { ok: false, status: "failed", revision: document.revision, error: "Project metadata and document identity do not match" };
     try {
       const record: RevisionRow = { key: `${metadata.id}:${document.revision}`, recordVersion: CURRENT_RECORD_VERSION, projectId: metadata.id, revision: document.revision, savedAt: Date.now(), document: checked.data };
+      let durableRevision: number = document.revision;
       await this.db.transaction("rw", this.db.projects, this.db.revisions, async () => {
         const latest = await this.db.revisions.where("projectId").equals(metadata.id).sortBy("revision");
-        if (latest.at(-1) && (latest.at(-1)?.revision ?? -1) > document.revision) return;
+        const newest = latest.at(-1);
+        if (newest && newest.revision > document.revision) {
+          durableRevision = newest.revision;
+          return;
+        }
         await this.db.revisions.put(record);
         await this.db.projects.put({ ...metadata, id: metadata.id, updatedAt: record.savedAt });
       });
-      return { ok: true, status: "saved", revision: document.revision };
+      return { ok: true, status: "saved", revision: durableRevision };
     } catch (error) { return { ok: false, status: "failed", revision: document.revision, error: error instanceof Error ? error.message : "Local write failed" }; }
   }
 

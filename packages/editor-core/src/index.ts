@@ -110,9 +110,12 @@ export const updatePage = (width: number, height: number): EditorCommand => ({
 
 export const setLayerVisibility = (id: LayerId, visible: boolean): EditorCommand => ({
   name: `layer-visibility:${id}`,
-  apply: (document) => document.layers.some((layer) => layer.id === id)
-    ? result({ ...document, revision: nextRevision(document.revision), layers: document.layers.map((layer) => layer.id === id ? { ...layer, visible } : layer) })
-    : { success: false, error: `Layer not found: ${id}` },
+  apply: (document) => {
+    const layer = document.layers.find((current) => current.id === id);
+    if (!layer) return { success: false, error: `Layer not found: ${id}` };
+    if (layer.visible === visible) return { success: true, document };
+    return result({ ...document, revision: nextRevision(document.revision), layers: document.layers.map((current) => current.id === id ? { ...current, visible } : current) });
+  },
 });
 
 export const reorderLayer = (id: LayerId, order: number): EditorCommand => ({
@@ -154,7 +157,7 @@ export function clearSelection(state: EditorState): EditorState { return { ...st
 
 export function dispatch(state: EditorState, command: EditorCommand): EditorState {
   const applied = command.apply(state.document);
-  if (!applied.success) return state;
+  if (!applied.success || applied.document === state.document) return state;
   return { ...state, document: applied.document, undo: [...state.undo, { command: command.name, before: state.document, after: applied.document }], redo: [], gesture: undefined };
 }
 

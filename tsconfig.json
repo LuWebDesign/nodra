@@ -30,5 +30,5 @@
     "types": ["node"],
     "noEmit": true
   },
-    "include": ["*.config.ts", "eslint.config.mjs", "packages/**/*.ts", "apps/**/*.ts", "apps/**/*.tsx"]
+    "include": ["*.config.ts", "eslint.config.mjs", "packages/**/*.ts", "apps/**/*.ts", "apps/**/*.tsx", "tests/**/*.ts"]
 }

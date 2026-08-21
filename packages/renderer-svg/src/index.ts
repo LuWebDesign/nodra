@@ -1,8 +1,9 @@
-import type { Element } from "@nodra/domain";
+import { CURRENT_SCHEMA_VERSION, type Element } from "@nodra/domain";
 import { mmToScreen, type Viewport } from "@nodra/geometry";
 import { validateDocument } from "@nodra/validation";
 
 const MAX_ISSUES = 8;
+const SUPPORTED_SCHEMA_VERSIONS = new Set([1, 2, CURRENT_SCHEMA_VERSION]);
 
 export interface SvgRenderer {
   render(document: unknown, viewport: unknown): RenderResult;
@@ -61,7 +62,7 @@ export function renderSvg(document: unknown, viewport: unknown): RenderResult {
   const checked = validateDocument(document);
   if (!checked.success) {
     const candidate = typeof document === "object" && document !== null ? document as { schemaVersion?: unknown; elements?: unknown } : undefined;
-    const unsupported = candidate?.schemaVersion !== 1 || (Array.isArray(candidate?.elements) && candidate.elements.some((element) => typeof element === "object" && element !== null && !["rectangle", "ellipse", "line"].includes((element as { type?: unknown }).type as string)));
+    const unsupported = !SUPPORTED_SCHEMA_VERSIONS.has(candidate?.schemaVersion as number) || (Array.isArray(candidate?.elements) && candidate.elements.some((element) => typeof element === "object" && element !== null && !["rectangle", "ellipse", "line"].includes((element as { type?: unknown }).type as string)));
     return { success: false, reason: unsupported ? "unsupported" : "invalid", error: checked.error.slice(0, 512), issues: checked.issues.slice(0, MAX_ISSUES).map((issue) => `${issue.path.join(".") || "document"}: ${issue.message}`) };
   }
   const checkedViewport = viewportResult(viewport);

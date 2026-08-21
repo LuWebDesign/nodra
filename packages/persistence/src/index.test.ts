@@ -32,8 +32,16 @@ describe("DexieProjectRepository", () => {
     await db.saveProject(metadata, { ...first, revision: revision(3) });
     const stale = await db.saveProject(metadata, { ...first, revision: revision(1) });
     expect(stale.ok).toBe(true);
+    expect(stale.revision).toBe(3);
     const recovered = await db.getProject(metadata.id);
     expect(recovered.ok && recovered.revision.revision).toBe(3);
+  });
+
+  it("rejects metadata and document identity mismatches before writing", async () => {
+    db = await repository();
+    const mismatched = await db.saveProject(metadata, { ...document(), id: "other-project" as never });
+    expect(mismatched).toMatchObject({ ok: false, status: "failed" });
+    expect((await db.getProject(metadata.id)).ok).toBe(false);
   });
 
   it("skips corrupt and unknown-version records during recovery", async () => {

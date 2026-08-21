@@ -45,6 +45,15 @@ describe("SVG renderer boundary", () => {
     expect(renderSvg(document(), { zoom: 0, panMm: { x: 0, y: 0 } })).toMatchObject({ success: false, reason: "invalid" });
   });
 
+  it("classifies invalid schema-3 documents as invalid rather than unsupported", () => {
+    const invalid = { ...document(), revision: -1 };
+    expect(renderSvg(invalid, { zoom: 1, panMm: { x: 0, y: 0 } })).toMatchObject({ success: false, reason: "invalid" });
+  });
+
+  it("classifies genuinely unsupported schema versions as unsupported", () => {
+    expect(renderSvg({ ...document(), schemaVersion: 99 }, { zoom: 1, panMm: { x: 0, y: 0 } })).toMatchObject({ success: false, reason: "unsupported" });
+  });
+
   it("does not mutate the source snapshot", () => {
     const source = document();
     const before = structuredClone(source);
