@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { boundsOf, degreesToRadians, elementCenter, hitTest, mmToScreen, radiansToDegrees, realGeometryNodes, resizeHandle, rotatedLineEndpoints, rotationFromDrag, rotationHandlePoints, screenToMm, validateSize } from "./index.js";
+import { boundsOf, boundsOfElements, degreesToRadians, elementCenter, groupCenter, groupHandlePoints, hitTest, mmToScreen, radiansToDegrees, realGeometryNodes, resizeGroup, resizeHandle, rotatedLineEndpoints, rotateElements, rotationFromDrag, rotationHandlePoints, screenToMm, validateSize } from "./index.js";
 import { elementId, layerId } from "@nodra/domain";
 
 const style = { stroke: "#000", strokeWidth: 0.2 };
@@ -85,5 +85,22 @@ describe("canonical millimetre geometry", () => {
     expect(hitTest(line, { x: 5, y: 4 }, 0.01)).toBe(true);
     expect(hitTest(line, { x: 9, y: 0 }, 0.01)).toBe(false);
     expect(realGeometryNodes(line)).toEqual([{ kind: "endpoint", point: start }, { kind: "center", point: { x: 5, y: 0 } }, { kind: "endpoint", point: end }]);
+  });
+  it("computes nine group handles and scales a group from one atomic geometry result", () => {
+    const second = { ...rectangle, id: elementId("r2"), position: { x: 40, y: 30 }, size: { width: 10, height: 10 } };
+    const elements = [rectangle, second];
+    const bounds = boundsOfElements(elements);
+    expect(Object.keys(groupHandlePoints(bounds))).toHaveLength(9);
+    expect(groupCenter(bounds)).toEqual({ x: 30, y: 30 });
+    expect(resizeGroup(elements, "se", { x: 70, y: 50 })[0]).toMatchObject({ position: { x: 10, y: 20 }, size: { width: 30, height: 15 } });
+    expect(resizeGroup(elements, "e", { x: 70, y: 999 }, 1, true)[1]).toMatchObject({ size: { width: 15, height: 15 } });
+  });
+  it("rotates group members around the axis-aligned group center", () => {
+    const second = { ...rectangle, id: elementId("r3"), position: { x: 40, y: 20 } };
+    const line = { type: "line" as const, id: elementId("r-line"), layerId: layerId("l"), start: { x: 0, y: 0 }, end: { x: 10, y: 0 }, rotation: 0, style };
+    const next = rotateElements([rectangle, second], groupCenter(boundsOfElements([rectangle, second])), Math.PI / 2);
+    expect(next[0]).toMatchObject({ position: { x: 25, y: 5 }, rotation: Math.PI / 2 });
+    expect(next[1]).toMatchObject({ rotation: Math.PI / 2 });
+    expect(rotateElements([line], { x: 5, y: 0 }, Math.PI / 2)[0]).toMatchObject({ start: { x: 5, y: -5 }, end: { x: 5, y: 5 }, rotation: 0 });
   });
 });

@@ -4,6 +4,7 @@ export interface Bounds { readonly x: number; readonly y: number; readonly width
 export interface Viewport { readonly zoom: number; readonly panMm: PointMm }
 export interface PointPx { readonly x: number; readonly y: number }
 export type ResizeHandle = "nw" | "n" | "ne" | "e" | "se" | "s" | "sw" | "w";
+export type GroupHandle = ResizeHandle | "center";
 export type ResizeCorner = Extract<ResizeHandle, "nw" | "ne" | "se" | "sw">;
 export interface ResizeGeometry { readonly position: PointMm; readonly size: SizeMm }
 export type RealGeometryNodeKind = "corner" | "edge-midpoint" | "endpoint" | "center" | "cardinal";
@@ -174,6 +175,36 @@ export function boundsOf(element: Element): Bounds {
   const points = corners(element); const xs = points.map((point) => point.x); const ys = points.map((point) => point.y);
   return { x: Math.min(...xs), y: Math.min(...ys), width: Math.max(...xs) - Math.min(...xs), height: Math.max(...ys) - Math.min(...ys) };
 }
+export function boundsOfElements(elements: readonly Element[]): Bounds { if (!elements.length) throw new Error("At least one element is required"); const values = elements.map(boundsOf); const x = Math.min(...values.map((v) => v.x)); const y = Math.min(...values.map((v) => v.y)); const right = Math.max(...values.map((v) => v.x + v.width)); const bottom = Math.max(...values.map((v) => v.y + v.height)); return { x, y, width: right - x, height: bottom - y }; }
+export function groupCenter(bounds: Bounds): PointMm { return { x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2 }; }
+export function groupHandlePoints(bounds: Bounds): Readonly<Record<GroupHandle, PointMm>> { const r = bounds.x + bounds.width; const b = bounds.y + bounds.height; return { nw: { x: bounds.x, y: bounds.y }, n: { x: bounds.x + bounds.width / 2, y: bounds.y }, ne: { x: r, y: bounds.y }, e: { x: r, y: bounds.y + bounds.height / 2 }, se: { x: r, y: b }, s: { x: bounds.x + bounds.width / 2, y: b }, sw: { x: bounds.x, y: b }, w: { x: bounds.x, y: bounds.y + bounds.height / 2 }, center: groupCenter(bounds) }; }
+export function resizeGroup(elements: readonly Element[], handle: ResizeHandle, pointer: PointMm, minimumSize = 1, aspectLock = false): readonly Element[] {
+  const bounds = boundsOfElements(elements);
+  const horizontal = handle.includes("e") || handle.includes("w");
+  const vertical = handle.includes("n") || handle.includes("s");
+  const anchorX = handle.includes("e") ? bounds.x : handle.includes("w") ? bounds.x + bounds.width : bounds.x + bounds.width / 2;
+  const anchorY = handle.includes("s") ? bounds.y : handle.includes("n") ? bounds.y + bounds.height : bounds.y + bounds.height / 2;
+  let width = Math.max(minimumSize, horizontal ? Math.abs(pointer.x - anchorX) : bounds.width);
+  let height = Math.max(minimumSize, vertical ? Math.abs(pointer.y - anchorY) : bounds.height);
+  if (aspectLock) {
+    const ratio = bounds.width > 0 && bounds.height > 0 ? bounds.width / bounds.height : 1;
+    if (horizontal && !vertical) height = Math.max(minimumSize, width / ratio);
+    else if (vertical && !horizontal) width = Math.max(minimumSize, height * ratio);
+    else if (horizontal && vertical) {
+      const scale = Math.max(width / Math.max(bounds.width, minimumSize), height / Math.max(bounds.height, minimumSize));
+      width = Math.max(minimumSize, bounds.width * scale);
+      height = Math.max(minimumSize, bounds.height * scale);
+    }
+  }
+  const x = handle.includes("w") ? anchorX - width : handle.includes("e") ? anchorX : bounds.x;
+  const y = handle.includes("n") ? anchorY - height : handle.includes("s") ? anchorY : bounds.y;
+  const sx = bounds.width ? width / bounds.width : 1;
+  const sy = bounds.height ? height / bounds.height : 1;
+  return elements.map((e) => e.type === "line"
+    ? { ...e, start: { x: x + (e.start.x - bounds.x) * sx, y: y + (e.start.y - bounds.y) * sy }, end: { x: x + (e.end.x - bounds.x) * sx, y: y + (e.end.y - bounds.y) * sy } }
+    : { ...e, position: { x: x + (elementCenter(e).x - bounds.x) * sx - e.size.width * sx / 2, y: y + (elementCenter(e).y - bounds.y) * sy - e.size.height * sy / 2 }, size: { width: e.size.width * sx, height: e.size.height * sy } });
+}
+export function rotateElements(elements: readonly Element[], center: PointMm, delta: number): readonly Element[] { const rotatePoint = (p: PointMm) => transformPoint({ x: p.x - center.x, y: p.y - center.y }, center, delta); return elements.map((e) => e.type === "line" ? { ...e, start: rotatePoint(e.start), end: rotatePoint(e.end) } : (() => { const c = rotatePoint(elementCenter(e)); return { ...e, position: { x: c.x - e.size.width / 2, y: c.y - e.size.height / 2 }, rotation: normalizeAngle(e.rotation + delta) }; })()); }
 
 const distanceToSegment = (point: PointMm, start: PointMm, end: PointMm): number => {
   const dx = end.x - start.x; const dy = end.y - start.y; const lengthSquared = dx * dx + dy * dy;

@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent, type PointerEvent, type ReactNode, type WheelEvent } from "react";
 import { createProject, elementId, layerId, pageId, revision, type DocumentSnapshot, type Element, type ElementId, type PointMm, type ProjectSnapshot } from "@nodra/domain";
-import { addToSelection, beginGesture, cancelGesture, clearSelection, commitGesture, createElement, deleteElement, dispatch, moveElements, previewGesture, previewGestureFromBase, redo, resizeElement, rotateElement, select, selectForPointerDown, undo, updateElement, updateElementStyles, updatePage } from "@nodra/editor-core";
-import { elementCenter, realGeometryNodes, resizeHandle, rotatedResizeHandles, rotationFromDrag, rotationHandlePoints, type ResizeHandle } from "@nodra/geometry";
+import { addToSelection, beginGesture, cancelGesture, clearSelection, commitGesture, createElement, deleteElement, dispatch, moveElements, previewGesture, previewGestureFromBase, redo, resizeElement, resizeElements, rotateElement, rotateElementsAroundCenter, select, selectForPointerDown, undo, updateElement, updateElementStyles, updatePage } from "@nodra/editor-core";
+import { boundsOfElements, elementCenter, groupCenter, groupHandlePoints, realGeometryNodes, resizeHandle, rotatedResizeHandles, rotationFromDrag, rotationHandlePoints, type GroupHandle, type ResizeHandle } from "@nodra/geometry";
 import { DebouncedAutosave, DexieProjectRepository, requestStoragePersistence } from "@nodra/persistence";
 import { renderSvg } from "@nodra/renderer-svg";
 import { canActivateRotation, centerPageInCanvas, clientPointToCanvas, hoveredSelectionCenter, isDrawingTool, marqueeSelection, movementExceedsThreshold, normalizeBounds, normalizeDrag, pagePointToCanvas, pickElement, pickNode, screenDeltaToMm, screenPointToMm, selectedNodeAnchor, snapMoveDelta, zoomAtPoint, type NodeHit, type SnapGuide, type TransformMode } from "./interaction.js";
@@ -28,7 +28,7 @@ type ActiveInteraction = {
   startClient?: PointMm;
   previewed?: boolean;
   tool?: Exclude<Tool, "select" | "pan">;
-  handle?: ResizeHandle;
+  handle?: GroupHandle;
   anchor?: NodeHit;
   element?: Element;
   document?: DocumentSnapshot;
@@ -52,6 +52,7 @@ export function App() {
   const [snapGuide, setSnapGuide] = useState<SnapGuide>();
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [cursorPoint, setCursorPoint] = useState<PointMm>();
+  const [groupAspectLock, setGroupAspectLock] = useState(false);
   const [centerHover, setCenterHover] = useState<{ elementId: ElementId; point: PointMm }>();
   const [transformMode, setTransformMode] = useState<TransformMode>("resize");
   const repository = useMemo(() => new DexieProjectRepository(), []);
@@ -113,6 +114,10 @@ export function App() {
 
   const selectedElements = selection.map((selectedId) => document.elements.find((element) => element.id === selectedId)).filter((element): element is Element => Boolean(element));
   const selectedElement = selectedElements.length === 1 ? selectedElements[0] : undefined;
+  const selectedBounds = selectedElements.length ? boundsOfElements(selectedElements) : undefined;
+  const propertyElement = selectedElements.length > 1 && selectedBounds
+    ? { type: "rectangle" as const, id: selectedElements[0]!.id, layerId: selectedElements[0]!.layerId, position: { x: selectedBounds.x, y: selectedBounds.y }, size: { width: selectedBounds.width, height: selectedBounds.height }, cornerRadius: 0, rotation: 0, style: selectedElements[0]!.style }
+    : selectedElement?.type !== "line" ? selectedElement : undefined;
   const selectionKey = selection.join(":");
   useEffect(() => { setTransformMode("resize"); }, [tool, project.activePageId, selectionKey]);
 
@@ -213,26 +218,26 @@ export function App() {
   const canvasPointAt = (event: PointerEvent<HTMLElement> | WheelEvent<HTMLElement>) => clientPointToCanvas({ x: event.clientX, y: event.clientY }, canvas.current!.getBoundingClientRect());
   const pointAt = (event: PointerEvent<HTMLElement> | WheelEvent<HTMLElement>) => screenPointToMm(canvasPointAt(event), { x: 0, y: 0 }, zoom, panMm);
 
-  const resizePointerDown = (event: PointerEvent<HTMLElement>, handle: ResizeHandle) => {
-    if (!selectedElement || selectedElement.type === "line") return;
+  const resizePointerDown = (event: PointerEvent<HTMLElement>, handle: GroupHandle) => {
+    if (!selectedElements.length || handle === "center") return;
     setCenterHover(undefined);
     event.preventDefault();
     event.stopPropagation();
     event.currentTarget.setPointerCapture(event.pointerId);
     setEditorState(beginGesture(editorRef.current));
-    interaction.current = { pointerId: event.pointerId, lastX: event.clientX, lastY: event.clientY, kind: "resize", ids: [selectedElement.id], handle, element: selectedElement, dragged: false };
+    interaction.current = { pointerId: event.pointerId, lastX: event.clientX, lastY: event.clientY, kind: "resize", ids: selection, ...(selectedElement ? { element: selectedElement } : {}), handle, dragged: false };
   };
 
   const rotationPointerDown = (event: PointerEvent<HTMLButtonElement>) => {
-    if (!selectedElement || transformMode !== "rotate") return;
-    const center = elementCenter(selectedElement);
+    if (!selectedElements.length || transformMode !== "rotate") return;
+    const center = selectedBounds ? groupCenter(selectedBounds) : elementCenter(selectedElements[0]!);
     const start = pointAt(event);
     if (Math.hypot(start.x - center.x, start.y - center.y) * zoom < 8) return;
     event.preventDefault();
     event.stopPropagation();
     event.currentTarget.setPointerCapture(event.pointerId);
     setEditorState(beginGesture(editorRef.current));
-    interaction.current = { pointerId: event.pointerId, lastX: event.clientX, lastY: event.clientY, kind: "rotate", ids: [selectedElement.id], element: selectedElement, center, start, dragged: false };
+    interaction.current = { pointerId: event.pointerId, lastX: event.clientX, lastY: event.clientY, kind: "rotate", ids: selection, ...(selectedElement ? { element: selectedElement } : {}), center, start, dragged: false };
   };
 
   const onCanvasPointerDown = (event: PointerEvent<HTMLDivElement>) => {
@@ -292,16 +297,16 @@ export function App() {
       setMarquee({ start: active.start, end: pointAt(event) });
       return;
     }
-    if (active.kind === "resize" && active.element && active.element.type !== "line" && active.handle) {
+    if (active.kind === "resize" && active.ids && active.handle && active.handle !== "center") {
       const element = active.element;
-      const geometry = resizeHandle(element, active.handle, pointAt(event));
-      setEditorState(previewGestureFromBase(editorRef.current, resizeElement(element.id, geometry.position, geometry.size)));
+      const command = active.ids.length === 1 && element && element.type !== "line" ? (() => { const geometry = resizeHandle(element, active.handle as ResizeHandle, pointAt(event)); return resizeElement(element.id, geometry.position, geometry.size); })() : resizeElements(active.ids, active.handle as ResizeHandle, pointAt(event));
+      setEditorState(previewGestureFromBase(editorRef.current, command));
       active.dragged = true;
       return;
     }
-    if (active.kind === "rotate" && active.element && active.center && active.start) {
-      const rotation = rotationFromDrag(active.element.rotation, active.center, active.start, pointAt(event), event.shiftKey ? Math.PI / 12 : 0);
-      setEditorState(previewGestureFromBase(editorRef.current, rotateElement(active.element.id, rotation)));
+    if (active.kind === "rotate" && active.ids && active.center && active.start) {
+      const rotation = rotationFromDrag(active.element?.rotation ?? 0, active.center, active.start, pointAt(event), event.shiftKey ? Math.PI / 12 : 0);
+      setEditorState(previewGestureFromBase(editorRef.current, active.ids.length === 1 && active.element ? rotateElement(active.element.id, rotation) : rotateElementsAroundCenter(active.ids, rotation - (active.element?.rotation ?? 0))));
       active.dragged = true;
       return;
     }
@@ -341,13 +346,13 @@ export function App() {
         setEditorState(active.shiftKey ? addToSelection(editorRef.current, nextIds) : select(editorRef.current, nextIds));
       } else if (!cancelled && !active.dragged) setEditorState(clearSelection(editorRef.current));
       setMarquee(undefined);
-    } else if (active.kind === "resize" && active.element && active.element.type !== "line" && active.handle && !cancelled) {
+    } else if (active.kind === "resize" && active.ids && active.handle && active.handle !== "center" && !cancelled) {
       const element = active.element;
-      const geometry = resizeHandle(element, active.handle, pointAt(event));
-      setEditorState(commitGesture(previewGestureFromBase(editorRef.current, resizeElement(element.id, geometry.position, geometry.size))));
-    } else if (active.kind === "rotate" && active.element && active.center && active.start && !cancelled) {
-      const rotation = rotationFromDrag(active.element.rotation, active.center, active.start, pointAt(event), event.shiftKey ? Math.PI / 12 : 0);
-      setEditorState(commitGesture(previewGestureFromBase(editorRef.current, rotateElement(active.element.id, rotation))));
+      const command = active.ids.length === 1 && element && element.type !== "line" ? (() => { const geometry = resizeHandle(element, active.handle as ResizeHandle, pointAt(event)); return resizeElement(element.id, geometry.position, geometry.size); })() : resizeElements(active.ids, active.handle as ResizeHandle, pointAt(event));
+      setEditorState(commitGesture(previewGestureFromBase(editorRef.current, command)));
+    } else if (active.kind === "rotate" && active.ids && active.center && active.start && !cancelled) {
+      const rotation = rotationFromDrag(active.element?.rotation ?? 0, active.center, active.start, pointAt(event), event.shiftKey ? Math.PI / 12 : 0);
+      setEditorState(commitGesture(previewGestureFromBase(editorRef.current, active.ids.length === 1 && active.element ? rotateElement(active.element.id, rotation) : rotateElementsAroundCenter(active.ids, rotation - (active.element?.rotation ?? 0)))));
     } else if (["resize", "rotate", "move"].includes(active.kind)) {
       setEditorState(cancelled ? cancelGesture(editorRef.current) : commitGesture(editorRef.current));
     } else if (active.kind === "draw") {
@@ -398,15 +403,16 @@ export function App() {
     return () => removeEventListener("keydown", onKey);
   }, [selectionKey]);
 
+  const groupPoints = selectedBounds ? groupHandlePoints(selectedBounds) : undefined;
   const handlePoints = selectedElement?.type === "line" ? undefined : selectedElement ? rotatedResizeHandles(selectedElement) : undefined;
   const handleNames: readonly ResizeHandle[] = ["nw", "n", "ne", "e", "se", "s", "sw", "w"];
-  const handleStyle = (handle: ResizeHandle) => {
-    const point = handlePoints?.[handleNames.indexOf(handle)];
+  const handleStyle = (handle: GroupHandle) => {
+     const point = selectedElements.length > 1 ? groupPoints?.[handle] : handle === "center" ? undefined : handlePoints?.[handleNames.indexOf(handle)];
     if (!point) return undefined;
     const screen = pagePointToCanvas(point, zoom, panMm);
     return { left: `${screen.x}px`, top: `${screen.y}px` };
   };
-  const rotationPoints = selectedElement && transformMode === "rotate" ? rotationHandlePoints(selectedElement, 18 / zoom) : [];
+  const rotationPoints = selectedElements.length > 1 && selectedBounds && transformMode === "rotate" ? [groupHandlePoints(selectedBounds).nw, groupHandlePoints(selectedBounds).ne, groupHandlePoints(selectedBounds).se, groupHandlePoints(selectedBounds).sw] : selectedElement && transformMode === "rotate" ? rotationHandlePoints(selectedElement, 18 / zoom) : [];
   const centerStyle = selectedElement ? (() => {
     const point = pagePointToCanvas(elementCenter(selectedElement), zoom, panMm);
     return { left: point.x, top: point.y };
@@ -451,7 +457,7 @@ export function App() {
   };
 
   const commitGeometry = (element: PropertyElement, field: GeometryField) => {
-    const key = `${element.id}:${field}`;
+    const key = `${selectedElements.length > 1 ? "group" : element.id}:${field}`;
     const raw = drafts[key];
     if (raw === undefined) return;
     const value = Number(raw.trim());
@@ -460,7 +466,11 @@ export function App() {
       return;
     }
     setDrafts((current) => { const next = { ...current }; delete next[key]; return next; });
-    setEditorState(dispatch(editorRef.current, updateElement(element.id, geometryPatch(element, field, value))));
+    if (selectedElements.length > 1 && selectedBounds) {
+      const current = field === "x" ? selectedBounds.x : field === "y" ? selectedBounds.y : field === "width" ? selectedBounds.width : selectedBounds.height;
+      if (field === "x" || field === "y") setEditorState(dispatch(editorRef.current, moveElements(selection, { x: field === "x" ? value - current : 0, y: field === "y" ? value - current : 0 })));
+       else setEditorState(dispatch(editorRef.current, resizeElements(selection, "se", { x: field === "width" ? selectedBounds.x + value : selectedBounds.x + selectedBounds.width, y: field === "height" ? selectedBounds.y + value : selectedBounds.y + selectedBounds.height }, groupAspectLock)));
+    } else setEditorState(dispatch(editorRef.current, updateElement(element.id, geometryPatch(element, field, value))));
   };
 
   const cornerRadiusField = (element: Extract<Element, { type: "rectangle" }>) => {
@@ -476,7 +486,7 @@ export function App() {
 
   const dimensionIcon = (kind: "width" | "height", label: "Ancho" | "Alto") => <span className="dimension-icon" aria-label={label} title={label}><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{kind === "width" ? <><path d="M2 8h12M5 5 2 8l3 3M11 5l3 3-3 3" /><path d="M2 3v10M14 3v10" /></> : <><path d="M8 2v12M5 5l3-3 3 3M5 11l3 3 3-3" /><path d="M3 2h10M3 14h10" /></>}</svg></span>;
   const geometryInput = (element: PropertyElement, field: GeometryField, label: string, visibleLabel: ReactNode = label) => {
-    const key = `${element.id}:${field}`;
+     const key = `${selectedElements.length > 1 ? "group" : element.id}:${field}`;
     return <label className="field"><span>{visibleLabel}</span><input inputMode="decimal" aria-label={`${label} en milímetros`} value={drafts[key] ?? formatMm(geometryValue(element, field))} onChange={(event) => setDrafts((current) => ({ ...current, [key]: event.target.value }))} onBlur={() => commitGeometry(element, field)} onKeyDown={(event) => {
       if (event.key === "Enter") event.currentTarget.blur();
       if (event.key === "Escape") {
@@ -517,9 +527,9 @@ export function App() {
     {mode === "prepare" ? <section className="prepare"><div><div className="prepare-icon">◇</div><h1>Preparar aún no está disponible</h1><p>Nodra ofrece actualmente solo un espacio de trabajo de Diseño sin conexión. No hay hardware conectado, controlado ni listo.</p><button onClick={() => setMode("design")}>Volver a Diseño</button></div></section> : <div className="workspace">
       <section className="properties-bar" aria-label="Barra de propiedades">
         <div className="page-selector"><label>Página<select aria-label="Página activa" value={project.activePageId} onChange={(event) => switchPage(event.target.value)}>{project.pages.map((page, index) => <option key={page.id} value={page.id}>{index + 1} · {page.page.width} × {page.page.height} mm</option>)}</select></label><button type="button" onClick={createPageAndSelect}>+ Nueva página</button></div>
-        {selectedElement ? <div className="property-fields">
-          {selectedElement.type !== "line" && <><div className="property-card" role="group" aria-label="Posición">{geometryInput(selectedElement, "x", "X")}{geometryInput(selectedElement, "y", "Y")}</div><div className="property-card property-card-dimensions" role="group" aria-label="Dimensiones">{geometryInput(selectedElement, "width", "Ancho", dimensionIcon("width", "Ancho"))}{geometryInput(selectedElement, "height", "Alto", dimensionIcon("height", "Alto"))}</div>{selectedElement.type === "rectangle" && <div className="property-card property-card-radius" role="group" aria-label="Radio de esquina">{cornerRadiusField(selectedElement)}</div>}</>}
-          {rotationField(selectedElement)}
+          {selectedElements.length > 0 ? <div className="property-fields">
+            {propertyElement && <><div className="property-card" role="group" aria-label="Posición">{geometryInput(propertyElement, "x", "X")}{geometryInput(propertyElement, "y", "Y")}</div><div className="property-card property-card-dimensions" role="group" aria-label="Dimensiones">{geometryInput(propertyElement, "width", "Ancho", dimensionIcon("width", "Ancho"))}{geometryInput(propertyElement, "height", "Alto", dimensionIcon("height", "Alto"))}{selectedElements.length > 1 && <button type="button" aria-label="Bloquear proporción del grupo" aria-pressed={groupAspectLock} onClick={() => setGroupAspectLock((current) => !current)}>{groupAspectLock ? "🔒" : "⌁"}</button>}</div></>}{selectedElement?.type === "rectangle" && <div className="property-card property-card-radius" role="group" aria-label="Radio de esquina">{cornerRadiusField(selectedElement)}</div>}
+           {selectedElement && rotationField(selectedElement)}
         </div> : <p className="muted">Seleccione un objeto para editar sus propiedades.</p>}
       </section>
       <aside className="workspace-tools"><div className="tool-column" role="toolbar" aria-label="Herramientas de diseño">{(["select", "rectangle", "ellipse", "line", "pan"] as const).map((item) => <ToolButton key={item} label={toolCursorLabels[item]} icon={item} active={tool === item} onClick={() => { setTransformMode("resize"); setTool(item); }} />)}</div></aside>
@@ -528,8 +538,8 @@ export function App() {
         <div ref={canvas} className={grid ? "canvas" : "canvas no-grid"} onPointerDown={onCanvasPointerDown} onPointerMove={onCanvasPointerMove} onPointerUp={(event) => finishPointer(event, false)} onPointerCancel={(event) => finishPointer(event, true)} onPointerLeave={() => setCursorPoint(undefined)} onDoubleClick={onCanvasDoubleClick} onWheel={onWheel}>
           <div className="page" style={pageStyle}><div className="page-svg" dangerouslySetInnerHTML={{ __html: rendered.success ? rendered.svg : "" }} /></div>
           {centerHoverStyle && <div className="selection-center-feedback" style={centerHoverStyle} aria-hidden="true"><span className="selection-center-mark">×</span><span className="selection-center-label">centro</span></div>}
-          {transformMode === "resize" && handlePoints && <div className="resize-handles">{handleNames.map((handle) => <button key={handle} type="button" className={`resize-handle resize-handle-${handle}`} data-resize-handle={handle} aria-label={`Redimensionar ${handle}`} style={handleStyle(handle)} onPointerDown={(event) => resizePointerDown(event, handle)} onPointerUp={(event) => finishPointer(event, false)} onPointerCancel={(event) => finishPointer(event, true)} />)}</div>}
-          {transformMode === "rotate" && selectedElement && <div className="rotation-controls" aria-label="Controles de rotación"><span className="rotation-center" style={centerStyle} aria-hidden="true" />{rotationPoints.map((point, index) => { const screen = pagePointToCanvas(point, zoom, panMm); return <button key={index} type="button" className="rotation-handle" aria-label={`Rotar objeto, control ${index + 1}`} style={{ left: screen.x, top: screen.y }} onPointerDown={rotationPointerDown} onPointerUp={(event) => finishPointer(event, false)} onPointerCancel={(event) => finishPointer(event, true)}><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M15.5 8A6 6 0 1 0 16 12" /><path d="m12.5 4 3 4-5 .5" /></svg></button>; })}</div>}
+           {transformMode === "resize" && (handlePoints || groupPoints) && <div className="resize-handles">{handleNames.map((handle) => <button key={handle} type="button" className={`resize-handle resize-handle-${handle}`} data-resize-handle={handle} aria-label={`Redimensionar ${handle}`} style={handleStyle(handle)} onPointerDown={(event) => resizePointerDown(event, handle)} onPointerUp={(event) => finishPointer(event, false)} onPointerCancel={(event) => finishPointer(event, true)} />)}{groupPoints && <button type="button" className="resize-handle resize-handle-center" data-resize-handle="center" aria-label="Centro del grupo" style={handleStyle("center")} onPointerDown={(event) => event.stopPropagation()} />}</div>}
+           {transformMode === "rotate" && selectedElements.length > 0 && <div className="rotation-controls" aria-label="Controles de rotación"><span className="rotation-center" style={selectedElements.length > 1 && selectedBounds ? { left: pagePointToCanvas(groupCenter(selectedBounds), zoom, panMm).x, top: pagePointToCanvas(groupCenter(selectedBounds), zoom, panMm).y } : centerStyle} aria-hidden="true" />{rotationPoints.map((point, index) => { const screen = pagePointToCanvas(point, zoom, panMm); return <button key={index} type="button" className="rotation-handle" aria-label={`Rotar objeto, control ${index + 1}`} style={{ left: screen.x, top: screen.y }} onPointerDown={rotationPointerDown} onPointerUp={(event) => finishPointer(event, false)} onPointerCancel={(event) => finishPointer(event, true)}><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M15.5 8A6 6 0 1 0 16 12" /><path d="m12.5 4 3 4-5 .5" /></svg></button>; })}</div>}
           {marqueeStyle && <div className="marquee" style={marqueeStyle} />}
           {cursorPoint && <span className="tool-cursor" style={{ left: cursorPoint.x, top: cursorPoint.y }} aria-label={`Herramienta activa: ${toolCursorLabels[tool]}`}>{toolCursorIcons[tool]}</span>}
           <span className="canvas-hint">Clic: relleno · clic derecho: contorno · {toolCursorLabels[tool]}</span>

@@ -12,7 +12,7 @@ export type PointerDownIntent = "draw" | "select";
 export type TransformMode = "resize" | "rotate";
 
 export function canActivateRotation(tool: string, selectedIds: readonly ElementId[], hit: ElementId | undefined): boolean {
-  return tool === "select" && selectedIds.length === 1 && hit === selectedIds[0];
+  return tool === "select" && selectedIds.length > 0 && hit !== undefined && selectedIds.includes(hit);
 }
 
 export function pointerDownIntent(tool: string, hit: ElementId | undefined): PointerDownIntent {
