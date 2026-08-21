@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { createDocument, elementId, layerId, type RectangleElement } from "@nodra/domain";
 import { addToSelection, beginGesture, clearSelection, commitGesture, createEditor, createElement, dispatch, moveElement, moveElements, previewGesture, redo, removeFromSelection, reorderLayer, resizeElement, select, selectForPointerDown, setLayerVisibility, toggleSelection, undo, updateElement, updateElementStyles } from "./index.js";
 
-const rectangle: RectangleElement = { type: "rectangle", id: elementId("r1"), layerId: layerId("default"), position: { x: 1, y: 2 }, size: { width: 10, height: 5 }, rotation: 0, style: { stroke: "#000", strokeWidth: 1 } };
+const rectangle: RectangleElement = { type: "rectangle", id: elementId("r1"), layerId: layerId("default"), position: { x: 1, y: 2 }, size: { width: 10, height: 5 }, cornerRadius: 0, rotation: 0, style: { stroke: "#000", strokeWidth: 1 } };
 const document = createDocument("doc", [{ id: layerId("default"), name: "Default", visible: true, order: 0 }]);
 
 describe("editor core", () => {
@@ -41,6 +41,14 @@ describe("editor core", () => {
     expect(state.document.elements[0]).toMatchObject({ position: { x: 12.125, y: 8.5 }, size: { width: 25.75, height: 4.25 } });
     expect(state.undo).toHaveLength(2);
     const rejected = dispatch(state, updateElement(rectangle.id, { size: { width: 0, height: -1 } }));
+    expect(rejected).toBe(state);
+  });
+
+  it("persists a valid rectangle corner radius and rejects a negative radius", () => {
+    let state = dispatch(createEditor(document), createElement(rectangle));
+    state = dispatch(state, updateElement(rectangle.id, { cornerRadius: 3.5 }));
+    expect(state.document.elements[0]).toMatchObject({ cornerRadius: 3.5 });
+    const rejected = dispatch(state, updateElement(rectangle.id, { cornerRadius: -1 }));
     expect(rejected).toBe(state);
   });
 

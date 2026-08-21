@@ -26,4 +26,11 @@ describe("native document validation", () => {
     const result = validateDocument({ ...createDocument("doc-1"), page: { width: 0, height: Number.NaN } });
     expect(result.success).toBe(false);
   });
+  it("defaults legacy rectangle radii and rejects negative radii", () => {
+    const legacy = { ...createDocument("doc-1", [{ id: layerId("layer-1"), name: "Design", visible: true, order: 0 }]), elements: [{ type: "rectangle", id: "r", layerId: "layer-1", position: { x: 0, y: 0 }, size: { width: 10, height: 10 }, rotation: 0, style: { stroke: "#000", strokeWidth: 1 } }] };
+    const defaulted = validateDocument(legacy);
+    expect(defaulted.success).toBe(true);
+    if (defaulted.success) expect(defaulted.data.elements[0]).toMatchObject({ cornerRadius: 0 });
+    expect(validateDocument({ ...legacy, elements: [{ ...legacy.elements[0], cornerRadius: -1 }] }).success).toBe(false);
+  });
 });

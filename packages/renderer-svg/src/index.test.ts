@@ -5,7 +5,7 @@ import { renderSvg } from "./index.js";
 const layer = { id: layerId("design"), name: "Design", visible: true, order: 0 } as const;
 const style = { stroke: "#111", strokeWidth: 0.2 } as const;
 const document = (): DocumentSnapshot => withElements(createDocument("doc-1", [layer]), [
-  { type: "rectangle", id: elementId("rect"), layerId: layer.id, position: { x: 10, y: 20 }, size: { width: 30, height: 10 }, rotation: 0, style },
+  { type: "rectangle", id: elementId("rect"), layerId: layer.id, position: { x: 10, y: 20 }, size: { width: 30, height: 10 }, cornerRadius: 0, rotation: 0, style },
   { type: "ellipse", id: elementId("ellipse"), layerId: layer.id, position: { x: 50, y: 20 }, size: { width: 20, height: 10 }, rotation: 0, style },
   { type: "line", id: elementId("line"), layerId: layer.id, start: { x: 0, y: 0 }, end: { x: 10, y: 5 }, rotation: 0, style },
 ]);
@@ -21,6 +21,13 @@ describe("SVG renderer boundary", () => {
       expect(result.svg).toContain('x1="-10" y1="-20" x2="10" y2="-10"');
       expect(result.renderedElementIds).toEqual(["rect", "ellipse", "line"]);
     }
+  });
+
+  it("renders rectangle corner radii in screen millimetres and clamps to half dimensions", () => {
+    const source = withElements(createDocument("rounded", [layer]), [{ type: "rectangle", id: elementId("rounded-rect"), layerId: layer.id, position: { x: 0, y: 0 }, size: { width: 20, height: 10 }, cornerRadius: 8, rotation: 0, style }]);
+    const result = renderSvg(source, { zoom: 2, panMm: { x: 0, y: 0 } });
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.svg).toContain('rx="10" ry="10"');
   });
 
   it("omits hidden layers without changing layer or element data", () => {

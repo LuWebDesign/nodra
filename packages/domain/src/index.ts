@@ -37,6 +37,8 @@ export interface RectangleElement {
   readonly layerId: LayerId;
   readonly position: PointMm;
   readonly size: SizeMm;
+  /** Corner radius in millimetres. Values are non-negative; SVG clamps oversized radii. */
+  readonly cornerRadius: number;
   readonly rotation: number;
   readonly style: VisualStyle;
   readonly operation?: OperationMetadata;

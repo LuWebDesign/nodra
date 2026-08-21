@@ -60,7 +60,7 @@ describe("drawing tool routing", () => {
 });
 
 describe("property bar geometry", () => {
-  const rectangle = { type: "rectangle" as const, id: elementId("property"), layerId: layerId("property"), position: { x: 10, y: 20 }, size: { width: 30, height: 40 }, rotation: 0, style: { stroke: "#000", strokeWidth: 1 } };
+  const rectangle = { type: "rectangle" as const, id: elementId("property"), layerId: layerId("property"), position: { x: 10, y: 20 }, size: { width: 30, height: 40 }, cornerRadius: 0, rotation: 0, style: { stroke: "#000", strokeWidth: 1 } };
 
   it("reads and patches one rectangle dimension without changing the others", () => {
     expect(geometryValue(rectangle, "width")).toBe(30);
@@ -70,7 +70,7 @@ describe("property bar geometry", () => {
 
   it("selects fully enclosed objects for reverse marquee drags from the pointer-up snapshot", () => {
     const layer = { id: layerId("marquee"), name: "Marquee", visible: true, order: 0 };
-    const snapshot = { ...createDocument("marquee-doc", [layer]), elements: [{ type: "rectangle" as const, id: elementId("enclosed"), layerId: layer.id, position: { x: 10, y: 10 }, size: { width: 20, height: 10 }, rotation: 0, style: { stroke: "#000", strokeWidth: 1 } }] };
+  const snapshot = { ...createDocument("marquee-doc", [layer]), elements: [{ type: "rectangle" as const, id: elementId("enclosed"), layerId: layer.id, position: { x: 10, y: 10 }, size: { width: 20, height: 10 }, cornerRadius: 0, rotation: 0, style: { stroke: "#000", strokeWidth: 1 } }] };
     expect(marqueeSelection(snapshot, { x: 40, y: 30 }, { x: 0, y: 0 })).toEqual([elementId("enclosed")]);
     expect(marqueeSelection(snapshot, { x: 15, y: 15 }, { x: 0, y: 0 })).toEqual([]);
   });
@@ -124,7 +124,7 @@ describe("drag geometry", () => {
     const hidden = { id: layerId("hidden"), name: "Hidden", visible: false, order: 1 };
     const visible = { id: layerId("visible"), name: "Visible", visible: true, order: 0 };
     const document = createDocument("doc", [visible, hidden]);
-    const rectangle = { type: "rectangle" as const, id: elementId("r"), layerId: visible.id, position: { x: 0, y: 0 }, size: { width: 10, height: 10 }, rotation: 0, style: { stroke: "#000", strokeWidth: 1 } };
+    const rectangle = { type: "rectangle" as const, id: elementId("r"), layerId: visible.id, position: { x: 0, y: 0 }, size: { width: 10, height: 10 }, cornerRadius: 0, rotation: 0, style: { stroke: "#000", strokeWidth: 1 } };
     const hiddenRectangle = { ...rectangle, id: elementId("hidden-r"), layerId: hidden.id };
     const checked = { ...document, elements: [rectangle, hiddenRectangle] };
     expect(pickElement(checked, { x: 5, y: 5 }, 3)).toBe(rectangle.id);
@@ -134,7 +134,7 @@ describe("drag geometry", () => {
   it("hit-tests an existing shape independently of the active drawing tool", () => {
     const layer = { id: layerId("active-tool"), name: "Active tool", visible: true, order: 0 };
     const document = createDocument("doc-active-tool", [layer]);
-    const rectangle = { type: "rectangle" as const, id: elementId("active-rectangle"), layerId: layer.id, position: { x: 10, y: 10 }, size: { width: 20, height: 10 }, rotation: 0, style: { stroke: "#000", strokeWidth: 1 } };
+    const rectangle = { type: "rectangle" as const, id: elementId("active-rectangle"), layerId: layer.id, position: { x: 10, y: 10 }, size: { width: 20, height: 10 }, cornerRadius: 0, rotation: 0, style: { stroke: "#000", strokeWidth: 1 } };
     const checked = { ...document, elements: [rectangle] };
 
     for (const activeTool of ["rectangle", "ellipse", "line"] as const) {

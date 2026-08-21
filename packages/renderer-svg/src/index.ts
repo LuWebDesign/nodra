@@ -42,7 +42,8 @@ function renderElement(element: Element, viewport: Viewport): string {
     const width = element.size.width * viewport.zoom;
     const height = element.size.height * viewport.zoom;
     const center = { x: position.x + width / 2, y: position.y + height / 2 };
-    return `<rect data-element-id="${escapeAttribute(element.id)}" x="${number(position.x)}" y="${number(position.y)}" width="${number(width)}" height="${number(height)}" transform="${transform(element.rotation, center.x, center.y).trim()}" ${visualAttributes(element)} />`;
+    const radius = Math.min(element.cornerRadius * viewport.zoom, width / 2, height / 2);
+    return `<rect data-element-id="${escapeAttribute(element.id)}" x="${number(position.x)}" y="${number(position.y)}" width="${number(width)}" height="${number(height)}" rx="${number(radius)}" ry="${number(radius)}" transform="${transform(element.rotation, center.x, center.y).trim()}" ${visualAttributes(element)} />`;
   }
   if (element.type === "ellipse") {
     const position = screen(element.position);
