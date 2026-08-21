@@ -32,10 +32,10 @@ export function rotatedCorners(element: RectangleElement | EllipseElement): read
 
 /** Returns connection/alignment points in document space, independent of resize handles. */
 export function realGeometryNodes(element: Element): readonly RealGeometryNode[] {
-  if (element.type === "line") return [{ kind: "endpoint", point: element.start }, { kind: "endpoint", point: element.end }];
+  if (element.type === "line") return [{ kind: "endpoint", point: element.start }, { kind: "center", point: { x: (element.start.x + element.end.x) / 2, y: (element.start.y + element.end.y) / 2 } }, { kind: "endpoint", point: element.end }];
   const half = { x: element.size.width / 2, y: element.size.height / 2 };
   const center = { x: element.position.x + half.x, y: element.position.y + half.y };
-  if (element.type === "rectangle") return rotatedCorners(element).map((point) => ({ kind: "corner" as const, point }));
+  if (element.type === "rectangle") { const [nw, ne, se, sw] = rotatedCorners(element); return [{ kind: "corner" as const, point: nw }, { kind: "corner" as const, point: ne }, { kind: "corner" as const, point: se }, { kind: "corner" as const, point: sw }, { kind: "center" as const, point: center }]; }
   return [
     { kind: "center" as const, point: center },
     { kind: "cardinal" as const, point: transformPoint({ x: 0, y: -half.y }, center, element.rotation) },

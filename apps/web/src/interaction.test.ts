@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createDocument, elementId, layerId } from "@nodra/domain";
-import { centerPageInCanvas, clientPointToCanvas, hoveredSelectionCenter, INITIAL_ZOOM, isDrawingTool, marqueeSelection, MAX_ZOOM, MIN_ZOOM, movementExceedsThreshold, normalizeBounds, normalizeDrag, pagePointToCanvas, pagePointToScreen, screenDeltaToMm, screenPointToMm, containsBounds, elementsContainedBy, pickElement, pointerDownIntent, selectionCenter, selectionFrame, snapMoveDelta, zoomAtPoint } from "./interaction.js";
+import { centerPageInCanvas, clientPointToCanvas, hoveredSelectionCenter, INITIAL_ZOOM, isDrawingTool, marqueeSelection, MAX_ZOOM, MIN_ZOOM, movementExceedsThreshold, normalizeBounds, normalizeDrag, pagePointToCanvas, pagePointToScreen, screenDeltaToMm, screenPointToMm, containsBounds, elementsContainedBy, pickElement, pickNode, pointerDownIntent, selectedNodeAnchor, selectionCenter, selectionFrame, snapMoveDelta, zoomAtPoint } from "./interaction.js";
 import { geometryPatch, geometryValue } from "./propertyBar.js";
 
 describe("canvas coordinates", () => {
@@ -123,6 +123,12 @@ describe("move snapping", () => {
     expect(result.delta).toEqual({ x: 20, y: 0 });
     expect(result.guide).toEqual({ source: { x: 40, y: 10 }, target: { x: 40, y: 10 } });
   });
+  it("uses the grabbed node as the only moving snap source", () => {
+    const document = { ...createDocument("anchored-snap", [visible]), elements: [source, target] };
+    const anchor = pickNode(document, { x: 20, y: 15 }, 1);
+    expect(anchor?.nodeIndex).toBe(1);
+    expect(snapMoveDelta(document, [source.id], { x: 19, y: 0 }, 1, 3, anchor).delta).toEqual({ x: 20, y: 0 });
+  });
   it("keeps free movement outside tolerance and excludes selected or hidden targets", () => {
     const hiddenTarget = { ...target, id: elementId("snap-hidden-target"), layerId: hidden.id };
     const document = { ...createDocument("snap-exclusions", [visible, hidden]), elements: [source, target, hiddenTarget] };
@@ -174,5 +180,25 @@ describe("drag geometry", () => {
     for (const activeTool of ["rectangle", "ellipse", "line"] as const) {
       expect(pickElement(checked, { x: 15, y: 15 }, 3), activeTool).toBe(rectangle.id);
     }
+  });
+
+  it("prioritizes real nodes and applies a zoom-aware tolerance", () => {
+    const layer = { id: layerId("node-hit"), name: "Node hit", visible: true, order: 0 };
+    const document = createDocument("node-hit", [layer]);
+    const rectangle = { type: "rectangle" as const, id: elementId("node-rectangle"), layerId: layer.id, position: { x: 10, y: 10 }, size: { width: 20, height: 10 }, cornerRadius: 0, rotation: 0, style: { stroke: "#000", strokeWidth: 1 } };
+    const checked = { ...document, elements: [rectangle] };
+    expect(pickNode(checked, { x: 10.9, y: 10.9 }, 1)).toMatchObject({ elementId: rectangle.id, nodeIndex: 0 });
+    expect(pickNode(checked, { x: 10.9, y: 10.9 }, 10, 8)).toBeUndefined();
+    expect(pickElement(checked, { x: 10.9, y: 10.9 }, 1)).toBe(rectangle.id);
+  });
+
+  it("retains the exact node only when its element is in the move selection", () => {
+    const layer = { id: layerId("anchor-selection"), name: "Anchor selection", visible: true, order: 0 };
+    const document = createDocument("anchor-selection", [layer]);
+    const rectangle = { type: "rectangle" as const, id: elementId("anchor-rectangle"), layerId: layer.id, position: { x: 10, y: 10 }, size: { width: 20, height: 10 }, cornerRadius: 0, rotation: 0, style: { stroke: "#000", strokeWidth: 1 } };
+    const checked = { ...document, elements: [rectangle] };
+    const node = pickNode(checked, { x: 10, y: 10 }, 1);
+    expect(selectedNodeAnchor(node, [rectangle.id])).toBe(node);
+    expect(selectedNodeAnchor(node, [])).toBeUndefined();
   });
 });

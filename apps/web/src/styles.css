@@ -13,3 +13,8 @@
 .page-selector label { flex:0 1 auto; gap:0; font-size:0; }
 .page-selector select { font-size:10px; }
 .selected-type { display:none; }
+.tool strong { font-size:22px; line-height:20px; }
+.tool:not(:first-child) small { display:none; }
+.properties-bar { height:46px; flex-wrap:nowrap; overflow:hidden; }
+.page-selector select { display:none; }
+.properties-bar > .muted { flex:1 1 auto; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }

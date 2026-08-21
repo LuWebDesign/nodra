@@ -43,11 +43,12 @@ describe("canonical millimetre geometry", () => {
   });
   it("extracts rotated rectangle corners rather than axis-aligned bounds", () => {
     const nodes = realGeometryNodes({ ...rectangle, rotation: Math.PI / 2 });
-    expect(nodes.map(({ point }) => point)).toEqual([{ x: 25, y: 15 }, { x: 25, y: 35 }, { x: 15, y: 35 }, { x: 15, y: 15 }]);
+    expect(nodes.map(({ point }) => point)).toEqual([{ x: 25, y: 15 }, { x: 25, y: 35 }, { x: 15, y: 35 }, { x: 15, y: 15 }, { x: 20, y: 25 }]);
   });
   it("extracts line endpoints and ellipse center/cardinal nodes", () => {
     const line = { type: "line" as const, id: elementId("line-nodes"), layerId: layerId("l"), start: { x: 1, y: 2 }, end: { x: 7, y: 8 }, rotation: 0, style };
-    expect(realGeometryNodes(line).map(({ point }) => point)).toEqual([line.start, line.end]);
+    expect(realGeometryNodes(line).map(({ point }) => point)).toEqual([line.start, { x: 4, y: 5 }, line.end]);
+    expect(realGeometryNodes(rectangle).map(({ kind }) => kind)).toEqual(["corner", "corner", "corner", "corner", "center"]);
     const ellipse = { type: "ellipse" as const, id: elementId("ellipse-nodes"), layerId: layerId("l"), position: { x: 10, y: 20 }, size: { width: 20, height: 10 }, rotation: Math.PI / 2, style };
     expect(realGeometryNodes(ellipse).map(({ point }) => point)).toEqual([{ x: 20, y: 25 }, { x: 25, y: 25 }, { x: 20, y: 35 }, { x: 15, y: 25 }, { x: 20, y: 15 }]);
   });
