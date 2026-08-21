@@ -16,9 +16,12 @@ export function geometryPatch(element: PropertyElement, field: GeometryField, va
 
 export function aspectGeometryPatch(element: PropertyElement, field: GeometryField, value: number, aspectLock: boolean): Pick<PropertyElement, "position" | "size"> {
   if (!aspectLock || (field !== "width" && field !== "height")) return geometryPatch(element, field, value);
-  const ratio = element.size.width / element.size.height;
-  const size = field === "width" ? { width: value, height: value / ratio } : { width: value * ratio, height: value };
-  return { position: element.position, size };
+  return { position: element.position, size: aspectSize(element.size.width, element.size.height, field, value) };
+}
+
+export function aspectSize(width: number, height: number, field: "width" | "height", value: number): { width: number; height: number } {
+  const ratio = width / height;
+  return field === "width" ? { width: value, height: value / ratio } : { width: value * ratio, height: value };
 }
 
 export function cornerRadiusValue(element: Extract<Element, { type: "rectangle" }>): number {

@@ -29,6 +29,12 @@ describe("SVG renderer boundary", () => {
     expect(result.success).toBe(true);
     if (result.success) expect(result.svg).toContain('rx="10" ry="10"');
   });
+  it("renders compound contours as closed paths with an even-odd fill rule", () => {
+    const source = withElements(createDocument("contour", [layer]), [{ type: "contour", id: elementId("contour"), layerId: layer.id, position: { x: 0, y: 0 }, size: { width: 20, height: 20 }, contours: [{ points: [{ x: 0, y: 0 }, { x: 20, y: 0 }, { x: 20, y: 20 }, { x: 0, y: 20 }, { x: 0, y: 0 }] }, { points: [{ x: 5, y: 5 }, { x: 5, y: 15 }, { x: 15, y: 15 }, { x: 15, y: 5 }, { x: 5, y: 5 }] }], fillRule: "evenodd", rotation: 0, style }]);
+    const result = renderSvg(source, { zoom: 1, panMm: { x: 0, y: 0 } });
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.svg).toContain('fill-rule="evenodd"');
+  });
 
   it("emits a reflection transform for mirrored elements", () => {
     const source = withElements(createDocument("mirrored", [layer]), [{ type: "line", id: elementId("mirrored-line"), layerId: layer.id, start: { x: 0, y: 0 }, end: { x: 20, y: 10 }, rotation: 0, flipX: true, style }]);
@@ -36,6 +42,13 @@ describe("SVG renderer boundary", () => {
 
     expect(result.success).toBe(true);
     if (result.success) expect(result.svg).toContain('scale(-1 1)');
+  });
+
+  it("renders contour points directly so baked flips are visible without a second transform", () => {
+    const source = withElements(createDocument("flipped-contour", [layer]), [{ type: "contour", id: elementId("flipped-contour"), layerId: layer.id, position: { x: 0, y: 0 }, size: { width: 20, height: 10 }, contours: [{ points: [{ x: 20, y: 0 }, { x: 0, y: 0 }, { x: 0, y: 10 }, { x: 20, y: 10 }, { x: 20, y: 0 }] }], fillRule: "evenodd", rotation: 0, flipX: true, style }]);
+    const result = renderSvg(source, { zoom: 1, panMm: { x: 0, y: 0 } });
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.svg).toContain("M20 0 L0 0 L0 10");
   });
 
   it("omits hidden layers without changing layer or element data", () => {

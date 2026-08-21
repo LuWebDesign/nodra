@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { boundsOf, boundsOfElements, degreesToRadians, elementCenter, groupCenter, groupHandlePoints, hitTest, mmToScreen, radiansToDegrees, realGeometryNodes, resizeGroup, resizeHandle, rotatedLineEndpoints, rotateElements, rotationFromDrag, rotationHandlePoints, screenToMm, validateSize } from "./index.js";
+import { boundsOf, boundsOfElements, closedElementToPolygon, degreesToRadians, elementCenter, ELLIPSE_APPROXIMATION_SEGMENTS, groupCenter, groupHandlePoints, hitTest, mmToScreen, radiansToDegrees, realGeometryNodes, resizeGroup, resizeHandle, rotatedLineEndpoints, rotateElements, rotationFromDrag, rotationHandlePoints, screenToMm, shapeResultContours, validateSize } from "./index.js";
 import { elementId, layerId } from "@nodra/domain";
 
 const style = { stroke: "#000", strokeWidth: 0.2 };
@@ -76,6 +76,31 @@ describe("canonical millimetre geometry", () => {
     expect(elementCenter(line)).toEqual({ x: 5, y: 0 });
     expect(rotationHandlePoints(line, 2)).toEqual([{ x: 5, y: -7 }, { x: 5, y: 7 }]);
   });
+  it("extracts contour center, vertices, and edge midpoints for every ring", () => {
+    const contour = { type: "contour" as const, id: elementId("contour-nodes"), layerId: layerId("l"), position: { x: 10, y: 20 }, size: { width: 20, height: 20 }, contours: [
+      { points: [{ x: 10, y: 20 }, { x: 30, y: 20 }, { x: 30, y: 40 }, { x: 10, y: 40 }, { x: 10, y: 20 }] },
+      { points: [{ x: 15, y: 25 }, { x: 25, y: 25 }, { x: 25, y: 35 }, { x: 15, y: 35 }, { x: 15, y: 25 }] },
+    ], fillRule: "evenodd" as const, rotation: 0, style };
+    const nodes = realGeometryNodes(contour);
+    expect(nodes.filter(({ kind }) => kind === "center")).toEqual([{ kind: "center", point: { x: 20, y: 30 } }]);
+    expect(nodes.filter(({ kind }) => kind === "corner")).toHaveLength(8);
+    expect(nodes.filter(({ kind }) => kind === "edge-midpoint")).toHaveLength(8);
+    expect(nodes).toContainEqual({ kind: "edge-midpoint", point: { x: 20, y: 20 } });
+    expect(nodes).toContainEqual({ kind: "edge-midpoint", point: { x: 20, y: 25 } });
+  });
+  it("converts rotated and flipped ellipses to deterministic closed document-space polygons", () => {
+    const ellipse = { type: "ellipse" as const, id: elementId("operation-ellipse"), layerId: layerId("l"), position: { x: 0, y: 0 }, size: { width: 20, height: 10 }, rotation: Math.PI / 4, flipX: true, style };
+    const polygon = closedElementToPolygon(ellipse)[0]![0]!;
+    expect(polygon).toHaveLength(ELLIPSE_APPROXIMATION_SEGMENTS + 1);
+    expect(polygon[0]![0]).toBeCloseTo(polygon.at(-1)![0]);
+    expect(polygon[0]![1]).toBeCloseTo(polygon.at(-1)![1]);
+    expect(polygon[0]![0]).toBeCloseTo(-10 * Math.cos(Math.PI / 4) + 10);
+  });
+  it("returns real union contours rather than an axis-aligned bounds rectangle", () => {
+    const contours = shapeResultContours("union", [rectangle, { ...rectangle, id: elementId("union-2"), position: { x: 25, y: 20 } }]);
+    expect(contours).toHaveLength(1);
+    expect(contours[0]!.points.length).toBeGreaterThan(4);
+  });
   it("uses visually rotated line endpoints for bounds, hits, and stable nodes", () => {
     const line = { type: "line" as const, id: elementId("rotated-line"), layerId: layerId("l"), start: { x: 0, y: 0 }, end: { x: 10, y: 0 }, rotation: Math.PI / 2, style };
     const [start, end] = rotatedLineEndpoints(line);
@@ -95,6 +120,29 @@ describe("canonical millimetre geometry", () => {
     expect(resizeGroup(elements, "se", { x: 70, y: 50 })[0]).toMatchObject({ position: { x: 10, y: 20 }, size: { width: 30, height: 15 } });
     expect(resizeGroup(elements, "e", { x: 70, y: 999 }, 1, true)[1]).toMatchObject({ size: { width: 15, height: 15 } });
   });
+  it("transforms contour points in document space during group resize and rotation", () => {
+    const contour = { type: "contour" as const, id: elementId("contour-transform"), layerId: layerId("l"), position: { x: 10, y: 20 }, size: { width: 20, height: 10 }, contours: [{ points: [{ x: 10, y: 20 }, { x: 30, y: 20 }, { x: 30, y: 30 }, { x: 10, y: 30 }, { x: 10, y: 20 }] }], fillRule: "evenodd" as const, rotation: 0, style };
+    const resized = resizeGroup([contour], "se", { x: 50, y: 40 })[0];
+    expect(resized?.type).toBe("contour");
+    if (resized?.type === "contour") expect(resized.contours[0]?.points).toContainEqual({ x: 50, y: 20 });
+    const rotated = rotateElements([contour], { x: 20, y: 25 }, Math.PI / 2)[0];
+    expect(rotated?.type).toBe("contour");
+    if (rotated?.type === "contour") expect(rotated.contours[0]?.points).toContainEqual({ x: 25, y: 15 });
+  });
+  it("resizes a single compound contour while preserving every ring", () => {
+    const contour = { type: "contour" as const, id: elementId("contour-resize"), layerId: layerId("l"), position: { x: 10, y: 20 }, size: { width: 20, height: 20 }, contours: [
+      { points: [{ x: 10, y: 20 }, { x: 30, y: 20 }, { x: 30, y: 40 }, { x: 10, y: 40 }, { x: 10, y: 20 }] },
+      { points: [{ x: 15, y: 25 }, { x: 25, y: 25 }, { x: 25, y: 35 }, { x: 15, y: 35 }, { x: 15, y: 25 }] },
+    ], fillRule: "evenodd" as const, rotation: 0, style };
+    const resized = resizeGroup([contour], "se", { x: 50, y: 60 })[0];
+    expect(resized).toMatchObject({ position: { x: 10, y: 20 }, size: { width: 40, height: 40 } });
+    expect(resized?.type).toBe("contour");
+    if (resized?.type === "contour") {
+      expect(resized.contours).toHaveLength(2);
+      expect(resized.contours[1]?.points).toEqual([{ x: 20, y: 30 }, { x: 40, y: 30 }, { x: 40, y: 50 }, { x: 20, y: 50 }, { x: 20, y: 30 }]);
+    }
+  });
+
   it("rotates group members around the axis-aligned group center", () => {
     const second = { ...rectangle, id: elementId("r3"), position: { x: 40, y: 20 } };
     const line = { type: "line" as const, id: elementId("r-line"), layerId: layerId("l"), start: { x: 0, y: 0 }, end: { x: 10, y: 0 }, rotation: 0, style };

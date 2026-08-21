@@ -1,11 +1,11 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent, type PointerEvent, type ReactNode, type WheelEvent } from "react";
 import { createProject, elementId, layerId, pageId, revision, type DocumentSnapshot, type Element, type ElementId, type PointMm, type ProjectSnapshot } from "@nodra/domain";
-import { addToSelection, beginGesture, cancelGesture, clearSelection, commitGesture, createElement, deleteElement, dispatch, flipElements, moveElements, previewGesture, previewGestureFromBase, redo, resizeElement, resizeElements, rotateElement, rotateElementsAroundCenter, select, selectForPointerDown, undo, updateElement, updateElementStyles, updatePage, type FlipAxis } from "@nodra/editor-core";
+import { addToSelection, beginGesture, cancelGesture, clearSelection, commitGesture, createElement, deleteElement, dispatch, flipElements, moveElements, previewGesture, previewGestureFromBase, redo, resizeElement, resizeElements, rotateElement, rotateElementsAroundCenter, select, selectForPointerDown, shapeOperation, undo, updateElement, updateElementStyles, updatePage, type FlipAxis, type ShapeOperation } from "@nodra/editor-core";
 import { boundsOfElements, elementCenter, groupCenter, groupHandlePoints, realGeometryNodes, resizeHandle, rotatedResizeHandles, rotationFromDrag, rotationHandlePoints, type GroupHandle, type ResizeHandle } from "@nodra/geometry";
 import { DebouncedAutosave, DexieProjectRepository, requestStoragePersistence } from "@nodra/persistence";
 import { renderSvg } from "@nodra/renderer-svg";
 import { canActivateRotation, centerPageInCanvas, clientPointToCanvas, hoveredSelectionCenter, isDrawingTool, marqueeSelection, movementExceedsThreshold, normalizeBounds, normalizeDrag, pagePointToCanvas, pickElement, pickNode, screenDeltaToMm, screenPointToMm, selectedNodeAnchor, snapMoveDelta, zoomAtPoint, type NodeHit, type SnapGuide, type TransformMode } from "./interaction.js";
-import { aspectGeometryPatch, cornerRadiusPatch, formatMm, geometryValue, rotationDegreesValue, rotationPatch, type GeometryField, type PropertyElement } from "./propertyBar.js";
+import { aspectGeometryPatch, aspectSize, cornerRadiusPatch, formatMm, geometryValue, rotationDegreesValue, rotationPatch, type GeometryField, type PropertyElement } from "./propertyBar.js";
 import { useDocumentStore, usePersistenceStore, useUiStore, useViewportStore, type Tool } from "./stores.js";
 
 const defaultStyle = { stroke: "#000000", strokeWidth: 0.7 };
@@ -120,7 +120,7 @@ export function App() {
   const selectedBounds = selectedElements.length ? boundsOfElements(selectedElements) : undefined;
   const propertyElement = selectedElements.length > 1 && selectedBounds
     ? { type: "rectangle" as const, id: selectedElements[0]!.id, layerId: selectedElements[0]!.layerId, position: { x: selectedBounds.x, y: selectedBounds.y }, size: { width: selectedBounds.width, height: selectedBounds.height }, cornerRadius: 0, rotation: 0, style: selectedElements[0]!.style }
-    : selectedElement?.type !== "line" ? selectedElement : undefined;
+    : selectedElement?.type !== "line" && selectedElement?.type !== "contour" ? selectedElement : undefined;
   const selectionKey = selection.join(":");
   useEffect(() => { setTransformMode("resize"); }, [tool, project.activePageId, selectionKey]);
 
@@ -302,7 +302,7 @@ export function App() {
     }
     if (active.kind === "resize" && active.ids && active.handle && active.handle !== "center") {
       const element = active.element;
-      const command = active.ids.length === 1 && element && element.type !== "line" ? (() => { const geometry = resizeHandle(element, active.handle as ResizeHandle, pointAt(event)); return resizeElement(element.id, geometry.position, geometry.size); })() : resizeElements(active.ids, active.handle as ResizeHandle, pointAt(event));
+      const command = active.ids.length === 1 && element && element.type !== "line" && element.type !== "contour" ? (() => { const geometry = resizeHandle(element, active.handle as ResizeHandle, pointAt(event)); return resizeElement(element.id, geometry.position, geometry.size); })() : resizeElements(active.ids, active.handle as ResizeHandle, pointAt(event));
       setEditorState(previewGestureFromBase(editorRef.current, command));
       active.dragged = true;
       return;
@@ -351,7 +351,7 @@ export function App() {
       setMarquee(undefined);
     } else if (active.kind === "resize" && active.ids && active.handle && active.handle !== "center" && !cancelled) {
       const element = active.element;
-      const command = active.ids.length === 1 && element && element.type !== "line" ? (() => { const geometry = resizeHandle(element, active.handle as ResizeHandle, pointAt(event)); return resizeElement(element.id, geometry.position, geometry.size); })() : resizeElements(active.ids, active.handle as ResizeHandle, pointAt(event));
+      const command = active.ids.length === 1 && element && element.type !== "line" && element.type !== "contour" ? (() => { const geometry = resizeHandle(element, active.handle as ResizeHandle, pointAt(event)); return resizeElement(element.id, geometry.position, geometry.size); })() : resizeElements(active.ids, active.handle as ResizeHandle, pointAt(event));
       setEditorState(commitGesture(previewGestureFromBase(editorRef.current, command)));
     } else if (active.kind === "rotate" && active.ids && active.center && active.start && !cancelled) {
       const rotation = rotationFromDrag(active.element?.rotation ?? 0, active.center, active.start, pointAt(event), event.shiftKey ? Math.PI / 12 : 0);
@@ -407,7 +407,7 @@ export function App() {
   }, [selectionKey]);
 
   const groupPoints = selectedBounds ? groupHandlePoints(selectedBounds) : undefined;
-  const handlePoints = selectedElement?.type === "line" ? undefined : selectedElement ? rotatedResizeHandles(selectedElement) : undefined;
+  const handlePoints = selectedElement?.type === "line" ? undefined : selectedElement?.type === "contour" && selectedBounds ? [groupHandlePoints(selectedBounds).nw, groupHandlePoints(selectedBounds).n, groupHandlePoints(selectedBounds).ne, groupHandlePoints(selectedBounds).e, groupHandlePoints(selectedBounds).se, groupHandlePoints(selectedBounds).s, groupHandlePoints(selectedBounds).sw, groupHandlePoints(selectedBounds).w] as const : selectedElement && selectedElement.type !== "contour" ? rotatedResizeHandles(selectedElement) : undefined;
   const handleNames: readonly ResizeHandle[] = ["nw", "n", "ne", "e", "se", "s", "sw", "w"];
   const handleStyle = (handle: GroupHandle) => {
      const point = selectedElements.length > 1 ? groupPoints?.[handle] : handle === "center" ? undefined : handlePoints?.[handleNames.indexOf(handle)];
@@ -472,7 +472,10 @@ export function App() {
     if (selectedElements.length > 1 && selectedBounds) {
       const current = field === "x" ? selectedBounds.x : field === "y" ? selectedBounds.y : field === "width" ? selectedBounds.width : selectedBounds.height;
       if (field === "x" || field === "y") setEditorState(dispatch(editorRef.current, moveElements(selection, { x: field === "x" ? value - current : 0, y: field === "y" ? value - current : 0 })));
-       else setEditorState(dispatch(editorRef.current, resizeElements(selection, "se", { x: field === "width" ? selectedBounds.x + value : selectedBounds.x + selectedBounds.width, y: field === "height" ? selectedBounds.y + value : selectedBounds.y + selectedBounds.height }, aspectLock)));
+       else {
+         const size = aspectLock ? aspectSize(selectedBounds.width, selectedBounds.height, field, value) : { width: field === "width" ? value : selectedBounds.width, height: field === "height" ? value : selectedBounds.height };
+         setEditorState(dispatch(editorRef.current, resizeElements(selection, "se", { x: selectedBounds.x + size.width, y: selectedBounds.y + size.height }, aspectLock)));
+       }
      } else setEditorState(dispatch(editorRef.current, updateElement(element.id, aspectGeometryPatch(element, field, value, aspectLock))));
   };
 
@@ -520,6 +523,12 @@ export function App() {
       }
      }} /><span>°</span></label></div>;
   };
+  const applyShapeOperation = (operation: ShapeOperation) => {
+    const current = editorRef.current;
+    const next = dispatch(current, shapeOperation(current.selection, operation));
+    if (next === current) return;
+    setEditorState(next);
+  };
   const mirrorButton = (axis: FlipAxis) => {
     const label = axis === "horizontal" ? "Espejo horizontal" : "Espejo vertical";
     const description = axis === "horizontal" ? "Voltear la selección horizontalmente." : "Voltear la selección verticalmente.";
@@ -532,8 +541,42 @@ export function App() {
         {axis === "horizontal" ? <><path d="M3 10h14M6 7l-3 3 3 3M14 7l3 3-3 3" /><path d="M10 3v14" strokeDasharray="2 2" /></> : <><path d="M10 3v14M7 6l3-3 3 3M7 14l3 3 3-3" /><path d="M3 10h14" strokeDasharray="2 2" /></>}
       </svg>
       <span className="property-tool-description" role="tooltip">{description}</span>
+     </button>;
+    };
+
+  const shapeOperations = () => <div className="shape-operation-group" role="group" aria-label="Operaciones de forma">
+    <div className="shape-operation-copy"><div className="panel-title">OPERACIONES DE FORMA</div></div>
+    <div className="shape-operation-buttons">
+      <button type="button" className="shape-operation-button" aria-label="Soldar" title="Combinar los objetos cerrados seleccionados en una sola forma." aria-description="Combinar los objetos cerrados seleccionados en una sola forma." disabled={!selectedElements.length || selectedElements.some((element) => element.type === "line")} onClick={() => applyShapeOperation("weld")}>Soldar<span className="shape-operation-description" role="tooltip">Combinar los objetos cerrados seleccionados en una sola forma.</span></button>
+      <button type="button" className="shape-operation-button" aria-label="Recortar" title="Usar el primer objeto seleccionado como cortador y cortar el segundo objeto seleccionado." aria-description="Usar el primer objeto seleccionado como cortador y cortar el segundo objeto seleccionado." disabled={selectedElements.length !== 2 || selectedElements.some((element) => element.type === "line")} onClick={() => applyShapeOperation("subtract")}>Recortar<span className="shape-operation-description" role="tooltip">Usar el primer objeto seleccionado como cortador y cortar el segundo objeto seleccionado.</span></button>
+      <button type="button" className="shape-operation-button" aria-label="Crear límites" title="Crear un contorno real alrededor de los objetos cerrados seleccionados." aria-description="Crear un contorno real alrededor de los objetos cerrados seleccionados." disabled={!selectedElements.length || selectedElements.some((element) => element.type === "line")} onClick={() => applyShapeOperation("outline")}>Crear límites<span className="shape-operation-description" role="tooltip">Crear un contorno real alrededor de los objetos cerrados seleccionados.</span></button>
+    </div>
+  </div>;
+
+  const aspectLockButton = () => {
+    const label = aspectLock ? "Desbloquear proporción" : "Bloquear proporción";
+    return <button type="button" className="property-aspect-lock" aria-label={label} title={label} aria-pressed={aspectLock} onClick={() => setAspectLock((current) => !current)}>
+     <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <title>{label}</title>
+      {aspectLock ? <><rect x="5" y="8" width="10" height="9" rx="1.5" /><path d="M7.5 8V6a2.5 2.5 0 0 1 5 0v2" /></> : <><rect x="5" y="8" width="10" height="9" rx="1.5" /><path d="M7.5 8V6a2.5 2.5 0 0 1 4.6-1.3" /><path d="m12.4 4.8 1.8 1.6" /></>}
+    </svg>
     </button>;
   };
+
+  const objectPropertySections = (inspector = false) => propertyElement ? <>
+     <div className={inspector ? "inspector-property-card" : "property-card"} role="group" aria-label="Posición">
+       {geometryInput(propertyElement, "x", "X")}{geometryInput(propertyElement, "y", "Y")}
+     </div>
+     {inspector && <div className="inspector-property-card inspector-dimensions-card" role="group" aria-label="Dimensiones">
+       <div className="inspector-dimensions-fields">
+         {geometryInput(propertyElement, "width", "Ancho", dimensionIcon("width", "Ancho"))}
+         {geometryInput(propertyElement, "height", "Alto", dimensionIcon("height", "Alto"))}
+       </div>
+       {aspectLockButton()}
+     </div>}
+    {selectedElement?.type === "rectangle" && <div className={inspector ? "inspector-property-card inspector-radius-card" : "property-card property-card-radius"} role="group" aria-label="Radio de esquina">{cornerRadiusField(selectedElement)}</div>}
+    {selectedElement && rotationField(selectedElement)}
+  </> : null;
 
   return <main className="app-shell">
     <header className="topbar">
@@ -544,10 +587,9 @@ export function App() {
     {mode === "prepare" ? <section className="prepare"><div><div className="prepare-icon">◇</div><h1>Preparar aún no está disponible</h1><p>Nodra ofrece actualmente solo un espacio de trabajo de Diseño sin conexión. No hay hardware conectado, controlado ni listo.</p><button onClick={() => setMode("design")}>Volver a Diseño</button></div></section> : <div className="workspace">
       <section className="properties-bar" aria-label="Barra de propiedades">
         <div className="page-selector"><label>Página<select aria-label="Página activa" value={project.activePageId} onChange={(event) => switchPage(event.target.value)}>{project.pages.map((page, index) => <option key={page.id} value={page.id}>{index + 1} · {page.page.width} × {page.page.height} mm</option>)}</select></label><button type="button" onClick={createPageAndSelect}>+ Nueva página</button></div>
-          {selectedElements.length > 0 ? <div className="property-fields">
-             {propertyElement && <><div className="property-card" role="group" aria-label="Posición">{geometryInput(propertyElement, "x", "X")}{geometryInput(propertyElement, "y", "Y")}</div><div className="property-card property-card-dimensions" role="group" aria-label="Dimensiones">{geometryInput(propertyElement, "width", "Ancho", dimensionIcon("width", "Ancho"))}{geometryInput(propertyElement, "height", "Alto", dimensionIcon("height", "Alto"))}</div><button type="button" className="property-aspect-lock" aria-label="Bloquear proporción" aria-pressed={aspectLock} onClick={() => setAspectLock((current) => !current)}>{aspectLock ? "🔒" : "⌁"}</button></>}{selectedElement?.type === "rectangle" && <div className="property-card property-card-radius" role="group" aria-label="Radio de esquina">{cornerRadiusField(selectedElement)}</div>}
-            {selectedElement && rotationField(selectedElement)}{mirrorButton("horizontal")}{mirrorButton("vertical")}
-        </div> : <p className="muted">Seleccione un objeto para editar sus propiedades.</p>}
+           {selectedElements.length > 0 ? <div className="property-fields">
+                {objectPropertySections()}{mirrorButton("horizontal")}{mirrorButton("vertical")}{shapeOperations()}
+         </div> : <p className="muted">Seleccione un objeto para editar sus propiedades.</p>}
       </section>
       <aside className="workspace-tools"><div className="tool-column" role="toolbar" aria-label="Herramientas de diseño">{(["select", "rectangle", "ellipse", "line", "pan"] as const).map((item) => <ToolButton key={item} label={toolCursorLabels[item]} icon={item} active={tool === item} onClick={() => { setTransformMode("resize"); setTool(item); }} />)}</div></aside>
       <section className="canvas-area">
@@ -569,8 +611,8 @@ export function App() {
            <button type="button" role="tab" aria-selected={inspectorTab === "text"} className={inspectorTab === "text" ? "active" : ""} onClick={() => setInspectorTab("text")}>Texto</button>
          </div>
          <div className="inspector-tab-content" role="tabpanel">
-           {inspectorTab === "properties" && <section className="inspector-card"><div className="panel-title">PÁGINA</div><div className="preset-row"><button onClick={() => setPage(1200, 900)}>Horizontal</button><button onClick={() => setPage(900, 1200)}>Vertical</button></div><div className="fields"><Field label="W" value={document.page.width} onChange={(value) => setPage(value, document.page.height)} /><Field label="H" value={document.page.height} onChange={(value) => setPage(document.page.width, value)} /></div><label className="grid-toggle"><input type="checkbox" checked={grid} onChange={(event) => setGrid(event.target.checked)} /> Mostrar cuadrícula del espacio de trabajo</label></section>}
-           {inspectorTab === "appearance" && <section className="inspector-card"><div className="panel-title">APARIENCIA</div><div className="muted">Paleta: clic izquierdo para relleno · clic derecho para contorno</div><div className="palette"><button className="swatch no-fill" aria-label="Sin relleno" title="Sin relleno" onClick={() => applyPalette(null, "fill")} onContextMenu={(event) => event.preventDefault()}>×</button>{palette.map((color) => <button key={color} className="swatch" aria-label={`Color ${color}`} title={`Clic izquierdo: relleno · clic derecho: contorno (${color})`} style={{ background: color }} onClick={() => applyPalette(color, "fill")} onContextMenu={(event) => { event.preventDefault(); applyPalette(color, "stroke"); }} />)}</div></section>}
+             {inspectorTab === "properties" && (selectedElements.length === 0 ? <section className="inspector-card"><div className="panel-title">PÁGINA</div><div className="preset-row"><button onClick={() => setPage(1200, 900)}>Horizontal</button><button onClick={() => setPage(900, 1200)}>Vertical</button></div><div className="fields"><Field label="W" value={document.page.width} onChange={(value) => setPage(value, document.page.height)} /><Field label="H" value={document.page.height} onChange={(value) => setPage(document.page.width, value)} /></div><label className="grid-toggle"><input type="checkbox" checked={grid} onChange={(event) => setGrid(event.target.checked)} /> Mostrar cuadrícula del espacio de trabajo</label></section> : <section className="inspector-card inspector-object-card"><div className="panel-title">OBJETO</div>{propertyElement ? <div className="inspector-object-properties">{objectPropertySections(true)}</div> : <><div className="selected-type">{selectedElement?.type === "contour" ? "CONTORNO" : "LÍNEA"}</div><p className="muted">{selectedElement?.type === "contour" ? "Los contornos conservan su geometría real; las dimensiones no están disponibles." : "Las líneas no tienen dimensiones rectangulares."}</p>{selectedElement && rotationField(selectedElement)}</>}</section>)}
+            {inspectorTab === "appearance" && <section className="inspector-card"><div className="panel-title">APARIENCIA</div><div className="muted">Paleta: clic izquierdo para relleno · clic derecho para contorno</div><div className="palette"><button className="swatch no-fill" aria-label="Sin relleno" title="Sin relleno" onClick={() => applyPalette(null, "fill")} onContextMenu={(event) => event.preventDefault()}>×</button>{palette.map((color) => <button key={color} className="swatch" aria-label={`Color ${color}`} title={`Clic izquierdo: relleno · clic derecho: contorno (${color})`} style={{ background: color }} onClick={() => applyPalette(color, "fill")} onContextMenu={(event) => { event.preventDefault(); applyPalette(color, "stroke"); }} />)}</div></section>}
            {inspectorTab === "text" && <section className="inspector-card"><div className="panel-title">TEXTO</div><p className="muted">Las propiedades de texto estarán disponibles en una próxima iteración.</p></section>}
          </div>
          <section className="inspector-lower-card"><div className="panel-title">CAPAS</div>{document.layers.map((layer) => <div className="layer" key={layer.id}><span>{layer.name}</span><span>{layer.visible ? "Visible" : "Oculta"}</span></div>)}</section>

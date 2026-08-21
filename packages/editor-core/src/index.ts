@@ -8,18 +8,19 @@ import {
   type SizeMm,
   type VisualStyle,
   type OperationMetadata,
+  elementId,
   nextRevision,
   revision,
   withElements,
 } from "@nodra/domain";
 import { validateDocument } from "@nodra/validation";
-import { boundsOfElements, elementCenter, groupCenter, resizeGroup, rotateElements } from "@nodra/geometry";
+import { boundsOfElements, contourWithPoints, elementCenter, groupCenter, resizeGroup, rotateElements, shapeResultContours, transformPoint } from "@nodra/geometry";
 
 export type ElementPatch = { readonly position?: PointMm; readonly size?: SizeMm; readonly rotation?: number; readonly cornerRadius?: number; readonly style?: VisualStyle; readonly operation?: OperationMetadata; readonly start?: PointMm; readonly end?: PointMm };
 export type StylePatch = { readonly stroke?: string; readonly fill?: string | null; readonly strokeWidth?: number };
 export type EditorCommand = { readonly name: string; readonly apply: (document: DocumentSnapshot) => CommandResult };
 export type CommandResult = { readonly success: true; readonly document: DocumentSnapshot } | { readonly success: false; readonly error: string };
-export interface Transaction { readonly command: string; readonly before: DocumentSnapshot; readonly after: DocumentSnapshot }
+export interface Transaction { readonly command: string; readonly before: DocumentSnapshot; readonly after: DocumentSnapshot; readonly selectionBefore: readonly ElementId[]; readonly selectionAfter: readonly ElementId[] }
 export interface EditorState {
   readonly document: DocumentSnapshot;
   readonly selection: readonly ElementId[];
@@ -66,6 +67,7 @@ export const moveElement = (id: ElementId, delta: PointMm): EditorCommand => ({
     const element = document.elements.find((current) => current.id === id);
     if (!element) return { success: false, error: `Element not found: ${id}` };
     if (element.type === "line") return replaceElements(document, document.elements.map((current) => current.id === id && current.type === "line" ? { ...current, start: { x: current.start.x + delta.x, y: current.start.y + delta.y }, end: { x: current.end.x + delta.x, y: current.end.y + delta.y } } : current));
+    if (element.type === "contour") return replaceElements(document, document.elements.map((current) => current.id === id && current.type === "contour" ? contourWithPoints(current, current.contours.map((contour) => contour.points.map((point) => ({ x: point.x + delta.x, y: point.y + delta.y })))) : current));
     return replaceElements(document, document.elements.map((current) => current.id === id && current.type !== "line" ? { ...current, position: { x: current.position.x + delta.x, y: current.position.y + delta.y } } : current));
   },
 });
@@ -80,6 +82,7 @@ export const moveElements = (ids: readonly ElementId[], delta: PointMm): EditorC
     return replaceElements(document, document.elements.map((element) => {
       if (!selected.has(element.id)) return element;
       if (element.type === "line") return { ...element, start: { x: element.start.x + delta.x, y: element.start.y + delta.y }, end: { x: element.end.x + delta.x, y: element.end.y + delta.y } };
+      if (element.type === "contour") return contourWithPoints(element, element.contours.map((contour) => contour.points.map((point) => ({ x: point.x + delta.x, y: point.y + delta.y }))));
       return { ...element, position: { x: element.position.x + delta.x, y: element.position.y + delta.y } };
     }));
   },
@@ -88,7 +91,47 @@ export const resizeElements = (ids: readonly ElementId[], handle: "nw" | "n" | "
 export const rotateElementsAroundCenter = (ids: readonly ElementId[], delta: number): EditorCommand => ({ name: `rotate-group:${ids.join(",")}`, apply: (document) => { const selected = new Set(ids); const elements = document.elements.filter((e) => selected.has(e.id)); if (!elements.length || elements.length !== selected.size) return { success: false, error: "Invalid group selection" }; const next = rotateElements(elements, groupCenter(boundsOfElements(elements)), delta); return replaceElements(document, document.elements.map((e) => next.find((n) => n.id === e.id) ?? e)); } });
 
 export const resizeElement = (id: ElementId, position: PointMm, size: SizeMm): EditorCommand => updateElement(id, { position, size });
-export const rotateElement = (id: ElementId, rotation: number): EditorCommand => updateElement(id, { rotation });
+export const rotateElement = (id: ElementId, rotation: number): EditorCommand => ({ name: `rotate:${id}`, apply: (document) => {
+  const current = document.elements.find((element) => element.id === id);
+  if (!current) return { success: false, error: `Element not found: ${id}` };
+  if (current.type !== "contour") return updateElement(id, { rotation }).apply(document);
+  const center = elementCenter(current);
+  return replaceElements(document, document.elements.map((element) => element.id === id && element.type === "contour" ? contourWithPoints(element, element.contours.map((contour) => contour.points.map((point) => transformPoint({ x: point.x - center.x, y: point.y - center.y }, center, rotation - current.rotation)))) : element));
+} });
+
+export type ShapeOperation = "weld" | "subtract" | "outline";
+export const shapeOperation = (ids: readonly ElementId[], operation: ShapeOperation): EditorCommand => ({
+  name: `shape-${operation}:${ids.join(",")}`,
+  apply: (document) => {
+    const selected = ids.map((id) => document.elements.find((element) => element.id === id));
+    const known = selected.filter((element): element is Element => Boolean(element));
+    if (known.length !== selected.length || !known.length) return { success: false, error: "No valid objects selected" };
+    if (known.some((element) => element.type === "line")) return { success: false, error: "Shape operations require closed objects" };
+    if (operation === "subtract" && known.length !== 2) return { success: false, error: "Recortar requires exactly two objects" };
+    const first = known[0]!;
+    const contours = shapeResultContours(operation === "subtract" ? "difference" : "union", operation === "subtract" ? [known[1]!, known[0]!] : known);
+    if (!contours.length) return { success: false, error: "The shape operation produced an empty result" };
+    const points = contours.flatMap((contour) => contour.points);
+    const xs = points.map((point) => point.x); const ys = points.map((point) => point.y);
+    const resultElement = {
+      type: "contour" as const,
+      id: elementId(`contour-${crypto.randomUUID()}`),
+      layerId: first.layerId,
+      position: { x: Math.min(...xs), y: Math.min(...ys) },
+      size: { width: Math.max(...xs) - Math.min(...xs), height: Math.max(...ys) - Math.min(...ys) },
+      contours,
+      fillRule: "evenodd" as const,
+      rotation: 0 as const,
+      style: first.style,
+      ...(first.operation ? { operation: first.operation } : {}),
+    };
+    const removed = new Set(known.map((element) => element.id));
+    const firstIndex = Math.min(...known.map((element) => elementIndex(document, element.id)));
+    const elements = document.elements.filter((element) => !removed.has(element.id));
+    elements.splice(firstIndex, 0, resultElement);
+    return replaceElements(document, elements);
+  },
+});
 
 export type FlipAxis = "horizontal" | "vertical";
 export const flipElements = (ids: readonly ElementId[], axis: FlipAxis): EditorCommand => ({
@@ -110,6 +153,7 @@ export const flipElements = (ids: readonly ElementId[], axis: FlipAxis): EditorC
       const moved = element.type === "line"
         ? { ...element, start: { x: element.start.x + delta.x, y: element.start.y + delta.y }, end: { x: element.end.x + delta.x, y: element.end.y + delta.y } }
         : { ...element, position: { x: element.position.x + delta.x, y: element.position.y + delta.y } };
+      if (element.type === "contour") return contourWithPoints(element, element.contours.map((contour) => contour.points.map((point) => horizontal ? { x: center.x * 2 - point.x, y: point.y } : { x: point.x, y: center.y * 2 - point.y })));
       return { ...moved, rotation: -element.rotation, [horizontal ? "flipX" : "flipY"]: !(horizontal ? element.flipX : element.flipY) };
     }));
   },
@@ -186,18 +230,23 @@ export function clearSelection(state: EditorState): EditorState { return { ...st
 export function dispatch(state: EditorState, command: EditorCommand): EditorState {
   const applied = command.apply(state.document);
   if (!applied.success || applied.document === state.document) return state;
-  return { ...state, document: applied.document, undo: [...state.undo, { command: command.name, before: state.document, after: applied.document }], redo: [], gesture: undefined };
+  const nextSelection = command.name.startsWith("shape-")
+    ? applied.document.elements.filter((element) => !state.document.elements.some((previous) => previous.id === element.id)).map((element) => element.id)
+    : knownSelection({ ...state, document: applied.document }, state.selection);
+  return { ...state, document: applied.document, selection: nextSelection, undo: [...state.undo, { command: command.name, before: state.document, after: applied.document, selectionBefore: state.selection, selectionAfter: nextSelection }], redo: [], gesture: undefined };
 }
 
 export function undo(state: EditorState): EditorState {
   const transaction = state.undo.at(-1);
   if (!transaction) return state;
-  return { ...state, document: transaction.before, undo: state.undo.slice(0, -1), redo: [...state.redo, transaction], gesture: undefined };
+  const selection = transaction.command.startsWith("shape-") ? transaction.selectionBefore : knownSelection({ ...state, document: transaction.before }, state.selection);
+  return { ...state, document: transaction.before, selection, undo: state.undo.slice(0, -1), redo: [...state.redo, transaction], gesture: undefined };
 }
 export function redo(state: EditorState): EditorState {
   const transaction = state.redo.at(-1);
   if (!transaction) return state;
-  return { ...state, document: transaction.after, undo: [...state.undo, transaction], redo: state.redo.slice(0, -1), gesture: undefined };
+  const selection = transaction.command.startsWith("shape-") ? transaction.selectionAfter : knownSelection({ ...state, document: transaction.after }, state.selection);
+  return { ...state, document: transaction.after, selection, undo: [...state.undo, transaction], redo: state.redo.slice(0, -1), gesture: undefined };
 }
 
 export function beginGesture(state: EditorState): EditorState {
@@ -218,7 +267,7 @@ export function commitGesture(state: EditorState): EditorState {
   if (!state.gesture) return state;
   const { base, preview } = state.gesture;
   if (preview === base) return { ...state, gesture: undefined };
-  return { ...state, document: preview, undo: [...state.undo, { command: "gesture", before: base, after: preview }], redo: [], gesture: undefined };
+  return { ...state, document: preview, undo: [...state.undo, { command: "gesture", before: base, after: preview, selectionBefore: state.selection, selectionAfter: state.selection }], redo: [], gesture: undefined };
 }
 export function cancelGesture(state: EditorState): EditorState {
   return state.gesture ? { ...state, document: state.gesture.base, gesture: undefined } : state;

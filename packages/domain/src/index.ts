@@ -72,7 +72,24 @@ export interface LineElement {
   readonly style: VisualStyle;
   readonly operation?: OperationMetadata;
 }
-export type Element = RectangleElement | EllipseElement | LineElement;
+export interface Contour {
+  readonly points: readonly PointMm[];
+}
+export interface ContourElement {
+  readonly type: "contour";
+  readonly id: ElementId;
+  readonly layerId: LayerId;
+  readonly position: PointMm;
+  readonly size: SizeMm;
+  readonly contours: readonly Contour[];
+  readonly fillRule: "evenodd";
+  readonly rotation: number;
+  readonly flipX?: boolean;
+  readonly flipY?: boolean;
+  readonly style: VisualStyle;
+  readonly operation?: OperationMetadata;
+}
+export type Element = RectangleElement | EllipseElement | LineElement | ContourElement;
 export interface DocumentSnapshot {
   readonly schemaVersion: SchemaVersion;
   readonly id: DocumentId;

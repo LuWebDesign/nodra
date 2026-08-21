@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { elementId, layerId, type RectangleElement } from "@nodra/domain";
-import { aspectGeometryPatch, cornerRadiusPatch, cornerRadiusValue, geometryPatch, geometryValue, rotationDegreesValue, rotationPatch } from "./propertyBar.js";
+import { aspectGeometryPatch, aspectSize, cornerRadiusPatch, cornerRadiusValue, geometryPatch, geometryValue, rotationDegreesValue, rotationPatch } from "./propertyBar.js";
 
 const rectangle: RectangleElement = { type: "rectangle", id: elementId("r"), layerId: layerId("l"), position: { x: 2, y: 3 }, size: { width: 20, height: 10 }, cornerRadius: 1.5, rotation: 0, style: { stroke: "#000", strokeWidth: 1 } };
 
@@ -14,6 +14,11 @@ describe("property bar helpers", () => {
     expect(aspectGeometryPatch(rectangle, "width", 40, true)).toEqual({ position: rectangle.position, size: { width: 40, height: 20 } });
     expect(aspectGeometryPatch(rectangle, "height", 20, true)).toEqual({ position: rectangle.position, size: { width: 40, height: 20 } });
     expect(aspectGeometryPatch(rectangle, "width", 40, false)).toEqual(geometryPatch(rectangle, "width", 40));
+  });
+
+  it("derives proportional group dimensions from either edited dimension", () => {
+    expect(aspectSize(120, 60, "width", 60)).toEqual({ width: 60, height: 30 });
+    expect(aspectSize(120, 60, "height", 30)).toEqual({ width: 60, height: 30 });
   });
 
   it("accepts non-negative millimetre corner radii and rejects invalid values", () => {

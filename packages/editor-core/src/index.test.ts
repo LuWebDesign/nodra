@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createDocument, elementId, layerId, type RectangleElement } from "@nodra/domain";
-import { addToSelection, beginGesture, clearSelection, commitGesture, createEditor, createElement, dispatch, flipElements, moveElement, moveElements, previewGesture, previewGestureFromBase, redo, removeFromSelection, reorderLayer, resizeElement, resizeElements, rotateElementsAroundCenter, select, selectForPointerDown, setLayerVisibility, toggleSelection, undo, updateElement, updateElementStyles } from "./index.js";
+import { addToSelection, beginGesture, clearSelection, commitGesture, createEditor, createElement, dispatch, flipElements, moveElement, moveElements, previewGesture, previewGestureFromBase, redo, removeFromSelection, reorderLayer, resizeElement, resizeElements, rotateElementsAroundCenter, select, selectForPointerDown, setLayerVisibility, shapeOperation, toggleSelection, undo, updateElement, updateElementStyles } from "./index.js";
 
 const rectangle: RectangleElement = { type: "rectangle", id: elementId("r1"), layerId: layerId("default"), position: { x: 1, y: 2 }, size: { width: 10, height: 5 }, cornerRadius: 0, rotation: 0, style: { stroke: "#000", strokeWidth: 1 } };
 const document = createDocument("doc", [{ id: layerId("default"), name: "Default", visible: true, order: 0 }]);
@@ -171,5 +171,47 @@ describe("editor core", () => {
 
     expect(state.document.elements[0]).toMatchObject({ position: rounded.position, size: rounded.size, cornerRadius: 3, rotation: -Math.PI / 4, flipY: true });
     expect(state.undo).toHaveLength(1);
+  });
+
+  it("replaces closed objects with one styled contour and keeps the operation atomic", () => {
+    const second = { ...rectangle, id: elementId("r2"), position: { x: 6, y: 2 }, style: { stroke: "#f00", fill: "#0f0", strokeWidth: 2 } };
+    let state = select(createEditor({ ...document, elements: [rectangle, second] }), [rectangle.id, second.id]);
+    state = dispatch(state, shapeOperation(state.selection, "weld"));
+    expect(state.document.elements).toHaveLength(1);
+    expect(state.document.elements[0]).toMatchObject({ type: "contour", layerId: rectangle.layerId, style: rectangle.style });
+    expect(state.undo).toHaveLength(1);
+    expect(undo(state).document.elements).toEqual([rectangle, second]);
+    expect(redo(undo(state)).document.elements[0]?.type).toBe("contour");
+  });
+
+  it("uses the first selected object as cutter and the second as target", () => {
+    const cutter = { ...rectangle, id: elementId("cutter"), position: { x: 6, y: 3 }, size: { width: 4, height: 3 } };
+    let state = select(createEditor({ ...document, elements: [rectangle, cutter] }), [cutter.id, rectangle.id]);
+    state = dispatch(state, shapeOperation(state.selection, "subtract"));
+    expect(state.document.elements[0]).toMatchObject({ type: "contour", position: rectangle.position, size: rectangle.size });
+    expect(state.document.elements[0]?.type === "contour" ? state.document.elements[0].contours : []).toHaveLength(2);
+    expect(state.undo).toHaveLength(1);
+  });
+
+  it("rejects lines for shape operations", () => {
+    const line = { type: "line" as const, id: elementId("shape-line"), layerId: rectangle.layerId, start: { x: 0, y: 0 }, end: { x: 1, y: 1 }, rotation: 0, style: rectangle.style };
+    expect(dispatch(select(createEditor({ ...document, elements: [rectangle, line] }), [rectangle.id, line.id]), shapeOperation([rectangle.id, line.id], "weld")).document.elements).toEqual([rectangle, line]);
+  });
+
+  it("flips contour geometry, restores shape-operation selection on undo, and preserves stacking order", () => {
+    const contour = { type: "contour" as const, id: elementId("contour-flip"), layerId: layerId("default"), position: { x: 10, y: 2 }, size: { width: 10, height: 5 }, contours: [{ points: [{ x: 10, y: 2 }, { x: 20, y: 2 }, { x: 20, y: 7 }, { x: 10, y: 7 }, { x: 10, y: 2 }] }], fillRule: "evenodd" as const, rotation: 0, style: rectangle.style };
+    const unrelated = { ...rectangle, id: elementId("unrelated"), position: { x: 50, y: 2 } };
+    let state = select(createEditor({ ...document, elements: [rectangle, unrelated, contour] }), [rectangle.id, contour.id]);
+    state = dispatch(state, flipElements(state.selection, "horizontal"));
+    expect(state.document.elements.find((element) => element.id === contour.id)?.type).toBe("contour");
+    expect((state.document.elements.find((element) => element.id === contour.id) as Extract<(typeof state.document.elements)[number], { type: "contour" }>).contours[0]?.points).toContainEqual({ x: 1, y: 2 });
+    state = select(state, [rectangle.id, unrelated.id]);
+    state = dispatch(state, shapeOperation(state.selection, "weld"));
+    const generated = state.document.elements.find((element) => element.type === "contour");
+    expect(state.document.elements[0]?.id).toBe(generated?.id);
+    expect(state.selection).toEqual([generated?.id]);
+    const undone = undo(state);
+    expect(undone.selection).toEqual([rectangle.id, unrelated.id]);
+    expect(redo(undone).selection).toEqual([generated?.id]);
   });
 });
