@@ -6,7 +6,7 @@ export interface PointPx { readonly x: number; readonly y: number }
 export type ResizeHandle = "nw" | "n" | "ne" | "e" | "se" | "s" | "sw" | "w";
 export type ResizeCorner = Extract<ResizeHandle, "nw" | "ne" | "se" | "sw">;
 export interface ResizeGeometry { readonly position: PointMm; readonly size: SizeMm }
-export type RealGeometryNodeKind = "corner" | "endpoint" | "center" | "cardinal";
+export type RealGeometryNodeKind = "corner" | "edge-midpoint" | "endpoint" | "center" | "cardinal";
 export interface RealGeometryNode { readonly kind: RealGeometryNodeKind; readonly point: PointMm }
 
 const TAU = Math.PI * 2;
@@ -35,7 +35,20 @@ export function realGeometryNodes(element: Element): readonly RealGeometryNode[]
   if (element.type === "line") return [{ kind: "endpoint", point: element.start }, { kind: "center", point: { x: (element.start.x + element.end.x) / 2, y: (element.start.y + element.end.y) / 2 } }, { kind: "endpoint", point: element.end }];
   const half = { x: element.size.width / 2, y: element.size.height / 2 };
   const center = { x: element.position.x + half.x, y: element.position.y + half.y };
-  if (element.type === "rectangle") { const [nw, ne, se, sw] = rotatedCorners(element); return [{ kind: "corner" as const, point: nw }, { kind: "corner" as const, point: ne }, { kind: "corner" as const, point: se }, { kind: "corner" as const, point: sw }, { kind: "center" as const, point: center }]; }
+  if (element.type === "rectangle") {
+    const [nw, ne, se, sw] = rotatedCorners(element);
+    return [
+      { kind: "corner", point: nw },
+      { kind: "corner", point: ne },
+      { kind: "corner", point: se },
+      { kind: "corner", point: sw },
+      { kind: "center", point: center },
+      { kind: "edge-midpoint", point: transformPoint({ x: 0, y: -half.y }, center, element.rotation) },
+      { kind: "edge-midpoint", point: transformPoint({ x: half.x, y: 0 }, center, element.rotation) },
+      { kind: "edge-midpoint", point: transformPoint({ x: 0, y: half.y }, center, element.rotation) },
+      { kind: "edge-midpoint", point: transformPoint({ x: -half.x, y: 0 }, center, element.rotation) },
+    ];
+  }
   return [
     { kind: "center" as const, point: center },
     { kind: "cardinal" as const, point: transformPoint({ x: 0, y: -half.y }, center, element.rotation) },

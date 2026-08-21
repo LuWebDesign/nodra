@@ -41,14 +41,24 @@ describe("canonical millimetre geometry", () => {
     expect(result.position.x).toBeCloseTo(-3.5);
     expect(result.position.y).toBeCloseTo(1.5);
   });
-  it("extracts rotated rectangle corners rather than axis-aligned bounds", () => {
+  it("extracts rectangle corners, center, and edge midpoints in stable order", () => {
+    const nodes = realGeometryNodes(rectangle);
+    expect(nodes.map(({ kind }) => kind)).toEqual(["corner", "corner", "corner", "corner", "center", "edge-midpoint", "edge-midpoint", "edge-midpoint", "edge-midpoint"]);
+    expect(nodes.map(({ point }) => point)).toEqual([
+      { x: 10, y: 20 }, { x: 30, y: 20 }, { x: 30, y: 30 }, { x: 10, y: 30 }, { x: 20, y: 25 },
+      { x: 20, y: 20 }, { x: 30, y: 25 }, { x: 20, y: 30 }, { x: 10, y: 25 },
+    ]);
+  });
+  it("rotates rectangle edge midpoints with the rectangle", () => {
     const nodes = realGeometryNodes({ ...rectangle, rotation: Math.PI / 2 });
-    expect(nodes.map(({ point }) => point)).toEqual([{ x: 25, y: 15 }, { x: 25, y: 35 }, { x: 15, y: 35 }, { x: 15, y: 15 }, { x: 20, y: 25 }]);
+    expect(nodes.map(({ point }) => point)).toEqual([
+      { x: 25, y: 15 }, { x: 25, y: 35 }, { x: 15, y: 35 }, { x: 15, y: 15 }, { x: 20, y: 25 },
+      { x: 25, y: 25 }, { x: 20, y: 35 }, { x: 15, y: 25 }, { x: 20, y: 15 },
+    ]);
   });
   it("extracts line endpoints and ellipse center/cardinal nodes", () => {
     const line = { type: "line" as const, id: elementId("line-nodes"), layerId: layerId("l"), start: { x: 1, y: 2 }, end: { x: 7, y: 8 }, rotation: 0, style };
     expect(realGeometryNodes(line).map(({ point }) => point)).toEqual([line.start, { x: 4, y: 5 }, line.end]);
-    expect(realGeometryNodes(rectangle).map(({ kind }) => kind)).toEqual(["corner", "corner", "corner", "corner", "center"]);
     const ellipse = { type: "ellipse" as const, id: elementId("ellipse-nodes"), layerId: layerId("l"), position: { x: 10, y: 20 }, size: { width: 20, height: 10 }, rotation: Math.PI / 2, style };
     expect(realGeometryNodes(ellipse).map(({ point }) => point)).toEqual([{ x: 20, y: 25 }, { x: 25, y: 25 }, { x: 20, y: 35 }, { x: 15, y: 25 }, { x: 20, y: 15 }]);
   });

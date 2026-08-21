@@ -126,8 +126,18 @@ describe("move snapping", () => {
   it("uses the grabbed node as the only moving snap source", () => {
     const document = { ...createDocument("anchored-snap", [visible]), elements: [source, target] };
     const anchor = pickNode(document, { x: 20, y: 15 }, 1);
-    expect(anchor?.nodeIndex).toBe(1);
+    expect(anchor).toMatchObject({ elementId: source.id, nodeIndex: 6, node: { kind: "edge-midpoint", point: { x: 20, y: 15 } } });
     expect(snapMoveDelta(document, [source.id], { x: 19, y: 0 }, 1, 3, anchor).delta).toEqual({ x: 20, y: 0 });
+  });
+  it("snaps the grabbed rectangle midpoint to another real node", () => {
+    const endpointTarget = { type: "line" as const, id: elementId("midpoint-target"), layerId: visible.id, start: { x: 45, y: 15 }, end: { x: 55, y: 25 }, rotation: 0, style: source.style };
+    const document = { ...createDocument("midpoint-snap", [visible]), elements: [source, endpointTarget] };
+    const anchor = pickNode(document, { x: 20, y: 15 }, 4, 2);
+    expect(anchor).toMatchObject({ elementId: source.id, nodeIndex: 6, node: { kind: "edge-midpoint" } });
+    expect(snapMoveDelta(document, [source.id], { x: 24.5, y: 0 }, 4, 3, anchor)).toEqual({
+      delta: { x: 25, y: 0 },
+      guide: { source: { x: 45, y: 15 }, target: endpointTarget.start },
+    });
   });
   it("keeps free movement outside tolerance and excludes selected or hidden targets", () => {
     const hiddenTarget = { ...target, id: elementId("snap-hidden-target"), layerId: hidden.id };
@@ -190,6 +200,14 @@ describe("drag geometry", () => {
     expect(pickNode(checked, { x: 10.9, y: 10.9 }, 1)).toMatchObject({ elementId: rectangle.id, nodeIndex: 0 });
     expect(pickNode(checked, { x: 10.9, y: 10.9 }, 10, 8)).toBeUndefined();
     expect(pickElement(checked, { x: 10.9, y: 10.9 }, 1)).toBe(rectangle.id);
+  });
+
+  it("hit-tests a rotated rectangle edge midpoint with stable identity", () => {
+    const layer = { id: layerId("midpoint-hit"), name: "Midpoint hit", visible: true, order: 0 };
+    const document = createDocument("midpoint-hit", [layer]);
+    const rectangle = { type: "rectangle" as const, id: elementId("rotated-midpoint"), layerId: layer.id, position: { x: 10, y: 20 }, size: { width: 20, height: 10 }, cornerRadius: 0, rotation: Math.PI / 2, style: { stroke: "#000", strokeWidth: 1 } };
+    const checked = { ...document, elements: [rectangle] };
+    expect(pickNode(checked, { x: 25, y: 25 }, 3, 2)).toMatchObject({ elementId: rectangle.id, nodeIndex: 5, node: { kind: "edge-midpoint" } });
   });
 
   it("retains the exact node only when its element is in the move selection", () => {
