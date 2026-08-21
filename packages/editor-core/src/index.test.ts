@@ -158,6 +158,18 @@ describe("editor core", () => {
       expect.objectContaining({ id: rectangle.id, flipX: true }),
       expect.objectContaining({ id: second.id, flipX: true, flipY: true }),
     ]));
+    expect(state.document.elements).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: rectangle.id, position: { x: 20, y: 2 } }),
+      expect.objectContaining({ id: second.id, position: { x: 1, y: 2 } }),
+    ]));
     expect(undo(state).document.elements).toEqual([rectangle, second]);
+  });
+
+  it("mirrors a single rotated object without changing its size or corner radius", () => {
+    const rounded = { ...rectangle, cornerRadius: 3, rotation: Math.PI / 4 };
+    const state = dispatch(select(createEditor({ ...document, elements: [rounded] }), [rounded.id]), flipElements([rounded.id], "vertical"));
+
+    expect(state.document.elements[0]).toMatchObject({ position: rounded.position, size: rounded.size, cornerRadius: 3, rotation: -Math.PI / 4, flipY: true });
+    expect(state.undo).toHaveLength(1);
   });
 });

@@ -13,7 +13,7 @@ import {
   withElements,
 } from "@nodra/domain";
 import { validateDocument } from "@nodra/validation";
-import { boundsOfElements, groupCenter, resizeGroup, rotateElements } from "@nodra/geometry";
+import { boundsOfElements, elementCenter, groupCenter, resizeGroup, rotateElements } from "@nodra/geometry";
 
 export type ElementPatch = { readonly position?: PointMm; readonly size?: SizeMm; readonly rotation?: number; readonly cornerRadius?: number; readonly style?: VisualStyle; readonly operation?: OperationMetadata; readonly start?: PointMm; readonly end?: PointMm };
 export type StylePatch = { readonly stroke?: string; readonly fill?: string | null; readonly strokeWidth?: number };
@@ -98,9 +98,20 @@ export const flipElements = (ids: readonly ElementId[], axis: FlipAxis): EditorC
     const known = document.elements.filter((element) => selected.has(element.id));
     if (known.length !== selected.size) return { success: false, error: "One or more elements were not found" };
     if (known.length === 0) return { success: false, error: "No elements selected" };
-    return replaceElements(document, document.elements.map((element) => selected.has(element.id)
-      ? { ...element, [axis === "horizontal" ? "flipX" : "flipY"]: !(axis === "horizontal" ? element.flipX : element.flipY) }
-      : element));
+    const center = groupCenter(boundsOfElements(known));
+    const horizontal = axis === "horizontal";
+    return replaceElements(document, document.elements.map((element) => {
+      if (!selected.has(element.id)) return element;
+      const currentCenter = elementCenter(element);
+      const reflectedCenter = horizontal
+        ? { x: center.x * 2 - currentCenter.x, y: currentCenter.y }
+        : { x: currentCenter.x, y: center.y * 2 - currentCenter.y };
+      const delta = { x: reflectedCenter.x - currentCenter.x, y: reflectedCenter.y - currentCenter.y };
+      const moved = element.type === "line"
+        ? { ...element, start: { x: element.start.x + delta.x, y: element.start.y + delta.y }, end: { x: element.end.x + delta.x, y: element.end.y + delta.y } }
+        : { ...element, position: { x: element.position.x + delta.x, y: element.position.y + delta.y } };
+      return { ...moved, rotation: -element.rotation, [horizontal ? "flipX" : "flipY"]: !(horizontal ? element.flipX : element.flipY) };
+    }));
   },
 });
 

@@ -30,6 +30,14 @@ describe("SVG renderer boundary", () => {
     if (result.success) expect(result.svg).toContain('rx="10" ry="10"');
   });
 
+  it("emits a reflection transform for mirrored elements", () => {
+    const source = withElements(createDocument("mirrored", [layer]), [{ type: "line", id: elementId("mirrored-line"), layerId: layer.id, start: { x: 0, y: 0 }, end: { x: 20, y: 10 }, rotation: 0, flipX: true, style }]);
+    const result = renderSvg(source, { zoom: 1, panMm: { x: 0, y: 0 } });
+
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.svg).toContain('scale(-1 1)');
+  });
+
   it("omits hidden layers without changing layer or element data", () => {
     const source = document();
     const hidden = { ...source, layers: [{ ...layer, visible: false }] };

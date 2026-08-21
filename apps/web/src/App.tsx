@@ -523,7 +523,11 @@ export function App() {
   const mirrorButton = (axis: FlipAxis) => {
     const label = axis === "horizontal" ? "Espejo horizontal" : "Espejo vertical";
     const description = axis === "horizontal" ? "Voltear la selección horizontalmente." : "Voltear la selección verticalmente.";
-    return <button type="button" className="property-transform-button" aria-label={label} title={description} aria-description={description} onClick={() => setEditorState(dispatch(editorRef.current, flipElements(selection, axis)))}>
+    const isActive = selectedElements.some((element) => Boolean(axis === "horizontal" ? element.flipX : element.flipY));
+    return <button type="button" className={isActive ? "property-transform-button active" : "property-transform-button"} aria-label={label} aria-pressed={isActive} title={description} aria-description={description} onClick={() => {
+      const current = editorRef.current;
+      if (current.selection.length) setEditorState(dispatch(current, flipElements(current.selection, axis)));
+    }}>
       <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
         {axis === "horizontal" ? <><path d="M3 10h14M6 7l-3 3 3 3M14 7l3 3-3 3" /><path d="M10 3v14" strokeDasharray="2 2" /></> : <><path d="M10 3v14M7 6l3-3 3 3M7 14l3 3 3-3" /><path d="M3 10h14" strokeDasharray="2 2" /></>}
       </svg>
