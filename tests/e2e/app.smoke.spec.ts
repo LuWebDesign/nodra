@@ -40,6 +40,25 @@ test("creates, transforms, and undoes a rectangle", async ({ page }) => {
   await expect(width).toHaveValue(String(originalWidth));
 });
 
+test("places appearance controls in Propiedades and duplicates directionally", async ({ page }) => {
+  await page.goto("/");
+  await drawRectangle(page);
+  const rectangle = page.locator(".page-svg svg rect").first();
+  const rectangleBounds = await rectangle.boundingBox();
+  expect(rectangleBounds).not.toBeNull();
+  await page.mouse.click(rectangleBounds!.x + rectangleBounds!.width / 2, rectangleBounds!.y + rectangleBounds!.height / 2);
+
+  await expect(page.getByRole("tab", { name: "Propiedades" })).toHaveAttribute("aria-selected", "true");
+  await expect(page.locator(".inspector").getByText("APARIENCIA")).toBeVisible();
+  await expect(page.locator(".inspector .palette")).toBeVisible();
+  await page.getByRole("tab", { name: "Transformar" }).click();
+  await page.getByRole("button", { name: "Este", exact: true }).click();
+  await page.getByLabel("Distancia entre copias en milímetros").fill("5");
+  await page.getByLabel("Cantidad de copias").fill("1");
+  await page.getByRole("button", { name: "Reproducir copias" }).click();
+  await expect(page.locator(".page-svg svg rect")).toHaveCount(2);
+});
+
 test("moves an existing object with a drawing tool without creating another object", async ({ page }) => {
   await page.goto("/");
   await drawRectangle(page);

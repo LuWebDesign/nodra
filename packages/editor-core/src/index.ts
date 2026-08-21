@@ -14,7 +14,7 @@ import {
   withElements,
 } from "@nodra/domain";
 import { validateDocument } from "@nodra/validation";
-import { boundsOfElements, contourWithPoints, elementCenter, groupCenter, resizeGroup, rotateElements, shapeResultContours, transformPoint } from "@nodra/geometry";
+import { boundsOfElements, contourWithPoints, directionVector, elementCenter, groupCenter, resizeGroup, rotateElements, shapeResultContours, transformPoint, type Direction } from "@nodra/geometry";
 
 export type ElementPatch = { readonly position?: PointMm; readonly size?: SizeMm; readonly rotation?: number; readonly cornerRadius?: number; readonly style?: VisualStyle; readonly operation?: OperationMetadata; readonly start?: PointMm; readonly end?: PointMm };
 export type StylePatch = { readonly stroke?: string; readonly fill?: string | null; readonly strokeWidth?: number };
@@ -133,6 +133,28 @@ export const shapeOperation = (ids: readonly ElementId[], operation: ShapeOperat
   },
 });
 
+const translateElement = (element: Element, delta: PointMm, id: ElementId): Element => {
+  if (element.type === "line") return { ...element, id, start: { x: element.start.x + delta.x, y: element.start.y + delta.y }, end: { x: element.end.x + delta.x, y: element.end.y + delta.y } };
+  if (element.type === "contour") return { ...contourWithPoints(element, element.contours.map((contour) => contour.points.map((point) => ({ x: point.x + delta.x, y: point.y + delta.y })))), id, rotation: element.rotation };
+  return { ...element, id, position: { x: element.position.x + delta.x, y: element.position.y + delta.y } };
+};
+
+export const duplicateElements = (ids: readonly ElementId[], direction: Direction, distance: number, count: number): EditorCommand => ({
+  name: `duplicate:${direction}:${count}`,
+  apply: (document) => {
+    if (!Number.isFinite(distance) || distance < 0) return { success: false, error: "Distance must be a finite non-negative number" };
+    if (!Number.isInteger(count) || count < 1) return { success: false, error: "Copy count must be a positive integer" };
+    const uniqueIds = [...new Set(ids)];
+    const selected = document.elements.filter((element) => uniqueIds.includes(element.id));
+    if (!selected.length || selected.length !== uniqueIds.length) return { success: false, error: "One or more elements were not found" };
+    const vector = directionVector(direction);
+    const bounds = boundsOfElements(selected);
+    const step = { x: vector.x * (vector.x === 0 ? 0 : bounds.width + distance), y: vector.y * (vector.y === 0 ? 0 : bounds.height + distance) };
+    const copies = Array.from({ length: count }, (_, copyIndex) => selected.map((element) => translateElement(element, { x: step.x * (copyIndex + 1), y: step.y * (copyIndex + 1) }, elementId(`element-${crypto.randomUUID()}`)))).flat();
+    return replaceElements(document, [...document.elements, ...copies]);
+  },
+});
+
 export type FlipAxis = "horizontal" | "vertical";
 export const flipElements = (ids: readonly ElementId[], axis: FlipAxis): EditorCommand => ({
   name: `flip-${axis}:${[...new Set(ids)].join(",")}`,
@@ -232,6 +254,8 @@ export function dispatch(state: EditorState, command: EditorCommand): EditorStat
   if (!applied.success || applied.document === state.document) return state;
   const nextSelection = command.name.startsWith("shape-")
     ? applied.document.elements.filter((element) => !state.document.elements.some((previous) => previous.id === element.id)).map((element) => element.id)
+    : command.name.startsWith("duplicate:")
+      ? applied.document.elements.filter((element) => !state.document.elements.some((previous) => previous.id === element.id)).map((element) => element.id)
     : knownSelection({ ...state, document: applied.document }, state.selection);
   return { ...state, document: applied.document, selection: nextSelection, undo: [...state.undo, { command: command.name, before: state.document, after: applied.document, selectionBefore: state.selection, selectionAfter: nextSelection }], redo: [], gesture: undefined };
 }
@@ -239,13 +263,13 @@ export function dispatch(state: EditorState, command: EditorCommand): EditorStat
 export function undo(state: EditorState): EditorState {
   const transaction = state.undo.at(-1);
   if (!transaction) return state;
-  const selection = transaction.command.startsWith("shape-") ? transaction.selectionBefore : knownSelection({ ...state, document: transaction.before }, state.selection);
+  const selection = transaction.command.startsWith("shape-") || transaction.command.startsWith("duplicate:") ? transaction.selectionBefore : knownSelection({ ...state, document: transaction.before }, state.selection);
   return { ...state, document: transaction.before, selection, undo: state.undo.slice(0, -1), redo: [...state.redo, transaction], gesture: undefined };
 }
 export function redo(state: EditorState): EditorState {
   const transaction = state.redo.at(-1);
   if (!transaction) return state;
-  const selection = transaction.command.startsWith("shape-") ? transaction.selectionAfter : knownSelection({ ...state, document: transaction.after }, state.selection);
+  const selection = transaction.command.startsWith("shape-") || transaction.command.startsWith("duplicate:") ? transaction.selectionAfter : knownSelection({ ...state, document: transaction.after }, state.selection);
   return { ...state, document: transaction.after, selection, undo: [...state.undo, transaction], redo: state.redo.slice(0, -1), gesture: undefined };
 }
 
