@@ -76,6 +76,18 @@ describe("canonical millimetre geometry", () => {
     expect(elementCenter(line)).toEqual({ x: 5, y: 0 });
     expect(rotationHandlePoints(line, 2)).toEqual([{ x: 5, y: -7 }, { x: 5, y: 7 }]);
   });
+  it("extracts contour center, vertices, and edge midpoints for every ring", () => {
+    const contour = { type: "contour" as const, id: elementId("contour-nodes"), layerId: layerId("l"), position: { x: 10, y: 20 }, size: { width: 20, height: 20 }, contours: [
+      { points: [{ x: 10, y: 20 }, { x: 30, y: 20 }, { x: 30, y: 40 }, { x: 10, y: 40 }, { x: 10, y: 20 }] },
+      { points: [{ x: 15, y: 25 }, { x: 25, y: 25 }, { x: 25, y: 35 }, { x: 15, y: 35 }, { x: 15, y: 25 }] },
+    ], fillRule: "evenodd" as const, rotation: 0, style };
+    const nodes = realGeometryNodes(contour);
+    expect(nodes.filter(({ kind }) => kind === "center")).toEqual([{ kind: "center", point: { x: 20, y: 30 } }]);
+    expect(nodes.filter(({ kind }) => kind === "corner")).toHaveLength(8);
+    expect(nodes.filter(({ kind }) => kind === "edge-midpoint")).toHaveLength(8);
+    expect(nodes).toContainEqual({ kind: "edge-midpoint", point: { x: 20, y: 20 } });
+    expect(nodes).toContainEqual({ kind: "edge-midpoint", point: { x: 20, y: 25 } });
+  });
   it("converts rotated and flipped ellipses to deterministic closed document-space polygons", () => {
     const ellipse = { type: "ellipse" as const, id: elementId("operation-ellipse"), layerId: layerId("l"), position: { x: 0, y: 0 }, size: { width: 20, height: 10 }, rotation: Math.PI / 4, flipX: true, style };
     const polygon = closedElementToPolygon(ellipse)[0]![0]!;
@@ -116,6 +128,19 @@ describe("canonical millimetre geometry", () => {
     const rotated = rotateElements([contour], { x: 20, y: 25 }, Math.PI / 2)[0];
     expect(rotated?.type).toBe("contour");
     if (rotated?.type === "contour") expect(rotated.contours[0]?.points).toContainEqual({ x: 25, y: 15 });
+  });
+  it("resizes a single compound contour while preserving every ring", () => {
+    const contour = { type: "contour" as const, id: elementId("contour-resize"), layerId: layerId("l"), position: { x: 10, y: 20 }, size: { width: 20, height: 20 }, contours: [
+      { points: [{ x: 10, y: 20 }, { x: 30, y: 20 }, { x: 30, y: 40 }, { x: 10, y: 40 }, { x: 10, y: 20 }] },
+      { points: [{ x: 15, y: 25 }, { x: 25, y: 25 }, { x: 25, y: 35 }, { x: 15, y: 35 }, { x: 15, y: 25 }] },
+    ], fillRule: "evenodd" as const, rotation: 0, style };
+    const resized = resizeGroup([contour], "se", { x: 50, y: 60 })[0];
+    expect(resized).toMatchObject({ position: { x: 10, y: 20 }, size: { width: 40, height: 40 } });
+    expect(resized?.type).toBe("contour");
+    if (resized?.type === "contour") {
+      expect(resized.contours).toHaveLength(2);
+      expect(resized.contours[1]?.points).toEqual([{ x: 20, y: 30 }, { x: 40, y: 30 }, { x: 40, y: 50 }, { x: 20, y: 50 }, { x: 20, y: 30 }]);
+    }
   });
 
   it("rotates group members around the axis-aligned group center", () => {

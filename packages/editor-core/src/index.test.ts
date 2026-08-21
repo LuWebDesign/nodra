@@ -184,11 +184,16 @@ describe("editor core", () => {
     expect(redo(undo(state)).document.elements[0]?.type).toBe("contour");
   });
 
-  it("uses selection order for subtraction and rejects lines", () => {
-    const cutter = { ...rectangle, id: elementId("cutter"), position: { x: 4, y: 3 } };
-    let state = select(createEditor({ ...document, elements: [rectangle, cutter] }), [rectangle.id, cutter.id]);
+  it("uses the first selected object as cutter and the second as target", () => {
+    const cutter = { ...rectangle, id: elementId("cutter"), position: { x: 6, y: 3 }, size: { width: 4, height: 3 } };
+    let state = select(createEditor({ ...document, elements: [rectangle, cutter] }), [cutter.id, rectangle.id]);
     state = dispatch(state, shapeOperation(state.selection, "subtract"));
-    expect(state.document.elements[0]).toMatchObject({ type: "contour" });
+    expect(state.document.elements[0]).toMatchObject({ type: "contour", position: rectangle.position, size: rectangle.size });
+    expect(state.document.elements[0]?.type === "contour" ? state.document.elements[0].contours : []).toHaveLength(2);
+    expect(state.undo).toHaveLength(1);
+  });
+
+  it("rejects lines for shape operations", () => {
     const line = { type: "line" as const, id: elementId("shape-line"), layerId: rectangle.layerId, start: { x: 0, y: 0 }, end: { x: 1, y: 1 }, rotation: 0, style: rectangle.style };
     expect(dispatch(select(createEditor({ ...document, elements: [rectangle, line] }), [rectangle.id, line.id]), shapeOperation([rectangle.id, line.id], "weld")).document.elements).toEqual([rectangle, line]);
   });

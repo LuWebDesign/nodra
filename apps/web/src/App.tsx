@@ -407,7 +407,7 @@ export function App() {
   }, [selectionKey]);
 
   const groupPoints = selectedBounds ? groupHandlePoints(selectedBounds) : undefined;
-  const handlePoints = selectedElement?.type === "line" || selectedElement?.type === "contour" ? undefined : selectedElement ? rotatedResizeHandles(selectedElement) : undefined;
+  const handlePoints = selectedElement?.type === "line" ? undefined : selectedElement?.type === "contour" && selectedBounds ? [groupHandlePoints(selectedBounds).nw, groupHandlePoints(selectedBounds).n, groupHandlePoints(selectedBounds).ne, groupHandlePoints(selectedBounds).e, groupHandlePoints(selectedBounds).se, groupHandlePoints(selectedBounds).s, groupHandlePoints(selectedBounds).sw, groupHandlePoints(selectedBounds).w] as const : selectedElement && selectedElement.type !== "contour" ? rotatedResizeHandles(selectedElement) : undefined;
   const handleNames: readonly ResizeHandle[] = ["nw", "n", "ne", "e", "se", "s", "sw", "w"];
   const handleStyle = (handle: GroupHandle) => {
      const point = selectedElements.length > 1 ? groupPoints?.[handle] : handle === "center" ? undefined : handlePoints?.[handleNames.indexOf(handle)];
@@ -542,7 +542,12 @@ export function App() {
       </svg>
       <span className="property-tool-description" role="tooltip">{description}</span>
      </button>;
-   };
+    };
+
+  const shapeOperations = () => <div className="shape-operation-group" role="group" aria-label="Operaciones de forma">
+    <div className="shape-operation-copy"><div className="panel-title">OPERACIONES DE FORMA</div><p className="muted">Solo se aplican a objetos cerrados. Recortar usa el primero como cortador y el segundo como objetivo.</p></div>
+    <div className="shape-operation-buttons"><button type="button" disabled={!selectedElements.length || selectedElements.some((element) => element.type === "line")} onClick={() => applyShapeOperation("weld")}>Soldar</button><button type="button" disabled={selectedElements.length !== 2 || selectedElements.some((element) => element.type === "line")} onClick={() => applyShapeOperation("subtract")}>Recortar</button><button type="button" disabled={!selectedElements.length || selectedElements.some((element) => element.type === "line")} onClick={() => applyShapeOperation("outline")}>Crear límites</button></div>
+  </div>;
 
   const aspectLockButton = () => {
     const label = aspectLock ? "Desbloquear proporción" : "Bloquear proporción";
@@ -578,9 +583,9 @@ export function App() {
     {mode === "prepare" ? <section className="prepare"><div><div className="prepare-icon">◇</div><h1>Preparar aún no está disponible</h1><p>Nodra ofrece actualmente solo un espacio de trabajo de Diseño sin conexión. No hay hardware conectado, controlado ni listo.</p><button onClick={() => setMode("design")}>Volver a Diseño</button></div></section> : <div className="workspace">
       <section className="properties-bar" aria-label="Barra de propiedades">
         <div className="page-selector"><label>Página<select aria-label="Página activa" value={project.activePageId} onChange={(event) => switchPage(event.target.value)}>{project.pages.map((page, index) => <option key={page.id} value={page.id}>{index + 1} · {page.page.width} × {page.page.height} mm</option>)}</select></label><button type="button" onClick={createPageAndSelect}>+ Nueva página</button></div>
-          {selectedElements.length > 0 ? <div className="property-fields">
-               {objectPropertySections()}{mirrorButton("horizontal")}{mirrorButton("vertical")}
-        </div> : <p className="muted">Seleccione un objeto para editar sus propiedades.</p>}
+           {selectedElements.length > 0 ? <div className="property-fields">
+                {objectPropertySections()}{mirrorButton("horizontal")}{mirrorButton("vertical")}{shapeOperations()}
+         </div> : <p className="muted">Seleccione un objeto para editar sus propiedades.</p>}
       </section>
       <aside className="workspace-tools"><div className="tool-column" role="toolbar" aria-label="Herramientas de diseño">{(["select", "rectangle", "ellipse", "line", "pan"] as const).map((item) => <ToolButton key={item} label={toolCursorLabels[item]} icon={item} active={tool === item} onClick={() => { setTransformMode("resize"); setTool(item); }} />)}</div></aside>
       <section className="canvas-area">
@@ -603,8 +608,7 @@ export function App() {
          </div>
          <div className="inspector-tab-content" role="tabpanel">
              {inspectorTab === "properties" && (selectedElements.length === 0 ? <section className="inspector-card"><div className="panel-title">PÁGINA</div><div className="preset-row"><button onClick={() => setPage(1200, 900)}>Horizontal</button><button onClick={() => setPage(900, 1200)}>Vertical</button></div><div className="fields"><Field label="W" value={document.page.width} onChange={(value) => setPage(value, document.page.height)} /><Field label="H" value={document.page.height} onChange={(value) => setPage(document.page.width, value)} /></div><label className="grid-toggle"><input type="checkbox" checked={grid} onChange={(event) => setGrid(event.target.checked)} /> Mostrar cuadrícula del espacio de trabajo</label></section> : <section className="inspector-card inspector-object-card"><div className="panel-title">OBJETO</div>{propertyElement ? <div className="inspector-object-properties">{objectPropertySections(true)}</div> : <><div className="selected-type">{selectedElement?.type === "contour" ? "CONTORNO" : "LÍNEA"}</div><p className="muted">{selectedElement?.type === "contour" ? "Los contornos conservan su geometría real; las dimensiones no están disponibles." : "Las líneas no tienen dimensiones rectangulares."}</p>{selectedElement && rotationField(selectedElement)}</>}</section>)}
-             {inspectorTab === "properties" && <section className="inspector-card inspector-shape-operations"><div className="panel-title">OPERACIONES DE FORMA</div><p className="muted">Solo se aplican a objetos cerrados. Recortar usa el orden de selección.</p><div className="shape-operation-buttons"><button type="button" disabled={!selectedElements.length || selectedElements.some((element) => element.type === "line")} onClick={() => applyShapeOperation("weld")}>Soldar</button><button type="button" disabled={selectedElements.length !== 2 || selectedElements.some((element) => element.type === "line")} onClick={() => applyShapeOperation("subtract")}>Recortar</button><button type="button" disabled={!selectedElements.length || selectedElements.some((element) => element.type === "line")} onClick={() => applyShapeOperation("outline")}>Crear límites</button></div></section>}
-           {inspectorTab === "appearance" && <section className="inspector-card"><div className="panel-title">APARIENCIA</div><div className="muted">Paleta: clic izquierdo para relleno · clic derecho para contorno</div><div className="palette"><button className="swatch no-fill" aria-label="Sin relleno" title="Sin relleno" onClick={() => applyPalette(null, "fill")} onContextMenu={(event) => event.preventDefault()}>×</button>{palette.map((color) => <button key={color} className="swatch" aria-label={`Color ${color}`} title={`Clic izquierdo: relleno · clic derecho: contorno (${color})`} style={{ background: color }} onClick={() => applyPalette(color, "fill")} onContextMenu={(event) => { event.preventDefault(); applyPalette(color, "stroke"); }} />)}</div></section>}
+            {inspectorTab === "appearance" && <section className="inspector-card"><div className="panel-title">APARIENCIA</div><div className="muted">Paleta: clic izquierdo para relleno · clic derecho para contorno</div><div className="palette"><button className="swatch no-fill" aria-label="Sin relleno" title="Sin relleno" onClick={() => applyPalette(null, "fill")} onContextMenu={(event) => event.preventDefault()}>×</button>{palette.map((color) => <button key={color} className="swatch" aria-label={`Color ${color}`} title={`Clic izquierdo: relleno · clic derecho: contorno (${color})`} style={{ background: color }} onClick={() => applyPalette(color, "fill")} onContextMenu={(event) => { event.preventDefault(); applyPalette(color, "stroke"); }} />)}</div></section>}
            {inspectorTab === "text" && <section className="inspector-card"><div className="panel-title">TEXTO</div><p className="muted">Las propiedades de texto estarán disponibles en una próxima iteración.</p></section>}
          </div>
          <section className="inspector-lower-card"><div className="panel-title">CAPAS</div>{document.layers.map((layer) => <div className="layer" key={layer.id}><span>{layer.name}</span><span>{layer.visible ? "Visible" : "Oculta"}</span></div>)}</section>

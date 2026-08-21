@@ -159,7 +159,20 @@ export function realGeometryNodes(element: Element): readonly RealGeometryNode[]
     const [start, end] = rotatedLineEndpoints(element);
     return [{ kind: "endpoint", point: start }, { kind: "center", point: elementCenter(element) }, { kind: "endpoint", point: end }];
   }
-  if (element.type === "contour") return element.contours.flatMap((contour) => contour.points.map((point) => ({ kind: "corner" as const, point })));
+  if (element.type === "contour") {
+    const nodes: RealGeometryNode[] = [{ kind: "center", point: elementCenter(element) }];
+    for (const contour of element.contours) {
+      const points = contour.points;
+      const last = points.at(-1);
+      const vertices = last && points.length > 1 && last.x === points[0]!.x && last.y === points[0]!.y ? points.slice(0, -1) : points;
+      nodes.push(...vertices.map((point) => ({ kind: "corner" as const, point })));
+      for (const [index, start] of vertices.entries()) {
+        const end = vertices[(index + 1) % vertices.length];
+        if (end) nodes.push({ kind: "edge-midpoint", point: { x: (start.x + end.x) / 2, y: (start.y + end.y) / 2 } });
+      }
+    }
+    return nodes;
+  }
   const half = { x: element.size.width / 2, y: element.size.height / 2 };
   const center = { x: element.position.x + half.x, y: element.position.y + half.y };
   if (element.type === "rectangle") {
