@@ -28,3 +28,19 @@
 .property-aspect-lock { position:relative; z-index:2; display:grid; place-items:center; flex:0 0 30px; width:30px; height:36px; padding:5px; color:var(--muted); background:var(--panel-raised); border:1px solid var(--line); border-radius:6px; }
 .property-aspect-lock[aria-pressed="true"] { color:var(--accent); border-color:var(--accent); }
 .property-aspect-lock:hover,.property-aspect-lock:focus-visible { color:var(--accent); border-color:var(--accent); }
+.property-card-dimensions { display:flex; align-items:center; gap:6px; width:116px; }
+.property-dimensions-fields { display:grid; flex:1 1 auto; min-width:0; gap:5px; }
+.property-aspect-lock { flex:0 0 30px; color:#f4f7fb; background:#11151c; border-color:#3a4658; }
+.property-aspect-lock svg { display:block; width:18px; height:18px; }
+.property-aspect-lock[aria-pressed="true"] { color:var(--accent); background:#172b36; border-color:var(--accent); box-shadow:0 0 0 1px #65d9ff33; }
+.inspector-object-card { min-height:0; }
+.inspector-object-properties { display:grid; gap:10px; }
+.inspector-property-card { display:grid; gap:8px; padding:10px; border:1px solid var(--line); border-radius:6px; background:var(--bg); }
+.inspector-property-card .field { min-width:0; }
+.inspector-property-card .field input { min-width:0; }
+.inspector-dimensions-card { display:flex; align-items:stretch; gap:10px; }
+.inspector-dimensions-fields { display:grid; flex:1 1 auto; gap:8px; min-width:0; }
+.inspector-dimensions-card .property-aspect-lock { align-self:center; }
+.inspector-radius-card { display:block; }
+.inspector-radius-card .field { justify-content:space-between; }
+.inspector-radius-card .field input { max-width:130px; }

@@ -532,8 +532,33 @@ export function App() {
         {axis === "horizontal" ? <><path d="M3 10h14M6 7l-3 3 3 3M14 7l3 3-3 3" /><path d="M10 3v14" strokeDasharray="2 2" /></> : <><path d="M10 3v14M7 6l3-3 3 3M7 14l3 3 3-3" /><path d="M3 10h14" strokeDasharray="2 2" /></>}
       </svg>
       <span className="property-tool-description" role="tooltip">{description}</span>
+     </button>;
+   };
+
+  const aspectLockButton = () => {
+    const label = aspectLock ? "Desbloquear proporción" : "Bloquear proporción";
+    return <button type="button" className="property-aspect-lock" aria-label={label} title={label} aria-pressed={aspectLock} onClick={() => setAspectLock((current) => !current)}>
+     <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <title>{label}</title>
+      {aspectLock ? <><rect x="5" y="8" width="10" height="9" rx="1.5" /><path d="M7.5 8V6a2.5 2.5 0 0 1 5 0v2" /></> : <><rect x="5" y="8" width="10" height="9" rx="1.5" /><path d="M7.5 8V6a2.5 2.5 0 0 1 4.6-1.3" /><path d="m12.4 4.8 1.8 1.6" /></>}
+    </svg>
     </button>;
   };
+
+  const objectPropertySections = (inspector = false) => propertyElement ? <>
+    <div className={inspector ? "inspector-property-card" : "property-card"} role="group" aria-label="Posición">
+      {geometryInput(propertyElement, "x", "X")}{geometryInput(propertyElement, "y", "Y")}
+    </div>
+    <div className={inspector ? "inspector-property-card inspector-dimensions-card" : "property-card property-card-dimensions"} role="group" aria-label="Dimensiones">
+      <div className={inspector ? "inspector-dimensions-fields" : "property-dimensions-fields"}>
+        {geometryInput(propertyElement, "width", "Ancho", dimensionIcon("width", "Ancho"))}
+        {geometryInput(propertyElement, "height", "Alto", dimensionIcon("height", "Alto"))}
+      </div>
+      {aspectLockButton()}
+    </div>
+    {selectedElement?.type === "rectangle" && <div className={inspector ? "inspector-property-card inspector-radius-card" : "property-card property-card-radius"} role="group" aria-label="Radio de esquina">{cornerRadiusField(selectedElement)}</div>}
+    {selectedElement && rotationField(selectedElement)}
+  </> : null;
 
   return <main className="app-shell">
     <header className="topbar">
@@ -545,8 +570,7 @@ export function App() {
       <section className="properties-bar" aria-label="Barra de propiedades">
         <div className="page-selector"><label>Página<select aria-label="Página activa" value={project.activePageId} onChange={(event) => switchPage(event.target.value)}>{project.pages.map((page, index) => <option key={page.id} value={page.id}>{index + 1} · {page.page.width} × {page.page.height} mm</option>)}</select></label><button type="button" onClick={createPageAndSelect}>+ Nueva página</button></div>
           {selectedElements.length > 0 ? <div className="property-fields">
-             {propertyElement && <><div className="property-card" role="group" aria-label="Posición">{geometryInput(propertyElement, "x", "X")}{geometryInput(propertyElement, "y", "Y")}</div><div className="property-card property-card-dimensions" role="group" aria-label="Dimensiones">{geometryInput(propertyElement, "width", "Ancho", dimensionIcon("width", "Ancho"))}{geometryInput(propertyElement, "height", "Alto", dimensionIcon("height", "Alto"))}</div><button type="button" className="property-aspect-lock" aria-label="Bloquear proporción" aria-pressed={aspectLock} onClick={() => setAspectLock((current) => !current)}>{aspectLock ? "🔒" : "⌁"}</button></>}{selectedElement?.type === "rectangle" && <div className="property-card property-card-radius" role="group" aria-label="Radio de esquina">{cornerRadiusField(selectedElement)}</div>}
-            {selectedElement && rotationField(selectedElement)}{mirrorButton("horizontal")}{mirrorButton("vertical")}
+              {objectPropertySections()}{mirrorButton("horizontal")}{mirrorButton("vertical")}
         </div> : <p className="muted">Seleccione un objeto para editar sus propiedades.</p>}
       </section>
       <aside className="workspace-tools"><div className="tool-column" role="toolbar" aria-label="Herramientas de diseño">{(["select", "rectangle", "ellipse", "line", "pan"] as const).map((item) => <ToolButton key={item} label={toolCursorLabels[item]} icon={item} active={tool === item} onClick={() => { setTransformMode("resize"); setTool(item); }} />)}</div></aside>
@@ -569,7 +593,7 @@ export function App() {
            <button type="button" role="tab" aria-selected={inspectorTab === "text"} className={inspectorTab === "text" ? "active" : ""} onClick={() => setInspectorTab("text")}>Texto</button>
          </div>
          <div className="inspector-tab-content" role="tabpanel">
-           {inspectorTab === "properties" && <section className="inspector-card"><div className="panel-title">PÁGINA</div><div className="preset-row"><button onClick={() => setPage(1200, 900)}>Horizontal</button><button onClick={() => setPage(900, 1200)}>Vertical</button></div><div className="fields"><Field label="W" value={document.page.width} onChange={(value) => setPage(value, document.page.height)} /><Field label="H" value={document.page.height} onChange={(value) => setPage(document.page.width, value)} /></div><label className="grid-toggle"><input type="checkbox" checked={grid} onChange={(event) => setGrid(event.target.checked)} /> Mostrar cuadrícula del espacio de trabajo</label></section>}
+            {inspectorTab === "properties" && (selectedElements.length === 0 ? <section className="inspector-card"><div className="panel-title">PÁGINA</div><div className="preset-row"><button onClick={() => setPage(1200, 900)}>Horizontal</button><button onClick={() => setPage(900, 1200)}>Vertical</button></div><div className="fields"><Field label="W" value={document.page.width} onChange={(value) => setPage(value, document.page.height)} /><Field label="H" value={document.page.height} onChange={(value) => setPage(document.page.width, value)} /></div><label className="grid-toggle"><input type="checkbox" checked={grid} onChange={(event) => setGrid(event.target.checked)} /> Mostrar cuadrícula del espacio de trabajo</label></section> : <section className="inspector-card inspector-object-card"><div className="panel-title">OBJETO</div>{propertyElement ? <div className="inspector-object-properties">{objectPropertySections(true)}</div> : <><div className="selected-type">LÍNEA</div><p className="muted">Las líneas no tienen dimensiones rectangulares.</p>{selectedElement && rotationField(selectedElement)}</>}</section>)}
            {inspectorTab === "appearance" && <section className="inspector-card"><div className="panel-title">APARIENCIA</div><div className="muted">Paleta: clic izquierdo para relleno · clic derecho para contorno</div><div className="palette"><button className="swatch no-fill" aria-label="Sin relleno" title="Sin relleno" onClick={() => applyPalette(null, "fill")} onContextMenu={(event) => event.preventDefault()}>×</button>{palette.map((color) => <button key={color} className="swatch" aria-label={`Color ${color}`} title={`Clic izquierdo: relleno · clic derecho: contorno (${color})`} style={{ background: color }} onClick={() => applyPalette(color, "fill")} onContextMenu={(event) => { event.preventDefault(); applyPalette(color, "stroke"); }} />)}</div></section>}
            {inspectorTab === "text" && <section className="inspector-card"><div className="panel-title">TEXTO</div><p className="muted">Las propiedades de texto estarán disponibles en una próxima iteración.</p></section>}
          </div>
