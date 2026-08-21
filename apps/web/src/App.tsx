@@ -5,7 +5,7 @@ import { boundsOfElements, elementCenter, groupCenter, groupHandlePoints, realGe
 import { DebouncedAutosave, DexieProjectRepository, requestStoragePersistence } from "@nodra/persistence";
 import { renderSvg } from "@nodra/renderer-svg";
 import { canActivateRotation, centerPageInCanvas, clientPointToCanvas, hoveredSelectionCenter, isDrawingTool, marqueeSelection, movementExceedsThreshold, normalizeBounds, normalizeDrag, pagePointToCanvas, pickElement, pickNode, screenDeltaToMm, screenPointToMm, selectedNodeAnchor, snapMoveDelta, zoomAtPoint, type NodeHit, type SnapGuide, type TransformMode } from "./interaction.js";
-import { cornerRadiusPatch, formatMm, geometryPatch, geometryValue, rotationDegreesValue, rotationPatch, type GeometryField, type PropertyElement } from "./propertyBar.js";
+import { aspectGeometryPatch, cornerRadiusPatch, formatMm, geometryValue, rotationDegreesValue, rotationPatch, type GeometryField, type PropertyElement } from "./propertyBar.js";
 import { useDocumentStore, usePersistenceStore, useUiStore, useViewportStore, type Tool } from "./stores.js";
 
 const defaultStyle = { stroke: "#000000", strokeWidth: 0.7 };
@@ -54,7 +54,7 @@ export function App() {
   const [snapGuide, setSnapGuide] = useState<SnapGuide>();
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [cursorPoint, setCursorPoint] = useState<PointMm>();
-  const [groupAspectLock, setGroupAspectLock] = useState(false);
+  const [aspectLock, setAspectLock] = useState(false);
   const [centerHover, setCenterHover] = useState<{ elementId: ElementId; point: PointMm }>();
   const [transformMode, setTransformMode] = useState<TransformMode>("resize");
   const [inspectorTab, setInspectorTab] = useState<InspectorTab>("properties");
@@ -472,8 +472,8 @@ export function App() {
     if (selectedElements.length > 1 && selectedBounds) {
       const current = field === "x" ? selectedBounds.x : field === "y" ? selectedBounds.y : field === "width" ? selectedBounds.width : selectedBounds.height;
       if (field === "x" || field === "y") setEditorState(dispatch(editorRef.current, moveElements(selection, { x: field === "x" ? value - current : 0, y: field === "y" ? value - current : 0 })));
-       else setEditorState(dispatch(editorRef.current, resizeElements(selection, "se", { x: field === "width" ? selectedBounds.x + value : selectedBounds.x + selectedBounds.width, y: field === "height" ? selectedBounds.y + value : selectedBounds.y + selectedBounds.height }, groupAspectLock)));
-    } else setEditorState(dispatch(editorRef.current, updateElement(element.id, geometryPatch(element, field, value))));
+       else setEditorState(dispatch(editorRef.current, resizeElements(selection, "se", { x: field === "width" ? selectedBounds.x + value : selectedBounds.x + selectedBounds.width, y: field === "height" ? selectedBounds.y + value : selectedBounds.y + selectedBounds.height }, aspectLock)));
+     } else setEditorState(dispatch(editorRef.current, updateElement(element.id, aspectGeometryPatch(element, field, value, aspectLock))));
   };
 
   const cornerRadiusField = (element: Extract<Element, { type: "rectangle" }>) => {
@@ -545,7 +545,7 @@ export function App() {
       <section className="properties-bar" aria-label="Barra de propiedades">
         <div className="page-selector"><label>Página<select aria-label="Página activa" value={project.activePageId} onChange={(event) => switchPage(event.target.value)}>{project.pages.map((page, index) => <option key={page.id} value={page.id}>{index + 1} · {page.page.width} × {page.page.height} mm</option>)}</select></label><button type="button" onClick={createPageAndSelect}>+ Nueva página</button></div>
           {selectedElements.length > 0 ? <div className="property-fields">
-            {propertyElement && <><div className="property-card" role="group" aria-label="Posición">{geometryInput(propertyElement, "x", "X")}{geometryInput(propertyElement, "y", "Y")}</div><div className="property-card property-card-dimensions" role="group" aria-label="Dimensiones">{geometryInput(propertyElement, "width", "Ancho", dimensionIcon("width", "Ancho"))}{geometryInput(propertyElement, "height", "Alto", dimensionIcon("height", "Alto"))}{selectedElements.length > 1 && <button type="button" aria-label="Bloquear proporción del grupo" aria-pressed={groupAspectLock} onClick={() => setGroupAspectLock((current) => !current)}>{groupAspectLock ? "🔒" : "⌁"}</button>}</div></>}{selectedElement?.type === "rectangle" && <div className="property-card property-card-radius" role="group" aria-label="Radio de esquina">{cornerRadiusField(selectedElement)}</div>}
+             {propertyElement && <><div className="property-card" role="group" aria-label="Posición">{geometryInput(propertyElement, "x", "X")}{geometryInput(propertyElement, "y", "Y")}</div><div className="property-card property-card-dimensions" role="group" aria-label="Dimensiones">{geometryInput(propertyElement, "width", "Ancho", dimensionIcon("width", "Ancho"))}{geometryInput(propertyElement, "height", "Alto", dimensionIcon("height", "Alto"))}</div><button type="button" className="property-aspect-lock" aria-label="Bloquear proporción" aria-pressed={aspectLock} onClick={() => setAspectLock((current) => !current)}>{aspectLock ? "🔒" : "⌁"}</button></>}{selectedElement?.type === "rectangle" && <div className="property-card property-card-radius" role="group" aria-label="Radio de esquina">{cornerRadiusField(selectedElement)}</div>}
             {selectedElement && rotationField(selectedElement)}{mirrorButton("horizontal")}{mirrorButton("vertical")}
         </div> : <p className="muted">Seleccione un objeto para editar sus propiedades.</p>}
       </section>

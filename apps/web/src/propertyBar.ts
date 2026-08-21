@@ -14,6 +14,13 @@ export function geometryPatch(element: PropertyElement, field: GeometryField, va
   return field === "x" ? { position: { ...element.position, x: value }, size: element.size } : field === "y" ? { position: { ...element.position, y: value }, size: element.size } : field === "width" ? { position: element.position, size: { ...element.size, width: value } } : { position: element.position, size: { ...element.size, height: value } };
 }
 
+export function aspectGeometryPatch(element: PropertyElement, field: GeometryField, value: number, aspectLock: boolean): Pick<PropertyElement, "position" | "size"> {
+  if (!aspectLock || (field !== "width" && field !== "height")) return geometryPatch(element, field, value);
+  const ratio = element.size.width / element.size.height;
+  const size = field === "width" ? { width: value, height: value / ratio } : { width: value * ratio, height: value };
+  return { position: element.position, size };
+}
+
 export function cornerRadiusValue(element: Extract<Element, { type: "rectangle" }>): number {
   return element.cornerRadius;
 }

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { elementId, layerId, type RectangleElement } from "@nodra/domain";
-import { cornerRadiusPatch, cornerRadiusValue, geometryPatch, geometryValue, rotationDegreesValue, rotationPatch } from "./propertyBar.js";
+import { aspectGeometryPatch, cornerRadiusPatch, cornerRadiusValue, geometryPatch, geometryValue, rotationDegreesValue, rotationPatch } from "./propertyBar.js";
 
 const rectangle: RectangleElement = { type: "rectangle", id: elementId("r"), layerId: layerId("l"), position: { x: 2, y: 3 }, size: { width: 20, height: 10 }, cornerRadius: 1.5, rotation: 0, style: { stroke: "#000", strokeWidth: 1 } };
 
@@ -8,6 +8,12 @@ describe("property bar helpers", () => {
   it("reads and patches geometry without losing sibling values", () => {
     expect(geometryValue(rectangle, "width")).toBe(20);
     expect(geometryPatch(rectangle, "height", 12)).toEqual({ position: rectangle.position, size: { width: 20, height: 12 } });
+  });
+
+  it("keeps a single selection proportional when the aspect lock is enabled", () => {
+    expect(aspectGeometryPatch(rectangle, "width", 40, true)).toEqual({ position: rectangle.position, size: { width: 40, height: 20 } });
+    expect(aspectGeometryPatch(rectangle, "height", 20, true)).toEqual({ position: rectangle.position, size: { width: 40, height: 20 } });
+    expect(aspectGeometryPatch(rectangle, "width", 40, false)).toEqual(geometryPatch(rectangle, "width", 40));
   });
 
   it("accepts non-negative millimetre corner radii and rejects invalid values", () => {
