@@ -1,4 +1,4 @@
-import { difference, union, type MultiPolygon } from "polygon-clipping";
+import polygonClipping, { type MultiPolygon } from "polygon-clipping";
 import type { ContourElement, Element, EllipseElement, LineElement, PointMm, RectangleElement, SizeMm } from "@nodra/domain";
 
 export interface Bounds { readonly x: number; readonly y: number; readonly width: number; readonly height: number }
@@ -90,7 +90,7 @@ export type ShapeOperation = "union" | "difference";
 export function shapeResultContours(operation: ShapeOperation, elements: readonly Element[]): ContourElement["contours"] {
   if (!elements.length || elements.some((element) => element.type === "line")) throw new Error("Shape operations require closed objects");
   const polygons = elements.map(closedElementToPolygon);
-  const result = operation === "difference" ? difference(polygons[0]!, polygons[1]!) : union(polygons[0]!, ...polygons.slice(1));
+  const result = operation === "difference" ? polygonClipping.difference(polygons[0]!, polygons[1]!) : polygonClipping.union(polygons[0]!, ...polygons.slice(1));
   return contoursFromMultiPolygon(result);
 }
 
