@@ -59,6 +59,7 @@ export function App() {
   const [transformMode, setTransformMode] = useState<TransformMode>("resize");
   const [inspectorTab, setInspectorTab] = useState<InspectorTab>("properties");
   const [transformDirection, setTransformDirection] = useState<Direction>("center");
+  const [directionTooltipVisible, setDirectionTooltipVisible] = useState(false);
   const repository = useMemo(() => new DexieProjectRepository(), []);
   const autosave = useMemo(() => new DebouncedAutosave(repository), [repository]);
   const canvas = useRef<HTMLDivElement>(null);
@@ -67,7 +68,12 @@ export function App() {
   const viewportInteracted = useRef(false);
   const centeredViewport = useRef<string | undefined>(undefined);
   const recoveredNotice = useRef(false);
+  const directionTooltipTimer = useRef<ReturnType<typeof setTimeout>>();
   editorRef.current = editor;
+
+  useEffect(() => () => {
+    if (directionTooltipTimer.current) clearTimeout(directionTooltipTimer.current);
+  }, []);
 
   useEffect(() => {
     const on = () => setOnline(true);
@@ -540,13 +546,21 @@ export function App() {
   const transformControls = () => {
     const distanceKey = "transform:distance";
     const countKey = "transform:count";
+    const showDirectionTooltip = () => {
+      if (directionTooltipTimer.current) clearTimeout(directionTooltipTimer.current);
+      setDirectionTooltipVisible(true);
+      directionTooltipTimer.current = setTimeout(() => {
+        setDirectionTooltipVisible(false);
+        directionTooltipTimer.current = undefined;
+      }, 3000);
+    };
     const duplicate = () => {
       const distance = Number((drafts[distanceKey] ?? "10").trim());
       const count = Number((drafts[countKey] ?? "1").trim());
       if (!selectedElements.length || !Number.isFinite(distance) || distance < 0 || !Number.isInteger(count) || count < 1) return;
       setEditorState(dispatch(editorRef.current, duplicateElements(selection, transformDirection, distance, count)));
     };
-     return <section className="inspector-card transform-card"><div className="panel-title">REPRODUCCIÓN DIRECCIONAL</div><div className="transform-layout"><div className="direction-grid" role="group" aria-label="Dirección de reproducción" aria-describedby="transform-direction-description">{transformDirections.map(({ direction, label, marker }) => <button key={direction} type="button" className={transformDirection === direction ? "direction-button active" : "direction-button"} aria-label={label} aria-pressed={transformDirection === direction} onClick={() => setTransformDirection(direction)}><span aria-hidden="true">{marker}</span></button>)}<span id="transform-direction-description" className="direction-tooltip" role="tooltip">Crea copias separadas por el espacio indicado. El centro superpone la copia.</span></div><div className="transform-fields"><label className="field"><span>Distancia (mm)</span><input inputMode="decimal" aria-label="Distancia entre copias en milímetros" value={drafts[distanceKey] ?? "10"} onChange={(event) => setDrafts((current) => ({ ...current, [distanceKey]: event.target.value }))} /></label><label className="field"><span>Copias</span><input inputMode="numeric" aria-label="Cantidad de copias" value={drafts[countKey] ?? "1"} onChange={(event) => setDrafts((current) => ({ ...current, [countKey]: event.target.value }))} /></label><button type="button" className="transform-action" disabled={!selectedElements.length} onClick={duplicate}>Reproducir</button></div></div></section>;
+      return <section className="inspector-card transform-card"><div className="panel-title">REPRODUCCIÓN DIRECCIONAL</div><div className="transform-layout"><div className="direction-grid" role="group" aria-label="Dirección de reproducción" aria-describedby="transform-direction-description" onPointerEnter={showDirectionTooltip} onPointerDown={showDirectionTooltip} onFocusCapture={showDirectionTooltip}>{transformDirections.map(({ direction, label, marker }) => <button key={direction} type="button" className={transformDirection === direction ? "direction-button active" : "direction-button"} aria-label={label} aria-pressed={transformDirection === direction} onClick={() => { showDirectionTooltip(); setTransformDirection(direction); }}><span aria-hidden="true">{marker}</span></button>)}<span id="transform-direction-description" className={directionTooltipVisible ? "direction-tooltip visible" : "direction-tooltip"} role="tooltip">Crea copias separadas por el espacio indicado. El centro superpone la copia.</span></div><div className="transform-fields"><label className="field"><span>Distancia (mm)</span><input inputMode="decimal" aria-label="Distancia entre copias en milímetros" value={drafts[distanceKey] ?? "10"} onChange={(event) => setDrafts((current) => ({ ...current, [distanceKey]: event.target.value }))} /></label><label className="field"><span>Copias</span><input inputMode="numeric" aria-label="Cantidad de copias" value={drafts[countKey] ?? "1"} onChange={(event) => setDrafts((current) => ({ ...current, [countKey]: event.target.value }))} /></label><button type="button" className="transform-action" disabled={!selectedElements.length} onClick={duplicate}>Reproducir</button></div></div></section>;
   };
   const mirrorButton = (axis: FlipAxis) => {
     const label = axis === "horizontal" ? "Espejo horizontal" : "Espejo vertical";
