@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent, type PointerEvent, type ReactNode, type WheelEvent } from "react";
 import { createProject, elementId, layerId, pageId, revision, type DocumentSnapshot, type Element, type ElementId, type PointMm, type ProjectSnapshot } from "@nodra/domain";
-import { addToSelection, beginGesture, cancelGesture, clearSelection, commitGesture, createElement, deleteElement, dispatch, moveElements, previewGesture, previewGestureFromBase, redo, resizeElement, resizeElements, rotateElement, rotateElementsAroundCenter, select, selectForPointerDown, undo, updateElement, updateElementStyles, updatePage } from "@nodra/editor-core";
+import { addToSelection, beginGesture, cancelGesture, clearSelection, commitGesture, createElement, deleteElement, dispatch, flipElements, moveElements, previewGesture, previewGestureFromBase, redo, resizeElement, resizeElements, rotateElement, rotateElementsAroundCenter, select, selectForPointerDown, undo, updateElement, updateElementStyles, updatePage, type FlipAxis } from "@nodra/editor-core";
 import { boundsOfElements, elementCenter, groupCenter, groupHandlePoints, realGeometryNodes, resizeHandle, rotatedResizeHandles, rotationFromDrag, rotationHandlePoints, type GroupHandle, type ResizeHandle } from "@nodra/geometry";
 import { DebouncedAutosave, DexieProjectRepository, requestStoragePersistence } from "@nodra/persistence";
 import { renderSvg } from "@nodra/renderer-svg";
@@ -518,7 +518,17 @@ export function App() {
         setDrafts((current) => { const next = { ...current }; delete next[key]; return next; });
         event.currentTarget.blur();
       }
-    }} /><span>°</span></label></div>;
+     }} /><span>°</span></label></div>;
+  };
+  const mirrorButton = (axis: FlipAxis) => {
+    const label = axis === "horizontal" ? "Espejo horizontal" : "Espejo vertical";
+    const description = axis === "horizontal" ? "Voltear la selección horizontalmente." : "Voltear la selección verticalmente.";
+    return <button type="button" className="property-transform-button" aria-label={label} title={description} aria-description={description} onClick={() => setEditorState(dispatch(editorRef.current, flipElements(selection, axis)))}>
+      <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+        {axis === "horizontal" ? <><path d="M3 10h14M6 7l-3 3 3 3M14 7l3 3-3 3" /><path d="M10 3v14" strokeDasharray="2 2" /></> : <><path d="M10 3v14M7 6l3-3 3 3M7 14l3 3 3-3" /><path d="M3 10h14" strokeDasharray="2 2" /></>}
+      </svg>
+      <span className="property-tool-description" role="tooltip">{description}</span>
+    </button>;
   };
 
   return <main className="app-shell">
@@ -532,7 +542,7 @@ export function App() {
         <div className="page-selector"><label>Página<select aria-label="Página activa" value={project.activePageId} onChange={(event) => switchPage(event.target.value)}>{project.pages.map((page, index) => <option key={page.id} value={page.id}>{index + 1} · {page.page.width} × {page.page.height} mm</option>)}</select></label><button type="button" onClick={createPageAndSelect}>+ Nueva página</button></div>
           {selectedElements.length > 0 ? <div className="property-fields">
             {propertyElement && <><div className="property-card" role="group" aria-label="Posición">{geometryInput(propertyElement, "x", "X")}{geometryInput(propertyElement, "y", "Y")}</div><div className="property-card property-card-dimensions" role="group" aria-label="Dimensiones">{geometryInput(propertyElement, "width", "Ancho", dimensionIcon("width", "Ancho"))}{geometryInput(propertyElement, "height", "Alto", dimensionIcon("height", "Alto"))}{selectedElements.length > 1 && <button type="button" aria-label="Bloquear proporción del grupo" aria-pressed={groupAspectLock} onClick={() => setGroupAspectLock((current) => !current)}>{groupAspectLock ? "🔒" : "⌁"}</button>}</div></>}{selectedElement?.type === "rectangle" && <div className="property-card property-card-radius" role="group" aria-label="Radio de esquina">{cornerRadiusField(selectedElement)}</div>}
-           {selectedElement && rotationField(selectedElement)}
+            {selectedElement && rotationField(selectedElement)}{mirrorButton("horizontal")}{mirrorButton("vertical")}
         </div> : <p className="muted">Seleccione un objeto para editar sus propiedades.</p>}
       </section>
       <aside className="workspace-tools"><div className="tool-column" role="toolbar" aria-label="Herramientas de diseño">{(["select", "rectangle", "ellipse", "line", "pan"] as const).map((item) => <ToolButton key={item} label={toolCursorLabels[item]} icon={item} active={tool === item} onClick={() => { setTransformMode("resize"); setTool(item); }} />)}</div></aside>

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createDocument, elementId, layerId, type RectangleElement } from "@nodra/domain";
-import { addToSelection, beginGesture, clearSelection, commitGesture, createEditor, createElement, dispatch, moveElement, moveElements, previewGesture, previewGestureFromBase, redo, removeFromSelection, reorderLayer, resizeElement, resizeElements, rotateElementsAroundCenter, select, selectForPointerDown, setLayerVisibility, toggleSelection, undo, updateElement, updateElementStyles } from "./index.js";
+import { addToSelection, beginGesture, clearSelection, commitGesture, createEditor, createElement, dispatch, flipElements, moveElement, moveElements, previewGesture, previewGestureFromBase, redo, removeFromSelection, reorderLayer, resizeElement, resizeElements, rotateElementsAroundCenter, select, selectForPointerDown, setLayerVisibility, toggleSelection, undo, updateElement, updateElementStyles } from "./index.js";
 
 const rectangle: RectangleElement = { type: "rectangle", id: elementId("r1"), layerId: layerId("default"), position: { x: 1, y: 2 }, size: { width: 10, height: 5 }, cornerRadius: 0, rotation: 0, style: { stroke: "#000", strokeWidth: 1 } };
 const document = createDocument("doc", [{ id: layerId("default"), name: "Default", visible: true, order: 0 }]);
@@ -146,5 +146,18 @@ describe("editor core", () => {
     expect(state.document.elements[1]?.style).toEqual({ stroke: "#f00", strokeWidth: 1 });
     expect(undo(state).document.elements).toEqual([rectangle, ellipse]);
     expect(redo(undo(state)).document.elements[0]?.style).toEqual({ stroke: "#f00", strokeWidth: 1 });
+  });
+
+  it("flips a complete single or multiple selection atomically", () => {
+    const second = { ...rectangle, id: elementId("r2"), position: { x: 20, y: 2 }, flipY: true };
+    let state = select(createEditor({ ...document, elements: [rectangle, second] }), [rectangle.id, second.id]);
+    state = dispatch(state, flipElements(state.selection, "horizontal"));
+
+    expect(state.undo).toHaveLength(1);
+    expect(state.document.elements).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: rectangle.id, flipX: true }),
+      expect.objectContaining({ id: second.id, flipX: true, flipY: true }),
+    ]));
+    expect(undo(state).document.elements).toEqual([rectangle, second]);
   });
 });
