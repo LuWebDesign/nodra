@@ -194,9 +194,47 @@ describe("editor core", () => {
     expect(state.undo).toHaveLength(1);
   });
 
+  it("applies every preceding selection as a cutter to the last selected target", () => {
+    const firstCutter = { ...rectangle, id: elementId("cutter-1"), position: { x: 3, y: 3 }, size: { width: 2, height: 3 } };
+    const secondCutter = { ...rectangle, id: elementId("cutter-2"), position: { x: 7, y: 3 }, size: { width: 2, height: 3 } };
+    const target = { ...rectangle, id: elementId("target"), position: { x: 1, y: 2 }, size: { width: 10, height: 5 } };
+    let state = select(createEditor({ ...document, elements: [firstCutter, secondCutter, target] }), [firstCutter.id, secondCutter.id, target.id]);
+    state = dispatch(state, shapeOperation(state.selection, "subtract"));
+    const result = state.document.elements[0];
+    expect(state.document.elements).toHaveLength(1);
+    expect(result?.type).toBe("contour");
+    expect(result).toMatchObject({ position: target.position, size: target.size });
+    expect(result?.type === "contour" ? result.contours : []).toHaveLength(3);
+    expect(state.selection).toEqual([result!.id]);
+    expect(state.undo).toHaveLength(1);
+    expect(undo(state).document.elements).toEqual([firstCutter, secondCutter, target]);
+    expect(redo(undo(state)).document.elements[0]?.type).toBe("contour");
+  });
+
+  it("keeps a non-overlapping target unchanged and orders multiple results deterministically", () => {
+    const cutter = { ...rectangle, id: elementId("non-overlap-cutter"), position: { x: 100, y: 100 } };
+    const target = { ...rectangle, id: elementId("non-overlap-target") };
+    const source = { ...document, elements: [cutter, target] };
+    const run = dispatch(select(createEditor(source), [cutter.id, target.id]), shapeOperation([cutter.id, target.id], "subtract"));
+    const secondRun = dispatch(select(createEditor(source), [cutter.id, target.id]), shapeOperation([cutter.id, target.id], "subtract"));
+    expect(run.document.elements[0]).toMatchObject({ position: target.position, size: target.size });
+    expect(run.document.elements[0]?.type === "contour" ? run.document.elements[0].contours : []).toEqual(secondRun.document.elements[0]?.type === "contour" ? secondRun.document.elements[0].contours : []);
+  });
+
+  it("rejects full target consumption without changing document or history", () => {
+    const cutter = { ...rectangle, id: elementId("full-cutter"), position: { x: 0, y: 0 }, size: { width: 20, height: 10 } };
+    const target = { ...rectangle, id: elementId("full-target"), position: { x: 1, y: 2 } };
+    const state = select(createEditor({ ...document, elements: [cutter, target] }), [cutter.id, target.id]);
+    const result = dispatch(state, shapeOperation(state.selection, "subtract"));
+    expect(result).toBe(state);
+    expect(result.document.elements).toEqual([cutter, target]);
+    expect(result.undo).toHaveLength(0);
+  });
+
   it("rejects lines for shape operations", () => {
     const line = { type: "line" as const, id: elementId("shape-line"), layerId: rectangle.layerId, start: { x: 0, y: 0 }, end: { x: 1, y: 1 }, rotation: 0, style: rectangle.style };
     expect(dispatch(select(createEditor({ ...document, elements: [rectangle, line] }), [rectangle.id, line.id]), shapeOperation([rectangle.id, line.id], "weld")).document.elements).toEqual([rectangle, line]);
+    expect(dispatch(select(createEditor({ ...document, elements: [rectangle, line] }), [line.id, rectangle.id]), shapeOperation([line.id, rectangle.id], "subtract")).document.elements).toEqual([rectangle, line]);
   });
 
   it("flips contour geometry, restores shape-operation selection on undo, and preserves stacking order", () => {

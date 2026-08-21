@@ -100,7 +100,7 @@ export type ShapeOperation = "union" | "difference";
 export function shapeResultContours(operation: ShapeOperation, elements: readonly Element[]): ContourElement["contours"] {
   if (!elements.length || elements.some((element) => element.type === "line")) throw new Error("Shape operations require closed objects");
   const polygons = elements.map(closedElementToPolygon);
-  const result = operation === "difference" ? polygonClipping.difference(polygons[0]!, polygons[1]!) : polygonClipping.union(polygons[0]!, ...polygons.slice(1));
+  const result = operation === "difference" ? polygonClipping.difference(polygons[0]!, ...polygons.slice(1)) : polygonClipping.union(polygons[0]!, ...polygons.slice(1));
   return contoursFromMultiPolygon(result);
 }
 

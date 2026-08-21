@@ -107,9 +107,9 @@ export const shapeOperation = (ids: readonly ElementId[], operation: ShapeOperat
     const known = selected.filter((element): element is Element => Boolean(element));
     if (known.length !== selected.length || !known.length) return { success: false, error: "No valid objects selected" };
     if (known.some((element) => element.type === "line")) return { success: false, error: "Shape operations require closed objects" };
-    if (operation === "subtract" && known.length !== 2) return { success: false, error: "Recortar requires exactly two objects" };
+    if (operation === "subtract" && known.length < 2) return { success: false, error: "Recortar requires at least two objects" };
     const first = known[0]!;
-    const contours = shapeResultContours(operation === "subtract" ? "difference" : "union", operation === "subtract" ? [known[1]!, known[0]!] : known);
+    const contours = shapeResultContours(operation === "subtract" ? "difference" : "union", operation === "subtract" ? [known.at(-1)!, ...known.slice(0, -1)] : known);
     if (!contours.length) return { success: false, error: "The shape operation produced an empty result" };
     const points = contours.flatMap((contour) => contour.points);
     const xs = points.map((point) => point.x); const ys = points.map((point) => point.y);

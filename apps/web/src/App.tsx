@@ -59,6 +59,7 @@ export function App() {
   const [transformMode, setTransformMode] = useState<TransformMode>("resize");
   const [inspectorTab, setInspectorTab] = useState<InspectorTab>("properties");
   const [transformDirection, setTransformDirection] = useState<Direction>("center");
+  const [directionTooltipVisible, setDirectionTooltipVisible] = useState(false);
   const repository = useMemo(() => new DexieProjectRepository(), []);
   const autosave = useMemo(() => new DebouncedAutosave(repository), [repository]);
   const canvas = useRef<HTMLDivElement>(null);
@@ -67,7 +68,12 @@ export function App() {
   const viewportInteracted = useRef(false);
   const centeredViewport = useRef<string | undefined>(undefined);
   const recoveredNotice = useRef(false);
+  const directionTooltipTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   editorRef.current = editor;
+
+  useEffect(() => () => {
+    if (directionTooltipTimer.current) clearTimeout(directionTooltipTimer.current);
+  }, []);
 
   useEffect(() => {
     const on = () => setOnline(true);
@@ -273,9 +279,14 @@ export function App() {
       setEditorState(next);
       if (!next.selection.includes(hit)) return;
       event.currentTarget.setPointerCapture(event.pointerId);
-      setEditorState(beginGesture(next));
       const anchor = selectedNodeAnchor(nodeHit, next.selection);
-      interaction.current = { pointerId: event.pointerId, lastX: event.clientX, lastY: event.clientY, kind: "move", ids: next.selection, ...(anchor ? { anchor } : {}), startClient: { x: event.clientX, y: event.clientY }, dragged: false, shiftKey: event.shiftKey };
+      if (isDrawingTool(tool)) {
+        setEditorState(beginGesture(next));
+        interaction.current = { pointerId: event.pointerId, lastX: event.clientX, lastY: event.clientY, kind: "draw", ids: [id()], start: point, startClient: { x: event.clientX, y: event.clientY }, dragged: false, shiftKey: event.shiftKey, tool };
+      } else {
+        setEditorState(beginGesture(next));
+        interaction.current = { pointerId: event.pointerId, lastX: event.clientX, lastY: event.clientY, kind: "move", ids: next.selection, ...(anchor ? { anchor } : {}), startClient: { x: event.clientX, y: event.clientY }, dragged: false, shiftKey: event.shiftKey };
+      }
       return;
     }
     event.currentTarget.setPointerCapture(event.pointerId);
@@ -540,13 +551,21 @@ export function App() {
   const transformControls = () => {
     const distanceKey = "transform:distance";
     const countKey = "transform:count";
+    const showDirectionTooltip = () => {
+      if (directionTooltipTimer.current) clearTimeout(directionTooltipTimer.current);
+      setDirectionTooltipVisible(true);
+      directionTooltipTimer.current = setTimeout(() => {
+        setDirectionTooltipVisible(false);
+        directionTooltipTimer.current = undefined;
+      }, 3000);
+    };
     const duplicate = () => {
       const distance = Number((drafts[distanceKey] ?? "10").trim());
       const count = Number((drafts[countKey] ?? "1").trim());
       if (!selectedElements.length || !Number.isFinite(distance) || distance < 0 || !Number.isInteger(count) || count < 1) return;
       setEditorState(dispatch(editorRef.current, duplicateElements(selection, transformDirection, distance, count)));
     };
-    return <section className="inspector-card transform-card"><div className="panel-title">REPRODUCCIÓN DIRECCIONAL</div><p className="muted">Crea copias separadas por el espacio indicado. El centro superpone la copia.</p><div className="direction-grid" role="group" aria-label="Dirección de reproducción">{transformDirections.map(({ direction, label, marker }) => <button key={direction} type="button" className={transformDirection === direction ? "direction-button active" : "direction-button"} aria-label={label} aria-pressed={transformDirection === direction} onClick={() => setTransformDirection(direction)}><span aria-hidden="true">{marker}</span></button>)}</div><div className="transform-fields"><label className="field"><span>Distancia</span><input inputMode="decimal" aria-label="Distancia entre copias en milímetros" value={drafts[distanceKey] ?? "10"} onChange={(event) => setDrafts((current) => ({ ...current, [distanceKey]: event.target.value }))} /></label><label className="field"><span>Copias</span><input inputMode="numeric" aria-label="Cantidad de copias" value={drafts[countKey] ?? "1"} onChange={(event) => setDrafts((current) => ({ ...current, [countKey]: event.target.value }))} /></label></div><button type="button" className="transform-action" disabled={!selectedElements.length} onClick={duplicate}>Reproducir copias</button></section>;
+      return <section className="inspector-card transform-card"><div className="panel-title">REPRODUCCIÓN DIRECCIONAL</div><div className="transform-layout"><div className="direction-grid" role="group" aria-label="Dirección de reproducción" aria-describedby="transform-direction-description" onPointerEnter={showDirectionTooltip} onPointerDown={showDirectionTooltip} onFocusCapture={showDirectionTooltip}>{transformDirections.map(({ direction, label, marker }) => <button key={direction} type="button" className={transformDirection === direction ? "direction-button active" : "direction-button"} aria-label={label} aria-pressed={transformDirection === direction} onClick={() => { showDirectionTooltip(); setTransformDirection(direction); }}><span aria-hidden="true">{marker}</span></button>)}<span id="transform-direction-description" className={directionTooltipVisible ? "direction-tooltip visible" : "direction-tooltip"} role="tooltip">Crea copias separadas por el espacio indicado. El centro superpone la copia.</span></div><div className="transform-fields"><label className="field"><span>Distancia (mm)</span><input inputMode="decimal" aria-label="Distancia entre copias en milímetros" value={drafts[distanceKey] ?? "10"} onChange={(event) => setDrafts((current) => ({ ...current, [distanceKey]: event.target.value }))} /></label><label className="field"><span>Copias</span><input inputMode="numeric" aria-label="Cantidad de copias" value={drafts[countKey] ?? "1"} onChange={(event) => setDrafts((current) => ({ ...current, [countKey]: event.target.value }))} /></label><button type="button" aria-label="Reproducir copias" className="transform-action" disabled={!selectedElements.length} onClick={duplicate}>Reproducir</button></div></div></section>;
   };
   const mirrorButton = (axis: FlipAxis) => {
     const label = axis === "horizontal" ? "Espejo horizontal" : "Espejo vertical";
@@ -567,7 +586,7 @@ export function App() {
     <div className="shape-operation-copy"><div className="panel-title">OPERACIONES DE FORMA</div></div>
     <div className="shape-operation-buttons">
       <button type="button" className="shape-operation-button" aria-label="Soldar" title="Combinar los objetos cerrados seleccionados en una sola forma." aria-description="Combinar los objetos cerrados seleccionados en una sola forma." disabled={!selectedElements.length || selectedElements.some((element) => element.type === "line")} onClick={() => applyShapeOperation("weld")}>Soldar<span className="shape-operation-description" role="tooltip">Combinar los objetos cerrados seleccionados en una sola forma.</span></button>
-      <button type="button" className="shape-operation-button" aria-label="Recortar" title="Usar el primer objeto seleccionado como cortador y cortar el segundo objeto seleccionado." aria-description="Usar el primer objeto seleccionado como cortador y cortar el segundo objeto seleccionado." disabled={selectedElements.length !== 2 || selectedElements.some((element) => element.type === "line")} onClick={() => applyShapeOperation("subtract")}>Recortar<span className="shape-operation-description" role="tooltip">Usar el primer objeto seleccionado como cortador y cortar el segundo objeto seleccionado.</span></button>
+      <button type="button" className="shape-operation-button" aria-label="Recortar" title="Usar el último objeto seleccionado como objetivo y los anteriores como cortadores." aria-description="Usar el último objeto seleccionado como objetivo y los anteriores como cortadores." disabled={selectedElements.length < 2 || selectedElements.some((element) => element.type === "line")} onClick={() => applyShapeOperation("subtract")}>Recortar<span className="shape-operation-description" role="tooltip">Usar el último objeto seleccionado como objetivo y los anteriores como cortadores.</span></button>
       <button type="button" className="shape-operation-button" aria-label="Crear límites" title="Crear un contorno real alrededor de los objetos cerrados seleccionados." aria-description="Crear un contorno real alrededor de los objetos cerrados seleccionados." disabled={!selectedElements.length || selectedElements.some((element) => element.type === "line")} onClick={() => applyShapeOperation("outline")}>Crear límites<span className="shape-operation-description" role="tooltip">Crear un contorno real alrededor de los objetos cerrados seleccionados.</span></button>
     </div>
   </div>;
@@ -613,10 +632,10 @@ export function App() {
       <aside className="workspace-tools"><div className="tool-column" role="toolbar" aria-label="Herramientas de diseño">{(["select", "rectangle", "ellipse", "line", "pan"] as const).map((item) => <ToolButton key={item} label={toolCursorLabels[item]} icon={item} active={tool === item} onClick={() => { setTransformMode("resize"); setTool(item); }} />)}</div></aside>
       <section className="canvas-area">
         <header className="canvas-header"><span>DISEÑO / SIN TÍTULO</span><span>{document.elements.length} objetos · {document.page.width} × {document.page.height} mm</span><div className="zoom-controls"><button aria-label="Alejar" onClick={() => setZoom(zoom - 0.5)}>−</button><span className="zoom-label">{Math.round(zoom * 100 / 3)}%</span><button aria-label="Acercar" onClick={() => setZoom(zoom + 0.5)}>+</button></div></header>
-        <div ref={canvas} className={grid ? "canvas" : "canvas no-grid"} onPointerDown={onCanvasPointerDown} onPointerMove={onCanvasPointerMove} onPointerUp={(event) => finishPointer(event, false)} onPointerCancel={(event) => finishPointer(event, true)} onPointerLeave={() => setCursorPoint(undefined)} onDoubleClick={onCanvasDoubleClick} onWheel={onWheel}>
+        <div ref={canvas} className={`${grid ? "canvas" : "canvas no-grid"}${isDrawingTool(tool) ? " drawing-tool" : ""}`} onPointerDown={onCanvasPointerDown} onPointerMove={onCanvasPointerMove} onPointerUp={(event) => finishPointer(event, false)} onPointerCancel={(event) => finishPointer(event, true)} onPointerLeave={() => setCursorPoint(undefined)} onDoubleClick={onCanvasDoubleClick} onWheel={onWheel}>
           <div className="page" style={pageStyle}><div className="page-svg" dangerouslySetInnerHTML={{ __html: rendered.success ? rendered.svg : "" }} /></div>
           {centerHoverStyle && <div className="selection-center-feedback" style={centerHoverStyle} aria-hidden="true"><span className="selection-center-mark">×</span><span className="selection-center-label">centro</span></div>}
-           {transformMode === "resize" && (handlePoints || groupPoints) && <div className="resize-handles">{handleNames.map((handle) => <button key={handle} type="button" className={`resize-handle resize-handle-${handle}`} data-resize-handle={handle} aria-label={`Redimensionar ${handle}`} style={handleStyle(handle)} onPointerDown={(event) => resizePointerDown(event, handle)} onPointerUp={(event) => finishPointer(event, false)} onPointerCancel={(event) => finishPointer(event, true)} />)}{groupPoints && <button type="button" className="resize-handle resize-handle-center" data-resize-handle="center" aria-label="Centro del grupo" style={handleStyle("center")} onPointerDown={(event) => event.stopPropagation()} />}</div>}
+            {transformMode === "resize" && (handlePoints || groupPoints) && <div className="resize-handles">{handleNames.map((handle) => <button key={handle} type="button" className={`resize-handle resize-handle-${handle}`} data-resize-handle={handle} aria-label={`Redimensionar ${handle}`} style={handleStyle(handle)} onPointerDown={(event) => resizePointerDown(event, handle)} onPointerUp={(event) => finishPointer(event, false)} onPointerCancel={(event) => finishPointer(event, true)} />)}{groupPoints && !isDrawingTool(tool) && <button type="button" className="resize-handle resize-handle-center" data-resize-handle="center" aria-label="Centro del grupo" style={handleStyle("center")} onPointerDown={(event) => event.stopPropagation()} />}</div>}
            {transformMode === "rotate" && selectedElements.length > 0 && <div className="rotation-controls" aria-label="Controles de rotación"><span className="rotation-center" style={selectedElements.length > 1 && selectedBounds ? { left: pagePointToCanvas(groupCenter(selectedBounds), zoom, panMm).x, top: pagePointToCanvas(groupCenter(selectedBounds), zoom, panMm).y } : centerStyle} aria-hidden="true" />{rotationPoints.map((point, index) => { const screen = pagePointToCanvas(point, zoom, panMm); return <button key={index} type="button" className="rotation-handle" aria-label={`Rotar objeto, control ${index + 1}`} style={{ left: screen.x, top: screen.y }} onPointerDown={rotationPointerDown} onPointerUp={(event) => finishPointer(event, false)} onPointerCancel={(event) => finishPointer(event, true)}><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M15.5 8A6 6 0 1 0 16 12" /><path d="m12.5 4 3 4-5 .5" /></svg></button>; })}</div>}
           {marqueeStyle && <div className="marquee" style={marqueeStyle} />}
           {cursorPoint && <span className="tool-cursor" style={{ left: cursorPoint.x, top: cursorPoint.y }} aria-label={`Herramienta activa: ${toolCursorLabels[tool]}`}>{toolCursorIcons[tool]}</span>}
