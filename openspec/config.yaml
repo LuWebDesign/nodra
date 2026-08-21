@@ -2,33 +2,33 @@ schema: spec-driven
 
 context: |
   Project: Nodra
-  Stack: No application files detected; stack is not established.
-  Architecture: No architecture or source conventions detected.
-  Testing: No test runner, test layers, coverage tool, linter, type checker, or formatter detected.
-  Strict TDD: disabled because no test runner is available.
+  Stack: pnpm workspace with React, Vite/PWA, TypeScript, Vitest, ESLint, and Playwright (Chromium).
+  Architecture: Web composition in apps/web over independent domain, geometry, validation, editor-core, renderer-svg, UI, and persistence packages.
+  Testing: Vitest unit tests, strict TypeScript typechecking, ESLint, root build, and one Chromium Playwright smoke test with an automatically started Vite server.
+  Strict TDD: disabled by repository policy; tests remain required regression evidence for behavior changes.
   Artifact store: OpenSpec files in this repository.
 
 strict_tdd: false
 
 testing:
   test_runner:
-    available: false
-    command: ""
-    framework: ""
+    available: true
+    command: "corepack pnpm test"
+    framework: "Vitest"
   layers:
-    unit: false
+    unit: true
     integration: false
-    e2e: false
+    e2e: true
   coverage:
     available: false
     command: ""
   quality:
     linter:
-      available: false
-      command: ""
+      available: true
+      command: "corepack pnpm lint"
     type_checker:
-      available: false
-      command: ""
+      available: true
+      command: "corepack pnpm typecheck"
     formatter:
       available: false
       command: ""
@@ -49,10 +49,10 @@ rules:
     guidelines:
       - Follow conventions established after the stack is detected.
     tdd: false
-    test_command: ""
+    test_command: "corepack pnpm test"
   verify:
-    test_command: ""
-    build_command: ""
+    test_command: "corepack pnpm test"
+    build_command: "corepack pnpm build"
     coverage_threshold: 0
   archive:
     - Warn before merging destructive deltas.

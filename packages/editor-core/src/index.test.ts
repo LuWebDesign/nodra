@@ -70,6 +70,17 @@ describe("editor core", () => {
     expect(document.layers[0]?.visible).toBe(true);
   });
 
+  it("does not record a no-op layer visibility command", () => {
+    const state = createEditor(document);
+    const unchanged = dispatch(state, setLayerVisibility(layerId("default"), true));
+
+    expect(unchanged).toBe(state);
+    expect(unchanged.document).toEqual(document);
+    expect(unchanged.document.revision).toBe(document.revision);
+    expect(unchanged.undo).toEqual([]);
+    expect(unchanged.redo).toEqual([]);
+  });
+
   it("provides deduplicated, known selection helpers", () => {
     let state = dispatch(createEditor(document), createElement(rectangle));
     state = addToSelection(state, [rectangle.id, rectangle.id, "unknown" as never]);
