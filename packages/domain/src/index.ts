@@ -12,6 +12,8 @@ export interface SizeMm { readonly width: number; readonly height: number }
 export interface Transform {
   readonly position: PointMm;
   readonly rotation: number;
+  readonly flipX?: boolean;
+  readonly flipY?: boolean;
   readonly scale: PointMm;
 }
 export interface VisualStyle {
@@ -41,6 +43,8 @@ export interface RectangleElement {
   /** Corner radius in millimetres. Values are non-negative; SVG clamps oversized radii. */
   readonly cornerRadius: number;
   readonly rotation: number;
+  readonly flipX?: boolean;
+  readonly flipY?: boolean;
   readonly style: VisualStyle;
   readonly operation?: OperationMetadata;
 }
@@ -51,6 +55,8 @@ export interface EllipseElement {
   readonly position: PointMm;
   readonly size: SizeMm;
   readonly rotation: number;
+  readonly flipX?: boolean;
+  readonly flipY?: boolean;
   readonly style: VisualStyle;
   readonly operation?: OperationMetadata;
 }
@@ -61,6 +67,8 @@ export interface LineElement {
   readonly start: PointMm;
   readonly end: PointMm;
   readonly rotation: number;
+  readonly flipX?: boolean;
+  readonly flipY?: boolean;
   readonly style: VisualStyle;
   readonly operation?: OperationMetadata;
 }

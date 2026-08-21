@@ -90,6 +90,20 @@ export const rotateElementsAroundCenter = (ids: readonly ElementId[], delta: num
 export const resizeElement = (id: ElementId, position: PointMm, size: SizeMm): EditorCommand => updateElement(id, { position, size });
 export const rotateElement = (id: ElementId, rotation: number): EditorCommand => updateElement(id, { rotation });
 
+export type FlipAxis = "horizontal" | "vertical";
+export const flipElements = (ids: readonly ElementId[], axis: FlipAxis): EditorCommand => ({
+  name: `flip-${axis}:${[...new Set(ids)].join(",")}`,
+  apply: (document) => {
+    const selected = new Set(ids);
+    const known = document.elements.filter((element) => selected.has(element.id));
+    if (known.length !== selected.size) return { success: false, error: "One or more elements were not found" };
+    if (known.length === 0) return { success: false, error: "No elements selected" };
+    return replaceElements(document, document.elements.map((element) => selected.has(element.id)
+      ? { ...element, [axis === "horizontal" ? "flipX" : "flipY"]: !(axis === "horizontal" ? element.flipX : element.flipY) }
+      : element));
+  },
+});
+
 export const updateElementStyles = (ids: readonly ElementId[], patch: StylePatch): EditorCommand => ({
   name: `style:${[...new Set(ids)].join(",")}`,
   apply: (document) => {

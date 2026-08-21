@@ -21,7 +21,7 @@ export type RenderResult =
 const escapeAttribute = (value: string): string => value.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 const number = (value: number): string => Number(value.toFixed(6)).toString();
 const degrees = (radians: number): string => number((radians * 180) / Math.PI);
-const transform = (rotation: number, cx: number, cy: number): string => ` rotate(${degrees(rotation)} ${number(cx)} ${number(cy)})`;
+const transform = (element: Element, cx: number, cy: number): string => `translate(${number(cx)} ${number(cy)}) rotate(${degrees(element.rotation)}) scale(${element.flipX ? -1 : 1} ${element.flipY ? -1 : 1}) translate(${number(-cx)} ${number(-cy)})`;
 
 function viewportResult(input: unknown): { success: true; data: Viewport } | { success: false; error: string } {
   if (typeof input !== "object" || input === null) return { success: false, error: "viewport must be an object" };
@@ -44,18 +44,18 @@ function renderElement(element: Element, viewport: Viewport): string {
     const height = element.size.height * viewport.zoom;
     const center = { x: position.x + width / 2, y: position.y + height / 2 };
     const radius = Math.min(element.cornerRadius * viewport.zoom, width / 2, height / 2);
-    return `<rect data-element-id="${escapeAttribute(element.id)}" x="${number(position.x)}" y="${number(position.y)}" width="${number(width)}" height="${number(height)}" rx="${number(radius)}" ry="${number(radius)}" transform="${transform(element.rotation, center.x, center.y).trim()}" ${visualAttributes(element)} />`;
+    return `<rect data-element-id="${escapeAttribute(element.id)}" x="${number(position.x)}" y="${number(position.y)}" width="${number(width)}" height="${number(height)}" rx="${number(radius)}" ry="${number(radius)}" transform="${transform(element, center.x, center.y)}" ${visualAttributes(element)} />`;
   }
   if (element.type === "ellipse") {
     const position = screen(element.position);
     const width = element.size.width * viewport.zoom;
     const height = element.size.height * viewport.zoom;
-    return `<ellipse data-element-id="${escapeAttribute(element.id)}" cx="${number(position.x + width / 2)}" cy="${number(position.y + height / 2)}" rx="${number(width / 2)}" ry="${number(height / 2)}" transform="${transform(element.rotation, position.x + width / 2, position.y + height / 2).trim()}" ${visualAttributes(element)} />`;
+    return `<ellipse data-element-id="${escapeAttribute(element.id)}" cx="${number(position.x + width / 2)}" cy="${number(position.y + height / 2)}" rx="${number(width / 2)}" ry="${number(height / 2)}" transform="${transform(element, position.x + width / 2, position.y + height / 2)}" ${visualAttributes(element)} />`;
   }
   const start = screen(element.start);
   const end = screen(element.end);
   const center = { x: (start.x + end.x) / 2, y: (start.y + end.y) / 2 };
-  return `<line data-element-id="${escapeAttribute(element.id)}" x1="${number(start.x)}" y1="${number(start.y)}" x2="${number(end.x)}" y2="${number(end.y)}" transform="${transform(element.rotation, center.x, center.y).trim()}" ${visualAttributes(element)} />`;
+  return `<line data-element-id="${escapeAttribute(element.id)}" x1="${number(start.x)}" y1="${number(start.y)}" x2="${number(end.x)}" y2="${number(end.y)}" transform="${transform(element, center.x, center.y)}" ${visualAttributes(element)} />`;
 }
 
 export function renderSvg(document: unknown, viewport: unknown): RenderResult {
