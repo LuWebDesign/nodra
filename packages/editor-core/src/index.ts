@@ -177,6 +177,12 @@ export function previewGesture(state: EditorState, command: EditorCommand): Edit
   const applied = command.apply(state.gesture.preview);
   return applied.success ? { ...state, document: applied.document, gesture: { ...state.gesture, preview: applied.document } } : state;
 }
+/** Recomputes a preview from the gesture base, so pointer-derived corrections never accumulate. */
+export function previewGestureFromBase(state: EditorState, command: EditorCommand): EditorState {
+  if (!state.gesture) return state;
+  const applied = command.apply(state.gesture.base);
+  return applied.success ? { ...state, document: applied.document, gesture: { ...state.gesture, preview: applied.document } } : state;
+}
 export function commitGesture(state: EditorState): EditorState {
   if (!state.gesture) return state;
   const { base, preview } = state.gesture;

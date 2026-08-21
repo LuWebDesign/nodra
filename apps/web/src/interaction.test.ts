@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createDocument, elementId, layerId } from "@nodra/domain";
-import { centerPageInCanvas, clientPointToCanvas, INITIAL_ZOOM, isDrawingTool, marqueeSelection, MAX_ZOOM, MIN_ZOOM, movementExceedsThreshold, normalizeBounds, normalizeDrag, pagePointToCanvas, pagePointToScreen, screenDeltaToMm, screenPointToMm, containsBounds, elementsContainedBy, pickElement, pointerDownIntent, selectionFrame, zoomAtPoint } from "./interaction.js";
+import { centerPageInCanvas, clientPointToCanvas, hoveredSelectionCenter, INITIAL_ZOOM, isDrawingTool, marqueeSelection, MAX_ZOOM, MIN_ZOOM, movementExceedsThreshold, normalizeBounds, normalizeDrag, pagePointToCanvas, pagePointToScreen, screenDeltaToMm, screenPointToMm, containsBounds, elementsContainedBy, pickElement, pointerDownIntent, selectionCenter, selectionFrame, snapMoveDelta, zoomAtPoint } from "./interaction.js";
 import { geometryPatch, geometryValue } from "./propertyBar.js";
 
 describe("canvas coordinates", () => {
@@ -18,6 +18,22 @@ describe("canvas coordinates", () => {
 
   it("projects page points into canvas pixels after pan and zoom", () => {
     expect(pagePointToCanvas({ x: 32, y: 26 }, 3, { x: 20, y: 10 })).toEqual({ x: 36, y: 48 });
+  });
+
+  it("calculates geometric centers without being affected by rotation", () => {
+    const rectangle = { type: "rectangle" as const, id: elementId("center-rectangle"), layerId: layerId("center"), position: { x: 10, y: 20 }, size: { width: 30, height: 40 }, cornerRadius: 0, rotation: Math.PI / 3, style: { stroke: "#000", strokeWidth: 1 } };
+    const line = { type: "line" as const, id: elementId("center-line"), layerId: layerId("center"), start: { x: 4, y: 8 }, end: { x: 20, y: 18 }, rotation: 0, style: { stroke: "#000", strokeWidth: 1 } };
+    expect(selectionCenter(rectangle)).toEqual({ x: 25, y: 40 });
+    expect(selectionCenter(line)).toEqual({ x: 12, y: 13 });
+  });
+
+  it("shows center feedback only when the selected object is the picked object", () => {
+    const layer = { id: layerId("center-hover"), name: "Center hover", visible: true, order: 0 };
+    const document = createDocument("center-hover-doc", [layer]);
+    const rectangle = { type: "rectangle" as const, id: elementId("center-hover-rectangle"), layerId: layer.id, position: { x: 10, y: 10 }, size: { width: 20, height: 10 }, cornerRadius: 0, rotation: 0, style: { stroke: "#000", strokeWidth: 1 } };
+    const checked = { ...document, elements: [rectangle] };
+    expect(hoveredSelectionCenter(checked, rectangle, { x: 15, y: 15 }, 3)).toEqual({ x: 20, y: 15 });
+    expect(hoveredSelectionCenter(checked, rectangle, { x: 100, y: 100 }, 3)).toBeUndefined();
   });
 });
 
@@ -94,6 +110,24 @@ describe("zoomAtPoint", () => {
     expect(screenPointToMm(before, { x: 0, y: 0 }, result.zoom, result.panMm)).toEqual({ x: 120, y: 80 });
     expect(result.panMm.x).toBeCloseTo(-1280);
     expect(result.panMm.y).toBeCloseTo(-853.3333333333334);
+  });
+});
+
+describe("move snapping", () => {
+  const visible = { id: layerId("snap-visible"), name: "Visible", visible: true, order: 0 };
+  const hidden = { id: layerId("snap-hidden"), name: "Hidden", visible: false, order: 1 };
+  const source = { type: "rectangle" as const, id: elementId("snap-source"), layerId: visible.id, position: { x: 10, y: 10 }, size: { width: 10, height: 10 }, cornerRadius: 0, rotation: 0, style: { stroke: "#000", strokeWidth: 1 } };
+  const target = { ...source, id: elementId("snap-target"), position: { x: 40, y: 10 } };
+  it("snaps a moving real node within screen tolerance and reports a guide", () => {
+    const result = snapMoveDelta({ ...createDocument("snap", [visible]), elements: [source, target] }, [source.id], { x: 19, y: 0 }, 2, 4);
+    expect(result.delta).toEqual({ x: 20, y: 0 });
+    expect(result.guide).toEqual({ source: { x: 40, y: 10 }, target: { x: 40, y: 10 } });
+  });
+  it("keeps free movement outside tolerance and excludes selected or hidden targets", () => {
+    const hiddenTarget = { ...target, id: elementId("snap-hidden-target"), layerId: hidden.id };
+    const document = { ...createDocument("snap-exclusions", [visible, hidden]), elements: [source, target, hiddenTarget] };
+    expect(snapMoveDelta(document, [source.id, target.id], { x: 1, y: 1 }, 1, 8)).toEqual({ delta: { x: 1, y: 1 }, guide: undefined });
+    expect(snapMoveDelta({ ...document, elements: [source, hiddenTarget] }, [source.id], { x: 29, y: 0 }, 1, 8)).toEqual({ delta: { x: 29, y: 0 }, guide: undefined });
   });
 });
 

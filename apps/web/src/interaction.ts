@@ -1,7 +1,9 @@
 import type { DocumentSnapshot, Element, ElementId, PointMm } from "@nodra/domain";
-import { boundsOf, hitTest, type Bounds } from "@nodra/geometry";
+import { boundsOf, hitTest, realGeometryNodes, type Bounds } from "@nodra/geometry";
 
 export interface DragGeometry { readonly position: PointMm; readonly size: { readonly width: number; readonly height: number } }
+export interface SnapGuide { readonly source: PointMm; readonly target: PointMm }
+export interface SnapMoveResult { readonly delta: PointMm; readonly guide: SnapGuide | undefined }
 
 export type DrawingTool = "rectangle" | "ellipse" | "line";
 
@@ -25,6 +27,24 @@ export function screenDeltaToMm(delta: PointMm, zoom: number): PointMm {
   return { x: delta.x / zoom, y: delta.y / zoom };
 }
 
+/** Finds one deterministic document-space correction for a move gesture. */
+export function snapMoveDelta(document: DocumentSnapshot, selectedIds: readonly ElementId[], rawDelta: PointMm, zoom: number, tolerancePx = 8): SnapMoveResult {
+  if (![rawDelta.x, rawDelta.y, zoom, tolerancePx].every(Number.isFinite) || zoom <= 0 || tolerancePx < 0) throw new Error("snap coordinates, zoom, and tolerance must be valid");
+  const selected = new Set(selectedIds);
+  const visibleLayers = new Set(document.layers.filter((layer) => layer.visible).map((layer) => layer.id));
+  const moving = document.elements.filter((element) => selected.has(element.id)).flatMap((element) => realGeometryNodes(element).map((node, index) => ({ point: { x: node.point.x + rawDelta.x, y: node.point.y + rawDelta.y }, order: `${element.id}:${index}` })));
+  const targets = document.elements.filter((element) => !selected.has(element.id) && visibleLayers.has(element.layerId)).flatMap((element) => realGeometryNodes(element).map((node, index) => ({ point: node.point, order: `${element.id}:${index}` })));
+  let best: { distance: number; source: PointMm; target: PointMm; sourceOrder: string; targetOrder: string } | undefined;
+  for (const source of moving) for (const target of targets) {
+    const distance = Math.hypot(source.point.x - target.point.x, source.point.y - target.point.y) * zoom;
+    const candidate = { distance, source: source.point, target: target.point, sourceOrder: source.order, targetOrder: target.order };
+    if (distance <= tolerancePx && (!best || distance < best.distance || distance === best.distance && `${candidate.sourceOrder}:${candidate.targetOrder}` < `${best.sourceOrder}:${best.targetOrder}`)) best = candidate;
+  }
+  if (!best) return { delta: rawDelta, guide: undefined };
+  const correction = { x: best.target.x - best.source.x, y: best.target.y - best.source.y };
+  return { delta: { x: rawDelta.x + correction.x, y: rawDelta.y + correction.y }, guide: { source: { x: best.source.x + correction.x, y: best.source.y + correction.y }, target: best.target } };
+}
+
 /** Converts a pointer client coordinate into pixels local to the canvas element. */
 export function clientPointToCanvas(client: PointMm, rect: { readonly left: number; readonly top: number }): PointMm {
   return { x: client.x - rect.left, y: client.y - rect.top };
@@ -40,6 +60,18 @@ export function selectionFrame(element: Element, zoom: number, panMm: PointMm): 
   const bounds = boundsOf(element);
   const topLeft = pagePointToCanvas({ x: bounds.x, y: bounds.y }, zoom, panMm);
   return { left: topLeft.x - (bounds.width === 0 ? 1 : 0), top: topLeft.y - (bounds.height === 0 ? 1 : 0), width: Math.max(2, bounds.width * zoom), height: Math.max(2, bounds.height * zoom) };
+}
+
+/** Returns the geometric center used by selection feedback, in page millimetres. */
+export function selectionCenter(element: Element): PointMm {
+  return element.type === "line"
+    ? { x: (element.start.x + element.end.x) / 2, y: (element.start.y + element.end.y) / 2 }
+    : { x: element.position.x + element.size.width / 2, y: element.position.y + element.size.height / 2 };
+}
+
+/** Returns the selected object's center only when the pointer picks that object. */
+export function hoveredSelectionCenter(document: DocumentSnapshot, element: Element, point: PointMm, zoom: number): PointMm | undefined {
+  return pickElement(document, point, zoom) === element.id ? selectionCenter(element) : undefined;
 }
 
 /** Converts canonical page coordinates into coordinates relative to the scaled page layer. */
