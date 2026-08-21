@@ -13,6 +13,7 @@ import {
   withElements,
 } from "@nodra/domain";
 import { validateDocument } from "@nodra/validation";
+import { boundsOfElements, groupCenter, resizeGroup, rotateElements } from "@nodra/geometry";
 
 export type ElementPatch = { readonly position?: PointMm; readonly size?: SizeMm; readonly rotation?: number; readonly cornerRadius?: number; readonly style?: VisualStyle; readonly operation?: OperationMetadata; readonly start?: PointMm; readonly end?: PointMm };
 export type StylePatch = { readonly stroke?: string; readonly fill?: string | null; readonly strokeWidth?: number };
@@ -83,9 +84,25 @@ export const moveElements = (ids: readonly ElementId[], delta: PointMm): EditorC
     }));
   },
 });
+export const resizeElements = (ids: readonly ElementId[], handle: "nw" | "n" | "ne" | "e" | "se" | "s" | "sw" | "w", pointer: PointMm, aspectLock = false): EditorCommand => ({ name: `resize-group:${ids.join(",")}`, apply: (document) => { const selected = new Set(ids); const elements = document.elements.filter((e) => selected.has(e.id)); if (!elements.length || elements.length !== selected.size) return { success: false, error: "Invalid group selection" }; const next = resizeGroup(elements, handle, pointer, 1, aspectLock); return replaceElements(document, document.elements.map((e) => next.find((n) => n.id === e.id) ?? e)); } });
+export const rotateElementsAroundCenter = (ids: readonly ElementId[], delta: number): EditorCommand => ({ name: `rotate-group:${ids.join(",")}`, apply: (document) => { const selected = new Set(ids); const elements = document.elements.filter((e) => selected.has(e.id)); if (!elements.length || elements.length !== selected.size) return { success: false, error: "Invalid group selection" }; const next = rotateElements(elements, groupCenter(boundsOfElements(elements)), delta); return replaceElements(document, document.elements.map((e) => next.find((n) => n.id === e.id) ?? e)); } });
 
 export const resizeElement = (id: ElementId, position: PointMm, size: SizeMm): EditorCommand => updateElement(id, { position, size });
 export const rotateElement = (id: ElementId, rotation: number): EditorCommand => updateElement(id, { rotation });
+
+export type FlipAxis = "horizontal" | "vertical";
+export const flipElements = (ids: readonly ElementId[], axis: FlipAxis): EditorCommand => ({
+  name: `flip-${axis}:${[...new Set(ids)].join(",")}`,
+  apply: (document) => {
+    const selected = new Set(ids);
+    const known = document.elements.filter((element) => selected.has(element.id));
+    if (known.length !== selected.size) return { success: false, error: "One or more elements were not found" };
+    if (known.length === 0) return { success: false, error: "No elements selected" };
+    return replaceElements(document, document.elements.map((element) => selected.has(element.id)
+      ? { ...element, [axis === "horizontal" ? "flipX" : "flipY"]: !(axis === "horizontal" ? element.flipX : element.flipY) }
+      : element));
+  },
+});
 
 export const updateElementStyles = (ids: readonly ElementId[], patch: StylePatch): EditorCommand => ({
   name: `style:${[...new Set(ids)].join(",")}`,

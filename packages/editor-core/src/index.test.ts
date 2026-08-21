@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createDocument, elementId, layerId, type RectangleElement } from "@nodra/domain";
-import { addToSelection, beginGesture, clearSelection, commitGesture, createEditor, createElement, dispatch, moveElement, moveElements, previewGesture, previewGestureFromBase, redo, removeFromSelection, reorderLayer, resizeElement, select, selectForPointerDown, setLayerVisibility, toggleSelection, undo, updateElement, updateElementStyles } from "./index.js";
+import { addToSelection, beginGesture, clearSelection, commitGesture, createEditor, createElement, dispatch, moveElement, moveElements, previewGesture, previewGestureFromBase, redo, removeFromSelection, reorderLayer, resizeElement, resizeElements, rotateElementsAroundCenter, select, selectForPointerDown, setLayerVisibility, toggleSelection, undo, updateElement, updateElementStyles } from "./index.js";
 
 const rectangle: RectangleElement = { type: "rectangle", id: elementId("r1"), layerId: layerId("default"), position: { x: 1, y: 2 }, size: { width: 10, height: 5 }, cornerRadius: 0, rotation: 0, style: { stroke: "#000", strokeWidth: 1 } };
 const document = createDocument("doc", [{ id: layerId("default"), name: "Default", visible: true, order: 0 }]);
@@ -113,6 +113,19 @@ describe("editor core", () => {
       expect.objectContaining({ id: line.id, start: { x: 2, y: -1 }, end: { x: 5, y: 3 } }),
     ]));
     expect(undo(state).document.elements).toEqual([rectangle, line]);
+  });
+  it("commits grouped resize and rotation as one history entry each", () => {
+    const second = { ...rectangle, id: elementId("r2"), position: { x: 20, y: 2 } };
+    let state = createEditor({ ...document, elements: [rectangle, second] });
+    state = beginGesture(state);
+    state = previewGestureFromBase(state, resizeElements([rectangle.id, second.id], "se", { x: 40, y: 12 }));
+    state = commitGesture(state);
+    expect(state.undo).toHaveLength(1);
+    state = beginGesture(state);
+    state = previewGestureFromBase(state, rotateElementsAroundCenter([rectangle.id, second.id], Math.PI / 2));
+    state = commitGesture(state);
+    expect(state.undo).toHaveLength(2);
+    expect((undo(state).document.elements[0] as RectangleElement).size.width).toBeGreaterThan(rectangle.size.width);
   });
 
   it("recomputes pointer previews from the gesture base without cumulative drift", () => {

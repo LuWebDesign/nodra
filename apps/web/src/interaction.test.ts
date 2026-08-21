@@ -59,7 +59,7 @@ describe("drawing tool routing", () => {
   it("activates rotation only for an already-selected single hit in the select tool", () => {
     const selected = elementId("selected");
     expect(canActivateRotation("select", [selected], selected)).toBe(true);
-    expect(canActivateRotation("select", [selected, elementId("other")], selected)).toBe(false);
+    expect(canActivateRotation("select", [selected, elementId("other")], selected)).toBe(true);
     expect(canActivateRotation("select", [selected], undefined)).toBe(false);
     expect(canActivateRotation("rectangle", [selected], selected)).toBe(false);
   });
