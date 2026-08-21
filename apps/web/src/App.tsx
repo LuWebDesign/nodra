@@ -21,7 +21,7 @@ type ActiveInteraction = {
   pointerId: number;
   lastX: number;
   lastY: number;
-  kind: "move" | "pan" | "draw" | "resize" | "rotate" | "marquee";
+  kind: "move" | "pan" | "draw" | "deferred-draw" | "resize" | "rotate" | "marquee";
   ids?: readonly ElementId[];
   dragged: boolean;
   start?: PointMm;
@@ -279,9 +279,10 @@ export function App() {
       setEditorState(next);
       if (!next.selection.includes(hit)) return;
       event.currentTarget.setPointerCapture(event.pointerId);
-      setEditorState(beginGesture(next));
       const anchor = selectedNodeAnchor(nodeHit, next.selection);
-      interaction.current = { pointerId: event.pointerId, lastX: event.clientX, lastY: event.clientY, kind: "move", ids: next.selection, ...(anchor ? { anchor } : {}), startClient: { x: event.clientX, y: event.clientY }, dragged: false, shiftKey: event.shiftKey };
+      const kind = isDrawingTool(tool) && !anchor ? "deferred-draw" : "move";
+      if (kind === "move") setEditorState(beginGesture(next));
+      interaction.current = { pointerId: event.pointerId, lastX: event.clientX, lastY: event.clientY, kind, ids: next.selection, ...(anchor ? { anchor } : {}), ...(kind === "deferred-draw" ? { start: point, tool, ids: [id()] } : {}), startClient: { x: event.clientX, y: event.clientY }, dragged: false, shiftKey: event.shiftKey };
       return;
     }
     event.currentTarget.setPointerCapture(event.pointerId);
@@ -302,6 +303,10 @@ export function App() {
     setCursorPoint(canvasPointAt(event));
     const active = interaction.current;
     if (!active || active.pointerId !== event.pointerId) return;
+    if (active.kind === "deferred-draw" && active.startClient && movementExceedsThreshold(active.startClient, { x: event.clientX, y: event.clientY })) {
+      setEditorState(beginGesture(editorRef.current));
+      active.kind = "draw";
+    }
     if (active.kind === "marquee" && active.start && active.startClient) {
       if (!movementExceedsThreshold(active.startClient, { x: event.clientX, y: event.clientY })) return;
       active.dragged = true;
@@ -366,6 +371,8 @@ export function App() {
       setEditorState(commitGesture(previewGestureFromBase(editorRef.current, active.ids.length === 1 && active.element ? rotateElement(active.element.id, rotation) : rotateElementsAroundCenter(active.ids, rotation - (active.element?.rotation ?? 0)))));
     } else if (["resize", "rotate", "move"].includes(active.kind)) {
       setEditorState(cancelled ? cancelGesture(editorRef.current) : commitGesture(editorRef.current));
+    } else if (active.kind === "deferred-draw") {
+      // Selection was applied on pointer-down; a click creates no gesture.
     } else if (active.kind === "draw") {
       const end = active.start ? pointAt(event) : undefined;
       const zeroLengthLine = active.tool === "line" && active.start && end && active.start.x === end.x && active.start.y === end.y;
@@ -627,7 +634,7 @@ export function App() {
       <aside className="workspace-tools"><div className="tool-column" role="toolbar" aria-label="Herramientas de diseño">{(["select", "rectangle", "ellipse", "line", "pan"] as const).map((item) => <ToolButton key={item} label={toolCursorLabels[item]} icon={item} active={tool === item} onClick={() => { setTransformMode("resize"); setTool(item); }} />)}</div></aside>
       <section className="canvas-area">
         <header className="canvas-header"><span>DISEÑO / SIN TÍTULO</span><span>{document.elements.length} objetos · {document.page.width} × {document.page.height} mm</span><div className="zoom-controls"><button aria-label="Alejar" onClick={() => setZoom(zoom - 0.5)}>−</button><span className="zoom-label">{Math.round(zoom * 100 / 3)}%</span><button aria-label="Acercar" onClick={() => setZoom(zoom + 0.5)}>+</button></div></header>
-        <div ref={canvas} className={grid ? "canvas" : "canvas no-grid"} onPointerDown={onCanvasPointerDown} onPointerMove={onCanvasPointerMove} onPointerUp={(event) => finishPointer(event, false)} onPointerCancel={(event) => finishPointer(event, true)} onPointerLeave={() => setCursorPoint(undefined)} onDoubleClick={onCanvasDoubleClick} onWheel={onWheel}>
+        <div ref={canvas} className={`${grid ? "canvas" : "canvas no-grid"}${isDrawingTool(tool) ? " drawing-tool" : ""}`} onPointerDown={onCanvasPointerDown} onPointerMove={onCanvasPointerMove} onPointerUp={(event) => finishPointer(event, false)} onPointerCancel={(event) => finishPointer(event, true)} onPointerLeave={() => setCursorPoint(undefined)} onDoubleClick={onCanvasDoubleClick} onWheel={onWheel}>
           <div className="page" style={pageStyle}><div className="page-svg" dangerouslySetInnerHTML={{ __html: rendered.success ? rendered.svg : "" }} /></div>
           {centerHoverStyle && <div className="selection-center-feedback" style={centerHoverStyle} aria-hidden="true"><span className="selection-center-mark">×</span><span className="selection-center-label">centro</span></div>}
            {transformMode === "resize" && (handlePoints || groupPoints) && <div className="resize-handles">{handleNames.map((handle) => <button key={handle} type="button" className={`resize-handle resize-handle-${handle}`} data-resize-handle={handle} aria-label={`Redimensionar ${handle}`} style={handleStyle(handle)} onPointerDown={(event) => resizePointerDown(event, handle)} onPointerUp={(event) => finishPointer(event, false)} onPointerCancel={(event) => finishPointer(event, true)} />)}{groupPoints && <button type="button" className="resize-handle resize-handle-center" data-resize-handle="center" aria-label="Centro del grupo" style={handleStyle("center")} onPointerDown={(event) => event.stopPropagation()} />}</div>}

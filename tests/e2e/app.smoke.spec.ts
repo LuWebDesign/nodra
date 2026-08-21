@@ -59,26 +59,28 @@ test("places appearance controls in Propiedades and duplicates directionally", a
   await expect(page.locator(".page-svg svg rect")).toHaveCount(2);
 });
 
-test("moves an existing object with a drawing tool without creating another object", async ({ page }) => {
+test("draws a nested object from an existing object with a drawing tool", async ({ page }) => {
   await page.goto("/");
   await drawRectangle(page);
 
   const rectangle = page.locator(".page-svg svg rect").first();
   const originalBounds = await rectangle.boundingBox();
   expect(originalBounds).not.toBeNull();
+  await page.getByRole("button", { name: "Rectángulo" }).click();
   await page.mouse.click(originalBounds!.x + originalBounds!.width / 2, originalBounds!.y + originalBounds!.height / 2);
   await expect(page.locator(".inspector").getByLabel("Ancho en milímetros")).toBeVisible();
+  await expect(page.locator(".page-svg svg rect")).toHaveCount(1);
 
   await page.mouse.move(originalBounds!.x + originalBounds!.width / 2, originalBounds!.y + originalBounds!.height / 2);
   await page.mouse.down();
   await page.mouse.move(originalBounds!.x + originalBounds!.width / 2 + 30, originalBounds!.y + originalBounds!.height / 2 + 20);
   await page.mouse.up();
 
-  await expect(page.locator(".page-svg svg rect")).toHaveCount(1);
-  const movedBounds = await rectangle.boundingBox();
-  expect(movedBounds).not.toBeNull();
-  expect(movedBounds!.x).toBeGreaterThan(originalBounds!.x + 20);
-  expect(movedBounds!.y).toBeGreaterThan(originalBounds!.y + 10);
+  await expect(page.locator(".page-svg svg rect")).toHaveCount(2);
+  const nestedBounds = await page.locator(".page-svg svg rect").nth(1).boundingBox();
+  expect(nestedBounds).not.toBeNull();
+  expect(nestedBounds!.x).toBeGreaterThan(originalBounds!.x);
+  expect(nestedBounds!.y).toBeGreaterThan(originalBounds!.y);
 });
 
 test("renders created geometry as SVG", async ({ page }) => {
