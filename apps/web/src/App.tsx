@@ -4,7 +4,7 @@ import { addToSelection, beginGesture, cancelGesture, clearSelection, commitGest
 import { boundsOfElements, elementCenter, groupCenter, groupHandlePoints, realGeometryNodes, resizeHandle, rotatedResizeHandles, rotationFromDrag, rotationHandlePoints, type GroupHandle, type ResizeHandle } from "@nodra/geometry";
 import { DebouncedAutosave, DexieProjectRepository, requestStoragePersistence } from "@nodra/persistence";
 import { renderSvg } from "@nodra/renderer-svg";
-import { canActivateRotation, centerPageInCanvas, clientPointToCanvas, hoveredSelectionCenter, isDrawingTool, marqueeSelection, movementExceedsThreshold, normalizeBounds, normalizeDrag, pagePointToCanvas, pickElement, pickNode, screenDeltaToMm, screenPointToMm, selectedNodeAnchor, snapMoveDelta, zoomAtPoint, type NodeHit, type SnapGuide, type TransformMode } from "./interaction.js";
+import { canActivateRotation, centerPageInCanvas, clientPointToCanvas, hoveredSelectionCenter, isDrawingTool, marqueeSelection, movementExceedsThreshold, normalizeBounds, normalizeDrag, pagePointToCanvas, pickElement, pickNode, pointerDownIntent, screenDeltaToMm, screenPointToMm, selectedNodeAnchor, snapMoveDelta, zoomAtPoint, type NodeHit, type SnapGuide, type TransformMode } from "./interaction.js";
 import { aspectGeometryPatch, aspectSize, cornerRadiusPatch, formatMm, geometryValue, rotationDegreesValue, rotationPatch, type GeometryField, type PropertyElement } from "./propertyBar.js";
 import { useDocumentStore, usePersistenceStore, useUiStore, useViewportStore, type Tool } from "./stores.js";
 
@@ -65,6 +65,7 @@ export function App() {
   const interaction = useRef<ActiveInteraction | undefined>(undefined);
   const viewportInteracted = useRef(false);
   const centeredViewport = useRef<string | undefined>(undefined);
+  const recoveredNotice = useRef(false);
   editorRef.current = editor;
 
   useEffect(() => {
@@ -77,12 +78,12 @@ export function App() {
       if (!result.ok) return;
       const recovered = "pages" in result.revision.document ? result.revision.document : createProject(result.revision.document);
       setProject(recovered);
+      recoveredNotice.current = true;
       persist.set("recovered", "Revisión local recuperada");
     });
     return () => {
       removeEventListener("online", on);
       removeEventListener("offline", off);
-      void repository.close();
     };
   }, [repository]);
 
@@ -211,9 +212,11 @@ export function App() {
 
   useEffect(() => { if (!interaction.current) setSnapGuide(undefined); }, [editor]);
   useEffect(() => {
-    persist.set(online ? "saving" : "offline", online ? "Guardando localmente" : "Sin conexión — la edición permanece local");
+    const preserveRecoveryNotice = recoveredNotice.current;
+    recoveredNotice.current = false;
+    if (!preserveRecoveryNotice) persist.set(online ? "saving" : "offline", online ? "Guardando localmente" : "Sin conexión — la edición permanece local");
     autosave.schedule({ id: project.id, name: "Diseño sin título", updatedAt: Date.now() }, project);
-    void autosave.flush().then((result) => { if (result?.ok) persist.set("saved", "Guardado localmente"); });
+    void autosave.flush().then((result) => { if (result?.ok && !preserveRecoveryNotice) persist.set("saved", "Guardado localmente"); });
   }, [project, online]);
 
   const rendered = renderSvg(document, { zoom: 1, panMm: { x: 0, y: 0 } });
@@ -258,14 +261,12 @@ export function App() {
     const point = pointAt(event);
     const nodeHit = transformMode === "resize" ? pickNode(editorRef.current.document, point, zoom) : undefined;
     const hit = nodeHit?.elementId ?? pickElement(editorRef.current.document, point, zoom);
-    if (isDrawingTool(tool)) {
-      if (hit) setEditorState(selectForPointerDown(editorRef.current, hit, event.shiftKey));
+    if (isDrawingTool(tool) && pointerDownIntent(tool, hit) === "draw") {
       event.currentTarget.setPointerCapture(event.pointerId);
       setEditorState(beginGesture(editorRef.current));
       interaction.current = { pointerId: event.pointerId, lastX: event.clientX, lastY: event.clientY, kind: "draw", dragged: false, start: point, startClient: { x: event.clientX, y: event.clientY }, tool, ids: [id()] };
       return;
     }
-    if (tool !== "select") return;
     if (hit) {
       const next = selectForPointerDown(editorRef.current, hit, event.shiftKey);
       setEditorState(next);

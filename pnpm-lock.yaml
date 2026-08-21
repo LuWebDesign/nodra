@@ -83,6 +83,9 @@ importers:
       '@nodra/domain':
         specifier: workspace:*
         version: link:../domain
+      '@nodra/geometry':
+        specifier: workspace:*
+        version: link:../geometry
       '@nodra/validation':
         specifier: workspace:*
         version: link:../validation
