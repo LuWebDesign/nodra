@@ -1,4 +1,4 @@
-import type { Element, EllipseElement, PointMm, RectangleElement, SizeMm } from "@nodra/domain";
+import type { Element, EllipseElement, LineElement, PointMm, RectangleElement, SizeMm } from "@nodra/domain";
 
 export interface Bounds { readonly x: number; readonly y: number; readonly width: number; readonly height: number }
 export interface Viewport { readonly zoom: number; readonly panMm: PointMm }
@@ -6,11 +6,58 @@ export interface PointPx { readonly x: number; readonly y: number }
 export type ResizeHandle = "nw" | "n" | "ne" | "e" | "se" | "s" | "sw" | "w";
 export type ResizeCorner = Extract<ResizeHandle, "nw" | "ne" | "se" | "sw">;
 export interface ResizeGeometry { readonly position: PointMm; readonly size: SizeMm }
+export type RealGeometryNodeKind = "corner" | "edge-midpoint" | "endpoint" | "center" | "cardinal";
+export interface RealGeometryNode { readonly kind: RealGeometryNodeKind; readonly point: PointMm }
 
 const TAU = Math.PI * 2;
 const assertFinite = (value: number, name: string): void => { if (!Number.isFinite(value)) throw new Error(`${name} must be finite`); };
 const assertPositive = (value: number, name: string): void => { assertFinite(value, name); if (value <= 0) throw new Error(`${name} must be positive`); };
 const rotate = (point: PointMm, angle: number): PointMm => ({ x: point.x * Math.cos(angle) - point.y * Math.sin(angle), y: point.x * Math.sin(angle) + point.y * Math.cos(angle) });
+
+export function elementCenter(element: Element): PointMm {
+  return element.type === "line"
+    ? { x: (element.start.x + element.end.x) / 2, y: (element.start.y + element.end.y) / 2 }
+    : { x: element.position.x + element.size.width / 2, y: element.position.y + element.size.height / 2 };
+}
+
+export function rotatedLineEndpoints(element: LineElement): readonly [PointMm, PointMm] {
+  const center = elementCenter(element);
+  return [
+    transformPoint({ x: element.start.x - center.x, y: element.start.y - center.y }, center, element.rotation),
+    transformPoint({ x: element.end.x - center.x, y: element.end.y - center.y }, center, element.rotation),
+  ];
+}
+
+export function rotationHandlePoints(element: Element, offsetMm: number): readonly PointMm[] {
+  assertFinite(offsetMm, "offsetMm");
+  if (offsetMm < 0) throw new Error("offsetMm must not be negative");
+  const center = elementCenter(element);
+  if (element.type === "line") {
+    const [start, end] = rotatedLineEndpoints(element);
+    const length = Math.hypot(end.x - start.x, end.y - start.y);
+    if (length === 0) return [];
+    const unit = { x: (end.x - start.x) / length, y: (end.y - start.y) / length };
+    return [
+      { x: start.x - unit.x * offsetMm, y: start.y - unit.y * offsetMm },
+      { x: end.x + unit.x * offsetMm, y: end.y + unit.y * offsetMm },
+    ];
+  }
+  return rotatedCorners(element).map((corner) => {
+    const distance = Math.hypot(corner.x - center.x, corner.y - center.y);
+    if (distance === 0) return corner;
+    return { x: corner.x + (corner.x - center.x) / distance * offsetMm, y: corner.y + (corner.y - center.y) / distance * offsetMm };
+  });
+}
+
+export function rotationFromDrag(baseRotation: number, center: PointMm, start: PointMm, current: PointMm, snapIncrement = 0): number {
+  [baseRotation, center.x, center.y, start.x, start.y, current.x, current.y, snapIncrement].forEach((value, index) => assertFinite(value, `rotation value ${index}`));
+  if (snapIncrement < 0) throw new Error("snapIncrement must not be negative");
+  const startAngle = Math.atan2(start.y - center.y, start.x - center.x);
+  const currentAngle = Math.atan2(current.y - center.y, current.x - center.x);
+  const delta = Math.atan2(Math.sin(currentAngle - startAngle), Math.cos(currentAngle - startAngle));
+  const rotation = normalizeAngle(baseRotation + delta);
+  return snapIncrement > 0 ? normalizeAngle(Math.round(rotation / snapIncrement) * snapIncrement) : rotation;
+}
 
 export function validateSize(size: SizeMm): SizeMm {
   assertPositive(size.width, "width"); assertPositive(size.height, "height"); return { ...size };
@@ -26,6 +73,37 @@ export function rotatedCorners(element: RectangleElement | EllipseElement): read
   const half = { x: element.size.width / 2, y: element.size.height / 2 };
   const center = { x: element.position.x + half.x, y: element.position.y + half.y };
   return [transformPoint({ x: -half.x, y: -half.y }, center, element.rotation), transformPoint({ x: half.x, y: -half.y }, center, element.rotation), transformPoint({ x: half.x, y: half.y }, center, element.rotation), transformPoint({ x: -half.x, y: half.y }, center, element.rotation)];
+}
+
+/** Returns connection/alignment points in document space, independent of resize handles. */
+export function realGeometryNodes(element: Element): readonly RealGeometryNode[] {
+  if (element.type === "line") {
+    const [start, end] = rotatedLineEndpoints(element);
+    return [{ kind: "endpoint", point: start }, { kind: "center", point: elementCenter(element) }, { kind: "endpoint", point: end }];
+  }
+  const half = { x: element.size.width / 2, y: element.size.height / 2 };
+  const center = { x: element.position.x + half.x, y: element.position.y + half.y };
+  if (element.type === "rectangle") {
+    const [nw, ne, se, sw] = rotatedCorners(element);
+    return [
+      { kind: "corner", point: nw },
+      { kind: "corner", point: ne },
+      { kind: "corner", point: se },
+      { kind: "corner", point: sw },
+      { kind: "center", point: center },
+      { kind: "edge-midpoint", point: transformPoint({ x: 0, y: -half.y }, center, element.rotation) },
+      { kind: "edge-midpoint", point: transformPoint({ x: half.x, y: 0 }, center, element.rotation) },
+      { kind: "edge-midpoint", point: transformPoint({ x: 0, y: half.y }, center, element.rotation) },
+      { kind: "edge-midpoint", point: transformPoint({ x: -half.x, y: 0 }, center, element.rotation) },
+    ];
+  }
+  return [
+    { kind: "center" as const, point: center },
+    { kind: "cardinal" as const, point: transformPoint({ x: 0, y: -half.y }, center, element.rotation) },
+    { kind: "cardinal" as const, point: transformPoint({ x: half.x, y: 0 }, center, element.rotation) },
+    { kind: "cardinal" as const, point: transformPoint({ x: 0, y: half.y }, center, element.rotation) },
+    { kind: "cardinal" as const, point: transformPoint({ x: -half.x, y: 0 }, center, element.rotation) },
+  ];
 }
 
 export function rotatedResizeHandles(element: RectangleElement | EllipseElement): readonly [PointMm, PointMm, PointMm, PointMm, PointMm, PointMm, PointMm, PointMm] {
@@ -90,7 +168,8 @@ export function resizeHandle(element: RectangleElement | EllipseElement, handle:
 
 export function boundsOf(element: Element): Bounds {
   if (element.type === "line") {
-    return { x: Math.min(element.start.x, element.end.x), y: Math.min(element.start.y, element.end.y), width: Math.abs(element.end.x - element.start.x), height: Math.abs(element.end.y - element.start.y) };
+    const [start, end] = rotatedLineEndpoints(element);
+    return { x: Math.min(start.x, end.x), y: Math.min(start.y, end.y), width: Math.abs(end.x - start.x), height: Math.abs(end.y - start.y) };
   }
   const points = corners(element); const xs = points.map((point) => point.x); const ys = points.map((point) => point.y);
   return { x: Math.min(...xs), y: Math.min(...ys), width: Math.max(...xs) - Math.min(...xs), height: Math.max(...ys) - Math.min(...ys) };
@@ -105,7 +184,10 @@ const distanceToSegment = (point: PointMm, start: PointMm, end: PointMm): number
 
 export function hitTest(element: Element, point: PointMm, toleranceMm = 0): boolean {
   assertFinite(toleranceMm, "toleranceMm"); if (toleranceMm < 0) throw new Error("toleranceMm must not be negative");
-  if (element.type === "line") return distanceToSegment(point, element.start, element.end) <= toleranceMm;
+  if (element.type === "line") {
+    const [start, end] = rotatedLineEndpoints(element);
+    return distanceToSegment(point, start, end) <= toleranceMm;
+  }
   const center = { x: element.position.x + element.size.width / 2, y: element.position.y + element.size.height / 2 };
   const local = rotate({ x: point.x - center.x, y: point.y - center.y }, -element.rotation);
   if (element.type === "rectangle") return Math.abs(local.x) <= element.size.width / 2 + toleranceMm && Math.abs(local.y) <= element.size.height / 2 + toleranceMm;
@@ -116,3 +198,5 @@ export function hitTest(element: Element, point: PointMm, toleranceMm = 0): bool
 export function mmToScreen(point: PointMm, viewport: Viewport): PointPx { assertPositive(viewport.zoom, "zoom"); return { x: (point.x - viewport.panMm.x) * viewport.zoom, y: (point.y - viewport.panMm.y) * viewport.zoom }; }
 export function screenToMm(point: PointPx, viewport: Viewport): PointMm { assertPositive(viewport.zoom, "zoom"); return { x: point.x / viewport.zoom + viewport.panMm.x, y: point.y / viewport.zoom + viewport.panMm.y }; }
 export function normalizeAngle(angle: number): number { assertFinite(angle, "angle"); return ((angle % TAU) + TAU) % TAU; }
+export function degreesToRadians(degrees: number): number { assertFinite(degrees, "degrees"); return normalizeAngle(degrees * Math.PI / 180); }
+export function radiansToDegrees(radians: number): number { return normalizeAngle(radians) * 180 / Math.PI; }

@@ -1,6 +1,6 @@
 import "fake-indexeddb/auto";
 import { afterEach, describe, expect, it } from "vitest";
-import { createDocument, layerId, revision } from "@nodra/domain";
+import { createDocument, createProject, layerId, revision } from "@nodra/domain";
 import { DebouncedAutosave, DexieProjectRepository, MigrationRegistry, type ProjectRepository } from "./index.js";
 
 const metadata = { id: "project-1", name: "Offline project", updatedAt: 0 };
@@ -52,6 +52,15 @@ describe("DexieProjectRepository", () => {
     await db.saveProject(metadata, document());
     await db.deleteProject(metadata.id);
     expect((await db.getProject(metadata.id)).ok).toBe(false);
+  });
+
+  it("persists and recovers a multi-page project", async () => {
+    db = await repository();
+    const base = createProject(document());
+    const project = { ...base, pages: [...base.pages, { ...base.pages[0]!, id: "page-2" as never }] };
+    expect((await db.saveProject(metadata, project)).ok).toBe(true);
+    const recovered = await db.getProject(metadata.id);
+    expect(recovered.ok && recovered.revision.document).toMatchObject({ pages: [{ id: "page-1" }, { id: "page-2" }] });
   });
 });
 

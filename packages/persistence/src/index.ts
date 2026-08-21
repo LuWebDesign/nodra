@@ -1,6 +1,6 @@
 import { Dexie, type Table } from "dexie";
-import type { DocumentSnapshot } from "@nodra/domain";
-import { validateDocument } from "@nodra/validation";
+import type { DocumentSnapshot, ProjectSnapshot } from "@nodra/domain";
+import { validateDocument, validateProject } from "@nodra/validation";
 
 export const CURRENT_RECORD_VERSION = 1 as const;
 
@@ -20,7 +20,7 @@ export interface NativeDocumentRecord {
 
 export interface StoredRevision {
   readonly metadata: ProjectMetadata;
-  readonly document: DocumentSnapshot;
+  readonly document: DocumentSnapshot | ProjectSnapshot;
   readonly revision: number;
   readonly savedAt: number;
 }
@@ -33,7 +33,7 @@ export type RecoveryResult =
 export interface ProjectRepository {
   listProjects(): Promise<readonly ProjectMetadata[]>;
   getProject(projectId: string): Promise<RecoveryResult>;
-  saveProject(metadata: ProjectMetadata, document: DocumentSnapshot): Promise<SaveResult>;
+  saveProject(metadata: ProjectMetadata, document: DocumentSnapshot | ProjectSnapshot): Promise<SaveResult>;
   deleteProject(projectId: string): Promise<void>;
 }
 
@@ -86,12 +86,12 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function validateRecord(input: unknown, projectId: string): NativeDocumentRecord & { readonly document: DocumentSnapshot } {
+function validateRecord(input: unknown, projectId: string): NativeDocumentRecord & { readonly document: DocumentSnapshot | ProjectSnapshot } {
   const migrated = migrations.migrate(input, { projectId, revision: 0 });
   if (!isRecord(migrated) || migrated.recordVersion !== CURRENT_RECORD_VERSION || migrated.projectId !== projectId || typeof migrated.revision !== "number" || !Number.isInteger(migrated.revision) || migrated.revision < 0 || typeof migrated.savedAt !== "number") throw new Error("Corrupt persistence record");
-  const document = validateDocument(migrated.document);
+   const document = isProjectInput(migrated.document) ? validateProject(migrated.document) : validateDocument(migrated.document);
   if (!document.success) throw new Error(document.error);
-  if (document.data.id !== projectId || document.data.revision !== migrated.revision) throw new Error("Record identity or revision mismatch");
+   if (document.data.id !== projectId || document.data.revision !== migrated.revision) throw new Error("Record identity or revision mismatch");
   return { recordVersion: CURRENT_RECORD_VERSION, projectId, revision: migrated.revision, savedAt: migrated.savedAt, document: document.data };
 }
 
@@ -134,8 +134,8 @@ export class DexieProjectRepository implements ProjectRepository {
     return { ok: true, revision: newest, recovered: skipped > 0 || valid.length > 1, skipped };
   }
 
-  async saveProject(metadata: ProjectMetadata, document: DocumentSnapshot): Promise<SaveResult> {
-    const checked = validateDocument(document);
+  async saveProject(metadata: ProjectMetadata, document: DocumentSnapshot | ProjectSnapshot): Promise<SaveResult> {
+    const checked = isProjectInput(document) ? validateProject(document) : validateDocument(document);
     if (!checked.success) return { ok: false, status: "failed", revision: document.revision, error: checked.error };
     try {
       const record: RevisionRow = { key: `${metadata.id}:${document.revision}`, recordVersion: CURRENT_RECORD_VERSION, projectId: metadata.id, revision: document.revision, savedAt: Date.now(), document: checked.data };
@@ -163,13 +163,13 @@ export interface AutosaveOptions { readonly debounceMs?: number; readonly retryM
 export class DebouncedAutosave {
   private timer: ReturnType<typeof setTimeout> | undefined;
   private latestRevision = -1;
-  private pending: { metadata: ProjectMetadata; document: DocumentSnapshot } | undefined;
+  private pending: { metadata: ProjectMetadata; document: DocumentSnapshot | ProjectSnapshot } | undefined;
   private attempts = 0;
   readonly status: { state: "saved" | "pending" | "failed"; revision: number; error: string | undefined } = { state: "saved", revision: -1, error: undefined };
 
   constructor(private readonly repository: ProjectRepository, private readonly options: AutosaveOptions = {}) {}
 
-  schedule(metadata: ProjectMetadata, document: DocumentSnapshot): void {
+  schedule(metadata: ProjectMetadata, document: DocumentSnapshot | ProjectSnapshot): void {
     if (document.revision < this.latestRevision) return;
     this.latestRevision = document.revision;
     this.pending = { metadata, document };
@@ -207,3 +207,5 @@ export async function requestStoragePersistence(): Promise<{ readonly supported:
     return { supported: true, persisted: await candidate.storage.persist() };
   } catch { return { supported: true, persisted: false }; }
 }
+
+function isProjectInput(input: unknown): input is ProjectSnapshot { return typeof input === "object" && input !== null && "pages" in input; }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createDocument, elementId, layerId, revision, withElements } from "./index.js";
+import { createDocument, createProject, documentFromProject, elementId, layerId, pageId, projectFromDocument, revision, withElements } from "./index.js";
 
 describe("domain contracts", () => {
   it("creates immutable-shaped versioned documents and increments revisions", () => {
@@ -10,5 +10,13 @@ describe("domain contracts", () => {
     expect(document.revision).toBe(revision(0));
     expect(next.revision).toBe(revision(1));
     expect(next.elements).toEqual([element]);
+  });
+  it("switches active pages by stable id without using dimensions as identity", () => {
+    const first = createDocument("doc-1");
+    const project = createProject(first);
+    const secondId = pageId("page-2");
+    const next = projectFromDocument({ ...project, pages: [...project.pages, { ...project.pages[0]!, id: secondId, elements: [] }], activePageId: secondId }, { ...first, page: { width: 1200, height: 900 } });
+    expect(documentFromProject(next).page).toEqual({ width: 1200, height: 900 });
+    expect(next.pages.map((page) => page.id)).toEqual(["page-1", "page-2"]);
   });
 });

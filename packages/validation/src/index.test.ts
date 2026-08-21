@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createDocument, layerId } from "@nodra/domain";
-import { migrateDocument, parseDocument, serializeDocument, validateDocument } from "./index.js";
+import { migrateDocument, parseDocument, serializeDocument, validateDocument, validateProject } from "./index.js";
 
 describe("native document validation", () => {
   it("round-trips valid records", () => {
@@ -20,7 +20,12 @@ describe("native document validation", () => {
     const result = validateDocument(oldDocument);
     expect(result.success).toBe(true);
     if (result.success) expect(result.data.page).toEqual({ width: 1200, height: 900 });
-    expect(migrateDocument(oldDocument)).toMatchObject({ schemaVersion: 2, page: { width: 1200, height: 900 } });
+    expect(migrateDocument(oldDocument)).toMatchObject({ schemaVersion: 3, page: { width: 1200, height: 900 } });
+  });
+  it("validates a project with stable page ids, including duplicate sizes", () => {
+    const document = createDocument("doc-1", []);
+    const project = { ...({ schemaVersion: 3, id: document.id, revision: document.revision, origin: document.origin, units: document.units } as const), pages: [{ id: "page-a", page: document.page, layers: [], elements: [] }, { id: "page-b", page: document.page, layers: [], elements: [] }], activePageId: "page-b" };
+    expect(validateProject(project).success).toBe(true);
   });
   it("rejects non-finite and non-positive page dimensions", () => {
     const result = validateDocument({ ...createDocument("doc-1"), page: { width: 0, height: Number.NaN } });
