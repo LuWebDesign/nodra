@@ -4,7 +4,7 @@ import { addToSelection, beginGesture, cancelGesture, clearSelection, commitGest
 import { elementCenter, realGeometryNodes, resizeHandle, rotatedResizeHandles, rotationFromDrag, rotationHandlePoints, type ResizeHandle } from "@nodra/geometry";
 import { DebouncedAutosave, DexieProjectRepository, requestStoragePersistence } from "@nodra/persistence";
 import { renderSvg } from "@nodra/renderer-svg";
-import { canActivateRotation, centerPageInCanvas, clientPointToCanvas, isDrawingTool, marqueeSelection, movementExceedsThreshold, normalizeBounds, normalizeDrag, pagePointToCanvas, pickElement, pickNode, screenDeltaToMm, screenPointToMm, selectedNodeAnchor, snapMoveDelta, zoomAtPoint, type NodeHit, type SnapGuide, type TransformMode } from "./interaction.js";
+import { canActivateRotation, centerPageInCanvas, clientPointToCanvas, hoveredSelectionCenter, isDrawingTool, marqueeSelection, movementExceedsThreshold, normalizeBounds, normalizeDrag, pagePointToCanvas, pickElement, pickNode, screenDeltaToMm, screenPointToMm, selectedNodeAnchor, snapMoveDelta, zoomAtPoint, type NodeHit, type SnapGuide, type TransformMode } from "./interaction.js";
 import { cornerRadiusPatch, formatMm, geometryPatch, geometryValue, rotationDegreesValue, rotationPatch, type GeometryField, type PropertyElement } from "./propertyBar.js";
 import { useDocumentStore, usePersistenceStore, useUiStore, useViewportStore, type Tool } from "./stores.js";
 
@@ -52,6 +52,7 @@ export function App() {
   const [snapGuide, setSnapGuide] = useState<SnapGuide>();
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [cursorPoint, setCursorPoint] = useState<PointMm>();
+  const [centerHover, setCenterHover] = useState<{ elementId: ElementId; point: PointMm }>();
   const [transformMode, setTransformMode] = useState<TransformMode>("resize");
   const repository = useMemo(() => new DexieProjectRepository(), []);
   const autosave = useMemo(() => new DebouncedAutosave(repository), [repository]);
@@ -116,6 +117,25 @@ export function App() {
   useEffect(() => { setTransformMode("resize"); }, [tool, project.activePageId, selectionKey]);
 
   useEffect(() => {
+    setCenterHover(undefined);
+    const target = canvas.current;
+    if (!target || mode !== "design" || tool !== "select" || transformMode !== "resize" || !selectedElement) return;
+    const update = (event: globalThis.PointerEvent) => {
+      if (interaction.current) { setCenterHover(undefined); return; }
+      const point = screenPointToMm(clientPointToCanvas({ x: event.clientX, y: event.clientY }, target.getBoundingClientRect()), { x: 0, y: 0 }, zoom, panMm);
+      const center = hoveredSelectionCenter(document, selectedElement, point, zoom);
+      setCenterHover(center ? { elementId: selectedElement.id, point: center } : undefined);
+    };
+    const clear = () => setCenterHover(undefined);
+    target.addEventListener("pointermove", update);
+    target.addEventListener("pointerleave", clear);
+    return () => {
+      target.removeEventListener("pointermove", update);
+      target.removeEventListener("pointerleave", clear);
+    };
+  }, [document, mode, panMm, selectedElement, tool, transformMode, zoom]);
+
+  useEffect(() => {
     const target = canvas.current;
     if (!target) return;
     const overlay = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "svg");
@@ -125,20 +145,27 @@ export function App() {
     const point = (value: PointMm) => pagePointToCanvas(value, zoom, panMm);
     if (transformMode === "resize") for (const element of selectedElements) for (const [nodeIndex, node] of realGeometryNodes(element).entries()) {
       const screen = point(node.point);
-      const circle = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "circle");
-      circle.dataset.realNode = element.id;
-      circle.dataset.realNodeIndex = String(nodeIndex);
-      circle.setAttribute("cx", String(screen.x));
-      circle.setAttribute("cy", String(screen.y));
-      circle.setAttribute("r", "8");
-      circle.setAttribute("fill", "#65d9ff");
-      circle.setAttribute("stroke", "#ffffff");
-      circle.setAttribute("stroke-width", "1");
-      circle.style.pointerEvents = "auto";
-      circle.style.cursor = "move";
-      overlay.append(circle);
+      const hitArea = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "circle");
+      hitArea.dataset.realNode = element.id;
+      hitArea.dataset.realNodeIndex = String(nodeIndex);
+      hitArea.setAttribute("cx", String(screen.x));
+      hitArea.setAttribute("cy", String(screen.y));
+      hitArea.setAttribute("r", "8");
+      hitArea.setAttribute("fill", "transparent");
+      hitArea.style.pointerEvents = "auto";
+      hitArea.style.cursor = "move";
+      overlay.append(hitArea);
+      const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "circle");
+      mark.setAttribute("cx", String(screen.x));
+      mark.setAttribute("cy", String(screen.y));
+      mark.setAttribute("r", "2.5");
+      mark.setAttribute("fill", "#ffffff");
+      mark.setAttribute("stroke", "#111827");
+      mark.setAttribute("stroke-width", "1");
+      mark.style.pointerEvents = "none";
+      overlay.append(mark);
     }
-    if (snapGuide) {
+    if (snapGuide && interaction.current?.kind === "move") {
       const source = point(snapGuide.source);
       const destination = point(snapGuide.target);
       const line = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "line");
@@ -149,14 +176,25 @@ export function App() {
       line.setAttribute("stroke", "#65d9ff");
       line.setAttribute("stroke-width", "1");
       line.setAttribute("stroke-dasharray", "3 2");
+      line.style.pointerEvents = "none";
       overlay.append(line);
+      const sourceMark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "circle");
+      sourceMark.setAttribute("cx", String(source.x));
+      sourceMark.setAttribute("cy", String(source.y));
+      sourceMark.setAttribute("r", "5");
+      sourceMark.setAttribute("fill", "none");
+      sourceMark.setAttribute("stroke", "#65d9ff");
+      sourceMark.setAttribute("stroke-width", "2");
+      sourceMark.style.pointerEvents = "none";
+      overlay.append(sourceMark);
       const targetMark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "circle");
       targetMark.setAttribute("cx", String(destination.x));
       targetMark.setAttribute("cy", String(destination.y));
-      targetMark.setAttribute("r", "7");
+      targetMark.setAttribute("r", "8");
       targetMark.setAttribute("fill", "none");
       targetMark.setAttribute("stroke", "#65d9ff");
-      targetMark.setAttribute("stroke-width", "1.5");
+      targetMark.setAttribute("stroke-width", "2");
+      targetMark.style.pointerEvents = "none";
       overlay.append(targetMark);
     }
     target.append(overlay);
@@ -177,6 +215,7 @@ export function App() {
 
   const resizePointerDown = (event: PointerEvent<HTMLElement>, handle: ResizeHandle) => {
     if (!selectedElement || selectedElement.type === "line") return;
+    setCenterHover(undefined);
     event.preventDefault();
     event.stopPropagation();
     event.currentTarget.setPointerCapture(event.pointerId);
@@ -198,6 +237,7 @@ export function App() {
 
   const onCanvasPointerDown = (event: PointerEvent<HTMLDivElement>) => {
     if (interaction.current) return;
+    setCenterHover(undefined);
     setCursorPoint(canvasPointAt(event));
     setSnapGuide(undefined);
     const resizeTarget = (event.target as HTMLElement).closest<HTMLElement>("[data-resize-handle]");
@@ -237,6 +277,7 @@ export function App() {
     const hit = pickElement(editorRef.current.document, point, zoom);
     if (canActivateRotation(tool, editorRef.current.selection, hit)) {
       event.preventDefault();
+      setCenterHover(undefined);
       setTransformMode("rotate");
     }
   };
@@ -370,6 +411,10 @@ export function App() {
     const point = pagePointToCanvas(elementCenter(selectedElement), zoom, panMm);
     return { left: point.x, top: point.y };
   })() : undefined;
+  const centerHoverStyle = centerHover && centerHover.elementId === selectedElement?.id && tool === "select" && transformMode === "resize" && !interaction.current ? (() => {
+    const point = pagePointToCanvas(centerHover.point, zoom, panMm);
+    return { left: point.x, top: point.y };
+  })() : undefined;
   const marqueeStyle = marquee ? (() => {
     const bounds = normalizeBounds(marquee.start, marquee.end);
     const topLeft = pagePointToCanvas({ x: bounds.x, y: bounds.y }, zoom, panMm);
@@ -382,6 +427,7 @@ export function App() {
   };
   const resetPageInteraction = () => {
     setTransformMode("resize");
+    setCenterHover(undefined);
     setMarquee(undefined);
     interaction.current = undefined;
     viewportInteracted.current = false;
@@ -481,6 +527,7 @@ export function App() {
         <header className="canvas-header"><span>DISEÑO / SIN TÍTULO</span><span>{document.elements.length} objetos · {document.page.width} × {document.page.height} mm</span><div className="zoom-controls"><button aria-label="Alejar" onClick={() => setZoom(zoom - 0.5)}>−</button><span className="zoom-label">{Math.round(zoom * 100 / 3)}%</span><button aria-label="Acercar" onClick={() => setZoom(zoom + 0.5)}>+</button></div></header>
         <div ref={canvas} className={grid ? "canvas" : "canvas no-grid"} onPointerDown={onCanvasPointerDown} onPointerMove={onCanvasPointerMove} onPointerUp={(event) => finishPointer(event, false)} onPointerCancel={(event) => finishPointer(event, true)} onPointerLeave={() => setCursorPoint(undefined)} onDoubleClick={onCanvasDoubleClick} onWheel={onWheel}>
           <div className="page" style={pageStyle}><div className="page-svg" dangerouslySetInnerHTML={{ __html: rendered.success ? rendered.svg : "" }} /></div>
+          {centerHoverStyle && <div className="selection-center-feedback" style={centerHoverStyle} aria-hidden="true"><span className="selection-center-mark">×</span><span className="selection-center-label">centro</span></div>}
           {transformMode === "resize" && handlePoints && <div className="resize-handles">{handleNames.map((handle) => <button key={handle} type="button" className={`resize-handle resize-handle-${handle}`} data-resize-handle={handle} aria-label={`Redimensionar ${handle}`} style={handleStyle(handle)} onPointerDown={(event) => resizePointerDown(event, handle)} onPointerUp={(event) => finishPointer(event, false)} onPointerCancel={(event) => finishPointer(event, true)} />)}</div>}
           {transformMode === "rotate" && selectedElement && <div className="rotation-controls" aria-label="Controles de rotación"><span className="rotation-center" style={centerStyle} aria-hidden="true" />{rotationPoints.map((point, index) => { const screen = pagePointToCanvas(point, zoom, panMm); return <button key={index} type="button" className="rotation-handle" aria-label={`Rotar objeto, control ${index + 1}`} style={{ left: screen.x, top: screen.y }} onPointerDown={rotationPointerDown} onPointerUp={(event) => finishPointer(event, false)} onPointerCancel={(event) => finishPointer(event, true)}><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M15.5 8A6 6 0 1 0 16 12" /><path d="m12.5 4 3 4-5 .5" /></svg></button>; })}</div>}
           {marqueeStyle && <div className="marquee" style={marqueeStyle} />}
