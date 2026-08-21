@@ -1,4 +1,5 @@
-import type { Element, EllipseElement, LineElement, PointMm, RectangleElement, SizeMm } from "@nodra/domain";
+import { difference, union, type MultiPolygon } from "polygon-clipping";
+import type { ContourElement, Element, EllipseElement, LineElement, PointMm, RectangleElement, SizeMm } from "@nodra/domain";
 
 export interface Bounds { readonly x: number; readonly y: number; readonly width: number; readonly height: number }
 export interface Viewport { readonly zoom: number; readonly panMm: PointMm }
@@ -9,6 +10,8 @@ export type ResizeCorner = Extract<ResizeHandle, "nw" | "ne" | "se" | "sw">;
 export interface ResizeGeometry { readonly position: PointMm; readonly size: SizeMm }
 export type RealGeometryNodeKind = "corner" | "edge-midpoint" | "endpoint" | "center" | "cardinal";
 export interface RealGeometryNode { readonly kind: RealGeometryNodeKind; readonly point: PointMm }
+export const ELLIPSE_APPROXIMATION_SEGMENTS = 64;
+export const ROUNDED_RECTANGLE_APPROXIMATION_SEGMENTS = 8;
 
 const TAU = Math.PI * 2;
 const assertFinite = (value: number, name: string): void => { if (!Number.isFinite(value)) throw new Error(`${name} must be finite`); };
@@ -18,7 +21,77 @@ const rotate = (point: PointMm, angle: number): PointMm => ({ x: point.x * Math.
 export function elementCenter(element: Element): PointMm {
   return element.type === "line"
     ? { x: (element.start.x + element.end.x) / 2, y: (element.start.y + element.end.y) / 2 }
+    : element.type === "contour" ? groupCenter(contourBounds(element))
     : { x: element.position.x + element.size.width / 2, y: element.position.y + element.size.height / 2 };
+}
+
+const contourBounds = (element: ContourElement): Bounds => {
+  const points = element.contours.flatMap((contour) => contour.points);
+  const xs = points.map((point) => point.x); const ys = points.map((point) => point.y);
+  return { x: Math.min(...xs), y: Math.min(...ys), width: Math.max(...xs) - Math.min(...xs), height: Math.max(...ys) - Math.min(...ys) };
+};
+export function contourWithPoints(element: ContourElement, points: readonly (readonly PointMm[])[]): ContourElement {
+  const flattened = points.flat();
+  const xs = flattened.map((point) => point.x);
+  const ys = flattened.map((point) => point.y);
+  const position = { x: Math.min(...xs), y: Math.min(...ys) };
+  return { ...element, position, size: { width: Math.max(...xs) - position.x, height: Math.max(...ys) - position.y }, contours: points.map((ring) => ({ points: [...ring] })), rotation: 0 };
+}
+const pointInRing = (point: PointMm, ring: readonly [number, number][]): boolean => {
+  let inside = false;
+  for (let index = 0, previous = ring.length - 1; index < ring.length; previous = index++) {
+    const current = ring[index]!; const prior = ring[previous]!;
+    if ((current[1] > point.y) !== (prior[1] > point.y) && point.x < (prior[0] - current[0]) * (point.y - current[1]) / (prior[1] - current[1]) + current[0]) inside = !inside;
+  }
+  return inside;
+};
+
+function primitivePolygon(element: RectangleElement | EllipseElement): [number, number][] {
+  const center = elementCenter(element);
+  const flipX = element.flipX ? -1 : 1; const flipY = element.flipY ? -1 : 1;
+  if (element.type === "ellipse") return Array.from({ length: ELLIPSE_APPROXIMATION_SEGMENTS + 1 }, (_, index) => {
+    const angle = index * TAU / ELLIPSE_APPROXIMATION_SEGMENTS;
+    const local = { x: Math.cos(angle) * element.size.width / 2 * flipX, y: Math.sin(angle) * element.size.height / 2 * flipY };
+    const world = transformPoint(local, center, element.rotation);
+    return [world.x, world.y];
+  });
+  const radius = Math.min(element.cornerRadius, element.size.width / 2, element.size.height / 2);
+  if (radius === 0) {
+    const baseCorners: readonly [number, number][] = [
+    [-element.size.width / 2 * flipX, -element.size.height / 2 * flipY],
+    [element.size.width / 2 * flipX, -element.size.height / 2 * flipY],
+    [element.size.width / 2 * flipX, element.size.height / 2 * flipY],
+    [-element.size.width / 2 * flipX, element.size.height / 2 * flipY],
+    [-element.size.width / 2 * flipX, -element.size.height / 2 * flipY],
+    ];
+    return baseCorners.map(([x, y]): [number, number] => { const world = transformPoint({ x, y }, center, element.rotation); return [world.x, world.y]; });
+  }
+  const corners = [{ x: -element.size.width / 2 + radius, y: -element.size.height / 2 + radius, start: Math.PI }, { x: element.size.width / 2 - radius, y: -element.size.height / 2 + radius, start: -Math.PI / 2 }, { x: element.size.width / 2 - radius, y: element.size.height / 2 - radius, start: 0 }, { x: -element.size.width / 2 + radius, y: element.size.height / 2 - radius, start: Math.PI / 2 }];
+  const points: [number, number][] = [];
+  for (const corner of corners) for (let index = 0; index <= ROUNDED_RECTANGLE_APPROXIMATION_SEGMENTS; index++) {
+    const angle = corner.start + index * Math.PI / 2 / ROUNDED_RECTANGLE_APPROXIMATION_SEGMENTS;
+    const world = transformPoint({ x: (corner.x + Math.cos(angle) * radius) * flipX, y: (corner.y + Math.sin(angle) * radius) * flipY }, center, element.rotation);
+    points.push([world.x, world.y]);
+  }
+  return points;
+}
+
+export function closedElementToPolygon(element: Element): MultiPolygon {
+  if (element.type === "line") throw new Error("Shape operations require closed objects");
+  if (element.type === "contour") return [element.contours.map((contour) => contour.points.map((point) => [point.x, point.y] as [number, number]))];
+  return [[primitivePolygon(element)]];
+}
+
+export function contoursFromMultiPolygon(polygons: MultiPolygon): ContourElement["contours"] {
+  return polygons.flatMap((polygon) => polygon.map((ring) => ({ points: ring.map(([x, y]) => ({ x, y })) })));
+}
+
+export type ShapeOperation = "union" | "difference";
+export function shapeResultContours(operation: ShapeOperation, elements: readonly Element[]): ContourElement["contours"] {
+  if (!elements.length || elements.some((element) => element.type === "line")) throw new Error("Shape operations require closed objects");
+  const polygons = elements.map(closedElementToPolygon);
+  const result = operation === "difference" ? difference(polygons[0]!, polygons[1]!) : union(polygons[0]!, ...polygons.slice(1));
+  return contoursFromMultiPolygon(result);
 }
 
 export function rotatedLineEndpoints(element: LineElement): readonly [PointMm, PointMm] {
@@ -42,6 +115,10 @@ export function rotationHandlePoints(element: Element, offsetMm: number): readon
       { x: start.x - unit.x * offsetMm, y: start.y - unit.y * offsetMm },
       { x: end.x + unit.x * offsetMm, y: end.y + unit.y * offsetMm },
     ];
+  }
+  if (element.type === "contour") {
+    const bounds = contourBounds(element);
+    return rotationHandlePoints({ type: "rectangle", id: element.id, layerId: element.layerId, position: { x: bounds.x, y: bounds.y }, size: { width: Math.max(bounds.width, 1), height: Math.max(bounds.height, 1) }, cornerRadius: 0, rotation: 0, style: element.style }, offsetMm);
   }
   return rotatedCorners(element).map((corner) => {
     const distance = Math.hypot(corner.x - center.x, corner.y - center.y);
@@ -82,6 +159,7 @@ export function realGeometryNodes(element: Element): readonly RealGeometryNode[]
     const [start, end] = rotatedLineEndpoints(element);
     return [{ kind: "endpoint", point: start }, { kind: "center", point: elementCenter(element) }, { kind: "endpoint", point: end }];
   }
+  if (element.type === "contour") return element.contours.flatMap((contour) => contour.points.map((point) => ({ kind: "corner" as const, point })));
   const half = { x: element.size.width / 2, y: element.size.height / 2 };
   const center = { x: element.position.x + half.x, y: element.position.y + half.y };
   if (element.type === "rectangle") {
@@ -172,6 +250,7 @@ export function boundsOf(element: Element): Bounds {
     const [start, end] = rotatedLineEndpoints(element);
     return { x: Math.min(start.x, end.x), y: Math.min(start.y, end.y), width: Math.abs(end.x - start.x), height: Math.abs(end.y - start.y) };
   }
+  if (element.type === "contour") return contourBounds(element);
   const points = corners(element); const xs = points.map((point) => point.x); const ys = points.map((point) => point.y);
   return { x: Math.min(...xs), y: Math.min(...ys), width: Math.max(...xs) - Math.min(...xs), height: Math.max(...ys) - Math.min(...ys) };
 }
@@ -202,9 +281,11 @@ export function resizeGroup(elements: readonly Element[], handle: ResizeHandle, 
   const sy = bounds.height ? height / bounds.height : 1;
   return elements.map((e) => e.type === "line"
     ? { ...e, start: { x: x + (e.start.x - bounds.x) * sx, y: y + (e.start.y - bounds.y) * sy }, end: { x: x + (e.end.x - bounds.x) * sx, y: y + (e.end.y - bounds.y) * sy } }
+    : e.type === "contour"
+      ? contourWithPoints(e, e.contours.map((contour) => contour.points.map((point) => ({ x: x + (point.x - bounds.x) * sx, y: y + (point.y - bounds.y) * sy }))))
     : { ...e, position: { x: x + (elementCenter(e).x - bounds.x) * sx - e.size.width * sx / 2, y: y + (elementCenter(e).y - bounds.y) * sy - e.size.height * sy / 2 }, size: { width: e.size.width * sx, height: e.size.height * sy } });
 }
-export function rotateElements(elements: readonly Element[], center: PointMm, delta: number): readonly Element[] { const rotatePoint = (p: PointMm) => transformPoint({ x: p.x - center.x, y: p.y - center.y }, center, delta); return elements.map((e) => e.type === "line" ? { ...e, start: rotatePoint(e.start), end: rotatePoint(e.end) } : (() => { const c = rotatePoint(elementCenter(e)); return { ...e, position: { x: c.x - e.size.width / 2, y: c.y - e.size.height / 2 }, rotation: normalizeAngle(e.rotation + delta) }; })()); }
+export function rotateElements(elements: readonly Element[], center: PointMm, delta: number): readonly Element[] { const rotatePoint = (p: PointMm) => transformPoint({ x: p.x - center.x, y: p.y - center.y }, center, delta); return elements.map((e) => e.type === "line" ? { ...e, start: rotatePoint(e.start), end: rotatePoint(e.end) } : e.type === "contour" ? contourWithPoints(e, e.contours.map((contour) => contour.points.map(rotatePoint))) : (() => { const c = rotatePoint(elementCenter(e)); return { ...e, position: { x: c.x - e.size.width / 2, y: c.y - e.size.height / 2 }, rotation: normalizeAngle(e.rotation + delta) }; })()); }
 
 const distanceToSegment = (point: PointMm, start: PointMm, end: PointMm): number => {
   const dx = end.x - start.x; const dy = end.y - start.y; const lengthSquared = dx * dx + dy * dy;
@@ -218,6 +299,9 @@ export function hitTest(element: Element, point: PointMm, toleranceMm = 0): bool
   if (element.type === "line") {
     const [start, end] = rotatedLineEndpoints(element);
     return distanceToSegment(point, start, end) <= toleranceMm;
+  }
+  if (element.type === "contour") {
+    return element.contours.reduce((inside, contour) => inside !== pointInRing(point, contour.points.map((value) => [value.x, value.y] as [number, number])), false);
   }
   const center = { x: element.position.x + element.size.width / 2, y: element.position.y + element.size.height / 2 };
   const local = rotate({ x: point.x - center.x, y: point.y - center.y }, -element.rotation);

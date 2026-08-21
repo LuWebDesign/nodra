@@ -44,3 +44,6 @@
 .inspector-radius-card { display:block; }
 .inspector-radius-card .field { justify-content:space-between; }
 .inspector-radius-card .field input { max-width:130px; }
+.shape-operation-buttons { display:grid; grid-template-columns:repeat(3,1fr); gap:6px; }
+.shape-operation-buttons button { padding:7px 4px; color:var(--text); background:var(--bg); border:1px solid var(--line); border-radius:4px; font-size:11px; }
+.shape-operation-buttons button:disabled { cursor:not-allowed; opacity:.45; }
