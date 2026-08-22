@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createDocument, elementId, layerId, type PathElement, type RectangleElement } from "@nodra/domain";
-import { addToSelection, beginGesture, cancelGesture, clearSelection, closePath, commitGesture, createEditor, createElement, createPathCubicNode, deleteContourNodes, deleteElementNodes, deletePathNodes, dispatch, duplicateElements, flipElements, insertContourNode, moveElement, moveElements, movePathNode, movePathHandle, previewGesture, previewGestureFromBase, redo, removeFromSelection, reorderLayer, resizeElement, resizeElements, rotateElementsAroundCenter, select, selectForPointerDown, setLayerVisibility, setPathJoin, shapeOperation, splitPathSegment, toggleSelection, undo, updateContourNode, updateElement, updateElementNode, updateElementStyles } from "./index.js";
+import { addToSelection, beginGesture, cancelGesture, clearSelection, closePath, commitGesture, createEditor, createElement, createPathCubicNode, deleteContourNodes, deleteElementNodes, deletePathNodes, dispatch, duplicateElements, flipElements, insertContourNode, moveElement, moveElements, movePathNode, movePathHandle, openPath, previewGesture, previewGestureFromBase, redo, removeFromSelection, reorderLayer, resizeElement, resizeElements, rotateElementsAroundCenter, select, selectForPointerDown, setLayerVisibility, setPathJoin, shapeOperation, splitPathSegment, toggleSelection, undo, updateContourNode, updateElement, updateElementNode, updateElementStyles } from "./index.js";
 import type { Direction } from "@nodra/geometry";
 
 const rectangle: RectangleElement = { type: "rectangle", id: elementId("r1"), layerId: layerId("default"), position: { x: 1, y: 2 }, size: { width: 10, height: 5 }, cornerRadius: 0, rotation: 0, style: { stroke: "#000", strokeWidth: 1 } };
@@ -41,6 +41,15 @@ describe("editor core", () => {
     const closed = dispatch(state, closePath(path.id));
     expect(closed.document.elements[0]).toMatchObject({ closed: true });
     expect(dispatch(state, setPathJoin(path.id, "a", "smooth")).document.elements[0]).toBeDefined();
+  });
+  it("closes and reopens a path as independent undoable commands", () => {
+    let state = dispatch(createEditor({ ...document, elements: [path] }), closePath(path.id));
+    expect(state.document.elements[0]).toMatchObject({ closed: true, segments: [{ type: "cubicBezier" }, { type: "line", startNodeId: "b", endNodeId: "a" }] });
+    expect(state.undo).toHaveLength(1);
+    state = dispatch(state, openPath(path.id));
+    expect(state.document.elements[0]).toMatchObject({ closed: false, segments: [{ type: "cubicBezier" }] });
+    expect(state.undo).toHaveLength(2);
+    expect(redo(undo(state)).document.elements).toEqual(state.document.elements);
   });
   it("deletes an open interior anchor and preserves neighboring cubic endpoint controls", () => {
     const three: PathElement = { ...path, nodes: [...path.nodes, { id: "c", anchor: { x: 20, y: 0 }, join: "corner" }], segments: [...path.segments, { type: "cubicBezier", startNodeId: "b", endNodeId: "c", control1: { x: 12, y: -4 }, control2: { x: 18, y: -4 } }] };

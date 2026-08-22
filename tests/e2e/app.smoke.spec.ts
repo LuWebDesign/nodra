@@ -53,6 +53,47 @@ test("creates an open path with Pluma and exposes its anchors", async ({ page })
   await expect(page.locator(".contour-node")).toHaveCount(3);
 });
 
+test("closes a Pluma silhouette by clicking its first anchor and supports fill and undo", async ({ page }) => {
+  await page.goto("/");
+  const pageBounds = await page.locator(".page").boundingBox();
+  expect(pageBounds).not.toBeNull();
+  await page.getByRole("button", { name: "Pluma" }).click();
+  const x = pageBounds!.x + 80;
+  const y = pageBounds!.y + 80;
+  await page.mouse.click(x, y);
+  await page.mouse.click(x + 100, y + 50);
+  await page.mouse.click(x + 180, y);
+
+  const first = page.locator(".contour-node").first();
+  const firstBounds = await first.boundingBox();
+  expect(firstBounds).not.toBeNull();
+  await page.mouse.click(firstBounds!.x + firstBounds!.width / 2, firstBounds!.y + firstBounds!.height / 2);
+  await expect(page.locator(".page-svg svg path[data-element-id]")).toHaveAttribute("d", / Z$/);
+  await expect(page.getByRole("button", { name: "Reabrir trazado" })).toBeVisible();
+  await expect(page.getByText(/Relleno: Sin relleno/)).toBeVisible();
+
+  await page.getByRole("button", { name: "Azul", exact: true }).click();
+  await expect(page.locator(".page-svg svg path[data-element-id]")).toHaveAttribute("fill", "#3b82f6");
+  await page.getByRole("button", { name: "Deshacer" }).click();
+  await expect(page.locator(".page-svg svg path[data-element-id]")).toHaveAttribute("fill", "none");
+  await page.getByRole("button", { name: "Rehacer" }).click();
+  await expect(page.locator(".page-svg svg path[data-element-id]")).toHaveAttribute("fill", "#3b82f6");
+});
+
+test("closes and reopens a selected path through contextual actions", async ({ page }) => {
+  await page.goto("/");
+  const pageBounds = await page.locator(".page").boundingBox();
+  expect(pageBounds).not.toBeNull();
+  await page.getByRole("button", { name: "Pluma" }).click();
+  await page.mouse.click(pageBounds!.x + 90, pageBounds!.y + 120);
+  await page.mouse.click(pageBounds!.x + 170, pageBounds!.y + 120);
+  await page.mouse.click(pageBounds!.x + 250, pageBounds!.y + 160);
+  await page.getByRole("button", { name: "Cerrar trazado" }).click();
+  await expect(page.getByRole("button", { name: "Reabrir trazado" })).toBeVisible();
+  await page.getByRole("button", { name: "Reabrir trazado" }).click();
+  await expect(page.getByRole("button", { name: "Cerrar trazado" })).toBeVisible();
+});
+
 test("deletes a selected Pluma anchor without deleting the path", async ({ page }) => {
   await page.goto("/");
   const pageBounds = await page.locator(".page").boundingBox();
