@@ -44,6 +44,15 @@ export function movementExceedsThreshold(start: PointMm, end: PointMm, threshold
   return Math.hypot(end.x - start.x, end.y - start.y) >= threshold;
 }
 
+/** Derives the two controls for a pen endpoint drag in document millimetres. */
+export function cubicPlacementControls(start: PointMm, end: PointMm, pointer: PointMm): { readonly control1: PointMm; readonly control2: PointMm } {
+  if (![start.x, start.y, end.x, end.y, pointer.x, pointer.y].every(Number.isFinite)) throw new Error("cubic placement coordinates must be finite");
+  return {
+    control1: { x: start.x + (end.x - start.x) / 3, y: start.y + (end.y - start.y) / 3 },
+    control2: { x: end.x - (pointer.x - end.x), y: end.y - (pointer.y - end.y) },
+  };
+}
+
 export function screenDeltaToMm(delta: PointMm, zoom: number): PointMm {
   if (!Number.isFinite(zoom) || zoom <= 0) throw new Error("zoom must be positive");
   return { x: delta.x / zoom, y: delta.y / zoom };

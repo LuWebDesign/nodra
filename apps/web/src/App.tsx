@@ -1,10 +1,10 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent, type PointerEvent, type ReactNode, type WheelEvent } from "react";
 import { createProject, elementId, layerId, pageId, revision, type DocumentSnapshot, type Element, type ElementId, type PointMm, type ProjectSnapshot } from "@nodra/domain";
-import { addToSelection, beginGesture, cancelGesture, clearSelection, closePath, commitGesture, createElement, createPathNode, deleteContourNodes, deleteElement, deleteElementNodes, dispatch, duplicateElements, flipElements, insertFormaNode, moveElements, movePathHandle, movePathNode, previewGesture, previewGestureFromBase, redo, resizeElement, resizeElements, rotateElement, rotateElementsAroundCenter, select, selectForPointerDown, shapeOperation, undo, updateContourNode, updateElement, updateElementNode, updateElementStyles, updatePage, type FlipAxis, type ShapeOperation } from "@nodra/editor-core";
+import { addToSelection, beginGesture, cancelGesture, clearSelection, closePath, commitGesture, createElement, createPathCubicNode, createPathNode, deleteContourNodes, deleteElement, deleteElementNodes, dispatch, duplicateElements, flipElements, insertFormaNode, moveElements, movePathHandle, movePathNode, previewGesture, previewGestureFromBase, redo, resizeElement, resizeElements, rotateElement, rotateElementsAroundCenter, select, selectForPointerDown, shapeOperation, undo, updateContourNode, updateElement, updateElementNode, updateElementStyles, updatePage, type FlipAxis, type ShapeOperation } from "@nodra/editor-core";
 import { boundsOfElements, contourVertexNodes, elementCenter, groupCenter, groupHandlePoints, pathGeometryNodes, realGeometryNodes, resizeHandle, rotatedResizeHandles, rotationFromDrag, rotationHandlePoints, type Direction, type GroupHandle, type ResizeHandle } from "@nodra/geometry";
 import { DebouncedAutosave, DexieProjectRepository, requestStoragePersistence } from "@nodra/persistence";
 import { renderSvg } from "@nodra/renderer-svg";
-import { canActivateRotation, centerPageInCanvas, clientPointToCanvas, formaNodeKey, hoveredSelectionCenter, isDrawingTool, marqueeSelection, movementExceedsThreshold, normalizeBounds, normalizeDrag, pagePointToCanvas, pickElement, pickFormaNode, pickFormaSegment, pickNode, pickPathNode, pointerDownIntent, screenDeltaToMm, screenPointToMm, selectedNodeAnchor, snapMoveDelta, zoomAtPoint, type ContourNodeHit, type FormaNodeHit, type NodeHit, type PathNodeHit, type SnapGuide, type TransformMode } from "./interaction.js";
+import { canActivateRotation, centerPageInCanvas, clientPointToCanvas, cubicPlacementControls, formaNodeKey, hoveredSelectionCenter, isDrawingTool, marqueeSelection, movementExceedsThreshold, normalizeBounds, normalizeDrag, pagePointToCanvas, pickElement, pickFormaNode, pickFormaSegment, pickNode, pickPathNode, pointerDownIntent, screenDeltaToMm, screenPointToMm, selectedNodeAnchor, snapMoveDelta, zoomAtPoint, type ContourNodeHit, type FormaNodeHit, type NodeHit, type PathNodeHit, type SnapGuide, type TransformMode } from "./interaction.js";
 import { aspectGeometryPatch, aspectSize, cornerRadiusPatch, formatMm, geometryValue, rotationDegreesValue, rotationPatch, type GeometryField, type PropertyElement, type RotatableElement } from "./propertyBar.js";
 import { useDocumentStore, usePersistenceStore, useUiStore, useViewportStore, type Tool } from "./stores.js";
 
@@ -28,10 +28,11 @@ type ActiveInteraction = {
   pointerId: number;
   lastX: number;
   lastY: number;
-  kind: "move" | "pan" | "draw" | "resize" | "rotate" | "marquee" | "contour-node" | "path-node";
+  kind: "move" | "pan" | "draw" | "resize" | "rotate" | "marquee" | "contour-node" | "path-node" | "pen-place";
   ids?: readonly ElementId[];
   dragged: boolean;
   start?: PointMm;
+  placement?: PointMm;
   startClient?: PointMm;
   previewed?: boolean;
   tool?: Exclude<Tool, "select" | "pan">;
@@ -44,6 +45,7 @@ type ActiveInteraction = {
   center?: PointMm;
   contourNode?: ContourNodeHit;
   pathNode?: PathNodeHit;
+  pathId?: ElementId;
 };
 
 type FormaNodeOverlay =
@@ -229,9 +231,27 @@ export function App() {
       targetMark.style.pointerEvents = "none";
       overlay.append(targetMark);
     }
+    const pen = interaction.current;
+    if (tool === "pen" && pen?.kind === "pen-place" && pen.start && pen.placement && cursorPoint) {
+      const end = pen.placement;
+      const pointer = screenPointToMm(cursorPoint, { x: 0, y: 0 }, zoom, panMm);
+      const controls = cubicPlacementControls(pen.start, end, pointer);
+      const drawLine = (from: PointMm, to: PointMm) => {
+        const line = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "line");
+        const a = point(from); const b = point(to);
+        line.setAttribute("x1", String(a.x)); line.setAttribute("y1", String(a.y)); line.setAttribute("x2", String(b.x)); line.setAttribute("y2", String(b.y));
+        line.setAttribute("stroke", "#65d9ff"); line.setAttribute("stroke-width", "1"); line.setAttribute("stroke-dasharray", "3 2"); line.style.pointerEvents = "none"; overlay.append(line);
+      };
+      drawLine(pen.start, controls.control1);
+      drawLine(end, controls.control2);
+      for (const value of [controls.control1, controls.control2]) {
+        const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "circle");
+        const screen = point(value); mark.setAttribute("cx", String(screen.x)); mark.setAttribute("cy", String(screen.y)); mark.setAttribute("r", "4"); mark.setAttribute("fill", "#ffffff"); mark.setAttribute("stroke", "#65d9ff"); mark.setAttribute("stroke-width", "1.5"); mark.style.pointerEvents = "none"; overlay.append(mark);
+      }
+    }
     target.append(overlay);
     return () => overlay.remove();
-  }, [document, panMm, selectedElements, snapGuide, transformMode, zoom]);
+  }, [cursorPoint, document, panMm, selectedElements, snapGuide, tool, transformMode, zoom]);
 
   useEffect(() => { if (!interaction.current) setSnapGuide(undefined); }, [editor]);
   useEffect(() => {
@@ -249,14 +269,6 @@ export function App() {
 
   const addPenPoint = (point: PointMm) => {
     const current = editorRef.current;
-    const selectedPath = current.selection.length === 1 ? current.document.elements.find((element) => element.id === current.selection[0] && element.type === "path") : undefined;
-    if (selectedPath?.type === "path" && !selectedPath.closed) {
-      const last = selectedPath.nodes.at(-1);
-      if (last) {
-        setEditorState(dispatch(current, createPathNode(selectedPath.id, { id: `path-node-${crypto.randomUUID()}`, anchor: point, join: "corner" }, last.id)));
-        return;
-      }
-    }
     if (!penDraftPoint) {
       setPenDraftPoint(point);
       return;
@@ -325,7 +337,15 @@ export function App() {
         event.currentTarget.setPointerCapture(event.pointerId);
         setEditorState(beginGesture(editorRef.current));
         interaction.current = { pointerId: event.pointerId, lastX: event.clientX, lastY: event.clientY, kind: "path-node", pathNode, startClient: { x: event.clientX, y: event.clientY }, dragged: false };
-      } else addPenPoint(point);
+      } else {
+        const selectedPath = editorRef.current.selection.length === 1 ? editorRef.current.document.elements.find((element) => element.id === editorRef.current.selection[0] && element.type === "path") : undefined;
+        const last = selectedPath?.type === "path" && !selectedPath.closed ? selectedPath.nodes.at(-1) : undefined;
+        if (last || penDraftPoint) {
+          event.currentTarget.setPointerCapture(event.pointerId);
+          setEditorState(beginGesture(editorRef.current));
+          interaction.current = { pointerId: event.pointerId, lastX: event.clientX, lastY: event.clientY, kind: "pen-place", start: last?.anchor ?? penDraftPoint, placement: point, ...(last && selectedPath ? { pathId: selectedPath.id } : {}), startClient: { x: event.clientX, y: event.clientY }, dragged: false };
+        } else addPenPoint(point);
+      }
       return;
     }
       const formaNodeHit = tool === "forma" ? pickFormaNode(editorRef.current.document, point, zoom) : undefined;
@@ -437,6 +457,15 @@ export function App() {
       setEditorState(previewGestureFromBase(editorRef.current, command));
       return;
     }
+    if (active.kind === "pen-place" && active.start && active.startClient && movementExceedsThreshold(active.startClient, { x: event.clientX, y: event.clientY })) {
+      active.dragged = true;
+      if (active.pathId) {
+        const end = active.placement ?? pointAt(event);
+        const controls = cubicPlacementControls(active.start, end, pointAt(event));
+        setEditorState(previewGestureFromBase(editorRef.current, createPathCubicNode(active.pathId, { id: `path-node-${crypto.randomUUID()}`, anchor: end, join: "corner" }, controls.control1, controls.control2)));
+      }
+      return;
+    }
     if (active.kind === "contour-node" && active.formaNode) {
       const point = pointAt(event);
       if (!active.startClient || !movementExceedsThreshold(active.startClient, { x: event.clientX, y: event.clientY })) return;
@@ -475,9 +504,26 @@ export function App() {
     } else if (active.kind === "rotate" && active.ids && active.center && active.start && !cancelled) {
       const rotation = rotationFromDrag(active.element && isRotatableElement(active.element) ? active.element.rotation : 0, active.center, active.start, pointAt(event), event.shiftKey ? Math.PI / 12 : 0);
       setEditorState(commitGesture(previewGestureFromBase(editorRef.current, active.ids.length === 1 && active.element && isRotatableElement(active.element) ? rotateElement(active.element.id, rotation) : rotateElementsAroundCenter(active.ids, rotation - (active.element && isRotatableElement(active.element) ? active.element.rotation : 0)))));
-     } else if (["resize", "rotate", "move", "contour-node", "path-node"].includes(active.kind)) {
-      setEditorState(cancelled ? cancelGesture(editorRef.current) : commitGesture(editorRef.current));
-    } else if (active.kind === "draw") {
+      } else if (["resize", "rotate", "move", "contour-node", "path-node"].includes(active.kind)) {
+       setEditorState(cancelled ? cancelGesture(editorRef.current) : commitGesture(editorRef.current));
+     } else if (active.kind === "pen-place") {
+       if (cancelled || !active.start) { setEditorState(cancelGesture(editorRef.current)); setPenDraftPoint(undefined); }
+       else {
+         const end = active.placement ?? pointAt(event);
+         const node = { id: `path-node-${crypto.randomUUID()}`, anchor: end, join: "corner" as const };
+         if (active.pathId) {
+           const command = active.dragged ? (() => { const controls = cubicPlacementControls(active.start!, end, pointAt(event)); return createPathCubicNode(active.pathId!, node, controls.control1, controls.control2); })() : createPathNode(active.pathId, node);
+           setEditorState(commitGesture(previewGestureFromBase(editorRef.current, command)));
+         } else {
+           const firstId = `path-node-${crypto.randomUUID()}`;
+           const segment = active.dragged ? (() => { const controls = cubicPlacementControls(active.start!, end, pointAt(event)); return { type: "cubicBezier" as const, startNodeId: firstId, endNodeId: node.id, control1: controls.control1, control2: controls.control2 }; })() : { type: "line" as const, startNodeId: firstId, endNodeId: node.id };
+           const path = { type: "path" as const, id: id(), layerId: layerId(editorRef.current.document.layers[0]?.id ?? "layer-1"), nodes: [{ id: firstId, anchor: active.start, join: "corner" as const }, node], segments: [segment], closed: false, style: defaultStyle };
+           const next = dispatch(editorRef.current, createElement(path));
+           setPenDraftPoint(undefined);
+           setEditorState(select(next, [path.id]));
+         }
+       }
+     } else if (active.kind === "draw") {
       const end = active.start ? pointAt(event) : undefined;
       const zeroLengthLine = active.tool === "line" && active.start && end && active.start.x === end.x && active.start.y === end.y;
       if (cancelled || !active.dragged || zeroLengthLine) setEditorState(cancelGesture(editorRef.current));
@@ -503,7 +549,8 @@ export function App() {
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         if (interaction.current) {
-          setEditorState(cancelGesture(editorRef.current));
+           setEditorState(cancelGesture(editorRef.current));
+           if (interaction.current.kind === "pen-place") setPenDraftPoint(undefined);
           interaction.current = undefined;
           setMarquee(undefined);
           setSnapGuide(undefined);
