@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createDocument, elementId, layerId } from "@nodra/domain";
-import { canActivateRotation, centerPageInCanvas, clientPointToCanvas, hoveredSelectionCenter, INITIAL_ZOOM, isDrawingTool, marqueeSelection, MAX_ZOOM, MIN_ZOOM, movementExceedsThreshold, normalizeBounds, normalizeDrag, pagePointToCanvas, pagePointToScreen, screenDeltaToMm, screenPointToMm, containsBounds, elementsContainedBy, pickContourNode, pickContourSegment, pickElement, pickFormaNode, pickFormaSegment, pickNode, pointerDownIntent, selectedNodeAnchor, selectionCenter, selectionFrame, snapMoveDelta, zoomAtPoint } from "./interaction.js";
+import { canActivateRotation, centerPageInCanvas, clientPointToCanvas, hoveredSelectionCenter, INITIAL_ZOOM, isDrawingTool, marqueeSelection, MAX_ZOOM, MIN_ZOOM, movementExceedsThreshold, normalizeBounds, normalizeDrag, pagePointToCanvas, pagePointToScreen, screenDeltaToMm, screenPointToMm, containsBounds, elementsContainedBy, pickContourNode, pickContourSegment, pickElement, pickFormaNode, pickFormaSegment, pickNode, pickPathNode, pointerDownIntent, selectedNodeAnchor, selectionCenter, selectionFrame, snapMoveDelta, zoomAtPoint } from "./interaction.js";
 import { geometryPatch, geometryValue } from "./propertyBar.js";
 
 describe("canvas coordinates", () => {
@@ -62,6 +62,16 @@ describe("drawing tool routing", () => {
     expect(canActivateRotation("select", [selected, elementId("other")], selected)).toBe(true);
     expect(canActivateRotation("select", [selected], undefined)).toBe(false);
     expect(canActivateRotation("rectangle", [selected], selected)).toBe(false);
+  });
+
+  it("picks path anchors and cubic controls in document space", () => {
+    const layer = { id: layerId("path-layer"), name: "Paths", visible: true, order: 0 };
+    const path = { type: "path" as const, id: elementId("path-hit"), layerId: layer.id, nodes: [{ id: "a", anchor: { x: 10, y: 10 }, join: "corner" as const }, { id: "b", anchor: { x: 40, y: 10 }, join: "corner" as const }], segments: [{ type: "cubicBezier" as const, startNodeId: "a", endNodeId: "b", control1: { x: 20, y: 30 }, control2: { x: 30, y: 30 } }], closed: false, style: { stroke: "#000", strokeWidth: 1 } };
+    const document = createDocument("path-hit-doc", [layer]);
+    const anchor = pickPathNode({ ...document, elements: [path] }, { x: 10, y: 10 }, 1);
+    const control = pickPathNode({ ...document, elements: [path] }, { x: 20, y: 30 }, 1);
+    expect(anchor?.node).toMatchObject({ kind: "anchor", nodeId: "a" });
+    expect(control?.node).toMatchObject({ kind: "control", handle: "control1", segmentIndex: 0 });
   });
   it("recognizes drawing tools without consulting object hit testing", () => {
     expect(["rectangle", "ellipse", "line"].every(isDrawingTool)).toBe(true);
