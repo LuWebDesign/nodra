@@ -66,7 +66,6 @@ export function App() {
   const [aspectLock, setAspectLock] = useState(false);
   const [centerHover, setCenterHover] = useState<{ elementId: ElementId; point: PointMm }>();
   const [transformMode, setTransformMode] = useState<TransformMode>("resize");
-  const [activeContourNodeKey, setActiveContourNodeKey] = useState<string>();
   const [selectedFormaNodeKeys, setSelectedFormaNodeKeys] = useState<readonly string[]>([]);
   const [inspectorTab, setInspectorTab] = useState<InspectorTab>("properties");
   const [transformDirection, setTransformDirection] = useState<Direction>("center");
@@ -321,9 +320,7 @@ export function App() {
       if (pickFormaNode(editorRef.current.document, point, zoom)) return;
       const segment = pickFormaSegment(editorRef.current.document, point, zoom);
       if (segment) {
-        const nextPointIndex = segment.segmentIndex + 1;
         setEditorState(dispatch(select(editorRef.current, [segment.elementId]), insertFormaNode(segment.elementId, segment, point)));
-        setActiveContourNodeKey(`${segment.elementId}:${segment.ringIndex}:${nextPointIndex}`);
       }
       return;
     }
