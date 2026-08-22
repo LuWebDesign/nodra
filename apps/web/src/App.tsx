@@ -340,10 +340,11 @@ export function App() {
       } else {
         const selectedPath = editorRef.current.selection.length === 1 ? editorRef.current.document.elements.find((element) => element.id === editorRef.current.selection[0] && element.type === "path") : undefined;
         const last = selectedPath?.type === "path" && !selectedPath.closed ? selectedPath.nodes.at(-1) : undefined;
-        if (last || penDraftPoint) {
+        const start = last?.anchor ?? penDraftPoint;
+        if (start) {
           event.currentTarget.setPointerCapture(event.pointerId);
           setEditorState(beginGesture(editorRef.current));
-          interaction.current = { pointerId: event.pointerId, lastX: event.clientX, lastY: event.clientY, kind: "pen-place", start: last?.anchor ?? penDraftPoint, placement: point, ...(last && selectedPath ? { pathId: selectedPath.id } : {}), startClient: { x: event.clientX, y: event.clientY }, dragged: false };
+          interaction.current = { pointerId: event.pointerId, lastX: event.clientX, lastY: event.clientY, kind: "pen-place", start, placement: point, ...(last && selectedPath ? { pathId: selectedPath.id } : {}), startClient: { x: event.clientX, y: event.clientY }, dragged: false };
         } else addPenPoint(point);
       }
       return;
