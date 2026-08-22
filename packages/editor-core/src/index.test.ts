@@ -42,6 +42,16 @@ describe("editor core", () => {
     expect(closed.document.elements[0]).toMatchObject({ closed: true });
     expect(dispatch(state, setPathJoin(path.id, "a", "smooth")).document.elements[0]).toBeDefined();
   });
+  it("changes each path join mode as one undoable command", () => {
+    let state = dispatch(createEditor({ ...document, elements: [path] }), createElement(path));
+    for (const join of ["smooth", "symmetric", "corner"] as const) {
+      const before = state;
+      state = dispatch(state, setPathJoin(path.id, "a", join));
+      expect(state.undo).toHaveLength(before.undo.length + 1);
+      expect(state.document.elements[0]).toMatchObject({ nodes: [{ id: "a", join }] });
+      expect(undo(state).document.elements[0]).toMatchObject({ nodes: [{ id: "a", join: before.document.elements[0]?.type === "path" ? before.document.elements[0].nodes[0]?.join : "corner" }] });
+    }
+  });
   it("appends a validated cubic pen node and commits the gesture once", () => {
     let state = beginGesture(createEditor({ ...document, elements: [path] }));
     state = previewGestureFromBase(state, createPathCubicNode(path.id, { id: "c", anchor: { x: 20, y: 10 }, join: "corner" }, { x: 4, y: 0 }, { x: 16, y: 8 }));
