@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createDocument, elementId, layerId } from "@nodra/domain";
-import { canActivateRotation, centerPageInCanvas, clientPointToCanvas, cubicPlacementControls, hoveredSelectionCenter, INITIAL_ZOOM, isDrawingTool, marqueeSelection, MAX_ZOOM, MIN_ZOOM, movementExceedsThreshold, normalizeBounds, normalizeDrag, pagePointToCanvas, pagePointToScreen, screenDeltaToMm, screenPointToMm, containsBounds, elementsContainedBy, pickContourNode, pickContourSegment, pickElement, pickFormaNode, pickFormaSegment, pickNode, pickPathNode, pickPathSegment, pointerDownIntent, selectedNodeAnchor, selectedPathAnchorIds, selectionCenter, selectionFrame, snapMoveDelta, zoomAtPoint } from "./interaction.js";
+import { canActivateRotation, centerPageInCanvas, clientPointToCanvas, cubicPlacementControls, hoveredSelectionCenter, INITIAL_ZOOM, isDrawingTool, marqueeSelection, MAX_ZOOM, MIN_ZOOM, movementExceedsThreshold, normalizeBounds, normalizeDrag, pagePointToCanvas, pagePointToScreen, screenDeltaToMm, screenPointToMm, containsBounds, elementsContainedBy, pathGuides, pickContourNode, pickContourSegment, pickElement, pickFormaNode, pickFormaSegment, pickNode, pickPathNode, pickPathSegment, pointerDownIntent, selectedNodeAnchor, selectedPathAnchorIds, selectionCenter, selectionFrame, snapMoveDelta, zoomAtPoint } from "./interaction.js";
 import { geometryPatch, geometryValue } from "./propertyBar.js";
 
 describe("canvas coordinates", () => {
@@ -81,6 +81,14 @@ describe("drawing tool routing", () => {
     expect(pickPathSegment({ ...document, elements: [path] }, { x: 25, y: 25 }, 1)).toMatchObject({ elementId: path.id, segmentIndex: 0 });
     expect(pickPathSegment({ ...document, elements: [path] }, { x: 10, y: 10 }, 1)).toBeUndefined();
     expect(selectedPathAnchorIds(path, [`${path.id}:p:0`, `${path.id}:p:1`, `${path.id}:p:1`, `${path.id}:p:2`])).toEqual(["a", "b"]);
+  });
+  it("derives directional guides only for cubic controls", () => {
+    const layer = { id: layerId("guide-layer"), name: "Guides", visible: true, order: 0 };
+    const path = { type: "path" as const, id: elementId("guide-path"), layerId: layer.id, nodes: [{ id: "a", anchor: { x: 0, y: 0 }, join: "corner" as const }, { id: "b", anchor: { x: 40, y: 0 }, join: "corner" as const }, { id: "c", anchor: { x: 80, y: 0 }, join: "corner" as const }], segments: [{ type: "cubicBezier" as const, startNodeId: "a", endNodeId: "b", control1: { x: 10, y: 10 }, control2: { x: 30, y: 10 } }, { type: "line" as const, startNodeId: "b", endNodeId: "c" }], closed: false, style: { stroke: "#000", strokeWidth: 1 } };
+    expect(pathGuides(path)).toEqual([
+      { elementId: path.id, segmentIndex: 0, nodeId: "a", anchor: { x: 0, y: 0 }, control: { x: 10, y: 10 }, direction: "outgoing" },
+      { elementId: path.id, segmentIndex: 0, nodeId: "b", anchor: { x: 40, y: 0 }, control: { x: 30, y: 10 }, direction: "incoming" },
+    ]);
   });
   it("recognizes drawing tools without consulting object hit testing", () => {
     expect(["rectangle", "ellipse", "line"].every(isDrawingTool)).toBe(true);
