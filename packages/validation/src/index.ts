@@ -20,7 +20,20 @@ const contour = z.object({ ...common, type: z.literal("contour"), position: poin
     if (!first || !last || first.x !== last.x || first.y !== last.y) ctx.addIssue({ code: "custom", message: "Contour rings must be closed", path: ["contours", index, "points"] });
   });
 });
-export const elementSchema = z.discriminatedUnion("type", [rectangle, ellipse, line, contour]);
+const pathNode = z.object({ id: nonEmptyId, anchor: point, join: z.enum(["corner", "smooth", "symmetric"]) }).strict();
+const pathSegment = z.union([
+  z.object({ type: z.literal("line") }).strict(),
+  z.object({ type: z.literal("cubicBezier"), control1: point, control2: point }).strict(),
+]);
+const path = z.object({ ...common, type: z.literal("path"), nodes: z.array(pathNode), segments: z.array(pathSegment), closed: z.boolean() }).strict().superRefine((value, ctx) => {
+  const minimum = value.closed ? 3 : 2;
+  if (value.nodes.length < minimum) ctx.addIssue({ code: "custom", message: `Path requires at least ${minimum} nodes`, path: ["nodes"] });
+  const ids = new Set<string>();
+  value.nodes.forEach((node, index) => { if (ids.has(node.id)) ctx.addIssue({ code: "custom", message: "Path node ids must be unique", path: ["nodes", index, "id"] }); ids.add(node.id); });
+  const expected = value.closed ? value.nodes.length : Math.max(0, value.nodes.length - 1);
+  if (value.segments.length !== expected) ctx.addIssue({ code: "custom", message: "Path segment count does not match topology", path: ["segments"] });
+});
+export const elementSchema = z.discriminatedUnion("type", [rectangle, ellipse, line, contour, path]);
 export const layerSchema = z.object({ id: nonEmptyId, name: z.string().min(1), visible: z.boolean(), order: finite.int().nonnegative() }).strict();
 const documentFields = { id: nonEmptyId, revision: finite.int().nonnegative(), origin: z.literal("top-left"), units: z.literal("mm"), page: size, layers: z.array(layerSchema), elements: z.array(elementSchema) };
 export const documentSchema = z.object({ schemaVersion: z.literal(CURRENT_SCHEMA_VERSION), ...documentFields }).strict().superRefine((value, ctx) => {

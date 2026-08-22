@@ -32,7 +32,7 @@ export function cornerRadiusPatch(value: number): { cornerRadius: number } | und
   return Number.isFinite(value) && value >= 0 ? { cornerRadius: value } : undefined;
 }
 
-export const rotationDegreesValue = (element: Element): number => radiansToDegrees(element.rotation);
+export const rotationDegreesValue = (element: Element): number => radiansToDegrees("rotation" in element ? element.rotation : 0);
 
 export function rotationPatch(raw: string, currentRotation: number): { rotation: number } | undefined {
   if (!raw.trim()) return undefined;

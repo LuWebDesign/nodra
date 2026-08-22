@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { boundsOf, boundsOfElements, closedElementToPolygon, degreesToRadians, elementCenter, ELLIPSE_APPROXIMATION_SEGMENTS, groupCenter, groupHandlePoints, hitTest, mmToScreen, radiansToDegrees, realGeometryNodes, resizeGroup, resizeHandle, rotatedLineEndpoints, rotateElements, rotationFromDrag, rotationHandlePoints, screenToMm, shapeResultContours, validateSize } from "./index.js";
+import { boundsOf, boundsOfElements, closedElementToPolygon, cubicBezierBounds, degreesToRadians, elementCenter, ELLIPSE_APPROXIMATION_SEGMENTS, evaluateCubicBezier, groupCenter, groupHandlePoints, hitTest, mmToScreen, radiansToDegrees, realGeometryNodes, resizeGroup, resizeHandle, rotatedLineEndpoints, rotateElements, rotationFromDrag, rotationHandlePoints, screenToMm, shapeResultContours, splitCubicBezier, validateSize } from "./index.js";
 import { elementId, layerId } from "@nodra/domain";
 
 const style = { stroke: "#000", strokeWidth: 0.2 };
@@ -15,6 +15,17 @@ describe("canonical millimetre geometry", () => {
     expect(boundsOf(rectangle)).toEqual({ x: 10, y: 20, width: 20, height: 10 });
     expect(hitTest(rectangle, { x: 10, y: 20 })).toBe(true);
     expect(hitTest(rectangle, { x: 31, y: 20 })).toBe(false);
+  });
+  it("evaluates, bounds, splits, and hits cubic paths", () => {
+    const p0 = { x: 0, y: 0 }, p1 = { x: 0, y: 10 }, p2 = { x: 10, y: 10 }, p3 = { x: 10, y: 0 };
+    expect(evaluateCubicBezier(p0, p1, p2, p3, 0.5)).toEqual({ x: 5, y: 7.5 });
+    expect(cubicBezierBounds(p0, p1, p2, p3)).toMatchObject({ x: 0, y: 0, width: 10, height: 7.5 });
+    const [left, right] = splitCubicBezier(p0, p1, p2, p3);
+    expect(left[3]).toEqual(right[0]);
+    const path = { type: "path" as const, id: elementId("bezier"), layerId: layerId("l"), nodes: [{ id: "a", anchor: p0, join: "corner" as const }, { id: "b", anchor: p3, join: "smooth" as const }], segments: [{ type: "cubicBezier" as const, control1: p1, control2: p2 }], closed: false, style };
+    expect(boundsOf(path)).toMatchObject({ width: 10, height: 7.5 });
+    expect(hitTest(path, { x: 5, y: 7.5 }, 0.2)).toBe(true);
+    expect(realGeometryNodes(path)).toHaveLength(4);
   });
   it("rejects degenerate geometry and viewports", () => {
     expect(() => validateSize({ width: 0, height: 2 })).toThrow();

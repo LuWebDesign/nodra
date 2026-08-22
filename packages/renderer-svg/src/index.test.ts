@@ -35,6 +35,12 @@ describe("SVG renderer boundary", () => {
     expect(result.success).toBe(true);
     if (result.success) expect(result.svg).toContain('fill-rule="evenodd"');
   });
+  it("renders canonical paths using M, L, C, and Z", () => {
+    const source = withElements(createDocument("path", [layer]), [{ type: "path", id: elementId("path"), layerId: layer.id, nodes: [{ id: "a", anchor: { x: 0, y: 0 }, join: "corner" }, { id: "b", anchor: { x: 10, y: 0 }, join: "smooth" }, { id: "c", anchor: { x: 10, y: 10 }, join: "corner" }], segments: [{ type: "line" }, { type: "cubicBezier", control1: { x: 12, y: 2 }, control2: { x: 12, y: 8 } }, { type: "line" }], closed: true, style }]);
+    const result = renderSvg(source, { zoom: 1, panMm: { x: 0, y: 0 } });
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.svg).toContain("M0 0 L10 0 C12 2 12 8 10 10 Z");
+  });
 
   it("emits a reflection transform for mirrored elements", () => {
     const source = withElements(createDocument("mirrored", [layer]), [{ type: "line", id: elementId("mirrored-line"), layerId: layer.id, start: { x: 0, y: 0 }, end: { x: 20, y: 10 }, rotation: 0, flipX: true, style }]);

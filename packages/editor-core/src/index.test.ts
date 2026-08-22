@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createDocument, elementId, layerId, type RectangleElement } from "@nodra/domain";
-import { addToSelection, beginGesture, clearSelection, commitGesture, createEditor, createElement, dispatch, duplicateElements, flipElements, moveElement, moveElements, previewGesture, previewGestureFromBase, redo, removeFromSelection, reorderLayer, resizeElement, resizeElements, rotateElementsAroundCenter, select, selectForPointerDown, setLayerVisibility, shapeOperation, toggleSelection, undo, updateElement, updateElementStyles } from "./index.js";
+import { addToSelection, beginGesture, clearSelection, closePath, commitGesture, createEditor, createElement, createPath, dispatch, duplicateElements, flipElements, moveElement, moveElements, movePathHandle, movePathNode, openPath, previewGesture, previewGestureFromBase, redo, removeFromSelection, reorderLayer, resizeElement, resizeElements, reversePath, rotateElementsAroundCenter, select, selectForPointerDown, setLayerVisibility, setPathJoinMode, shapeOperation, splitPathSegment, toggleSelection, undo, updateElement, updateElementStyles } from "./index.js";
 import type { Direction } from "@nodra/geometry";
 
 const rectangle: RectangleElement = { type: "rectangle", id: elementId("r1"), layerId: layerId("default"), position: { x: 1, y: 2 }, size: { width: 10, height: 5 }, cornerRadius: 0, rotation: 0, style: { stroke: "#000", strokeWidth: 1 } };
@@ -255,5 +255,48 @@ describe("editor core", () => {
     expect(dispatch(state, duplicateElements(state.selection, "east", -1, 1))).toBe(state);
     expect(dispatch(state, duplicateElements(state.selection, "east", 1, 0))).toBe(state);
     expect(dispatch(state, duplicateElements(state.selection, "east", 1, 1.5))).toBe(state);
+  });
+  it("edits paths through commands and preserves no-op history semantics", () => {
+    const path = { type: "path" as const, id: elementId("path"), layerId: rectangle.layerId, nodes: [{ id: "a", anchor: { x: 0, y: 0 }, join: "corner" as const }, { id: "b", anchor: { x: 10, y: 0 }, join: "corner" as const }], segments: [{ type: "cubicBezier" as const, control1: { x: 2, y: 2 }, control2: { x: 8, y: 2 } }], closed: false, style: rectangle.style };
+    let state = dispatch(createEditor(document), createPath(path));
+    state = dispatch(state, movePathNode(path.id, "b", { x: 1, y: 0 }));
+    state = dispatch(state, movePathHandle(path.id, 0, "control1", { x: 3, y: 3 }));
+    state = dispatch(state, splitPathSegment(path.id, 0, "middle"));
+    state = dispatch(state, setPathJoinMode(path.id, "middle", "smooth"));
+    state = dispatch(state, closePath(path.id));
+    state = dispatch(state, reversePath(path.id));
+    state = dispatch(state, openPath(path.id));
+    expect(state.document.elements[0]?.type).toBe("path");
+    expect(state.undo.length).toBeGreaterThan(1);
+    const unchanged = dispatch(state, setPathJoinMode(path.id, "middle", "smooth"));
+    expect(unchanged).toBe(state);
+  });
+  it("moves a path node together with both adjacent cubic controls", () => {
+    const path = { type: "path" as const, id: elementId("node-move"), layerId: rectangle.layerId, nodes: [{ id: "a", anchor: { x: 0, y: 0 }, join: "corner" as const }, { id: "b", anchor: { x: 10, y: 0 }, join: "corner" as const }, { id: "c", anchor: { x: 20, y: 0 }, join: "corner" as const }], segments: [{ type: "cubicBezier" as const, control1: { x: 2, y: 1 }, control2: { x: 8, y: 2 } }, { type: "cubicBezier" as const, control1: { x: 12, y: 3 }, control2: { x: 18, y: 4 } }], closed: false, style: rectangle.style };
+    const state = dispatch(dispatch(createEditor(document), createPath(path)), movePathNode(path.id, "b", { x: 2, y: 3 }));
+    const moved = state.document.elements[0];
+    expect(moved?.type).toBe("path");
+    if (moved?.type === "path") {
+      expect(moved.nodes[1]?.anchor).toEqual({ x: 12, y: 3 });
+      expect(moved.segments[0]).toMatchObject({ control2: { x: 10, y: 5 } });
+      expect(moved.segments[1]).toMatchObject({ control1: { x: 14, y: 6 } });
+    }
+  });
+  it("applies corner, smooth, and symmetric join rules to moved handles", () => {
+    const makePath = (join: "corner" | "smooth" | "symmetric") => ({ type: "path" as const, id: elementId(`join-${join}`), layerId: rectangle.layerId, nodes: [{ id: "a", anchor: { x: 0, y: 0 }, join: "corner" as const }, { id: "b", anchor: { x: 10, y: 0 }, join }, { id: "c", anchor: { x: 20, y: 0 }, join: "corner" as const }], segments: [{ type: "cubicBezier" as const, control1: { x: 2, y: 1 }, control2: { x: 6, y: 0 } }, { type: "cubicBezier" as const, control1: { x: 11, y: 1 }, control2: { x: 18, y: 1 } }], closed: false, style: rectangle.style });
+    const control = (join: "corner" | "smooth" | "symmetric") => {
+      const path = makePath(join);
+      const state = dispatch(dispatch(createEditor(document), createPath(path)), movePathHandle(path.id, 1, "control1", { x: 12, y: 0 }));
+      return state.document.elements[0]?.type === "path" ? state.document.elements[0].segments : [];
+    };
+    expect(control("corner")[0]).toMatchObject({ control2: { x: 6, y: 0 } });
+    expect(control("smooth")[0]).toMatchObject({ control2: { x: 6, y: 0 } });
+    expect(control("symmetric")[0]).toMatchObject({ control2: { x: 8, y: 0 } });
+    expect(control("smooth")[1]).toMatchObject({ control1: { x: 12, y: 0 } });
+  });
+  it("does not fail when a joined neighbor is a line segment", () => {
+    const path = { type: "path" as const, id: elementId("line-neighbor"), layerId: rectangle.layerId, nodes: [{ id: "a", anchor: { x: 0, y: 0 }, join: "smooth" as const }, { id: "b", anchor: { x: 10, y: 0 }, join: "smooth" as const }, { id: "c", anchor: { x: 20, y: 0 }, join: "corner" as const }], segments: [{ type: "line" as const }, { type: "cubicBezier" as const, control1: { x: 11, y: 1 }, control2: { x: 18, y: 1 } }], closed: false, style: rectangle.style };
+    const state = dispatch(dispatch(createEditor(document), createPath(path)), movePathHandle(path.id, 1, "control1", { x: 12, y: 0 }));
+    expect(state.document.elements[0]?.type).toBe("path");
   });
 });

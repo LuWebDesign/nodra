@@ -8,13 +8,15 @@ import {
   type SizeMm,
   type VisualStyle,
   type OperationMetadata,
+  type PathElement,
+  type PathJoinMode,
   elementId,
   nextRevision,
   revision,
   withElements,
 } from "@nodra/domain";
 import { validateDocument } from "@nodra/validation";
-import { boundsOfElements, contourWithPoints, directionVector, elementCenter, groupCenter, resizeGroup, rotateElements, shapeResultContours, transformPoint, type Direction } from "@nodra/geometry";
+import { boundsOfElements, contourWithPoints, directionVector, elementCenter, groupCenter, resizeGroup, rotateElements, shapeResultContours, splitCubicBezier, transformPoint, type Direction } from "@nodra/geometry";
 
 export type ElementPatch = { readonly position?: PointMm; readonly size?: SizeMm; readonly rotation?: number; readonly cornerRadius?: number; readonly style?: VisualStyle; readonly operation?: OperationMetadata; readonly start?: PointMm; readonly end?: PointMm };
 export type StylePatch = { readonly stroke?: string; readonly fill?: string | null; readonly strokeWidth?: number };
@@ -68,6 +70,7 @@ export const moveElement = (id: ElementId, delta: PointMm): EditorCommand => ({
     if (!element) return { success: false, error: `Element not found: ${id}` };
     if (element.type === "line") return replaceElements(document, document.elements.map((current) => current.id === id && current.type === "line" ? { ...current, start: { x: current.start.x + delta.x, y: current.start.y + delta.y }, end: { x: current.end.x + delta.x, y: current.end.y + delta.y } } : current));
     if (element.type === "contour") return replaceElements(document, document.elements.map((current) => current.id === id && current.type === "contour" ? contourWithPoints(current, current.contours.map((contour) => contour.points.map((point) => ({ x: point.x + delta.x, y: point.y + delta.y })))) : current));
+    if (element.type === "path") return replaceElements(document, document.elements.map((current) => current.id === id && current.type === "path" ? { ...current, nodes: current.nodes.map((node) => ({ ...node, anchor: { x: node.anchor.x + delta.x, y: node.anchor.y + delta.y } })), segments: current.segments.map((segment) => segment.type === "line" ? segment : { ...segment, control1: { x: segment.control1.x + delta.x, y: segment.control1.y + delta.y }, control2: { x: segment.control2.x + delta.x, y: segment.control2.y + delta.y } }) } : current));
     return replaceElements(document, document.elements.map((current) => current.id === id && current.type !== "line" ? { ...current, position: { x: current.position.x + delta.x, y: current.position.y + delta.y } } : current));
   },
 });
@@ -83,6 +86,7 @@ export const moveElements = (ids: readonly ElementId[], delta: PointMm): EditorC
       if (!selected.has(element.id)) return element;
       if (element.type === "line") return { ...element, start: { x: element.start.x + delta.x, y: element.start.y + delta.y }, end: { x: element.end.x + delta.x, y: element.end.y + delta.y } };
       if (element.type === "contour") return contourWithPoints(element, element.contours.map((contour) => contour.points.map((point) => ({ x: point.x + delta.x, y: point.y + delta.y }))));
+      if (element.type === "path") return { ...element, nodes: element.nodes.map((node) => ({ ...node, anchor: { x: node.anchor.x + delta.x, y: node.anchor.y + delta.y } })), segments: element.segments.map((segment) => segment.type === "line" ? segment : { ...segment, control1: { x: segment.control1.x + delta.x, y: segment.control1.y + delta.y }, control2: { x: segment.control2.x + delta.x, y: segment.control2.y + delta.y } }) };
       return { ...element, position: { x: element.position.x + delta.x, y: element.position.y + delta.y } };
     }));
   },
@@ -132,10 +136,86 @@ export const shapeOperation = (ids: readonly ElementId[], operation: ShapeOperat
     return replaceElements(document, elements);
   },
 });
+export const createPath = (path: PathElement): EditorCommand => createElement(path);
+
+const addPoint = (first: PointMm, second: PointMm): PointMm => ({ x: first.x + second.x, y: first.y + second.y });
+const subtractPoint = (first: PointMm, second: PointMm): PointMm => ({ x: first.x - second.x, y: first.y - second.y });
+const scalePoint = (point: PointMm, scale: number): PointMm => ({ x: point.x * scale, y: point.y * scale });
+const lengthOf = (point: PointMm): number => Math.hypot(point.x, point.y);
+
+function joinedOppositeControl(path: PathElement, segmentIndex: number, control: "control1" | "control2", moved: PointMm, segments: PathElement["segments"]): readonly [number, "control1" | "control2", PointMm] | undefined {
+  const segmentCount = path.segments.length;
+  const nodeIndex = control === "control1" ? segmentIndex : (segmentIndex + 1) % path.nodes.length;
+  const node = path.nodes[nodeIndex];
+  if (!node || node.join === "corner") return undefined;
+  const adjacentIndex = control === "control1" ? segmentIndex - 1 : segmentIndex + 1;
+  const normalizedIndex = path.closed ? (adjacentIndex + segmentCount) % segmentCount : adjacentIndex;
+  if (normalizedIndex < 0 || normalizedIndex >= segmentCount) return undefined;
+  const adjacent = segments[normalizedIndex];
+  if (!adjacent || adjacent.type !== "cubicBezier") return undefined;
+  const oppositeControl = control === "control1" ? "control2" : "control1";
+  const existing = adjacent[oppositeControl];
+  const movedVector = subtractPoint(moved, node.anchor);
+  const movedLength = lengthOf(movedVector);
+  let oppositeVector: PointMm;
+  if (node.join === "symmetric") {
+    oppositeVector = scalePoint(movedVector, -1);
+  } else if (movedLength === 0) {
+    return undefined;
+  } else {
+    const existingLength = lengthOf(subtractPoint(existing, node.anchor));
+    oppositeVector = scalePoint(movedVector, -existingLength / movedLength);
+  }
+  return [normalizedIndex, oppositeControl, addPoint(node.anchor, oppositeVector)];
+}
+
+const updatePath = (document: DocumentSnapshot, id: ElementId, update: (path: PathElement) => PathElement): CommandResult => {
+  const index = elementIndex(document, id); const current = document.elements[index];
+  if (!current) return { success: false, error: `Element not found: ${id}` };
+  if (current.type !== "path") return { success: false, error: `Element is not a path: ${id}` };
+  const next = update(current); if (JSON.stringify(next) === JSON.stringify(current)) return { success: true, document };
+  const elements = [...document.elements]; elements[index] = next; return replaceElements(document, elements);
+};
+export const movePathNode = (id: ElementId, nodeId: string, delta: PointMm): EditorCommand => ({ name: `move-path-node:${id}:${nodeId}`, apply: (document) => updatePath(document, id, (path) => {
+  const nodeIndex = path.nodes.findIndex((node) => node.id === nodeId);
+  if (nodeIndex < 0) return path;
+  const nextAnchor = addPoint(path.nodes[nodeIndex]!.anchor, delta);
+  const segments = path.segments.map((segment) => segment);
+  const outgoingIndex = nodeIndex;
+  const incomingIndex = nodeIndex - 1;
+  const indices = path.closed ? [outgoingIndex % segments.length, (incomingIndex + segments.length) % segments.length] : [outgoingIndex, incomingIndex];
+  for (const segmentIndex of indices) {
+    if (segmentIndex < 0 || segmentIndex >= segments.length) continue;
+    const segment = segments[segmentIndex];
+    if (!segment || segment.type !== "cubicBezier") continue;
+    segments[segmentIndex] = segmentIndex === outgoingIndex ? { ...segment, control1: addPoint(segment.control1, delta) } : { ...segment, control2: addPoint(segment.control2, delta) };
+  }
+  return { ...path, nodes: path.nodes.map((node, index) => index === nodeIndex ? { ...node, anchor: nextAnchor } : node), segments };
+}) });
+export const movePathHandle = (id: ElementId, segmentIndex: number, control: "control1" | "control2", point: PointMm): EditorCommand => ({ name: `move-path-handle:${id}:${segmentIndex}:${control}`, apply: (document) => updatePath(document, id, (path) => {
+  const segment = path.segments[segmentIndex];
+  if (!segment || segment.type !== "cubicBezier") return path;
+  const segments = path.segments.map((current, index) => index === segmentIndex ? { ...current, [control]: point } : current);
+  const opposite = joinedOppositeControl(path, segmentIndex, control, point, segments);
+  if (opposite) {
+    const [oppositeIndex, oppositeControl, oppositePoint] = opposite;
+    const adjacent = segments[oppositeIndex];
+    if (adjacent?.type === "cubicBezier") segments[oppositeIndex] = { ...adjacent, [oppositeControl]: oppositePoint };
+  }
+  return { ...path, segments };
+}) });
+export const setPathJoinMode = (id: ElementId, nodeId: string, join: PathJoinMode): EditorCommand => ({ name: `path-join:${id}:${nodeId}`, apply: (document) => updatePath(document, id, (path) => ({ ...path, nodes: path.nodes.map((node) => node.id === nodeId ? { ...node, join } : node) })) });
+export const setPathClosed = (id: ElementId, closed: boolean): EditorCommand => ({ name: `${closed ? "close" : "open"}-path:${id}`, apply: (document) => updatePath(document, id, (path) => { if (path.closed === closed) return path; if (closed) return { ...path, closed: true, segments: [...path.segments, { type: "line" }] }; return { ...path, closed: false, segments: path.segments.slice(0, -1) }; }) });
+export const openPath = (id: ElementId): EditorCommand => setPathClosed(id, false);
+export const closePath = (id: ElementId): EditorCommand => setPathClosed(id, true);
+export const reversePath = (id: ElementId): EditorCommand => ({ name: `reverse-path:${id}`, apply: (document) => updatePath(document, id, (path) => { const nodes = [...path.nodes].reverse(); const segments = [...path.segments].reverse().map((segment) => segment.type === "line" ? segment : ({ ...segment, control1: segment.control2, control2: segment.control1 })); return { ...path, nodes, segments }; }) });
+export const splitPathSegment = (id: ElementId, segmentIndex: number, nodeId: string, anchor?: PointMm): EditorCommand => ({ name: `split-path:${id}:${segmentIndex}`, apply: (document) => updatePath(document, id, (path) => { const segment = path.segments[segmentIndex]; const start = path.nodes[segmentIndex]?.anchor; const end = path.nodes[(segmentIndex + 1) % path.nodes.length]?.anchor; if (!segment || !start || !end || path.nodes.some((node) => node.id === nodeId)) return path; const t = anchor ? 0.5 : 0.5; const parts = segment.type === "line" ? [[start, start, end, end], [start, start, end, end]] as const : splitCubicBezier(start, segment.control1, segment.control2, end, t); const point = anchor ?? parts[0][3]; const inserted = { id: nodeId, anchor: point, join: "corner" as const }; const nodes = [...path.nodes]; nodes.splice(segmentIndex + 1, 0, inserted); const segments = [...path.segments]; segments.splice(segmentIndex, 1, ...(segment.type === "line" ? [{ type: "line" as const }, { type: "line" as const }] : [{ type: "cubicBezier" as const, control1: parts[0][1], control2: parts[0][2] }, { type: "cubicBezier" as const, control1: parts[1][1], control2: parts[1][2] }])); return { ...path, nodes, segments }; }) });
+export const insertPathNode = splitPathSegment;
 
 const translateElement = (element: Element, delta: PointMm, id: ElementId): Element => {
   if (element.type === "line") return { ...element, id, start: { x: element.start.x + delta.x, y: element.start.y + delta.y }, end: { x: element.end.x + delta.x, y: element.end.y + delta.y } };
   if (element.type === "contour") return { ...contourWithPoints(element, element.contours.map((contour) => contour.points.map((point) => ({ x: point.x + delta.x, y: point.y + delta.y })))), id, rotation: element.rotation };
+  if (element.type === "path") return { ...element, id, nodes: element.nodes.map((node) => ({ ...node, anchor: { x: node.anchor.x + delta.x, y: node.anchor.y + delta.y } })), segments: element.segments.map((segment) => segment.type === "line" ? segment : { ...segment, control1: { x: segment.control1.x + delta.x, y: segment.control1.y + delta.y }, control2: { x: segment.control2.x + delta.x, y: segment.control2.y + delta.y } }) };
   return { ...element, id, position: { x: element.position.x + delta.x, y: element.position.y + delta.y } };
 };
 
@@ -172,6 +252,7 @@ export const flipElements = (ids: readonly ElementId[], axis: FlipAxis): EditorC
         ? { x: center.x * 2 - currentCenter.x, y: currentCenter.y }
         : { x: currentCenter.x, y: center.y * 2 - currentCenter.y };
       const delta = { x: reflectedCenter.x - currentCenter.x, y: reflectedCenter.y - currentCenter.y };
+      if (element.type === "path") return { ...element, nodes: element.nodes.map((node) => ({ ...node, anchor: horizontal ? { x: center.x * 2 - node.anchor.x, y: node.anchor.y } : { x: node.anchor.x, y: center.y * 2 - node.anchor.y } })), segments: element.segments.map((segment) => segment.type === "line" ? segment : ({ ...segment, control1: horizontal ? { x: center.x * 2 - segment.control1.x, y: segment.control1.y } : { x: segment.control1.x, y: center.y * 2 - segment.control1.y }, control2: horizontal ? { x: center.x * 2 - segment.control2.x, y: segment.control2.y } : { x: segment.control2.x, y: center.y * 2 - segment.control2.y } })) };
       const moved = element.type === "line"
         ? { ...element, start: { x: element.start.x + delta.x, y: element.start.y + delta.y }, end: { x: element.end.x + delta.x, y: element.end.y + delta.y } }
         : { ...element, position: { x: element.position.x + delta.x, y: element.position.y + delta.y } };

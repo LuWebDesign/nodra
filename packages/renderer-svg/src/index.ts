@@ -21,7 +21,7 @@ export type RenderResult =
 const escapeAttribute = (value: string): string => value.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 const number = (value: number): string => Number(value.toFixed(6)).toString();
 const degrees = (radians: number): string => number((radians * 180) / Math.PI);
-const transform = (element: Element, cx: number, cy: number): string => `translate(${number(cx)} ${number(cy)}) rotate(${degrees(element.rotation)}) scale(${element.flipX ? -1 : 1} ${element.flipY ? -1 : 1}) translate(${number(-cx)} ${number(-cy)})`;
+const transform = (element: Element, cx: number, cy: number): string => `translate(${number(cx)} ${number(cy)}) rotate(${degrees("rotation" in element ? element.rotation : 0)}) scale(${"flipX" in element && element.flipX ? -1 : 1} ${"flipY" in element && element.flipY ? -1 : 1}) translate(${number(-cx)} ${number(-cy)})`;
 
 function viewportResult(input: unknown): { success: true; data: Viewport } | { success: false; error: string } {
   if (typeof input !== "object" || input === null) return { success: false, error: "viewport must be an object" };
@@ -59,6 +59,22 @@ function renderElement(element: Element, viewport: Viewport): string {
     }).join(" ") + " Z").join(" ");
     return `<path data-element-id="${escapeAttribute(element.id)}" d="${escapeAttribute(path)}" fill-rule="${element.fillRule}" ${visualAttributes(element)} />`;
   }
+  if (element.type === "path") {
+    const commands = element.nodes.map((node, index) => {
+      const point = screen(node.anchor);
+      const prefix = index === 0 ? `M${number(point.x)} ${number(point.y)}` : "";
+      const segment = element.segments[index - 1];
+      if (!segment) return prefix;
+      if (segment.type === "line") return `${prefix} L${number(point.x)} ${number(point.y)}`;
+      const control1 = screen(segment.control1); const control2 = screen(segment.control2);
+      return `${prefix} C${number(control1.x)} ${number(control1.y)} ${number(control2.x)} ${number(control2.y)} ${number(point.x)} ${number(point.y)}`;
+    }).join(" ");
+    const closing = element.closed ? " Z" : "";
+    const finalSegment = element.closed ? element.segments.at(-1) : undefined;
+    const first = screen(element.nodes[0]!.anchor);
+    const last = finalSegment && finalSegment.type === "cubicBezier" ? ` C${number(screen(finalSegment.control1).x)} ${number(screen(finalSegment.control1).y)} ${number(screen(finalSegment.control2).x)} ${number(screen(finalSegment.control2).y)} ${number(first.x)} ${number(first.y)}` : "";
+    return `<path data-element-id="${escapeAttribute(element.id)}" d="${escapeAttribute(commands + last + closing)}" ${visualAttributes(element)} />`;
+  }
   const start = screen(element.start);
   const end = screen(element.end);
   const center = { x: (start.x + end.x) / 2, y: (start.y + end.y) / 2 };
@@ -69,7 +85,7 @@ export function renderSvg(document: unknown, viewport: unknown): RenderResult {
   const checked = validateDocument(document);
   if (!checked.success) {
     const candidate = typeof document === "object" && document !== null ? document as { schemaVersion?: unknown; elements?: unknown } : undefined;
-    const unsupported = !SUPPORTED_SCHEMA_VERSIONS.has(candidate?.schemaVersion as number) || (Array.isArray(candidate?.elements) && candidate.elements.some((element) => typeof element === "object" && element !== null && !["rectangle", "ellipse", "line", "contour"].includes((element as { type?: unknown }).type as string)));
+    const unsupported = !SUPPORTED_SCHEMA_VERSIONS.has(candidate?.schemaVersion as number) || (Array.isArray(candidate?.elements) && candidate.elements.some((element) => typeof element === "object" && element !== null && !["rectangle", "ellipse", "line", "contour", "path"].includes((element as { type?: unknown }).type as string)));
     return { success: false, reason: unsupported ? "unsupported" : "invalid", error: checked.error.slice(0, 512), issues: checked.issues.slice(0, MAX_ISSUES).map((issue) => `${issue.path.join(".") || "document"}: ${issue.message}`) };
   }
   const checkedViewport = viewportResult(viewport);

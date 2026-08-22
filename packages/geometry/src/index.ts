@@ -1,5 +1,5 @@
 import polygonClipping, { type MultiPolygon } from "polygon-clipping";
-import type { ContourElement, Element, EllipseElement, LineElement, PointMm, RectangleElement, SizeMm } from "@nodra/domain";
+import type { ContourElement, Element, EllipseElement, LineElement, PathElement, PathSegment, PointMm, RectangleElement, SizeMm } from "@nodra/domain";
 
 export interface Bounds { readonly x: number; readonly y: number; readonly width: number; readonly height: number }
 export interface Viewport { readonly zoom: number; readonly panMm: PointMm }
@@ -11,8 +11,42 @@ export type ResizeCorner = Extract<ResizeHandle, "nw" | "ne" | "se" | "sw">;
 export interface ResizeGeometry { readonly position: PointMm; readonly size: SizeMm }
 export type RealGeometryNodeKind = "corner" | "edge-midpoint" | "endpoint" | "center" | "cardinal";
 export interface RealGeometryNode { readonly kind: RealGeometryNodeKind; readonly point: PointMm }
+export interface PathGeometryNode { readonly kind: "anchor" | "handle"; readonly id: string; readonly point: PointMm; readonly nodeId?: string; readonly control?: "control1" | "control2" }
 export const ELLIPSE_APPROXIMATION_SEGMENTS = 64;
 export const ROUNDED_RECTANGLE_APPROXIMATION_SEGMENTS = 8;
+
+const lerp = (a: PointMm, b: PointMm, t: number): PointMm => ({ x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t });
+export function evaluateCubicBezier(p0: PointMm, p1: PointMm, p2: PointMm, p3: PointMm, t: number): PointMm {
+  [p0.x, p0.y, p1.x, p1.y, p2.x, p2.y, p3.x, p3.y, t].forEach((value, index) => assertFinite(value, `cubic value ${index}`));
+  if (t < 0 || t > 1) throw new Error("t must be between 0 and 1");
+  const a = lerp(p0, p1, t); const b = lerp(p1, p2, t); const c = lerp(p2, p3, t);
+  return lerp(lerp(a, b, t), lerp(b, c, t), t);
+}
+export function cubicBezierDerivative(p0: PointMm, p1: PointMm, p2: PointMm, p3: PointMm, t: number): PointMm {
+  return { x: 3 * ((1 - t) ** 2 * (p1.x - p0.x) + 2 * (1 - t) * t * (p2.x - p1.x) + t ** 2 * (p3.x - p2.x)), y: 3 * ((1 - t) ** 2 * (p1.y - p0.y) + 2 * (1 - t) * t * (p2.y - p1.y) + t ** 2 * (p3.y - p2.y)) };
+}
+export function cubicBezierBounds(p0: PointMm, p1: PointMm, p2: PointMm, p3: PointMm): Bounds {
+  const values = (axis: "x" | "y") => { const a = -p0[axis] + 3 * p1[axis] - 3 * p2[axis] + p3[axis]; const b = 2 * (p0[axis] - 2 * p1[axis] + p2[axis]); const c = p1[axis] - p0[axis]; const roots = [0, 1]; if (Math.abs(a) < 1e-12) { if (Math.abs(b) > 1e-12) roots.push(-c / b); } else { const discriminant = b * b - 4 * a * c; if (discriminant >= 0) { roots.push((-b + Math.sqrt(discriminant)) / (2 * a), (-b - Math.sqrt(discriminant)) / (2 * a)); } } return roots.filter((t) => t >= 0 && t <= 1).map((t) => evaluateCubicBezier(p0, p1, p2, p3, t)[axis]); };
+  const xs = values("x"); const ys = values("y"); const x = Math.min(...xs); const y = Math.min(...ys); return { x, y, width: Math.max(...xs) - x, height: Math.max(...ys) - y };
+}
+export function splitCubicBezier(p0: PointMm, p1: PointMm, p2: PointMm, p3: PointMm, t = 0.5): readonly [[PointMm, PointMm, PointMm, PointMm], [PointMm, PointMm, PointMm, PointMm]] {
+  if (!Number.isFinite(t) || t < 0 || t > 1) throw new Error("t must be between 0 and 1");
+  const a = lerp(p0, p1, t), b = lerp(p1, p2, t), c = lerp(p2, p3, t), d = lerp(a, b, t), e = lerp(b, c, t), f = lerp(d, e, t);
+  return [[p0, a, d, f], [f, e, c, p3]];
+}
+const segmentPoints = (start: PointMm, segment: PathSegment, end: PointMm): readonly [PointMm, PointMm, PointMm, PointMm] => segment.type === "line" ? [start, start, end, end] : [start, segment.control1, segment.control2, end];
+export function flattenCubicBezier(p0: PointMm, p1: PointMm, p2: PointMm, p3: PointMm, tolerance = 0.1): readonly PointMm[] {
+  if (!Number.isFinite(tolerance) || tolerance <= 0) throw new Error("tolerance must be positive and finite");
+  const flat = (a: PointMm, b: PointMm, c: PointMm, d: PointMm, depth: number): PointMm[] => { const dx = d.x - a.x, dy = d.y - a.y; const distance = (p: PointMm) => Math.abs(dy * (p.x - a.x) - dx * (p.y - a.y)) / Math.max(Math.hypot(dx, dy), 1e-12); if (depth >= 16 || Math.max(distance(b), distance(c)) <= tolerance) return [a, d]; const [left, right] = splitCubicBezier(a, b, c, d); return [...flat(...left, depth + 1).slice(0, -1), ...flat(...right, depth + 1)]; };
+  return flat(p0, p1, p2, p3, 0);
+}
+export function flattenPath(element: PathElement, tolerance = 0.1): readonly PointMm[] {
+  const points: PointMm[] = [];
+  for (const [index, segment] of element.segments.entries()) { const start = element.nodes[index]!.anchor; const end = element.nodes[(index + 1) % element.nodes.length]!.anchor; const values = segment.type === "line" ? [start, end] : flattenCubicBezier(start, segment.control1, segment.control2, end, tolerance); points.push(...(index === 0 ? values : values.slice(1))); }
+  return points;
+}
+export function pathBounds(element: PathElement): Bounds { const values = element.segments.flatMap((segment, index) => { const [p0, p1, p2, p3] = segmentPoints(element.nodes[index]!.anchor, segment, element.nodes[(index + 1) % element.nodes.length]!.anchor); return segment.type === "line" ? [{ x: Math.min(p0.x, p3.x), y: Math.min(p0.y, p3.y) }, { x: Math.max(p0.x, p3.x), y: Math.max(p0.y, p3.y) }] : (() => { const b = cubicBezierBounds(p0, p1, p2, p3); return [{ x: b.x, y: b.y }, { x: b.x + b.width, y: b.y + b.height }]; })(); }); const xs = values.map((p) => p.x), ys = values.map((p) => p.y); const x = Math.min(...xs), y = Math.min(...ys); return { x, y, width: Math.max(...xs) - x, height: Math.max(...ys) - y }; }
+export function pathGeometryNodes(element: PathElement): readonly PathGeometryNode[] { return [...element.nodes.map((node) => ({ kind: "anchor" as const, id: node.id, point: node.anchor })), ...element.segments.flatMap((segment, index) => segment.type === "line" ? [] : [{ kind: "handle" as const, id: `${element.id}:${index}:control1`, nodeId: element.nodes[index]!.id, control: "control1" as const, point: segment.control1 }, { kind: "handle" as const, id: `${element.id}:${index}:control2`, nodeId: element.nodes[(index + 1) % element.nodes.length]!.id, control: "control2" as const, point: segment.control2 }])]; }
 
 export function directionVector(direction: Direction): PointMm {
   const vectors: Readonly<Record<Direction, PointMm>> = {
@@ -32,6 +66,7 @@ export function elementCenter(element: Element): PointMm {
   return element.type === "line"
     ? { x: (element.start.x + element.end.x) / 2, y: (element.start.y + element.end.y) / 2 }
     : element.type === "contour" ? groupCenter(contourBounds(element))
+    : element.type === "path" ? groupCenter(pathBounds(element))
     : { x: element.position.x + element.size.width / 2, y: element.position.y + element.size.height / 2 };
 }
 
@@ -89,6 +124,7 @@ function primitivePolygon(element: RectangleElement | EllipseElement): [number, 
 export function closedElementToPolygon(element: Element): MultiPolygon {
   if (element.type === "line") throw new Error("Shape operations require closed objects");
   if (element.type === "contour") return [element.contours.map((contour) => contour.points.map((point) => [point.x, point.y] as [number, number]))];
+  if (element.type === "path") { if (!element.closed) throw new Error("Shape operations require closed objects"); const points = flattenPath(element); return [[points.map((point) => [point.x, point.y] as [number, number])]]; }
   return [[primitivePolygon(element)]];
 }
 
@@ -128,6 +164,10 @@ export function rotationHandlePoints(element: Element, offsetMm: number): readon
   }
   if (element.type === "contour") {
     const bounds = contourBounds(element);
+    return rotationHandlePoints({ type: "rectangle", id: element.id, layerId: element.layerId, position: { x: bounds.x, y: bounds.y }, size: { width: Math.max(bounds.width, 1), height: Math.max(bounds.height, 1) }, cornerRadius: 0, rotation: 0, style: element.style }, offsetMm);
+  }
+  if (element.type === "path") {
+    const bounds = pathBounds(element);
     return rotationHandlePoints({ type: "rectangle", id: element.id, layerId: element.layerId, position: { x: bounds.x, y: bounds.y }, size: { width: Math.max(bounds.width, 1), height: Math.max(bounds.height, 1) }, cornerRadius: 0, rotation: 0, style: element.style }, offsetMm);
   }
   return rotatedCorners(element).map((corner) => {
@@ -183,6 +223,7 @@ export function realGeometryNodes(element: Element): readonly RealGeometryNode[]
     }
     return nodes;
   }
+  if (element.type === "path") return pathGeometryNodes(element).map(({ kind, point }) => ({ kind: kind === "anchor" ? "corner" : "endpoint", point }));
   const half = { x: element.size.width / 2, y: element.size.height / 2 };
   const center = { x: element.position.x + half.x, y: element.position.y + half.y };
   if (element.type === "rectangle") {
@@ -274,6 +315,7 @@ export function boundsOf(element: Element): Bounds {
     return { x: Math.min(start.x, end.x), y: Math.min(start.y, end.y), width: Math.abs(end.x - start.x), height: Math.abs(end.y - start.y) };
   }
   if (element.type === "contour") return contourBounds(element);
+  if (element.type === "path") return pathBounds(element);
   const points = corners(element); const xs = points.map((point) => point.x); const ys = points.map((point) => point.y);
   return { x: Math.min(...xs), y: Math.min(...ys), width: Math.max(...xs) - Math.min(...xs), height: Math.max(...ys) - Math.min(...ys) };
 }
@@ -306,9 +348,11 @@ export function resizeGroup(elements: readonly Element[], handle: ResizeHandle, 
     ? { ...e, start: { x: x + (e.start.x - bounds.x) * sx, y: y + (e.start.y - bounds.y) * sy }, end: { x: x + (e.end.x - bounds.x) * sx, y: y + (e.end.y - bounds.y) * sy } }
     : e.type === "contour"
       ? contourWithPoints(e, e.contours.map((contour) => contour.points.map((point) => ({ x: x + (point.x - bounds.x) * sx, y: y + (point.y - bounds.y) * sy }))))
+    : e.type === "path"
+      ? { ...e, nodes: e.nodes.map((node) => ({ ...node, anchor: { x: x + (node.anchor.x - bounds.x) * sx, y: y + (node.anchor.y - bounds.y) * sy } })), segments: e.segments.map((segment) => segment.type === "line" ? segment : { ...segment, control1: { x: x + (segment.control1.x - bounds.x) * sx, y: y + (segment.control1.y - bounds.y) * sy }, control2: { x: x + (segment.control2.x - bounds.x) * sx, y: y + (segment.control2.y - bounds.y) * sy } }) }
     : { ...e, position: { x: x + (elementCenter(e).x - bounds.x) * sx - e.size.width * sx / 2, y: y + (elementCenter(e).y - bounds.y) * sy - e.size.height * sy / 2 }, size: { width: e.size.width * sx, height: e.size.height * sy } });
 }
-export function rotateElements(elements: readonly Element[], center: PointMm, delta: number): readonly Element[] { const rotatePoint = (p: PointMm) => transformPoint({ x: p.x - center.x, y: p.y - center.y }, center, delta); return elements.map((e) => e.type === "line" ? { ...e, start: rotatePoint(e.start), end: rotatePoint(e.end) } : e.type === "contour" ? contourWithPoints(e, e.contours.map((contour) => contour.points.map(rotatePoint))) : (() => { const c = rotatePoint(elementCenter(e)); return { ...e, position: { x: c.x - e.size.width / 2, y: c.y - e.size.height / 2 }, rotation: normalizeAngle(e.rotation + delta) }; })()); }
+export function rotateElements(elements: readonly Element[], center: PointMm, delta: number): readonly Element[] { const rotatePoint = (p: PointMm) => transformPoint({ x: p.x - center.x, y: p.y - center.y }, center, delta); return elements.map((e) => e.type === "line" ? { ...e, start: rotatePoint(e.start), end: rotatePoint(e.end) } : e.type === "contour" ? contourWithPoints(e, e.contours.map((contour) => contour.points.map(rotatePoint))) : e.type === "path" ? { ...e, nodes: e.nodes.map((node) => ({ ...node, anchor: rotatePoint(node.anchor) })), segments: e.segments.map((segment) => segment.type === "line" ? segment : { ...segment, control1: rotatePoint(segment.control1), control2: rotatePoint(segment.control2) }) } : (() => { const c = rotatePoint(elementCenter(e)); return { ...e, position: { x: c.x - e.size.width / 2, y: c.y - e.size.height / 2 }, rotation: normalizeAngle(e.rotation + delta) }; })()); }
 
 const distanceToSegment = (point: PointMm, start: PointMm, end: PointMm): number => {
   const dx = end.x - start.x; const dy = end.y - start.y; const lengthSquared = dx * dx + dy * dy;
@@ -325,6 +369,12 @@ export function hitTest(element: Element, point: PointMm, toleranceMm = 0): bool
   }
   if (element.type === "contour") {
     return element.contours.reduce((inside, contour) => inside !== pointInRing(point, contour.points.map((value) => [value.x, value.y] as [number, number])), false);
+  }
+  if (element.type === "path") {
+    const flattened = flattenPath(element, Math.max(toleranceMm / 2, 0.05));
+    for (let index = 1; index < flattened.length; index += 1) if (distanceToSegment(point, flattened[index - 1]!, flattened[index]!) <= toleranceMm) return true;
+    if (element.closed && flattened.length > 2) return pointInRing(point, [...flattened, flattened[0]!].map((value) => [value.x, value.y] as [number, number]));
+    return false;
   }
   const center = { x: element.position.x + element.size.width / 2, y: element.position.y + element.size.height / 2 };
   const local = rotate({ x: point.x - center.x, y: point.y - center.y }, -element.rotation);

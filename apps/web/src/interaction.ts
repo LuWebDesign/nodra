@@ -1,5 +1,5 @@
 import type { DocumentSnapshot, Element, ElementId, PointMm } from "@nodra/domain";
-import { boundsOf, hitTest, realGeometryNodes, type Bounds, type RealGeometryNode } from "@nodra/geometry";
+import { boundsOf, groupCenter, hitTest, realGeometryNodes, type Bounds, type RealGeometryNode } from "@nodra/geometry";
 
 export interface DragGeometry { readonly position: PointMm; readonly size: { readonly width: number; readonly height: number } }
 export interface SnapGuide { readonly source: PointMm; readonly target: PointMm }
@@ -94,6 +94,7 @@ export function selectionFrame(element: Element, zoom: number, panMm: PointMm): 
 export function selectionCenter(element: Element): PointMm {
   return element.type === "line"
     ? { x: (element.start.x + element.end.x) / 2, y: (element.start.y + element.end.y) / 2 }
+    : element.type === "path" ? groupCenter(boundsOf(element))
     : { x: element.position.x + element.size.width / 2, y: element.position.y + element.size.height / 2 };
 }
 

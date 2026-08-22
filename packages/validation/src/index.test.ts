@@ -44,4 +44,11 @@ describe("native document validation", () => {
     expect(validateDocument({ ...base, elements: [contour] }).success).toBe(true);
     expect(validateDocument({ ...base, elements: [{ ...contour, contours: [{ points: contour.contours[0]!.points.slice(0, 3) }] }] }).success).toBe(false);
   });
+  it("validates additive path topology and finite controls", () => {
+    const base = createDocument("path-doc", [{ id: layerId("layer-1"), name: "Design", visible: true, order: 0 }]);
+    const path = { type: "path", id: "path", layerId: "layer-1", nodes: [{ id: "a", anchor: { x: 0, y: 0 }, join: "corner" }, { id: "b", anchor: { x: 10, y: 0 }, join: "smooth" }], segments: [{ type: "line" }], closed: false, style: { stroke: "#000", strokeWidth: 1 } };
+    expect(validateDocument({ ...base, elements: [path] }).success).toBe(true);
+    expect(validateDocument({ ...base, elements: [{ ...path, segments: [] }] }).success).toBe(false);
+    expect(validateDocument({ ...base, elements: [{ ...path, nodes: [{ ...path.nodes[0], anchor: { x: Number.NaN, y: 0 } }, path.nodes[1]] }] }).success).toBe(false);
+  });
 });

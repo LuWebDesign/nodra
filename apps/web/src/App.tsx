@@ -304,14 +304,15 @@ export function App() {
     }
     if (active.kind === "resize" && active.ids && active.handle && active.handle !== "center") {
       const element = active.element;
-      const command = active.ids.length === 1 && element && element.type !== "line" && element.type !== "contour" ? (() => { const geometry = resizeHandle(element, active.handle as ResizeHandle, pointAt(event)); return resizeElement(element.id, geometry.position, geometry.size); })() : resizeElements(active.ids, active.handle as ResizeHandle, pointAt(event));
+       const command = active.ids.length === 1 && element && (element.type === "rectangle" || element.type === "ellipse") ? (() => { const geometry = resizeHandle(element, active.handle as ResizeHandle, pointAt(event)); return resizeElement(element.id, geometry.position, geometry.size); })() : resizeElements(active.ids, active.handle as ResizeHandle, pointAt(event));
       setEditorState(previewGestureFromBase(editorRef.current, command));
       active.dragged = true;
       return;
     }
     if (active.kind === "rotate" && active.ids && active.center && active.start) {
-      const rotation = rotationFromDrag(active.element?.rotation ?? 0, active.center, active.start, pointAt(event), event.shiftKey ? Math.PI / 12 : 0);
-      setEditorState(previewGestureFromBase(editorRef.current, active.ids.length === 1 && active.element ? rotateElement(active.element.id, rotation) : rotateElementsAroundCenter(active.ids, rotation - (active.element?.rotation ?? 0))));
+      const currentRotation = active.element && "rotation" in active.element ? active.element.rotation : 0;
+      const rotation = rotationFromDrag(currentRotation, active.center, active.start, pointAt(event), event.shiftKey ? Math.PI / 12 : 0);
+      setEditorState(previewGestureFromBase(editorRef.current, active.ids.length === 1 && active.element ? rotateElement(active.element.id, rotation) : rotateElementsAroundCenter(active.ids, rotation - currentRotation)));
       active.dragged = true;
       return;
     }
@@ -336,7 +337,7 @@ export function App() {
     }
     if (!active.start || !active.tool || !active.ids?.[0] || !active.startClient || !movementExceedsThreshold(active.startClient, { x: event.clientX, y: event.clientY })) return;
     const element = newElement(active.tool, document.layers[0]?.id ?? "layer-1", active.start, pointAt(event), active.ids[0]);
-    const command = active.previewed ? updateElement(element.id, element.type === "line" ? { start: element.start, end: element.end } : { position: element.position, size: element.size }) : createElement(element);
+       const command = active.previewed ? updateElement(element.id, element.type === "line" ? { start: element.start, end: element.end } : element.type === "rectangle" || element.type === "ellipse" ? { position: element.position, size: element.size } : {}) : createElement(element);
     setEditorState(previewGesture(editorRef.current, command));
     active.previewed = true;
     active.dragged = true;
@@ -356,8 +357,9 @@ export function App() {
       const command = active.ids.length === 1 && element && element.type !== "line" && element.type !== "contour" ? (() => { const geometry = resizeHandle(element, active.handle as ResizeHandle, pointAt(event)); return resizeElement(element.id, geometry.position, geometry.size); })() : resizeElements(active.ids, active.handle as ResizeHandle, pointAt(event));
       setEditorState(commitGesture(previewGestureFromBase(editorRef.current, command)));
     } else if (active.kind === "rotate" && active.ids && active.center && active.start && !cancelled) {
-      const rotation = rotationFromDrag(active.element?.rotation ?? 0, active.center, active.start, pointAt(event), event.shiftKey ? Math.PI / 12 : 0);
-      setEditorState(commitGesture(previewGestureFromBase(editorRef.current, active.ids.length === 1 && active.element ? rotateElement(active.element.id, rotation) : rotateElementsAroundCenter(active.ids, rotation - (active.element?.rotation ?? 0)))));
+       const currentRotation = active.element && "rotation" in active.element ? active.element.rotation : 0;
+       const rotation = rotationFromDrag(currentRotation, active.center, active.start, pointAt(event), event.shiftKey ? Math.PI / 12 : 0);
+       setEditorState(commitGesture(previewGestureFromBase(editorRef.current, active.ids.length === 1 && active.element ? rotateElement(active.element.id, rotation) : rotateElementsAroundCenter(active.ids, rotation - currentRotation))));
     } else if (["resize", "rotate", "move"].includes(active.kind)) {
       setEditorState(cancelled ? cancelGesture(editorRef.current) : commitGesture(editorRef.current));
     } else if (active.kind === "draw") {
@@ -366,7 +368,7 @@ export function App() {
       if (cancelled || !active.dragged || zeroLengthLine) setEditorState(cancelGesture(editorRef.current));
       else if (active.start && active.tool && active.ids?.[0] && end) {
         const element = newElement(active.tool, editorRef.current.document.layers[0]?.id ?? "layer-1", active.start, end, active.ids[0]);
-        const command = active.previewed ? updateElement(element.id, element.type === "line" ? { start: element.start, end: element.end } : { position: element.position, size: element.size }) : createElement(element);
+         const command = active.previewed ? updateElement(element.id, element.type === "line" ? { start: element.start, end: element.end } : element.type === "rectangle" || element.type === "ellipse" ? { position: element.position, size: element.size } : {}) : createElement(element);
         setEditorState(commitGesture(previewGesture(editorRef.current, command)));
       }
     }
@@ -409,7 +411,7 @@ export function App() {
   }, [selectionKey]);
 
   const groupPoints = selectedBounds ? groupHandlePoints(selectedBounds) : undefined;
-  const handlePoints = selectedElement?.type === "line" ? undefined : selectedElement?.type === "contour" && selectedBounds ? [groupHandlePoints(selectedBounds).nw, groupHandlePoints(selectedBounds).n, groupHandlePoints(selectedBounds).ne, groupHandlePoints(selectedBounds).e, groupHandlePoints(selectedBounds).se, groupHandlePoints(selectedBounds).s, groupHandlePoints(selectedBounds).sw, groupHandlePoints(selectedBounds).w] as const : selectedElement && selectedElement.type !== "contour" ? rotatedResizeHandles(selectedElement) : undefined;
+   const handlePoints = selectedElement?.type === "line" || selectedElement?.type === "path" ? undefined : selectedElement?.type === "contour" && selectedBounds ? [groupHandlePoints(selectedBounds).nw, groupHandlePoints(selectedBounds).n, groupHandlePoints(selectedBounds).ne, groupHandlePoints(selectedBounds).e, groupHandlePoints(selectedBounds).se, groupHandlePoints(selectedBounds).s, groupHandlePoints(selectedBounds).sw, groupHandlePoints(selectedBounds).w] as const : selectedElement ? rotatedResizeHandles(selectedElement) : undefined;
   const handleNames: readonly ResizeHandle[] = ["nw", "n", "ne", "e", "se", "s", "sw", "w"];
   const handleStyle = (handle: GroupHandle) => {
      const point = selectedElements.length > 1 ? groupPoints?.[handle] : handle === "center" ? undefined : handlePoints?.[handleNames.indexOf(handle)];
@@ -510,7 +512,7 @@ export function App() {
     const commit = () => {
       const raw = drafts[key];
       if (raw === undefined) return;
-      const patch = rotationPatch(raw, element.rotation);
+      const patch = rotationPatch(raw, "rotation" in element ? element.rotation : 0);
       if (!raw.trim() || !Number.isFinite(Number(raw.trim()))) { restore(); return; }
       setDrafts((current) => { const next = { ...current }; delete next[key]; return next; });
       if (patch) setEditorState(dispatch(editorRef.current, rotateElement(element.id, patch.rotation)));
