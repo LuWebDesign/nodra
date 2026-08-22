@@ -1,5 +1,5 @@
 import polygonClipping, { type MultiPolygon } from "polygon-clipping";
-import type { ContourElement, Element, EllipseElement, LineElement, PointMm, RectangleElement, SizeMm } from "@nodra/domain";
+import type { ContourElement, Element, ElementId, EllipseElement, LineElement, PointMm, RectangleElement, SizeMm } from "@nodra/domain";
 
 export interface Bounds { readonly x: number; readonly y: number; readonly width: number; readonly height: number }
 export interface Viewport { readonly zoom: number; readonly panMm: PointMm }
@@ -11,6 +11,7 @@ export type ResizeCorner = Extract<ResizeHandle, "nw" | "ne" | "se" | "sw">;
 export interface ResizeGeometry { readonly position: PointMm; readonly size: SizeMm }
 export type RealGeometryNodeKind = "corner" | "edge-midpoint" | "endpoint" | "center" | "cardinal";
 export interface RealGeometryNode { readonly kind: RealGeometryNodeKind; readonly point: PointMm }
+export interface ContourVertexNode { readonly elementId: ElementId; readonly ringIndex: number; readonly pointIndex: number; readonly point: PointMm }
 export const ELLIPSE_APPROXIMATION_SEGMENTS = 64;
 export const ROUNDED_RECTANGLE_APPROXIMATION_SEGMENTS = 8;
 
@@ -46,6 +47,15 @@ export function contourWithPoints(element: ContourElement, points: readonly (rea
   const ys = flattened.map((point) => point.y);
   const position = { x: Math.min(...xs), y: Math.min(...ys) };
   return { ...element, position, size: { width: Math.max(...xs) - position.x, height: Math.max(...ys) - position.y }, contours: points.map((ring) => ({ points: [...ring] })), rotation: 0 };
+}
+
+/** Returns only stored polygon vertices, with stable ring/point identity. A repeated closing point is represented by pointIndex 0. */
+export function contourVertexNodes(element: ContourElement): readonly ContourVertexNode[] {
+  return element.contours.flatMap((contour, ringIndex) => contour.points.flatMap((point, pointIndex) => {
+    const first = contour.points[0];
+    const isClosingDuplicate = pointIndex === contour.points.length - 1 && contour.points.length > 1 && first?.x === point.x && first.y === point.y;
+    return isClosingDuplicate ? [] : [{ elementId: element.id, ringIndex, pointIndex, point }];
+  }));
 }
 const pointInRing = (point: PointMm, ring: readonly [number, number][]): boolean => {
   let inside = false;

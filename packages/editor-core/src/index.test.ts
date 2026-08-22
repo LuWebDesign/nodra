@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createDocument, elementId, layerId, type RectangleElement } from "@nodra/domain";
-import { addToSelection, beginGesture, clearSelection, commitGesture, createEditor, createElement, dispatch, duplicateElements, flipElements, moveElement, moveElements, previewGesture, previewGestureFromBase, redo, removeFromSelection, reorderLayer, resizeElement, resizeElements, rotateElementsAroundCenter, select, selectForPointerDown, setLayerVisibility, shapeOperation, toggleSelection, undo, updateElement, updateElementStyles } from "./index.js";
+import { addToSelection, beginGesture, clearSelection, commitGesture, createEditor, createElement, dispatch, duplicateElements, flipElements, moveElement, moveElements, previewGesture, previewGestureFromBase, redo, removeFromSelection, reorderLayer, resizeElement, resizeElements, rotateElementsAroundCenter, select, selectForPointerDown, setLayerVisibility, shapeOperation, toggleSelection, undo, updateContourNode, updateElement, updateElementStyles } from "./index.js";
 import type { Direction } from "@nodra/geometry";
 
 const rectangle: RectangleElement = { type: "rectangle", id: elementId("r1"), layerId: layerId("default"), position: { x: 1, y: 2 }, size: { width: 10, height: 5 }, cornerRadius: 0, rotation: 0, style: { stroke: "#000", strokeWidth: 1 } };
@@ -147,6 +147,17 @@ describe("editor core", () => {
     expect(state.document.elements[1]?.style).toEqual({ stroke: "#f00", strokeWidth: 1 });
     expect(undo(state).document.elements).toEqual([rectangle, ellipse]);
     expect(redo(undo(state)).document.elements[0]?.style).toEqual({ stroke: "#f00", strokeWidth: 1 });
+  });
+
+  it("updates one contour vertex through a validated gesture and preserves ring closure", () => {
+    const contour = { type: "contour" as const, id: elementId("editable-contour"), layerId: rectangle.layerId, position: { x: 1, y: 2 }, size: { width: 10, height: 5 }, contours: [{ points: [{ x: 1, y: 2 }, { x: 11, y: 2 }, { x: 11, y: 7 }, { x: 1, y: 2 }] }], fillRule: "evenodd" as const, rotation: 0, style: rectangle.style };
+    let state = beginGesture(createEditor({ ...document, elements: [contour] }));
+    state = previewGestureFromBase(state, updateContourNode(contour.id, { ringIndex: 0, pointIndex: 0 }, { x: 2, y: 3 }));
+    expect(state.document.elements[0]).toMatchObject({ type: "contour", contours: [{ points: [{ x: 2, y: 3 }, { x: 11, y: 2 }, { x: 11, y: 7 }, { x: 2, y: 3 }] }] });
+    state = commitGesture(state);
+    expect(state.undo).toHaveLength(1);
+    expect(undo(state).document.elements).toEqual([contour]);
+    expect(dispatch(state, updateContourNode(contour.id, { ringIndex: 4, pointIndex: 0 }, { x: 1, y: 1 }))).toBe(state);
   });
 
   it("flips a complete single or multiple selection atomically", () => {

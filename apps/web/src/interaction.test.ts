@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createDocument, elementId, layerId } from "@nodra/domain";
-import { canActivateRotation, centerPageInCanvas, clientPointToCanvas, hoveredSelectionCenter, INITIAL_ZOOM, isDrawingTool, marqueeSelection, MAX_ZOOM, MIN_ZOOM, movementExceedsThreshold, normalizeBounds, normalizeDrag, pagePointToCanvas, pagePointToScreen, screenDeltaToMm, screenPointToMm, containsBounds, elementsContainedBy, pickElement, pickNode, pointerDownIntent, selectedNodeAnchor, selectionCenter, selectionFrame, snapMoveDelta, zoomAtPoint } from "./interaction.js";
+import { canActivateRotation, centerPageInCanvas, clientPointToCanvas, hoveredSelectionCenter, INITIAL_ZOOM, isDrawingTool, marqueeSelection, MAX_ZOOM, MIN_ZOOM, movementExceedsThreshold, normalizeBounds, normalizeDrag, pagePointToCanvas, pagePointToScreen, screenDeltaToMm, screenPointToMm, containsBounds, elementsContainedBy, pickContourNode, pickElement, pickNode, pointerDownIntent, selectedNodeAnchor, selectionCenter, selectionFrame, snapMoveDelta, zoomAtPoint } from "./interaction.js";
 import { geometryPatch, geometryValue } from "./propertyBar.js";
 
 describe("canvas coordinates", () => {
@@ -225,5 +225,13 @@ describe("drag geometry", () => {
     const node = pickNode(checked, { x: 10, y: 10 }, 1);
     expect(selectedNodeAnchor(node, [rectangle.id])).toBe(node);
     expect(selectedNodeAnchor(node, [])).toBeUndefined();
+  });
+
+  it("identifies contour vertices by ring and point indexes, excluding only the repeated closing point", () => {
+    const layer = { id: layerId("contour-node"), name: "Contour node", visible: true, order: 0 };
+    const contour = { type: "contour" as const, id: elementId("contour-node"), layerId: layer.id, position: { x: 10, y: 10 }, size: { width: 20, height: 20 }, contours: [{ points: [{ x: 10, y: 10 }, { x: 30, y: 10 }, { x: 30, y: 30 }, { x: 10, y: 10 }] }, { points: [{ x: 15, y: 15 }, { x: 20, y: 15 }, { x: 15, y: 15 }] }], fillRule: "evenodd" as const, rotation: 0, style: { stroke: "#000", strokeWidth: 1 } };
+    const document = { ...createDocument("contour-node-document", [layer]), elements: [contour] };
+    expect(pickContourNode(document, { x: 30, y: 30 }, 1)).toMatchObject({ elementId: contour.id, ringIndex: 0, pointIndex: 2 });
+    expect(pickContourNode(document, { x: 10, y: 10 }, 1)).toMatchObject({ ringIndex: 0, pointIndex: 0 });
   });
 });
