@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createDocument, elementId, layerId, type PathElement, type RectangleElement } from "@nodra/domain";
-import { addToSelection, beginGesture, clearSelection, closePath, commitGesture, createEditor, createElement, dispatch, duplicateElements, flipElements, moveElement, moveElements, movePathNode, movePathHandle, previewGesture, previewGestureFromBase, redo, removeFromSelection, reorderLayer, resizeElement, resizeElements, rotateElementsAroundCenter, select, selectForPointerDown, setLayerVisibility, setPathJoin, shapeOperation, toggleSelection, undo, updateElement, updateElementStyles } from "./index.js";
+import { addToSelection, beginGesture, clearSelection, closePath, commitGesture, createEditor, createElement, deleteContourNodes, deleteElementNodes, dispatch, duplicateElements, flipElements, insertContourNode, moveElement, moveElements, movePathNode, movePathHandle, previewGesture, previewGestureFromBase, redo, removeFromSelection, reorderLayer, resizeElement, resizeElements, rotateElementsAroundCenter, select, selectForPointerDown, setLayerVisibility, setPathJoin, shapeOperation, toggleSelection, undo, updateContourNode, updateElement, updateElementNode, updateElementStyles } from "./index.js";
 import type { Direction } from "@nodra/geometry";
 
 const rectangle: RectangleElement = { type: "rectangle", id: elementId("r1"), layerId: layerId("default"), position: { x: 1, y: 2 }, size: { width: 10, height: 5 }, cornerRadius: 0, rotation: 0, style: { stroke: "#000", strokeWidth: 1 } };
@@ -8,6 +8,25 @@ const document = createDocument("doc", [{ id: layerId("default"), name: "Default
 const path: PathElement = { type: "path", id: elementId("path"), layerId: layerId("default"), nodes: [{ id: "a", anchor: { x: 0, y: 0 }, join: "corner" }, { id: "b", anchor: { x: 10, y: 0 }, join: "corner" }], segments: [{ type: "cubicBezier", startNodeId: "a", endNodeId: "b", control1: { x: 2, y: 4 }, control2: { x: 8, y: 4 } }], closed: false, style: rectangle.style };
 
 describe("editor core", () => {
+  it("deletes contour nodes through validation and keeps a ring valid", () => {
+    const contour = { type: "contour" as const, id: elementId("delete-contour-node"), layerId: rectangle.layerId, position: { x: 1, y: 2 }, size: { width: 10, height: 5 }, contours: [{ points: [{ x: 1, y: 2 }, { x: 11, y: 2 }, { x: 11, y: 7 }, { x: 1, y: 7 }, { x: 1, y: 2 }] }], fillRule: "evenodd" as const, rotation: 0, style: rectangle.style };
+    const state = dispatch(createEditor({ ...document, elements: [contour] }), deleteContourNodes(contour.id, [{ ringIndex: 0, pointIndex: 1 }]));
+    expect(state.document.elements[0]).toMatchObject({ type: "contour", contours: [{ points: [{ x: 1, y: 2 }, { x: 11, y: 7 }, { x: 1, y: 7 }, { x: 1, y: 2 }] }] });
+    expect(state.undo).toHaveLength(1);
+    expect(dispatch(state, deleteContourNodes(contour.id, [{ ringIndex: 0, pointIndex: 0 }, { ringIndex: 0, pointIndex: 1 }]))).toBe(state);
+  });
+
+  it("converts a primitive before deleting a Forma node", () => {
+    const state = dispatch(createEditor({ ...document, elements: [rectangle] }), deleteElementNodes(rectangle.id, [0]));
+    expect(state.document.elements[0]?.type).toBe("contour");
+    expect(state.document.elements[0]?.type === "contour" ? state.document.elements[0].contours[0]?.points : []).toHaveLength(4);
+  });
+
+  it("moves a primitive Forma node through a validated command", () => {
+    const state = dispatch(createEditor({ ...document, elements: [rectangle] }), updateElementNode(rectangle.id, 0, { x: 2, y: 3 }));
+    expect(state.document.elements[0]).toMatchObject({ type: "rectangle", position: { x: 2, y: 3 }, size: { width: 10, height: 5 } });
+    expect(state.undo).toHaveLength(1);
+  });
   it("moves path nodes with adjacent handles and records one command", () => {
     let state = dispatch(createEditor(document), createElement(path));
     state = dispatch(state, movePathNode(path.id, "a", { x: 1, y: 2 }));
@@ -163,6 +182,26 @@ describe("editor core", () => {
     expect(state.document.elements[1]?.style).toEqual({ stroke: "#f00", strokeWidth: 1 });
     expect(undo(state).document.elements).toEqual([rectangle, ellipse]);
     expect(redo(undo(state)).document.elements[0]?.style).toEqual({ stroke: "#f00", strokeWidth: 1 });
+  });
+
+  it("updates one contour vertex through a validated gesture and preserves ring closure", () => {
+    const contour = { type: "contour" as const, id: elementId("editable-contour"), layerId: rectangle.layerId, position: { x: 1, y: 2 }, size: { width: 10, height: 5 }, contours: [{ points: [{ x: 1, y: 2 }, { x: 11, y: 2 }, { x: 11, y: 7 }, { x: 1, y: 2 }] }], fillRule: "evenodd" as const, rotation: 0, style: rectangle.style };
+    let state = beginGesture(createEditor({ ...document, elements: [contour] }));
+    state = previewGestureFromBase(state, updateContourNode(contour.id, { ringIndex: 0, pointIndex: 0 }, { x: 2, y: 3 }));
+    expect(state.document.elements[0]).toMatchObject({ type: "contour", contours: [{ points: [{ x: 2, y: 3 }, { x: 11, y: 2 }, { x: 11, y: 7 }, { x: 2, y: 3 }] }] });
+    state = commitGesture(state);
+    expect(state.undo).toHaveLength(1);
+    expect(undo(state).document.elements).toEqual([contour]);
+    expect(dispatch(state, updateContourNode(contour.id, { ringIndex: 4, pointIndex: 0 }, { x: 1, y: 1 }))).toBe(state);
+  });
+
+  it("inserts one contour vertex before the closing duplicate and supports undo", () => {
+    const contour = { type: "contour" as const, id: elementId("insert-contour-node"), layerId: rectangle.layerId, position: { x: 1, y: 2 }, size: { width: 10, height: 5 }, contours: [{ points: [{ x: 1, y: 2 }, { x: 11, y: 2 }, { x: 11, y: 7 }, { x: 1, y: 2 }] }], fillRule: "evenodd" as const, rotation: 0, style: rectangle.style };
+    const state = dispatch(createEditor({ ...document, elements: [contour] }), insertContourNode(contour.id, { ringIndex: 0, segmentIndex: 2 }, { x: 6, y: 4 }));
+    expect(state.document.elements[0]).toMatchObject({ contours: [{ points: [{ x: 1, y: 2 }, { x: 11, y: 2 }, { x: 11, y: 7 }, { x: 6, y: 4 }, { x: 1, y: 2 }] }] });
+    expect(state.undo).toHaveLength(1);
+    expect(undo(state).document.elements).toEqual([contour]);
+    expect(dispatch(state, insertContourNode(contour.id, { ringIndex: 0, segmentIndex: 9 }, { x: 1, y: 1 }))).toBe(state);
   });
 
   it("flips a complete single or multiple selection atomically", () => {

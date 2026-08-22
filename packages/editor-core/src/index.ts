@@ -16,9 +16,11 @@ import {
   withElements,
 } from "@nodra/domain";
 import { validateDocument } from "@nodra/validation";
-import { boundsOfElements, contourWithPoints, directionVector, elementCenter, groupCenter, resizeGroup, rotateElements, shapeResultContours, transformPoint, type Direction } from "@nodra/geometry";
+import { boundsOfElements, contourWithPoints, directionVector, elementCenter, elementToContour, groupCenter, realGeometryNodes, resizeGroup, rotateElements, shapeResultContours, transformPoint, type Direction } from "@nodra/geometry";
 
 export type ElementPatch = { readonly position?: PointMm; readonly size?: SizeMm; readonly rotation?: number; readonly cornerRadius?: number; readonly style?: VisualStyle; readonly operation?: OperationMetadata; readonly start?: PointMm; readonly end?: PointMm };
+export interface ContourNodeAddress { readonly ringIndex: number; readonly pointIndex: number }
+export interface ContourSegmentAddress { readonly ringIndex: number; readonly segmentIndex: number }
 export type StylePatch = { readonly stroke?: string; readonly fill?: string | null; readonly strokeWidth?: number };
 export type EditorCommand = { readonly name: string; readonly apply: (document: DocumentSnapshot) => CommandResult };
 export type CommandResult = { readonly success: true; readonly document: DocumentSnapshot } | { readonly success: false; readonly error: string };
@@ -152,6 +154,125 @@ export const splitPathSegment = (pathId: ElementId, segmentIndex: number, newNod
 export const closePath = (pathId: ElementId): EditorCommand => ({ name: `path-close:${pathId}`, apply: (document) => { const path = pathAt(document, pathId); if (!path || path.closed) return { success: false, error: "Path is already closed" }; const first = path.nodes[0]!; const last = path.nodes.at(-1)!; return updatePath(document, { ...path, closed: true, segments: [...path.segments, { type: "line", startNodeId: last.id, endNodeId: first.id }] }); } });
 export const openPath = (pathId: ElementId): EditorCommand => ({ name: `path-open:${pathId}`, apply: (document) => { const path = pathAt(document, pathId); if (!path || !path.closed) return { success: false, error: "Path is already open" }; return updatePath(document, { ...path, closed: false, segments: path.segments.slice(0, -1) }); } });
 export const reversePath = (pathId: ElementId): EditorCommand => ({ name: `path-reverse:${pathId}`, apply: (document) => { const path = pathAt(document, pathId); if (!path) return { success: false, error: "Path not found" }; const nodes = [...path.nodes].reverse(); const segments = [...path.segments].reverse().map((segment) => segment.type === "line" ? { ...segment, startNodeId: segment.endNodeId, endNodeId: segment.startNodeId } : { ...segment, startNodeId: segment.endNodeId, endNodeId: segment.startNodeId, control1: segment.control2, control2: segment.control1 }); return updatePath(document, { ...path, nodes, segments }); } });
+
+export const updateContourNode = (id: ElementId, address: ContourNodeAddress, point: PointMm): EditorCommand => ({
+  name: `contour-node:${id}:${address.ringIndex}:${address.pointIndex}`,
+  apply: (document) => {
+    if (![point.x, point.y].every(Number.isFinite)) return { success: false, error: "Contour node coordinates must be finite" };
+    const current = document.elements.find((element) => element.id === id);
+    if (!current) return { success: false, error: `Element not found: ${id}` };
+    if (current.type !== "contour") return { success: false, error: "Contour node updates require a contour" };
+    const ring = current.contours[address.ringIndex];
+    if (!ring || !ring.points[address.pointIndex]) return { success: false, error: "Contour node not found" };
+    const points = current.contours.map((candidate, ringIndex) => candidate.points.map((candidatePoint, pointIndex) => {
+      const isAddress = ringIndex === address.ringIndex && pointIndex === address.pointIndex;
+      const closesRing = ringIndex === address.ringIndex && address.pointIndex === 0 && pointIndex === candidate.points.length - 1 && candidate.points.at(-1)?.x === candidate.points[0]?.x && candidate.points.at(-1)?.y === candidate.points[0]?.y;
+      return isAddress || closesRing ? point : candidatePoint;
+    }));
+    return replaceElements(document, document.elements.map((element) => element.id === id && element.type === "contour" ? contourWithPoints(element, points) : element));
+  },
+});
+
+export const insertContourNode = (id: ElementId, address: ContourSegmentAddress, point: PointMm): EditorCommand => ({
+  name: `contour-node-insert:${id}:${address.ringIndex}:${address.segmentIndex}`,
+  apply: (document) => {
+    if (![point.x, point.y].every(Number.isFinite)) return { success: false, error: "Contour node coordinates must be finite" };
+    const current = document.elements.find((element) => element.id === id);
+    if (!current) return { success: false, error: `Element not found: ${id}` };
+    if (current.type !== "contour") return { success: false, error: "Contour node insertion requires a contour" };
+    const ring = current.contours[address.ringIndex];
+    if (!ring) return { success: false, error: "Contour segment ring not found" };
+    const closing = ring.points.length > 1 && ring.points.at(-1)?.x === ring.points[0]?.x && ring.points.at(-1)?.y === ring.points[0]?.y;
+    const vertexCount = closing ? ring.points.length - 1 : ring.points.length;
+    if (!Number.isInteger(address.segmentIndex) || address.segmentIndex < 0 || address.segmentIndex >= vertexCount) return { success: false, error: "Contour segment not found" };
+    const insertIndex = address.segmentIndex + 1;
+    const points = current.contours.map((candidate, ringIndex) => ringIndex !== address.ringIndex ? candidate.points : [...candidate.points.slice(0, insertIndex), point, ...candidate.points.slice(insertIndex)]);
+    return replaceElements(document, document.elements.map((element) => element.id === id && element.type === "contour" ? contourWithPoints(element, points) : element));
+  },
+});
+
+export const insertFormaNode = (id: ElementId, address: ContourSegmentAddress, point: PointMm): EditorCommand => ({
+  name: `forma-node-insert:${id}:${address.segmentIndex}`,
+  apply: (document) => {
+    const current = document.elements.find((element) => element.id === id);
+    if (!current) return { success: false, error: `Element not found: ${id}` };
+    if (current.type === "contour") return insertContourNode(id, address, point).apply(document);
+    const contour = elementToContour(current);
+    const inserted = insertContourNode(id, address, point).apply({ ...document, elements: document.elements.map((element) => element.id === id ? contour : element) });
+    return inserted.success ? inserted : { success: false, error: inserted.error };
+  },
+});
+
+export const updateElementNode = (id: ElementId, nodeIndex: number, point: PointMm): EditorCommand => ({
+  name: `forma-node:${id}:${nodeIndex}`,
+  apply: (document) => {
+    if (![point.x, point.y].every(Number.isFinite) || !Number.isInteger(nodeIndex) || nodeIndex < 0) return { success: false, error: "Forma node coordinates must be finite" };
+    const current = document.elements.find((element) => element.id === id);
+    if (!current) return { success: false, error: `Element not found: ${id}` };
+    if (current.type === "contour") return { success: false, error: "Contour nodes require a contour address" };
+    const nodes = realGeometryNodes(current);
+    const node = nodes[nodeIndex];
+    if (!node) return { success: false, error: "Forma node not found" };
+    if (current.type === "line") {
+      const delta = { x: point.x - node.point.x, y: point.y - node.point.y };
+      const next = nodeIndex === 0 ? { ...current, start: point } : nodeIndex === 2 ? { ...current, end: point } : { ...current, start: { x: current.start.x + delta.x, y: current.start.y + delta.y }, end: { x: current.end.x + delta.x, y: current.end.y + delta.y } };
+      return replaceElements(document, document.elements.map((element) => element.id === id ? next : element));
+    }
+    if (node.kind === "center" || ((current.type === "rectangle" || current.type === "ellipse") && node.kind === "corner")) {
+      return moveElement(id, { x: point.x - node.point.x, y: point.y - node.point.y }).apply(document);
+    }
+    const handle = current.type === "rectangle" || current.type === "ellipse"
+      ? node.kind === "corner" ? (["nw", "ne", "se", "sw"] as const)[nodes.filter((candidate) => candidate.kind === "corner").findIndex((candidate) => candidate === node)]
+        : node.kind === "cardinal" ? (["n", "e", "s", "w"] as const)[nodes.filter((candidate) => candidate.kind === "cardinal").findIndex((candidate) => candidate === node)]
+        : undefined
+      : undefined;
+    const handleIndex = nodes.indexOf(node);
+    const mappedHandle = handle ?? (["nw", "n", "ne", "e", "se", "s", "sw", "w"] as const)[handleIndex];
+    if (!mappedHandle) return { success: false, error: "Forma node cannot resize this object" };
+    const geometry = resizeGroup([current], mappedHandle, point, 1)[0];
+    return geometry ? replaceElements(document, document.elements.map((element) => element.id === id ? geometry : element)) : { success: false, error: "Forma node resize failed" };
+  },
+});
+
+export const deleteElementNodes = (id: ElementId, nodeIndexes: readonly number[]): EditorCommand => ({
+  name: `forma-node-delete:${id}:${[...nodeIndexes].join(",")}`,
+  apply: (document) => {
+    const current = document.elements.find((element) => element.id === id);
+    if (!current) return { success: false, error: `Element not found: ${id}` };
+    const indexes = [...new Set(nodeIndexes)].sort((a, b) => b - a);
+    if (!indexes.length) return { success: false, error: "No Forma nodes selected" };
+    if (current.type !== "contour" && indexes.some((index) => realGeometryNodes(current)[index]?.kind === "center")) return { success: false, error: "El centro no es un nodo de contorno eliminable" };
+    const contour = current.type === "contour" ? current : elementToContour(current);
+    const remove = new Set(indexes);
+    const points = contour.contours.map((ring) => {
+      const vertices = ring.points.slice(0, -1);
+      const kept = vertices.filter((_, index) => !remove.has(index));
+      return [...kept, kept[0]!];
+    });
+    if (points.some((ring) => ring.length < 4)) return { success: false, error: "No se puede eliminar: el anillo debe conservar al menos tres vértices" };
+    return replaceElements(document, document.elements.map((element) => element.id === id ? contourWithPoints({ ...contour, id } as typeof contour, points) : element));
+  },
+});
+
+export const deleteContourNodes = (id: ElementId, addresses: readonly ContourNodeAddress[]): EditorCommand => ({
+  name: `contour-node-delete:${id}`,
+  apply: (document) => {
+    const current = document.elements.find((element) => element.id === id);
+    if (!current || current.type !== "contour") return { success: false, error: "Contour nodes require a contour" };
+    const removals = new Map<number, Set<number>>();
+    for (const address of addresses) {
+      if (!Number.isInteger(address.ringIndex) || !Number.isInteger(address.pointIndex)) return { success: false, error: "Invalid contour node address" };
+      const ring = current.contours[address.ringIndex];
+      if (!ring) return { success: false, error: "Contour node ring not found" };
+      const vertices = ring.points.slice(0, -1);
+      if (address.pointIndex < 0 || address.pointIndex >= vertices.length) return { success: false, error: "Contour node not found" };
+      const set = removals.get(address.ringIndex) ?? new Set<number>(); set.add(address.pointIndex); removals.set(address.ringIndex, set);
+    }
+    const points = current.contours.map((ring, ringIndex) => { const vertices = ring.points.slice(0, -1); const kept = vertices.filter((_, index) => !removals.get(ringIndex)?.has(index)); return [...kept, kept[0]!]; });
+    if (points.some((ring) => ring.length < 4)) return { success: false, error: "No se puede eliminar: el anillo debe conservar al menos tres vértices" };
+    return replaceElements(document, document.elements.map((element) => element.id === id && element.type === "contour" ? contourWithPoints(element, points) : element));
+  },
+});
 
 const translateElement = (element: Element, delta: PointMm, id: ElementId): Element => {
   if (element.type === "line") return { ...element, id, start: { x: element.start.x + delta.x, y: element.start.y + delta.y }, end: { x: element.end.x + delta.x, y: element.end.y + delta.y } };

@@ -108,6 +108,36 @@ test("renders created geometry as SVG", async ({ page }) => {
   await expect(page.locator(".page-svg svg rect")).toHaveCount(1);
 });
 
+test("exposes real contour vertices in Forma and edits one vertex", async ({ page }) => {
+  await page.goto("/");
+  await drawRectangle(page);
+  const first = await page.locator(".page-svg svg rect").first().boundingBox();
+  expect(first).not.toBeNull();
+  await page.getByRole("button", { name: "Rectángulo" }).click();
+  await page.mouse.move(first!.x + 40, first!.y + 40);
+  await page.mouse.down();
+  await page.mouse.move(first!.x + first!.width + 40, first!.y + first!.height + 40);
+  await page.mouse.up();
+
+  await page.getByRole("button", { name: "Seleccion" }).click();
+  await page.mouse.click(first!.x + 4, first!.y + 4);
+  await page.keyboard.down("Shift");
+  await page.mouse.click(first!.x + first!.width / 2 + 40, first!.y + first!.height / 2 + 40);
+  await page.keyboard.up("Shift");
+  await page.getByRole("button", { name: "Soldar" }).click();
+  await page.getByRole("button", { name: "Forma" }).click();
+  const nodes = page.locator(".contour-node");
+  await expect(nodes.first()).toBeVisible();
+  await expect(nodes.first()).toHaveAttribute("data-contour-node", /.+:.+:.+/);
+  const node = await nodes.first().boundingBox();
+  expect(node).not.toBeNull();
+  await page.mouse.move(node!.x + node!.width / 2, node!.y + node!.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(node!.x + node!.width / 2 + 12, node!.y + node!.height / 2 + 8);
+  await page.mouse.up();
+  await expect(nodes.first()).toBeVisible();
+});
+
 test("recovers the latest local revision after reload", async ({ page }) => {
   await page.goto("/");
   await drawRectangle(page);

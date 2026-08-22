@@ -1,11 +1,22 @@
 import { describe, expect, it } from "vitest";
-import { boundsOf, boundsOfElements, closedElementToPolygon, cubicBezierBounds, cubicBezierDerivative, degreesToRadians, elementCenter, evaluateCubicBezier, ELLIPSE_APPROXIMATION_SEGMENTS, groupCenter, groupHandlePoints, hitTest, mmToScreen, radiansToDegrees, realGeometryNodes, resizeGroup, resizeHandle, rotatedLineEndpoints, rotateElements, rotationFromDrag, rotationHandlePoints, screenToMm, shapeResultContours, splitCubicBezier, validateSize } from "./index.js";
+import { boundsOf, boundsOfElements, closedElementToPolygon, cubicBezierBounds, cubicBezierDerivative, degreesToRadians, elementCenter, elementSegmentAt, elementToContour, evaluateCubicBezier, ELLIPSE_APPROXIMATION_SEGMENTS, groupCenter, groupHandlePoints, hitTest, mmToScreen, radiansToDegrees, realGeometryNodes, resizeGroup, resizeHandle, rotatedLineEndpoints, rotateElements, rotationFromDrag, rotationHandlePoints, screenToMm, shapeResultContours, splitCubicBezier, validateSize } from "./index.js";
 import { elementId, layerId } from "@nodra/domain";
 
 const style = { stroke: "#000", strokeWidth: 0.2 };
 const rectangle = { type: "rectangle" as const, id: elementId("r"), layerId: layerId("l"), position: { x: 10, y: 20 }, size: { width: 20, height: 10 }, cornerRadius: 0, rotation: 0, style };
 
 describe("canonical millimetre geometry", () => {
+  it("projects primitives to editable nodes and segments without changing the primitive", () => {
+    expect(realGeometryNodes(rectangle)).toHaveLength(9);
+    expect(elementToContour(rectangle).contours[0]?.points).toHaveLength(5);
+    expect(elementSegmentAt(rectangle, { x: 20, y: 20 }, 0.1)).toMatchObject({ elementId: rectangle.id, segmentIndex: 0 });
+    expect(rectangle.type).toBe("rectangle");
+  });
+  it("does not pick a contour segment at a vertex within the segment tolerance", () => {
+    const contour = { type: "contour" as const, id: elementId("segment-vertex"), layerId: layerId("l"), position: { x: 10, y: 20 }, size: { width: 20, height: 10 }, contours: [{ points: [{ x: 10, y: 20 }, { x: 30, y: 20 }, { x: 30, y: 30 }, { x: 10, y: 20 }] }], fillRule: "evenodd" as const, rotation: 0, style };
+    expect(elementSegmentAt(contour, { x: 10, y: 20 }, 0.1)).toBeUndefined();
+    expect(elementSegmentAt(contour, { x: 20, y: 20 }, 0.1)).toMatchObject({ segmentIndex: 0 });
+  });
   it("evaluates cubic curves and includes exact derivative extrema", () => {
     const curve = { p0: { x: 0, y: 0 }, p1: { x: 0, y: 10 }, p2: { x: 10, y: 10 }, p3: { x: 10, y: 0 } };
     expect(evaluateCubicBezier(curve, 0)).toEqual(curve.p0);
