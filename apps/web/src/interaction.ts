@@ -15,7 +15,7 @@ export function selectedPathAnchorIds(path: PathElement, keys: readonly string[]
   return [...new Set(keys.flatMap((key) => {
     const match = key.match(new RegExp(`^${path.id}:p:(\\d+)$`));
     const node = match ? pathGeometryNodes(path)[Number(match[1])] : undefined;
-    return node?.node.kind === "anchor" ? [node.node.nodeId] : [];
+    return node?.kind === "anchor" ? [node.nodeId] : [];
   }))];
 }
 
