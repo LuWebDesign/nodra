@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createDocument, elementId, layerId } from "@nodra/domain";
-import { canActivateRotation, centerPageInCanvas, clientPointToCanvas, hoveredSelectionCenter, INITIAL_ZOOM, isDrawingTool, marqueeSelection, MAX_ZOOM, MIN_ZOOM, movementExceedsThreshold, normalizeBounds, normalizeDrag, pagePointToCanvas, pagePointToScreen, screenDeltaToMm, screenPointToMm, containsBounds, elementsContainedBy, pickContourNode, pickContourSegment, pickElement, pickFormaNode, pickFormaSegment, pickNode, pickPathNode, pointerDownIntent, selectedNodeAnchor, selectionCenter, selectionFrame, snapMoveDelta, zoomAtPoint } from "./interaction.js";
+import { canActivateRotation, centerPageInCanvas, clientPointToCanvas, cubicPlacementControls, hoveredSelectionCenter, INITIAL_ZOOM, isDrawingTool, marqueeSelection, MAX_ZOOM, MIN_ZOOM, movementExceedsThreshold, normalizeBounds, normalizeDrag, pagePointToCanvas, pagePointToScreen, screenDeltaToMm, screenPointToMm, containsBounds, elementsContainedBy, pickContourNode, pickContourSegment, pickElement, pickFormaNode, pickFormaSegment, pickNode, pickPathNode, pointerDownIntent, selectedNodeAnchor, selectionCenter, selectionFrame, snapMoveDelta, zoomAtPoint } from "./interaction.js";
 import { geometryPatch, geometryValue } from "./propertyBar.js";
 
 describe("canvas coordinates", () => {
@@ -52,6 +52,12 @@ describe("pointer movement threshold", () => {
     expect(movementExceedsThreshold({ x: 10, y: 10 }, { x: 10, y: 10 })).toBe(false);
     expect(movementExceedsThreshold({ x: 10, y: 10 }, { x: 12, y: 11 })).toBe(false);
     expect(movementExceedsThreshold({ x: 10, y: 10 }, { x: 13, y: 10 })).toBe(true);
+  });
+});
+
+describe("pen cubic placement", () => {
+  it("derives finite controls from an endpoint drag", () => {
+    expect(cubicPlacementControls({ x: 0, y: 0 }, { x: 30, y: 0 }, { x: 30, y: 20 })).toEqual({ control1: { x: 10, y: 0 }, control2: { x: 30, y: -20 } });
   });
 });
 

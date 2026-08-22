@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createDocument, elementId, layerId, type PathElement, type RectangleElement } from "@nodra/domain";
-import { addToSelection, beginGesture, clearSelection, closePath, commitGesture, createEditor, createElement, deleteContourNodes, deleteElementNodes, dispatch, duplicateElements, flipElements, insertContourNode, moveElement, moveElements, movePathNode, movePathHandle, previewGesture, previewGestureFromBase, redo, removeFromSelection, reorderLayer, resizeElement, resizeElements, rotateElementsAroundCenter, select, selectForPointerDown, setLayerVisibility, setPathJoin, shapeOperation, toggleSelection, undo, updateContourNode, updateElement, updateElementNode, updateElementStyles } from "./index.js";
+import { addToSelection, beginGesture, cancelGesture, clearSelection, closePath, commitGesture, createEditor, createElement, createPathCubicNode, deleteContourNodes, deleteElementNodes, dispatch, duplicateElements, flipElements, insertContourNode, moveElement, moveElements, movePathNode, movePathHandle, previewGesture, previewGestureFromBase, redo, removeFromSelection, reorderLayer, resizeElement, resizeElements, rotateElementsAroundCenter, select, selectForPointerDown, setLayerVisibility, setPathJoin, shapeOperation, toggleSelection, undo, updateContourNode, updateElement, updateElementNode, updateElementStyles } from "./index.js";
 import type { Direction } from "@nodra/geometry";
 
 const rectangle: RectangleElement = { type: "rectangle", id: elementId("r1"), layerId: layerId("default"), position: { x: 1, y: 2 }, size: { width: 10, height: 5 }, cornerRadius: 0, rotation: 0, style: { stroke: "#000", strokeWidth: 1 } };
@@ -41,6 +41,22 @@ describe("editor core", () => {
     const closed = dispatch(state, closePath(path.id));
     expect(closed.document.elements[0]).toMatchObject({ closed: true });
     expect(dispatch(state, setPathJoin(path.id, "a", "smooth")).document.elements[0]).toBeDefined();
+  });
+  it("appends a validated cubic pen node and commits the gesture once", () => {
+    let state = beginGesture(createEditor({ ...document, elements: [path] }));
+    state = previewGestureFromBase(state, createPathCubicNode(path.id, { id: "c", anchor: { x: 20, y: 10 }, join: "corner" }, { x: 4, y: 0 }, { x: 16, y: 8 }));
+    state = commitGesture(state);
+    expect(state.document.elements[0]).toMatchObject({ nodes: [{ id: "a" }, { id: "b" }, { id: "c" }], segments: [{ type: "cubicBezier" }, { type: "cubicBezier", control1: { x: 4, y: 0 }, control2: { x: 16, y: 8 } }] });
+    expect(state.undo).toHaveLength(1);
+    expect(undo(state).document.elements).toEqual([path]);
+  });
+  it("cancels a cubic pen preview without leaving a partial path or history entry", () => {
+    let state = beginGesture(createEditor({ ...document, elements: [path] }));
+    state = previewGestureFromBase(state, createPathCubicNode(path.id, { id: "partial", anchor: { x: 20, y: 10 }, join: "corner" }, { x: 4, y: 0 }, { x: 16, y: 8 }));
+    state = cancelGesture(state);
+    expect(state.document.elements).toEqual([path]);
+    expect(state.undo).toHaveLength(0);
+    expect(state.gesture).toBeUndefined();
   });
   it("applies explicit commands and keeps selection outside document history", () => {
     const created = dispatch(createEditor(document), createElement(rectangle));

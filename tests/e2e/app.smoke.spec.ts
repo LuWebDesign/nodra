@@ -53,6 +53,21 @@ test("creates an open path with Pluma and exposes its anchors", async ({ page })
   await expect(page.locator(".contour-node")).toHaveCount(3);
 });
 
+test("creates a cubic segment when placing an anchor with a drag", async ({ page }) => {
+  await page.goto("/");
+  const pageBounds = await page.locator(".page").boundingBox();
+  expect(pageBounds).not.toBeNull();
+  await page.getByRole("button", { name: "Pluma" }).click();
+  const start = { x: pageBounds!.x + 80, y: pageBounds!.y + 120 };
+  const anchor = { x: start.x + 120, y: start.y };
+  await page.mouse.click(start.x, start.y);
+  await page.mouse.move(anchor.x, anchor.y);
+  await page.mouse.down();
+  await page.mouse.move(anchor.x, anchor.y + 50);
+  await page.mouse.up();
+  await expect(page.locator(".page-svg svg path[data-element-id]")).toHaveAttribute("d", / C/);
+});
+
 test("creates, transforms, and undoes a rectangle", async ({ page }) => {
   await page.goto("/");
   await drawRectangle(page);
