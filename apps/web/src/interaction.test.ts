@@ -244,4 +244,12 @@ describe("drag geometry", () => {
     expect(pickFormaNode(document, { x: 10, y: 10 }, 1)).toMatchObject({ elementId: rectangle.id, nodeIndex: 0 });
     expect(pickFormaSegment(document, { x: 20, y: 10 }, 1)).toMatchObject({ elementId: rectangle.id, segmentIndex: 0 });
   });
+
+  it("keeps primitive and contour Forma node identities distinct", () => {
+    const layer = { id: layerId("forma-identity"), name: "Forma identity", visible: true, order: 0 };
+    const rectangle = { type: "rectangle" as const, id: elementId("forma-identity-rectangle"), layerId: layer.id, position: { x: 10, y: 10 }, size: { width: 20, height: 10 }, cornerRadius: 0, rotation: 0, style: { stroke: "#000", strokeWidth: 1 } };
+    const checked = { ...createDocument("forma-identity-document", [layer]), elements: [rectangle] };
+    const node = pickFormaNode(checked, { x: 10, y: 10 }, 1);
+    expect(node && `${node.elementId}:p:${node.nodeIndex}`).toBe(`${rectangle.id}:p:0`);
+  });
 });

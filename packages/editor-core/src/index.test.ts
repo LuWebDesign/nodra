@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createDocument, elementId, layerId, type RectangleElement } from "@nodra/domain";
-import { addToSelection, beginGesture, clearSelection, commitGesture, createEditor, createElement, deleteContourNodes, deleteElementNodes, dispatch, duplicateElements, flipElements, insertContourNode, moveElement, moveElements, previewGesture, previewGestureFromBase, redo, removeFromSelection, reorderLayer, resizeElement, resizeElements, rotateElementsAroundCenter, select, selectForPointerDown, setLayerVisibility, shapeOperation, toggleSelection, undo, updateContourNode, updateElement, updateElementStyles } from "./index.js";
+import { addToSelection, beginGesture, clearSelection, commitGesture, createEditor, createElement, deleteContourNodes, deleteElementNodes, dispatch, duplicateElements, flipElements, insertContourNode, moveElement, moveElements, previewGesture, previewGestureFromBase, redo, removeFromSelection, reorderLayer, resizeElement, resizeElements, rotateElementsAroundCenter, select, selectForPointerDown, setLayerVisibility, shapeOperation, toggleSelection, undo, updateContourNode, updateElement, updateElementNode, updateElementStyles } from "./index.js";
 import type { Direction } from "@nodra/geometry";
 
 const rectangle: RectangleElement = { type: "rectangle", id: elementId("r1"), layerId: layerId("default"), position: { x: 1, y: 2 }, size: { width: 10, height: 5 }, cornerRadius: 0, rotation: 0, style: { stroke: "#000", strokeWidth: 1 } };
@@ -19,6 +19,12 @@ describe("editor core", () => {
     const state = dispatch(createEditor({ ...document, elements: [rectangle] }), deleteElementNodes(rectangle.id, [0]));
     expect(state.document.elements[0]?.type).toBe("contour");
     expect(state.document.elements[0]?.type === "contour" ? state.document.elements[0].contours[0]?.points : []).toHaveLength(4);
+  });
+
+  it("moves a primitive Forma node through a validated command", () => {
+    const state = dispatch(createEditor({ ...document, elements: [rectangle] }), updateElementNode(rectangle.id, 0, { x: 2, y: 3 }));
+    expect(state.document.elements[0]).toMatchObject({ type: "rectangle", position: { x: 2, y: 3 }, size: { width: 10, height: 5 } });
+    expect(state.undo).toHaveLength(1);
   });
   it("applies explicit commands and keeps selection outside document history", () => {
     const created = dispatch(createEditor(document), createElement(rectangle));
