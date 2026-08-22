@@ -6,6 +6,15 @@ export interface SnapGuide { readonly source: PointMm; readonly target: PointMm 
 export interface SnapMoveResult { readonly delta: PointMm; readonly guide: SnapGuide | undefined }
 export interface NodeHit { readonly elementId: ElementId; readonly nodeIndex: number; readonly node: RealGeometryNode }
 export interface PathNodeHit { readonly elementId: ElementId; readonly node: PathGeometryNode }
+export type PathGuideDirection = "incoming" | "outgoing";
+export interface PathGuide {
+  readonly elementId: ElementId;
+  readonly segmentIndex: number;
+  readonly nodeId: string;
+  readonly anchor: PointMm;
+  readonly control: PointMm;
+  readonly direction: PathGuideDirection;
+}
 export type ContourNodeHit = ContourVertexNode;
 export type ContourSegmentHitResult = ContourSegmentHit;
 export type PathSegmentHitResult = PathSegmentHit;
@@ -17,6 +26,17 @@ export function selectedPathAnchorIds(path: PathElement, keys: readonly string[]
     const node = match ? pathGeometryNodes(path)[Number(match[1])] : undefined;
     return node?.kind === "anchor" ? [node.nodeId] : [];
   }))];
+}
+
+/** Derives editor-only handle guides from the path's existing geometry nodes. */
+export function pathGuides(path: PathElement): readonly PathGuide[] {
+  const nodes = pathGeometryNodes(path);
+  return nodes.flatMap((node) => {
+    if (node.kind !== "control" || node.segmentIndex === undefined || !node.handle) return [];
+    const anchor = nodes.find((candidate) => candidate.kind === "anchor" && candidate.nodeId === node.nodeId);
+    if (!anchor) return [];
+    return [{ elementId: path.id, segmentIndex: node.segmentIndex, nodeId: node.nodeId, anchor: anchor.point, control: node.point, direction: node.handle === "control1" ? "outgoing" : "incoming" }];
+  });
 }
 
 export type DrawingTool = "rectangle" | "ellipse" | "line";
