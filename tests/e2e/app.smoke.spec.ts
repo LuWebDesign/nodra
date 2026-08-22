@@ -3,9 +3,26 @@ import { expect, test, type Page } from "@playwright/test";
 async function drawRectangle(page: Page) {
   await page.getByRole("button", { name: "Rectángulo" }).click();
   const pageBounds = await page.locator(".page").boundingBox();
+  const canvasBounds = await page.locator(".canvas").boundingBox();
   expect(pageBounds).not.toBeNull();
-  const start = { x: pageBounds!.x + 40, y: pageBounds!.y + 40 };
-  const end = { x: pageBounds!.x + 180, y: pageBounds!.y + 130 };
+  expect(canvasBounds).not.toBeNull();
+
+  const visibleLeft = Math.max(pageBounds!.x, canvasBounds!.x);
+  const visibleTop = Math.max(pageBounds!.y, canvasBounds!.y);
+  const visibleRight = Math.min(pageBounds!.x + pageBounds!.width, canvasBounds!.x + canvasBounds!.width);
+  const visibleBottom = Math.min(pageBounds!.y + pageBounds!.height, canvasBounds!.y + canvasBounds!.height);
+  const availableWidth = visibleRight - visibleLeft - 2;
+  const availableHeight = visibleBottom - visibleTop - 2;
+  expect(availableWidth).toBeGreaterThan(0);
+  expect(availableHeight).toBeGreaterThan(0);
+
+  const rectangleWidth = Math.min(140, availableWidth);
+  const rectangleHeight = Math.min(90, availableHeight);
+  const start = {
+    x: visibleLeft + 1 + Math.min(40, availableWidth - rectangleWidth),
+    y: visibleTop + 1 + Math.min(40, availableHeight - rectangleHeight),
+  };
+  const end = { x: start.x + rectangleWidth, y: start.y + rectangleHeight };
   await page.mouse.move(start.x, start.y);
   await page.mouse.down();
   await page.mouse.move(end.x, end.y);
