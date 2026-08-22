@@ -9,7 +9,12 @@ import { aspectGeometryPatch, aspectSize, cornerRadiusPatch, formatMm, geometryV
 import { useDocumentStore, usePersistenceStore, useUiStore, useViewportStore, type Tool } from "./stores.js";
 
 const defaultStyle = { stroke: "#000000", strokeWidth: 0.7 };
-const palette = ["#111827", "#ef4444", "#f59e0b", "#22c55e", "#3b82f6", "#a855f7", "#ffffff"] as const;
+const palette = [
+  { name: "Negro", color: "#111827" }, { name: "Rojo", color: "#ef4444" }, { name: "Naranja", color: "#f59e0b" },
+  { name: "Verde", color: "#22c55e" }, { name: "Azul", color: "#3b82f6" }, { name: "Violeta", color: "#a855f7" },
+  { name: "Blanco", color: "#ffffff" }, { name: "Rosa", color: "#ec4899" }, { name: "Cian", color: "#22d3ee" },
+  { name: "Lima", color: "#a3e635" }, { name: "Gris", color: "#9ca3af" },
+] as const;
 const id = () => elementId(`element-${crypto.randomUUID()}`);
 const newElement = (tool: Exclude<Tool, "select" | "pan">, layer: string, start: PointMm, end: PointMm, nextId = id()): Element => tool === "line"
   ? { type: "line", id: nextId, layerId: layerId(layer), start, end, rotation: 0, style: defaultStyle }
@@ -531,7 +536,7 @@ export function App() {
     if (next === current) return;
     setEditorState(next);
   };
-  const paletteControls = () => <section className="inspector-card inspector-appearance-card"><div className="panel-title">APARIENCIA</div><div className="muted">Paleta: clic izquierdo para relleno · clic derecho para contorno</div><div className="palette"><button className="swatch no-fill" aria-label="Sin relleno" title="Sin relleno" onClick={() => applyPalette(null, "fill")} onContextMenu={(event) => event.preventDefault()}>×</button>{palette.map((color) => <button key={color} className="swatch" aria-label={`Color ${color}`} title={`Clic izquierdo: relleno · clic derecho: contorno (${color})`} style={{ background: color }} onClick={() => applyPalette(color, "fill")} onContextMenu={(event) => { event.preventDefault(); applyPalette(color, "stroke"); }} />)}</div></section>;
+  const paletteControls = () => <div className="status-palette" role="group" aria-label="Paleta de colores"><span className="status-palette-label">COLORES</span><div className="palette"><button className="swatch no-fill" aria-label="Sin relleno" title="Sin relleno" onClick={() => applyPalette(null, "fill")} onContextMenu={(event) => event.preventDefault()}>×</button>{palette.map(({ name, color }) => <button key={color} className="swatch" aria-label={name} title={`Clic izquierdo: relleno · clic derecho: contorno (${name})`} style={{ background: color }} onClick={() => applyPalette(color, "fill")} onContextMenu={(event) => { event.preventDefault(); applyPalette(color, "stroke"); }} />)}</div></div>;
   const transformDirections: readonly { direction: Direction; label: string; marker: string }[] = [
     { direction: "north-west", label: "Noroeste", marker: "↖" }, { direction: "north", label: "Norte", marker: "↑" }, { direction: "north-east", label: "Noreste", marker: "↗" },
     { direction: "west", label: "Oeste", marker: "←" }, { direction: "center", label: "Centro: superponer", marker: "•" }, { direction: "east", label: "Este", marker: "→" },
@@ -630,7 +635,7 @@ export function App() {
            <button type="button" role="tab" aria-selected={inspectorTab === "text"} className={inspectorTab === "text" ? "active" : ""} onClick={() => setInspectorTab("text")}>Texto</button>
          </div>
          <div className="inspector-tab-content" role="tabpanel">
-              {inspectorTab === "properties" && <>{selectedElements.length === 0 ? <section className="inspector-card"><div className="panel-title">PÁGINA</div><div className="preset-row"><button onClick={() => setPage(1200, 900)}>Horizontal</button><button onClick={() => setPage(900, 1200)}>Vertical</button></div><div className="fields"><Field label="W" value={document.page.width} onChange={(value) => setPage(value, document.page.height)} /><Field label="H" value={document.page.height} onChange={(value) => setPage(document.page.width, value)} /></div><label className="grid-toggle"><input type="checkbox" checked={grid} onChange={(event) => setGrid(event.target.checked)} /> Mostrar cuadrícula del espacio de trabajo</label></section> : <section className="inspector-card inspector-object-card"><div className="panel-title">OBJETO</div>{propertyElement ? <div className="inspector-object-properties">{objectPropertySections(true)}</div> : <><div className="selected-type">{selectedElement?.type === "contour" ? "CONTORNO" : "LÍNEA"}</div><p className="muted">{selectedElement?.type === "contour" ? "Los contornos conservan su geometría real; las dimensiones no están disponibles." : "Las líneas no tienen dimensiones rectangulares."}</p>{selectedElement && rotationField(selectedElement)}</>}</section>}{paletteControls()}</>}
+               {inspectorTab === "properties" && <>{selectedElements.length === 0 ? <section className="inspector-card"><div className="panel-title">PÁGINA</div><div className="preset-row"><button onClick={() => setPage(1200, 900)}>Horizontal</button><button onClick={() => setPage(900, 1200)}>Vertical</button></div><div className="fields"><Field label="W" value={document.page.width} onChange={(value) => setPage(value, document.page.height)} /><Field label="H" value={document.page.height} onChange={(value) => setPage(document.page.width, value)} /></div><label className="grid-toggle"><input type="checkbox" checked={grid} onChange={(event) => setGrid(event.target.checked)} /> Mostrar cuadrícula del espacio de trabajo</label></section> : <section className="inspector-card inspector-object-card"><div className="panel-title">OBJETO</div>{propertyElement ? <div className="inspector-object-properties">{objectPropertySections(true)}</div> : <><div className="selected-type">{selectedElement?.type === "contour" ? "CONTORNO" : "LÍNEA"}</div><p className="muted">{selectedElement?.type === "contour" ? "Los contornos conservan su geometría real; las dimensiones no están disponibles." : "Las líneas no tienen dimensiones rectangulares."}</p>{selectedElement && rotationField(selectedElement)}</>}</section>}</>}
               {inspectorTab === "transform" && transformControls()}
            {inspectorTab === "text" && <section className="inspector-card"><div className="panel-title">TEXTO</div><p className="muted">Las propiedades de texto estarán disponibles en una próxima iteración.</p></section>}
          </div>
@@ -640,7 +645,7 @@ export function App() {
          <section className="inspector-lower-card"><div className="panel-title">VALIDACIÓN DEL DISEÑO</div><p className="muted">La validación del diseño estará disponible próximamente.</p></section>
        </aside>
     </div>}
-    <footer className="statusbar"><span className={`status-dot ${persist.state === "saving" ? "saving" : ""}`} />{persist.message}</footer>
+     <footer className="statusbar"><div className="status-message"><span className={`status-dot ${persist.state === "saving" ? "saving" : ""}`} />{persist.message}</div>{paletteControls()}</footer>
   </main>;
 }
 

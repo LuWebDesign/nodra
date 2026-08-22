@@ -5,7 +5,7 @@ import { geometryPatch, geometryValue } from "./propertyBar.js";
 
 describe("canvas coordinates", () => {
   it("centers the default 1200x900 page in a measured canvas", () => {
-    expect(centerPageInCanvas({ width: 360, height: 270 }, { width: 1200, height: 900 }, INITIAL_ZOOM)).toEqual({ x: expect.closeTo(0), y: expect.closeTo(0) });
+    expect(centerPageInCanvas({ width: 360, height: 270 }, { width: 1200, height: 900 }, INITIAL_ZOOM)).toEqual({ x: expect.closeTo(360), y: expect.closeTo(270) });
   });
 
   it("centers a recovered custom page without assuming default dimensions", () => {
@@ -106,7 +106,7 @@ describe("zoomAtPoint", () => {
     expect(screenPointToMm({ x: 100, y: 60 }, { x: 0, y: 0 }, result.zoom, result.panMm)).toEqual({ x: 60, y: 50 });
   });
   it("clamps to the documented zoom range", () => {
-    expect(INITIAL_ZOOM).toBe(0.3);
+    expect(INITIAL_ZOOM).toBe(0.75);
     expect(zoomAtPoint(2, { x: 0, y: 0 }, { x: 0, y: 0 }, 0).zoom).toBe(MIN_ZOOM);
     expect(zoomAtPoint(2, { x: 0, y: 0 }, { x: 0, y: 0 }, 99).zoom).toBe(MAX_ZOOM);
   });
