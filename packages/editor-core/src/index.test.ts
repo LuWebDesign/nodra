@@ -49,7 +49,10 @@ describe("editor core", () => {
       state = dispatch(state, setPathJoin(path.id, "a", join));
       expect(state.undo).toHaveLength(before.undo.length + 1);
       expect(state.document.elements[0]?.type === "path" ? state.document.elements[0].nodes[0] : undefined).toMatchObject({ id: "a", join });
-      expect(undo(state).document.elements[0]?.type === "path" ? undo(state).document.elements[0].nodes[0] : undefined).toMatchObject({ id: "a", join: before.document.elements[0]?.type === "path" ? before.document.elements[0].nodes[0]?.join : "corner" });
+      const reverted = undo(state);
+      const revertedElement = reverted.document.elements[0];
+      const beforeElement = before.document.elements[0];
+      expect(revertedElement?.type === "path" ? revertedElement.nodes[0] : undefined).toMatchObject({ id: "a", join: beforeElement?.type === "path" ? beforeElement.nodes[0]?.join : "corner" });
     }
   });
   it("appends a validated cubic pen node and commits the gesture once", () => {
