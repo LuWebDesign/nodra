@@ -1,10 +1,10 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent, type PointerEvent, type ReactNode, type WheelEvent } from "react";
 import { createProject, elementId, layerId, pageId, revision, type DocumentSnapshot, type Element, type ElementId, type PointMm, type ProjectSnapshot } from "@nodra/domain";
-import { addToSelection, beginGesture, cancelGesture, clearSelection, commitGesture, createElement, deleteContourNodes, deleteElement, deleteElementNodes, dispatch, duplicateElements, flipElements, insertFormaNode, moveElements, previewGesture, previewGestureFromBase, redo, resizeElement, resizeElements, rotateElement, rotateElementsAroundCenter, select, selectForPointerDown, shapeOperation, undo, updateContourNode, updateElement, updateElementNode, updateElementStyles, updatePage, type FlipAxis, type ShapeOperation } from "@nodra/editor-core";
+import { addToSelection, beginGesture, cancelGesture, clearSelection, closePath, commitGesture, createElement, createPathNode, deleteContourNodes, deleteElement, deleteElementNodes, dispatch, duplicateElements, flipElements, insertFormaNode, moveElements, movePathHandle, movePathNode, previewGesture, previewGestureFromBase, redo, resizeElement, resizeElements, rotateElement, rotateElementsAroundCenter, select, selectForPointerDown, shapeOperation, undo, updateContourNode, updateElement, updateElementNode, updateElementStyles, updatePage, type FlipAxis, type ShapeOperation } from "@nodra/editor-core";
 import { boundsOfElements, contourVertexNodes, elementCenter, groupCenter, groupHandlePoints, realGeometryNodes, resizeHandle, rotatedResizeHandles, rotationFromDrag, rotationHandlePoints, type Direction, type GroupHandle, type ResizeHandle } from "@nodra/geometry";
 import { DebouncedAutosave, DexieProjectRepository, requestStoragePersistence } from "@nodra/persistence";
 import { renderSvg } from "@nodra/renderer-svg";
-import { canActivateRotation, centerPageInCanvas, clientPointToCanvas, formaNodeKey, hoveredSelectionCenter, isDrawingTool, marqueeSelection, movementExceedsThreshold, normalizeBounds, normalizeDrag, pagePointToCanvas, pickElement, pickFormaNode, pickFormaSegment, pickNode, pointerDownIntent, screenDeltaToMm, screenPointToMm, selectedNodeAnchor, snapMoveDelta, zoomAtPoint, type ContourNodeHit, type FormaNodeHit, type NodeHit, type SnapGuide, type TransformMode } from "./interaction.js";
+import { canActivateRotation, centerPageInCanvas, clientPointToCanvas, formaNodeKey, hoveredSelectionCenter, isDrawingTool, marqueeSelection, movementExceedsThreshold, normalizeBounds, normalizeDrag, pagePointToCanvas, pickElement, pickFormaNode, pickFormaSegment, pickNode, pickPathNode, pointerDownIntent, screenDeltaToMm, screenPointToMm, selectedNodeAnchor, snapMoveDelta, zoomAtPoint, type ContourNodeHit, type FormaNodeHit, type NodeHit, type PathNodeHit, type SnapGuide, type TransformMode } from "./interaction.js";
 import { aspectGeometryPatch, aspectSize, cornerRadiusPatch, formatMm, geometryValue, rotationDegreesValue, rotationPatch, type GeometryField, type PropertyElement, type RotatableElement } from "./propertyBar.js";
 import { useDocumentStore, usePersistenceStore, useUiStore, useViewportStore, type Tool } from "./stores.js";
 
@@ -18,7 +18,7 @@ const palette = [
   { name: "Lima", color: "#a3e635" }, { name: "Gris", color: "#9ca3af" },
 ] as const;
 const id = () => elementId(`element-${crypto.randomUUID()}`);
-const newElement = (tool: Exclude<Tool, "select" | "pan" | "forma">, layer: string, start: PointMm, end: PointMm, nextId = id()): Element => tool === "line"
+const newElement = (tool: Exclude<Tool, "select" | "pan" | "forma" | "pen">, layer: string, start: PointMm, end: PointMm, nextId = id()): Element => tool === "line"
   ? { type: "line", id: nextId, layerId: layerId(layer), start, end, rotation: 0, style: defaultStyle }
   : tool === "rectangle"
     ? { type: "rectangle", id: nextId, layerId: layerId(layer), ...normalizeDrag(start, end), cornerRadius: 0, rotation: 0, style: defaultStyle }
@@ -28,7 +28,7 @@ type ActiveInteraction = {
   pointerId: number;
   lastX: number;
   lastY: number;
-  kind: "move" | "pan" | "draw" | "resize" | "rotate" | "marquee" | "contour-node";
+  kind: "move" | "pan" | "draw" | "resize" | "rotate" | "marquee" | "contour-node" | "path-node";
   ids?: readonly ElementId[];
   dragged: boolean;
   start?: PointMm;
@@ -43,16 +43,17 @@ type ActiveInteraction = {
   shiftKey?: boolean;
   center?: PointMm;
   contourNode?: ContourNodeHit;
+  pathNode?: PathNodeHit;
 };
 
 type FormaNodeOverlay =
   | { readonly kind: "contour"; readonly key: string; readonly elementId: ElementId; readonly point: PointMm; readonly contour: ContourNodeHit }
-  | { readonly kind: "path"; readonly key: string; readonly elementId: ElementId; readonly point: PointMm; readonly nodeIndex: number };
+  | { readonly kind: "path"; readonly key: string; readonly elementId: ElementId; readonly point: PointMm; readonly nodeIndex: number; readonly pathNode?: PathNodeHit };
 
 type InspectorTab = "properties" | "transform" | "text";
 
-const toolCursorIcons: Record<Tool, string> = { select: "↖", forma: "⌘", rectangle: "□", ellipse: "○", line: "╱", pan: "✣" };
-const toolCursorLabels: Record<Tool, string> = { select: "Seleccion", forma: "Forma", rectangle: "Rectángulo", ellipse: "Elipse", line: "Línea", pan: "Desplazar" };
+const toolCursorIcons: Record<Tool, string> = { select: "↖", forma: "⌘", pen: "✒", rectangle: "□", ellipse: "○", line: "╱", pan: "✣" };
+const toolCursorLabels: Record<Tool, string> = { select: "Seleccion", forma: "Forma", pen: "Pluma", rectangle: "Rectángulo", ellipse: "Elipse", line: "Línea", pan: "Desplazar" };
 
 export function App() {
   const { mode, tool, setMode, setTool } = useUiStore();
@@ -74,6 +75,7 @@ export function App() {
   const [inspectorTab, setInspectorTab] = useState<InspectorTab>("properties");
   const [transformDirection, setTransformDirection] = useState<Direction>("center");
   const [directionTooltipVisible, setDirectionTooltipVisible] = useState(false);
+  const [penDraftPoint, setPenDraftPoint] = useState<PointMm>();
   const repository = useMemo(() => new DexieProjectRepository(), []);
   const autosave = useMemo(() => new DebouncedAutosave(repository), [repository]);
   const canvas = useRef<HTMLDivElement>(null);
@@ -245,6 +247,36 @@ export function App() {
   const canvasPointAt = (event: PointerEvent<HTMLElement> | WheelEvent<HTMLElement>) => clientPointToCanvas({ x: event.clientX, y: event.clientY }, canvas.current!.getBoundingClientRect());
   const pointAt = (event: PointerEvent<HTMLElement> | WheelEvent<HTMLElement>) => screenPointToMm(canvasPointAt(event), { x: 0, y: 0 }, zoom, panMm);
 
+  const addPenPoint = (point: PointMm) => {
+    const current = editorRef.current;
+    const selectedPath = current.selection.length === 1 ? current.document.elements.find((element) => element.id === current.selection[0] && element.type === "path") : undefined;
+    if (selectedPath?.type === "path" && !selectedPath.closed) {
+      const last = selectedPath.nodes.at(-1);
+      if (last) {
+        setEditorState(dispatch(current, createPathNode(selectedPath.id, { id: `path-node-${crypto.randomUUID()}`, anchor: point, join: "corner" }, last.id)));
+        return;
+      }
+    }
+    if (!penDraftPoint) {
+      setPenDraftPoint(point);
+      return;
+    }
+    const firstId = `path-node-${crypto.randomUUID()}`;
+    const secondId = `path-node-${crypto.randomUUID()}`;
+    const path = {
+      type: "path" as const,
+      id: id(),
+      layerId: layerId(current.document.layers[0]?.id ?? "layer-1"),
+      nodes: [{ id: firstId, anchor: penDraftPoint, join: "corner" as const }, { id: secondId, anchor: point, join: "corner" as const }],
+      segments: [{ type: "line" as const, startNodeId: firstId, endNodeId: secondId }],
+      closed: false,
+      style: defaultStyle,
+    };
+    const next = dispatch(current, createElement(path));
+    setPenDraftPoint(undefined);
+    setEditorState(select(next, [path.id]));
+  };
+
   const resizePointerDown = (event: PointerEvent<HTMLElement>, handle: GroupHandle) => {
     if (!selectedElements.length || handle === "center") return;
     setCenterHover(undefined);
@@ -280,6 +312,22 @@ export function App() {
       return;
     }
     const point = pointAt(event);
+    if (tool === "pen") {
+      const pathNode = pickPathNode(editorRef.current.document, point, zoom);
+      if (pathNode) {
+        const selectedPath = editorRef.current.document.elements.find((element) => element.id === pathNode.elementId && element.type === "path");
+        if (selectedPath?.type === "path" && pathNode.node.kind === "anchor" && selectedPath.nodes[0]?.id === pathNode.node.nodeId && !selectedPath.closed) {
+          setPenDraftPoint(undefined);
+          setEditorState(dispatch(select(editorRef.current, [pathNode.elementId]), closePath(pathNode.elementId)));
+          return;
+        }
+        setEditorState(select(editorRef.current, [pathNode.elementId]));
+        event.currentTarget.setPointerCapture(event.pointerId);
+        setEditorState(beginGesture(editorRef.current));
+        interaction.current = { pointerId: event.pointerId, lastX: event.clientX, lastY: event.clientY, kind: "path-node", pathNode, startClient: { x: event.clientX, y: event.clientY }, dragged: false };
+      } else addPenPoint(point);
+      return;
+    }
       const formaNodeHit = tool === "forma" ? pickFormaNode(editorRef.current.document, point, zoom) : undefined;
       const contourNodeHit = formaNodeHit?.contourNode;
       const nodeHit = tool !== "forma" && transformMode === "resize" ? pickNode(editorRef.current.document, point, zoom) : undefined;
@@ -379,6 +427,16 @@ export function App() {
       setEditorState(previewGestureFromBase(editorRef.current, moveElements(active.ids, snapped.delta)));
       return;
     }
+    if (active.kind === "path-node" && active.pathNode && active.startClient && movementExceedsThreshold(active.startClient, { x: event.clientX, y: event.clientY })) {
+      const pathNode = active.pathNode.node;
+      const point = pointAt(event);
+      const command = pathNode.kind === "anchor"
+        ? movePathNode(active.pathNode.elementId, pathNode.nodeId, point)
+        : movePathHandle(active.pathNode.elementId, pathNode.segmentIndex ?? -1, pathNode.handle ?? "control1", point);
+      active.dragged = true;
+      setEditorState(previewGestureFromBase(editorRef.current, command));
+      return;
+    }
     if (active.kind === "contour-node" && active.formaNode) {
       const point = pointAt(event);
       if (!active.startClient || !movementExceedsThreshold(active.startClient, { x: event.clientX, y: event.clientY })) return;
@@ -417,7 +475,7 @@ export function App() {
     } else if (active.kind === "rotate" && active.ids && active.center && active.start && !cancelled) {
       const rotation = rotationFromDrag(active.element && isRotatableElement(active.element) ? active.element.rotation : 0, active.center, active.start, pointAt(event), event.shiftKey ? Math.PI / 12 : 0);
       setEditorState(commitGesture(previewGestureFromBase(editorRef.current, active.ids.length === 1 && active.element && isRotatableElement(active.element) ? rotateElement(active.element.id, rotation) : rotateElementsAroundCenter(active.ids, rotation - (active.element && isRotatableElement(active.element) ? active.element.rotation : 0)))));
-      } else if (["resize", "rotate", "move", "contour-node"].includes(active.kind)) {
+     } else if (["resize", "rotate", "move", "contour-node", "path-node"].includes(active.kind)) {
       setEditorState(cancelled ? cancelGesture(editorRef.current) : commitGesture(editorRef.current));
     } else if (active.kind === "draw") {
       const end = active.start ? pointAt(event) : undefined;
@@ -476,8 +534,9 @@ export function App() {
     return () => removeEventListener("keydown", onKey);
     }, [selectionKey, selectedFormaNodeKeys, tool, selectedElements]);
 
-    const formaNodes: readonly FormaNodeOverlay[] = tool === "forma" ? selectedElements.flatMap((element): readonly FormaNodeOverlay[] => element.type === "contour"
+    const formaNodes: readonly FormaNodeOverlay[] = (tool === "forma" || tool === "pen") ? selectedElements.flatMap((element): readonly FormaNodeOverlay[] => element.type === "contour"
       ? contourVertexNodes(element).map((node) => ({ kind: "contour" as const, key: `${node.elementId}:c:${node.ringIndex}:${node.pointIndex}`, elementId: node.elementId, point: node.point, contour: node }))
+      : element.type === "path" ? pathGeometryNodes(element).map((node, nodeIndex) => ({ kind: "path" as const, key: `${element.id}:p:${nodeIndex}`, elementId: element.id, point: node.point, nodeIndex, pathNode: { elementId: element.id, node } }))
       : realGeometryNodes(element).map((node, nodeIndex) => ({ kind: "path" as const, key: `${element.id}:p:${nodeIndex}`, elementId: element.id, point: node.point, nodeIndex }))) : [];
    const groupPoints = selectedBounds ? groupHandlePoints(selectedBounds) : undefined;
    const handlePoints = selectedElement?.type === "line" || selectedElement?.type === "path" ? undefined : selectedElement?.type === "contour" && selectedBounds ? [groupHandlePoints(selectedBounds).nw, groupHandlePoints(selectedBounds).n, groupHandlePoints(selectedBounds).ne, groupHandlePoints(selectedBounds).e, groupHandlePoints(selectedBounds).se, groupHandlePoints(selectedBounds).s, groupHandlePoints(selectedBounds).sw, groupHandlePoints(selectedBounds).w] as const : selectedElement && selectedElement.type !== "contour" ? rotatedResizeHandles(selectedElement) : undefined;
@@ -689,12 +748,12 @@ export function App() {
                 {objectPropertySections()}{mirrorButton("horizontal")}{mirrorButton("vertical")}{shapeOperations()}
          </div> : <p className="muted">Seleccione un objeto para editar sus propiedades.</p>}
       </section>
-       <aside className="workspace-tools"><div className="tool-column" role="toolbar" aria-label="Herramientas de diseño">{(["select", "forma", "rectangle", "ellipse", "line", "pan"] as const).map((item) => <ToolButton key={item} label={toolCursorLabels[item]} icon={item} active={tool === item} onClick={() => { setTransformMode("resize"); setTool(item); }} />)}</div></aside>
+        <aside className="workspace-tools"><div className="tool-column" role="toolbar" aria-label="Herramientas de diseño">{(["select", "forma", "pen", "rectangle", "ellipse", "line", "pan"] as const).map((item) => <ToolButton key={item} label={toolCursorLabels[item]} icon={item} active={tool === item} onClick={() => { setTransformMode("resize"); setPenDraftPoint(undefined); setTool(item); }} />)}</div></aside>
       <section className="canvas-area">
         <header className="canvas-header"><span>DISEÑO / SIN TÍTULO</span><span>{document.elements.length} objetos · {document.page.width} × {document.page.height} mm</span><div className="zoom-controls"><button aria-label="Alejar" onClick={() => setZoom(zoom - 0.5)}>−</button><span className="zoom-label">{Math.round(zoom * 100 / 3)}%</span><button aria-label="Acercar" onClick={() => setZoom(zoom + 0.5)}>+</button></div></header>
            <div ref={canvas} className={`${grid ? "canvas" : "canvas no-grid"}${isDrawingTool(tool) ? " drawing-tool" : ""}`} onPointerDown={onCanvasPointerDown} onPointerMove={onCanvasPointerMove} onPointerUp={(event) => finishPointer(event, false)} onPointerCancel={(event) => finishPointer(event, true)} onPointerLeave={() => setCursorPoint(undefined)} onDoubleClick={onCanvasDoubleClick} onWheel={onWheel}>
            <div className="page" style={pageStyle}><div className="page-svg" dangerouslySetInnerHTML={{ __html: rendered.success ? rendered.svg : "" }} /></div>
-            {formaNodes.length > 0 && <div className="contour-node-overlay" role="group" aria-label="Nodos de forma">{formaNodes.map((node) => { const screen = pagePointToCanvas(node.point, zoom, panMm); const selected = selectedFormaNodeKeys.includes(node.key); return <button key={node.key} type="button" className={`contour-node${selected ? " active selected" : ""}`} data-contour-node={node.key} aria-label={node.kind === "contour" ? `Nodo del contorno, anillo ${node.contour.ringIndex + 1}, punto ${node.contour.pointIndex + 1}` : `Nodo editable ${node.nodeIndex + 1}`} style={{ left: screen.x, top: screen.y }} onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); setSelectedFormaNodeKeys((current) => event.shiftKey ? current.includes(node.key) ? current.filter((value) => value !== node.key) : [...current, node.key] : [node.key]); canvas.current?.setPointerCapture(event.pointerId); setEditorState(beginGesture(editorRef.current)); interaction.current = { pointerId: event.pointerId, lastX: event.clientX, lastY: event.clientY, kind: "contour-node", ...(node.kind === "contour" ? { contourNode: node.contour } : {}), formaNode: node.kind === "contour" ? { elementId: node.contour.elementId, contourNode: node.contour, point: node.point } : { elementId: node.elementId, nodeIndex: node.nodeIndex, point: node.point }, startClient: { x: event.clientX, y: event.clientY }, dragged: false }; }} />; })}</div>}
+             {formaNodes.length > 0 && <div className="contour-node-overlay" role="group" aria-label={tool === "pen" ? "Nodos y controles del trazado" : "Nodos de forma"}>{formaNodes.map((node) => { const screen = pagePointToCanvas(node.point, zoom, panMm); const selected = selectedFormaNodeKeys.includes(node.key); return <button key={node.key} type="button" className={`contour-node${selected ? " active selected" : ""}`} data-contour-node={node.key} aria-label={node.kind === "contour" ? `Nodo del contorno, anillo ${node.contour.ringIndex + 1}, punto ${node.contour.pointIndex + 1}` : node.pathNode?.node.kind === "control" ? `Control Bézier ${node.pathNode.node.handle === "control1" ? "inicial" : "final"}` : `Nodo editable ${node.nodeIndex + 1}`} style={{ left: screen.x, top: screen.y }} onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); setSelectedFormaNodeKeys((current) => event.shiftKey ? current.includes(node.key) ? current.filter((value) => value !== node.key) : [...current, node.key] : [node.key]); canvas.current?.setPointerCapture(event.pointerId); if (node.pathNode) { setEditorState(beginGesture(select(editorRef.current, [node.elementId]))); interaction.current = { pointerId: event.pointerId, lastX: event.clientX, lastY: event.clientY, kind: "path-node", pathNode: node.pathNode, startClient: { x: event.clientX, y: event.clientY }, dragged: false }; } else { setEditorState(beginGesture(editorRef.current)); interaction.current = { pointerId: event.pointerId, lastX: event.clientX, lastY: event.clientY, kind: "contour-node", ...(node.kind === "contour" ? { contourNode: node.contour } : {}), formaNode: node.kind === "contour" ? { elementId: node.contour.elementId, contourNode: node.contour, point: node.point } : { elementId: node.elementId, nodeIndex: node.nodeIndex, point: node.point }, startClient: { x: event.clientX, y: event.clientY }, dragged: false }; } }} />; })}</div>}
           {centerHoverStyle && <div className="selection-center-feedback" style={centerHoverStyle} aria-hidden="true"><span className="selection-center-mark">×</span><span className="selection-center-label">centro</span></div>}
             {tool !== "forma" && transformMode === "resize" && (handlePoints || groupPoints) && <div className="resize-handles">{handleNames.map((handle) => <button key={handle} type="button" className={`resize-handle resize-handle-${handle}`} data-resize-handle={handle} aria-label={`Redimensionar ${handle}`} style={handleStyle(handle)} onPointerDown={(event) => resizePointerDown(event, handle)} onPointerUp={(event) => finishPointer(event, false)} onPointerCancel={(event) => finishPointer(event, true)} />)}{groupPoints && !isDrawingTool(tool) && <button type="button" className="resize-handle resize-handle-center" data-resize-handle="center" aria-label="Centro del grupo" style={handleStyle("center")} onPointerDown={(event) => event.stopPropagation()} />}</div>}
            {transformMode === "rotate" && selectedElements.length > 0 && <div className="rotation-controls" aria-label="Controles de rotación"><span className="rotation-center" style={selectedElements.length > 1 && selectedBounds ? { left: pagePointToCanvas(groupCenter(selectedBounds), zoom, panMm).x, top: pagePointToCanvas(groupCenter(selectedBounds), zoom, panMm).y } : centerStyle} aria-hidden="true" />{rotationPoints.map((point, index) => { const screen = pagePointToCanvas(point, zoom, panMm); return <button key={index} type="button" className="rotation-handle" aria-label={`Rotar objeto, control ${index + 1}`} style={{ left: screen.x, top: screen.y }} onPointerDown={rotationPointerDown} onPointerUp={(event) => finishPointer(event, false)} onPointerCancel={(event) => finishPointer(event, true)}><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M15.5 8A6 6 0 1 0 16 12" /><path d="m12.5 4 3 4-5 .5" /></svg></button>; })}</div>}
@@ -724,9 +783,9 @@ export function App() {
   </main>;
 }
 
-const toolDescriptions: Record<string, string> = { Seleccion: "Seleccione, coloque o transforme objetos.", Forma: "Editar la forma mediante sus nodos.", Rectángulo: "Dibuje formas rectangulares.", Elipse: "Dibuje formas elípticas.", Línea: "Dibuje líneas rectas.", Desplazar: "Desplace el espacio de trabajo." };
+const toolDescriptions: Record<string, string> = { Seleccion: "Seleccione, coloque o transforme objetos.", Forma: "Editar la forma mediante sus nodos.", Pluma: "Cree un trazado abierto con clics. Haga clic en el primer nodo para cerrarlo; arrastre nodos y controles para editarlos.", Rectángulo: "Dibuje formas rectangulares.", Elipse: "Dibuje formas elípticas.", Línea: "Dibuje líneas rectas.", Desplazar: "Desplace el espacio de trabajo." };
 function ToolIcon({ icon }: { icon: Tool }) {
-  const shape = icon === "select" ? <path d="m5 3 13 8-6 2-3 6z" /> : icon === "forma" ? <><path d="M5 6h14v12H5z" /><circle cx="5" cy="6" r="1.5" fill="currentColor" /><circle cx="19" cy="6" r="1.5" fill="currentColor" /><circle cx="19" cy="18" r="1.5" fill="currentColor" /><circle cx="5" cy="18" r="1.5" fill="currentColor" /></> : icon === "rectangle" ? <rect x="5" y="5" width="14" height="14" rx="1" /> : icon === "ellipse" ? <circle cx="12" cy="12" r="7" /> : icon === "line" ? <path d="M5 19 19 5" /> : <><path d="M12 4v16M4 12h16" /><path d="m9 7 3-3 3 3M9 17l3 3 3-3M7 9l-3 3 3 3M17 9l3 3-3 3" /></>;
+  const shape = icon === "select" ? <path d="m5 3 13 8-6 2-3 6z" /> : icon === "forma" ? <><path d="M5 6h14v12H5z" /><circle cx="5" cy="6" r="1.5" fill="currentColor" /><circle cx="19" cy="6" r="1.5" fill="currentColor" /><circle cx="19" cy="18" r="1.5" fill="currentColor" /><circle cx="5" cy="18" r="1.5" fill="currentColor" /></> : icon === "pen" ? <><path d="M5 19 18 6l2 2L7 21z" /><path d="m14 7 3 3" /><circle cx="5" cy="19" r="1.5" /></> : icon === "rectangle" ? <rect x="5" y="5" width="14" height="14" rx="1" /> : icon === "ellipse" ? <circle cx="12" cy="12" r="7" /> : icon === "line" ? <path d="M5 19 19 5" /> : <><path d="M12 4v16M4 12h16" /><path d="m9 7 3-3 3 3M9 17l3 3 3-3M7 9l-3 3 3 3M17 9l3 3-3 3" /></>;
   return <svg className="tool-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{shape}</svg>;
 }
 function ToolButton({ label, icon, active, onClick }: { label: string; icon: Tool; active: boolean; onClick: () => void }) {

@@ -36,6 +36,21 @@ test("loads the editor workspace", async ({ page }) => {
   await expect(page).toHaveTitle("Nodra Editor");
   await expect(page.getByRole("region", { name: "Barra de propiedades" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Seleccion" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Pluma" })).toHaveAttribute("aria-description", /Cree un trazado abierto/);
+});
+
+test("creates an open path with Pluma and exposes its anchors", async ({ page }) => {
+  await page.goto("/");
+  const pageBounds = await page.locator(".page").boundingBox();
+  expect(pageBounds).not.toBeNull();
+  await page.getByRole("button", { name: "Pluma" }).click();
+  const x = pageBounds!.x + 80;
+  const y = pageBounds!.y + 80;
+  await page.mouse.click(x, y);
+  await page.mouse.click(x + 80, y + 30);
+  await page.mouse.click(x + 160, y);
+  await expect(page.locator(".page-svg svg path[data-element-id]")).toHaveCount(1);
+  await expect(page.locator(".contour-node")).toHaveCount(3);
 });
 
 test("creates, transforms, and undoes a rectangle", async ({ page }) => {
