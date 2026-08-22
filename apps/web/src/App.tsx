@@ -523,7 +523,7 @@ export function App() {
       }
     }} /></label>;
   };
-  const rotationField = (element: Element) => {
+  const rotationField = (element: RotatableElement) => {
     const key = `${element.id}:rotation`;
     const restore = () => setDrafts((current) => ({ ...current, [key]: formatMm(rotationDegreesValue(element)) }));
     const commit = () => {
