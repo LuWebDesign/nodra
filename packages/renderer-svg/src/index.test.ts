@@ -81,4 +81,10 @@ describe("SVG renderer boundary", () => {
     renderSvg(source, { zoom: 3, panMm: { x: 4, y: 5 } });
     expect(source).toEqual(before);
   });
+  it("renders canonical open paths with line and cubic commands", () => {
+    const source = withElements(createDocument("path", [layer]), [{ type: "path", id: elementId("path"), layerId: layer.id, nodes: [{ id: "a", anchor: { x: 0, y: 0 }, join: "corner" }, { id: "b", anchor: { x: 10, y: 0 }, join: "smooth" }, { id: "c", anchor: { x: 20, y: 0 }, join: "corner" }], segments: [{ type: "line", startNodeId: "a", endNodeId: "b" }, { type: "cubicBezier", startNodeId: "b", endNodeId: "c", control1: { x: 12, y: 5 }, control2: { x: 18, y: 5 } }], closed: false, style }]);
+    const result = renderSvg(source, { zoom: 1, panMm: { x: 0, y: 0 } });
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.svg).toContain("M0 0 L10 0 C12 5 18 5 20 0");
+  });
 });
