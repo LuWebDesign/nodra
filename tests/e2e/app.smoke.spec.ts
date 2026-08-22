@@ -53,6 +53,26 @@ test("creates an open path with Pluma and exposes its anchors", async ({ page })
   await expect(page.locator(".contour-node")).toHaveCount(3);
 });
 
+test("splits a selected path segment from Forma and supports undo and redo", async ({ page }) => {
+  await page.goto("/");
+  const pageBounds = await page.locator(".page").boundingBox();
+  expect(pageBounds).not.toBeNull();
+  await page.getByRole("button", { name: "Pluma" }).click();
+  const start = { x: pageBounds!.x + 100, y: pageBounds!.y + 180 };
+  await page.mouse.click(start.x, start.y);
+  await page.mouse.click(start.x + 160, start.y);
+  await page.mouse.click(start.x + 80, start.y);
+
+  const split = page.getByRole("button", { name: "Dividir segmento del trazado en el punto medio" });
+  await expect(split).toBeVisible();
+  await split.click();
+  await expect(page.locator(".contour-node")).toHaveCount(3);
+  await page.getByRole("button", { name: "Deshacer" }).click();
+  await expect(page.locator(".contour-node")).toHaveCount(2);
+  await page.getByRole("button", { name: "Rehacer" }).click();
+  await expect(page.locator(".contour-node")).toHaveCount(3);
+});
+
 test("creates a cubic segment when placing an anchor with a drag", async ({ page }) => {
   await page.goto("/");
   const pageBounds = await page.locator(".page").boundingBox();
