@@ -1,10 +1,10 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent, type PointerEvent, type ReactNode, type WheelEvent } from "react";
 import { createProject, elementId, layerId, pageId, revision, type DocumentSnapshot, type Element, type ElementId, type PointMm, type ProjectSnapshot } from "@nodra/domain";
-import { addToSelection, beginGesture, cancelGesture, clearSelection, closePath, commitGesture, createElement, createPathCubicNode, createPathNode, deleteContourNodes, deleteElement, deleteElementNodes, dispatch, duplicateElements, flipElements, insertFormaNode, moveElements, movePathHandle, movePathNode, previewGesture, previewGestureFromBase, redo, resizeElement, resizeElements, rotateElement, rotateElementsAroundCenter, select, selectForPointerDown, setPathJoin, shapeOperation, undo, updateContourNode, updateElement, updateElementNode, updateElementStyles, updatePage, type FlipAxis, type ShapeOperation } from "@nodra/editor-core";
+import { addToSelection, beginGesture, cancelGesture, clearSelection, closePath, commitGesture, createElement, createPathCubicNode, createPathNode, deleteContourNodes, deleteElement, deleteElementNodes, dispatch, duplicateElements, flipElements, insertFormaNode, moveElements, movePathHandle, movePathNode, previewGesture, previewGestureFromBase, redo, resizeElement, resizeElements, rotateElement, rotateElementsAroundCenter, select, selectForPointerDown, setPathJoin, shapeOperation, splitPathSegment, undo, updateContourNode, updateElement, updateElementNode, updateElementStyles, updatePage, type FlipAxis, type ShapeOperation } from "@nodra/editor-core";
 import { boundsOfElements, contourVertexNodes, elementCenter, groupCenter, groupHandlePoints, pathGeometryNodes, realGeometryNodes, resizeHandle, rotatedResizeHandles, rotationFromDrag, rotationHandlePoints, type Direction, type GroupHandle, type ResizeHandle } from "@nodra/geometry";
 import { DebouncedAutosave, DexieProjectRepository, requestStoragePersistence } from "@nodra/persistence";
 import { renderSvg } from "@nodra/renderer-svg";
-import { canActivateRotation, centerPageInCanvas, clientPointToCanvas, cubicPlacementControls, formaNodeKey, hoveredSelectionCenter, isDrawingTool, marqueeSelection, movementExceedsThreshold, normalizeBounds, normalizeDrag, pagePointToCanvas, pickElement, pickFormaNode, pickFormaSegment, pickNode, pickPathNode, pointerDownIntent, screenDeltaToMm, screenPointToMm, selectedNodeAnchor, snapMoveDelta, zoomAtPoint, type ContourNodeHit, type FormaNodeHit, type NodeHit, type PathNodeHit, type SnapGuide, type TransformMode } from "./interaction.js";
+import { canActivateRotation, centerPageInCanvas, clientPointToCanvas, cubicPlacementControls, formaNodeKey, hoveredSelectionCenter, isDrawingTool, marqueeSelection, movementExceedsThreshold, normalizeBounds, normalizeDrag, pagePointToCanvas, pickElement, pickFormaNode, pickFormaSegment, pickNode, pickPathNode, pickPathSegment, pointerDownIntent, screenDeltaToMm, screenPointToMm, selectedNodeAnchor, snapMoveDelta, zoomAtPoint, type ContourNodeHit, type FormaNodeHit, type NodeHit, type PathNodeHit, type SnapGuide, type TransformMode } from "./interaction.js";
 import { aspectGeometryPatch, aspectSize, cornerRadiusPatch, formatMm, geometryValue, rotationDegreesValue, rotationPatch, type GeometryField, type PropertyElement, type RotatableElement } from "./propertyBar.js";
 import { useDocumentStore, usePersistenceStore, useUiStore, useViewportStore, type Tool } from "./stores.js";
 import { pathJoinGuidance, pathJoinOptions } from "./pathJoins.js";
@@ -75,6 +75,7 @@ export function App() {
   const [centerHover, setCenterHover] = useState<{ elementId: ElementId; point: PointMm }>();
   const [transformMode, setTransformMode] = useState<TransformMode>("resize");
   const [selectedFormaNodeKeys, setSelectedFormaNodeKeys] = useState<readonly string[]>([]);
+  const [selectedPathSegment, setSelectedPathSegment] = useState<{ readonly elementId: ElementId; readonly segmentIndex: number }>();
   const [inspectorTab, setInspectorTab] = useState<InspectorTab>("properties");
   const [transformDirection, setTransformDirection] = useState<Direction>("center");
   const [directionTooltipVisible, setDirectionTooltipVisible] = useState(false);
@@ -150,6 +151,7 @@ export function App() {
     : selectedElement && isPropertyElement(selectedElement) ? selectedElement : undefined;
   const selectionKey = selection.join(":");
   useEffect(() => { setTransformMode("resize"); }, [tool, project.activePageId, selectionKey]);
+  useEffect(() => { setSelectedPathSegment(undefined); }, [tool, project.activePageId]);
 
   useEffect(() => {
     setCenterHover(undefined);
@@ -339,6 +341,13 @@ export function App() {
         setEditorState(beginGesture(editorRef.current));
         interaction.current = { pointerId: event.pointerId, lastX: event.clientX, lastY: event.clientY, kind: "path-node", pathNode, startClient: { x: event.clientX, y: event.clientY }, dragged: false };
       } else {
+        const pathSegmentHit = pickPathSegment(editorRef.current.document, point, zoom);
+        if (pathSegmentHit) {
+          setPenDraftPoint(undefined);
+          setSelectedPathSegment({ elementId: pathSegmentHit.elementId, segmentIndex: pathSegmentHit.segmentIndex });
+          setEditorState(select(editorRef.current, [pathSegmentHit.elementId]));
+          return;
+        }
         const selectedPath = editorRef.current.selection.length === 1 ? editorRef.current.document.elements.find((element) => element.id === editorRef.current.selection[0] && element.type === "path") : undefined;
         const last = selectedPath?.type === "path" && !selectedPath.closed ? selectedPath.nodes.at(-1) : undefined;
         const start = last?.anchor ?? penDraftPoint;
@@ -353,7 +362,8 @@ export function App() {
       const formaNodeHit = tool === "forma" ? pickFormaNode(editorRef.current.document, point, zoom) : undefined;
       const contourNodeHit = formaNodeHit?.contourNode;
       const nodeHit = tool !== "forma" && transformMode === "resize" ? pickNode(editorRef.current.document, point, zoom) : undefined;
-      const hit = formaNodeHit?.elementId ?? nodeHit?.elementId ?? pickElement(editorRef.current.document, point, zoom);
+      const pathSegmentHit = tool === "forma" && !formaNodeHit ? pickPathSegment(editorRef.current.document, point, zoom) : undefined;
+      const hit = formaNodeHit?.elementId ?? pathSegmentHit?.elementId ?? nodeHit?.elementId ?? pickElement(editorRef.current.document, point, zoom);
     if (isDrawingTool(tool) && pointerDownIntent(tool, hit) === "draw") {
       event.currentTarget.setPointerCapture(event.pointerId);
       setEditorState(beginGesture(editorRef.current));
@@ -365,14 +375,17 @@ export function App() {
       setEditorState(next);
       if (!next.selection.includes(hit)) return;
       event.currentTarget.setPointerCapture(event.pointerId);
-       if (tool === "forma") {
-          if (formaNodeHit && next.selection.includes(formaNodeHit.elementId)) {
-            const key = formaNodeKey(formaNodeHit);
+        if (tool === "forma") {
+           if (formaNodeHit && next.selection.includes(formaNodeHit.elementId)) {
+             setSelectedPathSegment(undefined);
+             const key = formaNodeKey(formaNodeHit);
             setSelectedFormaNodeKeys((current) => event.shiftKey ? current.includes(key) ? current.filter((value) => value !== key) : [...current, key] : [key]);
             setEditorState(beginGesture(next));
-            interaction.current = { pointerId: event.pointerId, lastX: event.clientX, lastY: event.clientY, kind: "contour-node", ...(contourNodeHit ? { contourNode: contourNodeHit } : {}), formaNode: formaNodeHit, startClient: { x: event.clientX, y: event.clientY }, dragged: false };
-         }
-         return;
+             interaction.current = { pointerId: event.pointerId, lastX: event.clientX, lastY: event.clientY, kind: "contour-node", ...(contourNodeHit ? { contourNode: contourNodeHit } : {}), formaNode: formaNodeHit, startClient: { x: event.clientX, y: event.clientY }, dragged: false };
+           } else if (pathSegmentHit) {
+             setSelectedPathSegment({ elementId: pathSegmentHit.elementId, segmentIndex: pathSegmentHit.segmentIndex });
+          } else setSelectedPathSegment(undefined);
+          return;
        }
        const anchor = selectedNodeAnchor(nodeHit, next.selection);
       if (isDrawingTool(tool)) {
@@ -385,6 +398,7 @@ export function App() {
       return;
     }
     event.currentTarget.setPointerCapture(event.pointerId);
+    setSelectedPathSegment(undefined);
     interaction.current = { pointerId: event.pointerId, lastX: event.clientX, lastY: event.clientY, kind: "marquee", start: point, startClient: { x: event.clientX, y: event.clientY }, dragged: false, shiftKey: event.shiftKey, document: editorRef.current.document };
   };
 
@@ -589,8 +603,25 @@ export function App() {
        : realGeometryNodes(element).map((node, nodeIndex) => ({ kind: "path" as const, key: `${element.id}:p:${nodeIndex}`, elementId: element.id, point: node.point, nodeIndex }))) : [];
     const selectedPathAnchor = selectedElement?.type === "path"
       ? (() => { const selectedPathOverlay = formaNodes.find((node): node is Extract<FormaNodeOverlay, { readonly kind: "path" }> => node.kind === "path" && "pathNode" in node && node.pathNode?.node.kind === "anchor" && selectedFormaNodeKeys.includes(node.key)); const anchor = selectedPathOverlay?.pathNode?.node; return anchor?.kind === "anchor" ? selectedElement.nodes.find((node) => node.id === anchor.nodeId) : undefined; })()
-      : undefined;
-   const pathJoinControls = selectedElement?.type === "path" && selectedPathAnchor ? <section className="path-join-card" role="group" aria-label="Unión del ancla seleccionada">
+       : undefined;
+    const splitSelectedPathSegment = () => {
+      const target = selectedPathSegment;
+      if (!target || selectedElement?.id !== target.elementId) return;
+      const newNodeId = `path-node-${crypto.randomUUID()}`;
+      const next = dispatch(editorRef.current, splitPathSegment(target.elementId, target.segmentIndex, newNodeId));
+      if (next === editorRef.current) return;
+      const path = next.document.elements.find((element) => element.id === target.elementId && element.type === "path");
+      const nodeIndex = path?.type === "path" ? path.nodes.findIndex((node) => node.id === newNodeId) : -1;
+      setSelectedPathSegment(undefined);
+      if (nodeIndex >= 0) setSelectedFormaNodeKeys([`${target.elementId}:p:${nodeIndex}`]);
+      setEditorState(next);
+    };
+    const pathSegmentControls = selectedElement?.type === "path" && selectedPathSegment?.elementId === selectedElement.id ? <section className="path-join-card" role="group" aria-label="Segmento seleccionado">
+      <div className="panel-title">SEGMENTO DEL TRAZADO</div>
+      <p className="muted">Divide el segmento seleccionado en su punto medio.</p>
+      <button type="button" aria-label="Dividir segmento del trazado en el punto medio" onClick={splitSelectedPathSegment}>Dividir segmento</button>
+    </section> : null;
+    const pathJoinControls = selectedElement?.type === "path" && selectedPathAnchor ? <section className="path-join-card" role="group" aria-label="Unión del ancla seleccionada">
      <div className="panel-title">UNIÓN DEL ANCLA</div>
      <p className="muted">{pathJoinGuidance}</p>
      <div className="path-join-buttons">{pathJoinOptions.map((option) => <button key={option.value} type="button" className="path-join-button" aria-label={option.label} aria-pressed={selectedPathAnchor.join === option.value} title={option.description} onClick={() => setEditorState(dispatch(editorRef.current, setPathJoin(selectedElement.id, selectedPathAnchor.id, option.value)))}>{option.label}</button>)}</div>
@@ -826,7 +857,7 @@ export function App() {
            <button type="button" role="tab" aria-selected={inspectorTab === "text"} className={inspectorTab === "text" ? "active" : ""} onClick={() => setInspectorTab("text")}>Texto</button>
          </div>
          <div className="inspector-tab-content" role="tabpanel">
-                {inspectorTab === "properties" && <>{selectedElements.length === 0 ? <section className="inspector-card"><div className="panel-title">PÁGINA</div><div className="preset-row"><button onClick={() => setPage(1200, 900)}>Horizontal</button><button onClick={() => setPage(900, 1200)}>Vertical</button></div><div className="fields"><Field label="W" value={document.page.width} onChange={(value) => setPage(value, document.page.height)} /><Field label="H" value={document.page.height} onChange={(value) => setPage(document.page.width, value)} /></div><label className="grid-toggle"><input type="checkbox" checked={grid} onChange={(event) => setGrid(event.target.checked)} /> Mostrar cuadrícula del espacio de trabajo</label></section> : <section className="inspector-card inspector-object-card"><div className="panel-title">OBJETO</div>{propertyElement ? <div className="inspector-object-properties">{objectPropertySections(true)}</div> : <><div className="selected-type">{selectedElement?.type === "contour" ? "CONTORNO" : selectedElement?.type === "path" ? "TRAZADO" : "LÍNEA"}</div><p className="muted">{selectedElement?.type === "contour" ? "Los contornos conservan su geometría real; las dimensiones no están disponibles." : selectedElement?.type === "path" ? "Los trazados conservan sus nodos y segmentos." : "Las líneas no tienen dimensiones rectangulares."}</p>{selectedElement && isRotatableElement(selectedElement) && rotationField(selectedElement)}</>}</section>}{pathJoinControls}</>}
+             {inspectorTab === "properties" && <>{selectedElements.length === 0 ? <section className="inspector-card"><div className="panel-title">PÁGINA</div><div className="preset-row"><button onClick={() => setPage(1200, 900)}>Horizontal</button><button onClick={() => setPage(900, 1200)}>Vertical</button></div><div className="fields"><Field label="W" value={document.page.width} onChange={(value) => setPage(value, document.page.height)} /><Field label="H" value={document.page.height} onChange={(value) => setPage(document.page.width, value)} /></div><label className="grid-toggle"><input type="checkbox" checked={grid} onChange={(event) => setGrid(event.target.checked)} /> Mostrar cuadrícula del espacio de trabajo</label></section> : <section className="inspector-card inspector-object-card"><div className="panel-title">OBJETO</div>{propertyElement ? <div className="inspector-object-properties">{objectPropertySections(true)}</div> : <><div className="selected-type">{selectedElement?.type === "contour" ? "CONTORNO" : selectedElement?.type === "path" ? "TRAZADO" : "LÍNEA"}</div><p className="muted">{selectedElement?.type === "contour" ? "Los contornos conservan su geometría real; las dimensiones no están disponibles." : selectedElement?.type === "path" ? "Los trazados conservan sus nodos y segmentos." : "Las líneas no tienen dimensiones rectangulares."}</p>{selectedElement && isRotatableElement(selectedElement) && rotationField(selectedElement)}</>}</section>}{pathJoinControls}{pathSegmentControls}</>}
               {inspectorTab === "transform" && transformControls()}
            {inspectorTab === "text" && <section className="inspector-card"><div className="panel-title">TEXTO</div><p className="muted">Las propiedades de texto estarán disponibles en una próxima iteración.</p></section>}
          </div>
