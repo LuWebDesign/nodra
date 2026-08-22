@@ -53,6 +53,9 @@
 .path-join-buttons { display:grid; grid-template-columns:repeat(3,1fr); gap:6px; }
 .path-join-button { padding:7px 4px; color:var(--text); background:var(--bg); border:1px solid var(--line); border-radius:4px; font-size:11px; }
 .path-join-button:hover,.path-join-button:focus-visible,.path-join-button[aria-pressed="true"] { color:var(--accent); border-color:var(--accent); background:#172b36; }
+.path-closure-card > button { width:100%; padding:7px 4px; color:var(--text); background:var(--bg); border:1px solid var(--line); border-radius:4px; font-size:11px; }
+.path-closure-card > button:hover,.path-closure-card > button:focus-visible { color:var(--accent); border-color:var(--accent); }
+.path-fill-hint { margin-bottom:0; }
 .shape-operation-description { position:absolute; z-index:7; top:calc(100% + 7px); left:50%; width:220px; padding:7px 9px; color:var(--text); background:var(--panel-raised); border:1px solid var(--line); border-radius:4px; box-shadow:0 6px 18px #0008; font-size:11px; font-weight:400; line-height:1.35; text-align:left; pointer-events:none; opacity:0; transform:translate(-50%, -4px); transition:opacity .12s ease,transform .12s ease; }
 .shape-operation-button:hover .shape-operation-description,.shape-operation-button:focus-visible .shape-operation-description { opacity:1; transform:translate(-50%, 0); }
 .shape-operation-buttons button:disabled { cursor:not-allowed; opacity:.45; }
