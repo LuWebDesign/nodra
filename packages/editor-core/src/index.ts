@@ -176,6 +176,67 @@ export const closePath = (pathId: ElementId): EditorCommand => ({ name: `path-cl
 export const openPath = (pathId: ElementId): EditorCommand => ({ name: `path-open:${pathId}`, apply: (document) => { const path = pathAt(document, pathId); if (!path || !path.closed) return { success: false, error: "Path is already open" }; return updatePath(document, { ...path, closed: false, segments: path.segments.slice(0, -1) }); } });
 export const reversePath = (pathId: ElementId): EditorCommand => ({ name: `path-reverse:${pathId}`, apply: (document) => { const path = pathAt(document, pathId); if (!path) return { success: false, error: "Path not found" }; const nodes = [...path.nodes].reverse(); const segments = [...path.segments].reverse().map((segment) => segment.type === "line" ? { ...segment, startNodeId: segment.endNodeId, endNodeId: segment.startNodeId } : { ...segment, startNodeId: segment.endNodeId, endNodeId: segment.startNodeId, control1: segment.control2, control2: segment.control1 }); return updatePath(document, { ...path, nodes, segments }); } });
 
+const lineControls = (start: PointMm, end: PointMm): { readonly control1: PointMm; readonly control2: PointMm } => ({
+  control1: { x: start.x + (end.x - start.x) / 3, y: start.y + (end.y - start.y) / 3 },
+  control2: { x: start.x + (end.x - start.x) * 2 / 3, y: start.y + (end.y - start.y) * 2 / 3 },
+});
+
+/** Removes path anchors while rebuilding only the segments made adjacent by the removal. */
+export const deletePathNodes = (pathId: ElementId, nodeIds: readonly string[]): EditorCommand => ({
+  name: `path-node-delete:${pathId}:${[...nodeIds].join(",")}`,
+  apply: (document) => {
+    const path = pathAt(document, pathId);
+    if (!path) return { success: false, error: "Path not found" };
+    const requested = [...new Set(nodeIds)];
+    if (!requested.length || requested.some((id) => !path.nodes.some((node) => node.id === id))) return { success: false, error: "Path node not found" };
+    const minimum = path.closed ? 3 : 2;
+    if (path.nodes.length - requested.length < minimum) return { success: false, error: `A ${path.closed ? "closed" : "open"} path must keep at least ${minimum} nodes` };
+
+    const removed = new Set(requested);
+    const nodes = path.nodes.filter((node) => !removed.has(node.id));
+    const originalSegment = (startIndex: number, endIndex: number) => {
+      const indexes: number[] = [];
+      let index = startIndex;
+      do {
+        indexes.push(index);
+        index = (index + 1) % path.nodes.length;
+      } while (index !== endIndex);
+      return indexes.map((segmentIndex) => path.segments[segmentIndex]).filter((segment): segment is NonNullable<typeof segment> => segment !== undefined);
+    };
+    const segments = nodes.slice(0, -1).map((node, index) => {
+      const end = nodes[index + 1]!;
+      const startIndex = path.nodes.findIndex((candidate) => candidate.id === node.id);
+      const endIndex = path.nodes.findIndex((candidate) => candidate.id === end.id);
+      const source = originalSegment(startIndex, endIndex);
+      return rebuildPathSegment(node, end, source);
+    });
+    if (path.closed) {
+      const first = nodes[0]!;
+      const last = nodes.at(-1)!;
+      const startIndex = path.nodes.findIndex((candidate) => candidate.id === last.id);
+      const endIndex = path.nodes.findIndex((candidate) => candidate.id === first.id);
+      segments.push(rebuildPathSegment(last, first, originalSegment(startIndex, endIndex)));
+    }
+    return updatePath(document, { ...path, nodes, segments });
+  },
+});
+
+function rebuildPathSegment(start: PathElement["nodes"][number], end: PathElement["nodes"][number], source: readonly PathElement["segments"][number][]): PathElement["segments"][number] {
+  const firstSegment = source[0];
+  const lastSegment = source.at(-1);
+  const firstCubic = firstSegment?.type === "cubicBezier" ? firstSegment : undefined;
+  const lastCubic = lastSegment?.type === "cubicBezier" ? lastSegment : undefined;
+  if (!firstCubic && !lastCubic) return { type: "line", startNodeId: start.id, endNodeId: end.id };
+  const fallback = lineControls(start.anchor, end.anchor);
+  return {
+    type: "cubicBezier",
+    startNodeId: start.id,
+    endNodeId: end.id,
+    control1: firstCubic?.control1 ?? fallback.control1,
+    control2: lastCubic?.control2 ?? fallback.control2,
+  };
+}
+
 export const updateContourNode = (id: ElementId, address: ContourNodeAddress, point: PointMm): EditorCommand => ({
   name: `contour-node:${id}:${address.ringIndex}:${address.pointIndex}`,
   apply: (document) => {

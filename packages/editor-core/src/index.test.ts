@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createDocument, elementId, layerId, type PathElement, type RectangleElement } from "@nodra/domain";
-import { addToSelection, beginGesture, cancelGesture, clearSelection, closePath, commitGesture, createEditor, createElement, createPathCubicNode, deleteContourNodes, deleteElementNodes, dispatch, duplicateElements, flipElements, insertContourNode, moveElement, moveElements, movePathNode, movePathHandle, previewGesture, previewGestureFromBase, redo, removeFromSelection, reorderLayer, resizeElement, resizeElements, rotateElementsAroundCenter, select, selectForPointerDown, setLayerVisibility, setPathJoin, shapeOperation, splitPathSegment, toggleSelection, undo, updateContourNode, updateElement, updateElementNode, updateElementStyles } from "./index.js";
+import { addToSelection, beginGesture, cancelGesture, clearSelection, closePath, commitGesture, createEditor, createElement, createPathCubicNode, deleteContourNodes, deleteElementNodes, deletePathNodes, dispatch, duplicateElements, flipElements, insertContourNode, moveElement, moveElements, movePathNode, movePathHandle, previewGesture, previewGestureFromBase, redo, removeFromSelection, reorderLayer, resizeElement, resizeElements, rotateElementsAroundCenter, select, selectForPointerDown, setLayerVisibility, setPathJoin, shapeOperation, splitPathSegment, toggleSelection, undo, updateContourNode, updateElement, updateElementNode, updateElementStyles } from "./index.js";
 import type { Direction } from "@nodra/geometry";
 
 const rectangle: RectangleElement = { type: "rectangle", id: elementId("r1"), layerId: layerId("default"), position: { x: 1, y: 2 }, size: { width: 10, height: 5 }, cornerRadius: 0, rotation: 0, style: { stroke: "#000", strokeWidth: 1 } };
@@ -41,6 +41,19 @@ describe("editor core", () => {
     const closed = dispatch(state, closePath(path.id));
     expect(closed.document.elements[0]).toMatchObject({ closed: true });
     expect(dispatch(state, setPathJoin(path.id, "a", "smooth")).document.elements[0]).toBeDefined();
+  });
+  it("deletes an open interior anchor and preserves neighboring cubic endpoint controls", () => {
+    const three: PathElement = { ...path, nodes: [...path.nodes, { id: "c", anchor: { x: 20, y: 0 }, join: "corner" }], segments: [...path.segments, { type: "cubicBezier", startNodeId: "b", endNodeId: "c", control1: { x: 12, y: -4 }, control2: { x: 18, y: -4 } }] };
+    const state = dispatch(createEditor({ ...document, elements: [three] }), deletePathNodes(three.id, ["b"]));
+    expect(state.document.elements[0]).toMatchObject({ nodes: [{ id: "a" }, { id: "c" }], segments: [{ type: "cubicBezier", startNodeId: "a", endNodeId: "c", control1: { x: 2, y: 4 }, control2: { x: 18, y: -4 } }] });
+    expect(state.undo).toHaveLength(1);
+    expect(undo(state).document.elements).toEqual([three]);
+  });
+  it("deletes a closed anchor across the closing join and rejects minimums atomically", () => {
+    const closed: PathElement = { ...path, closed: true, nodes: [...path.nodes, { id: "c", anchor: { x: 5, y: 10 }, join: "smooth" }, { id: "d", anchor: { x: -5, y: 10 }, join: "corner" }], segments: [{ type: "line", startNodeId: "a", endNodeId: "b" }, { type: "line", startNodeId: "b", endNodeId: "c" }, { type: "line", startNodeId: "c", endNodeId: "d" }, { type: "cubicBezier", startNodeId: "d", endNodeId: "a", control1: { x: -4, y: 8 }, control2: { x: -1, y: 2 } }] };
+    const state = dispatch(createEditor({ ...document, elements: [closed] }), deletePathNodes(closed.id, ["a"]));
+    expect(state.document.elements[0]).toMatchObject({ nodes: [{ id: "b" }, { id: "c" }, { id: "d" }], segments: [{ type: "line", startNodeId: "b", endNodeId: "c" }, { type: "line", startNodeId: "c", endNodeId: "d" }, { type: "cubicBezier", startNodeId: "d", endNodeId: "b", control1: { x: -4, y: 8 }, control2: { x: 5, y: 3.333333333333333 } }] });
+    expect(dispatch(state, deletePathNodes(closed.id, ["b"]))).toBe(state);
   });
   it("changes each path join mode as one undoable command", () => {
     let state = dispatch(createEditor({ ...document, elements: [path] }), createElement(path));
