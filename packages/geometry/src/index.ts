@@ -1,5 +1,5 @@
 import polygonClipping, { type MultiPolygon } from "polygon-clipping";
-import type { ContourElement, Element, EllipseElement, LineElement, PointMm, RectangleElement, SizeMm } from "@nodra/domain";
+import type { ContourElement, Element, EllipseElement, LineElement, PathCubicSegment, PathElement, PointMm, RectangleElement, SizeMm } from "@nodra/domain";
 
 export interface Bounds { readonly x: number; readonly y: number; readonly width: number; readonly height: number }
 export interface Viewport { readonly zoom: number; readonly panMm: PointMm }
@@ -9,10 +9,90 @@ export type GroupHandle = ResizeHandle | "center";
 export type Direction = "north-west" | "north" | "north-east" | "west" | "center" | "east" | "south-west" | "south" | "south-east";
 export type ResizeCorner = Extract<ResizeHandle, "nw" | "ne" | "se" | "sw">;
 export interface ResizeGeometry { readonly position: PointMm; readonly size: SizeMm }
-export type RealGeometryNodeKind = "corner" | "edge-midpoint" | "endpoint" | "center" | "cardinal";
-export interface RealGeometryNode { readonly kind: RealGeometryNodeKind; readonly point: PointMm }
+export type RealGeometryNodeKind = "corner" | "edge-midpoint" | "endpoint" | "center" | "cardinal" | "anchor" | "control";
+export interface RealGeometryNode { readonly kind: RealGeometryNodeKind; readonly point: PointMm; readonly nodeId?: string; readonly segmentIndex?: number; readonly handle?: "control1" | "control2" }
 export const ELLIPSE_APPROXIMATION_SEGMENTS = 64;
 export const ROUNDED_RECTANGLE_APPROXIMATION_SEGMENTS = 8;
+
+export interface CubicBezier { readonly p0: PointMm; readonly p1: PointMm; readonly p2: PointMm; readonly p3: PointMm }
+export interface PathGeometryNode { readonly kind: "anchor" | "control"; readonly nodeId: string; readonly segmentIndex?: number; readonly handle?: "control1" | "control2"; readonly point: PointMm }
+const cubic = (segment: PathCubicSegment, path: PathElement): CubicBezier => {
+  const start = path.nodes.find((node) => node.id === segment.startNodeId);
+  const end = path.nodes.find((node) => node.id === segment.endNodeId);
+  if (!start || !end) throw new Error("Cubic segment references an unknown node");
+  return { p0: start.anchor, p1: segment.control1, p2: segment.control2, p3: end.anchor };
+};
+export function evaluateCubicBezier(curve: CubicBezier, t: number): PointMm {
+  if (!Number.isFinite(t)) throw new Error("t must be finite");
+  const u = 1 - t;
+  return { x: u ** 3 * curve.p0.x + 3 * u ** 2 * t * curve.p1.x + 3 * u * t ** 2 * curve.p2.x + t ** 3 * curve.p3.x, y: u ** 3 * curve.p0.y + 3 * u ** 2 * t * curve.p1.y + 3 * u * t ** 2 * curve.p2.y + t ** 3 * curve.p3.y };
+}
+export function cubicBezierDerivative(curve: CubicBezier, t: number): PointMm {
+  const u = 1 - t;
+  return { x: 3 * (u ** 2 * (curve.p1.x - curve.p0.x) + 2 * u * t * (curve.p2.x - curve.p1.x) + t ** 2 * (curve.p3.x - curve.p2.x)), y: 3 * (u ** 2 * (curve.p1.y - curve.p0.y) + 2 * u * t * (curve.p2.y - curve.p1.y) + t ** 2 * (curve.p3.y - curve.p2.y)) };
+}
+function derivativeRoots(p0: number, p1: number, p2: number, p3: number): number[] {
+  // B'(t) / 3 = A t² + B t + C for the scalar cubic Bézier coordinate.
+  const A = -p0 + 3 * p1 - 3 * p2 + p3;
+  const B = 2 * (p0 - 2 * p1 + p2);
+  const C = p1 - p0;
+  const scale = Math.max(Math.abs(A), Math.abs(B), Math.abs(C));
+  if (scale === 0) return [];
+  const epsilon = 1e-12 * scale;
+  if (Math.abs(A) <= epsilon) return Math.abs(B) <= epsilon ? [] : [-C / B].filter((t) => t > 0 && t < 1);
+  const discriminant = B * B - 4 * A * C;
+  if (discriminant < -epsilon * epsilon) return [];
+  if (Math.abs(discriminant) <= epsilon * epsilon) {
+    const t = -B / (2 * A);
+    return t > 0 && t < 1 ? [t] : [];
+  }
+  if (discriminant < 0) return [];
+  const root = Math.sqrt(discriminant);
+  return [-1, 1].map((sign) => (-B + sign * root) / (2 * A)).filter((t) => t > 0 && t < 1);
+}
+export function cubicBezierBounds(curve: CubicBezier): Bounds {
+  const ts = [0, 1, ...derivativeRoots(curve.p0.x, curve.p1.x, curve.p2.x, curve.p3.x), ...derivativeRoots(curve.p0.y, curve.p1.y, curve.p2.y, curve.p3.y)];
+  const points = ts.map((t) => evaluateCubicBezier(curve, t));
+  const xs = points.map((point) => point.x); const ys = points.map((point) => point.y);
+  return { x: Math.min(...xs), y: Math.min(...ys), width: Math.max(...xs) - Math.min(...xs), height: Math.max(...ys) - Math.min(...ys) };
+}
+export function splitCubicBezier(curve: CubicBezier, t = 0.5): readonly [CubicBezier, CubicBezier] {
+  if (!Number.isFinite(t) || t < 0 || t > 1) throw new Error("t must be within [0, 1]");
+  const lerp = (a: PointMm, b: PointMm): PointMm => ({ x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t });
+  const a = lerp(curve.p0, curve.p1); const b = lerp(curve.p1, curve.p2); const c = lerp(curve.p2, curve.p3); const d = lerp(a, b); const e = lerp(b, c); const m = lerp(d, e);
+  return [{ p0: curve.p0, p1: a, p2: d, p3: m }, { p0: m, p1: e, p2: c, p3: curve.p3 }];
+}
+export function flattenCubicBezier(curve: CubicBezier, tolerance = 0.1): PointMm[] {
+  if (!Number.isFinite(tolerance) || tolerance <= 0) throw new Error("tolerance must be positive");
+  const result: PointMm[] = [curve.p0];
+  const flatEnough = (current: CubicBezier): boolean => {
+    const distance = (p: PointMm, a: PointMm, b: PointMm) => Math.abs((b.x - a.x) * (a.y - p.y) - (a.x - p.x) * (b.y - a.y)) / Math.max(Math.hypot(b.x - a.x, b.y - a.y), 1e-12);
+    return Math.max(distance(current.p1, current.p0, current.p3), distance(current.p2, current.p0, current.p3)) <= tolerance;
+  };
+  const visit = (current: CubicBezier, depth: number): void => { if (depth >= 12 || flatEnough(current)) result.push(current.p3); else { const [left, right] = splitCubicBezier(current); visit(left, depth + 1); visit(right, depth + 1); } };
+  visit(curve, 0); return result;
+}
+export function pathBounds(path: PathElement): Bounds {
+  const bounds = path.segments.map((segment) => segment.type === "cubicBezier" ? cubicBezierBounds(cubic(segment, path)) : (() => { const a = path.nodes.find((node) => node.id === segment.startNodeId)!.anchor; const b = path.nodes.find((node) => node.id === segment.endNodeId)!.anchor; return { x: Math.min(a.x, b.x), y: Math.min(a.y, b.y), width: Math.abs(a.x - b.x), height: Math.abs(a.y - b.y) }; })());
+  if (!bounds.length) throw new Error("Path must contain segments");
+  const x = Math.min(...bounds.map((item) => item.x)); const y = Math.min(...bounds.map((item) => item.y)); const right = Math.max(...bounds.map((item) => item.x + item.width)); const bottom = Math.max(...bounds.map((item) => item.y + item.height));
+  return { x, y, width: right - x, height: bottom - y };
+}
+export function pathGeometryNodes(path: PathElement): readonly PathGeometryNode[] {
+  const result: PathGeometryNode[] = path.nodes.map((node) => ({ kind: "anchor", nodeId: node.id, point: node.anchor }));
+  path.segments.forEach((segment, index) => { if (segment.type === "cubicBezier") { result.push({ kind: "control", nodeId: segment.startNodeId, segmentIndex: index, handle: "control1", point: segment.control1 }, { kind: "control", nodeId: segment.endNodeId, segmentIndex: index, handle: "control2", point: segment.control2 }); } });
+  return result;
+}
+export const derivedPathGeometryNodes = pathGeometryNodes;
+function flattenPath(path: PathElement): PointMm[] {
+  const points: PointMm[] = [];
+  path.segments.forEach((segment, index) => {
+    const start = path.nodes.find((node) => node.id === segment.startNodeId)!.anchor;
+    const values = segment.type === "cubicBezier" ? flattenCubicBezier(cubic(segment, path)) : [start, path.nodes.find((node) => node.id === segment.endNodeId)!.anchor];
+    points.push(...(index === 0 ? values : values.slice(1)));
+  });
+  return points;
+}
 
 export function directionVector(direction: Direction): PointMm {
   const vectors: Readonly<Record<Direction, PointMm>> = {
@@ -32,6 +112,7 @@ export function elementCenter(element: Element): PointMm {
   return element.type === "line"
     ? { x: (element.start.x + element.end.x) / 2, y: (element.start.y + element.end.y) / 2 }
     : element.type === "contour" ? groupCenter(contourBounds(element))
+    : element.type === "path" ? groupCenter(pathBounds(element))
     : { x: element.position.x + element.size.width / 2, y: element.position.y + element.size.height / 2 };
 }
 
@@ -88,6 +169,7 @@ function primitivePolygon(element: RectangleElement | EllipseElement): [number, 
 
 export function closedElementToPolygon(element: Element): MultiPolygon {
   if (element.type === "line") throw new Error("Shape operations require closed objects");
+  if (element.type === "path") { if (!element.closed) throw new Error("Shape operations require closed objects"); return [[flattenPath(element).map((point) => [point.x, point.y] as [number, number])]]; }
   if (element.type === "contour") return [element.contours.map((contour) => contour.points.map((point) => [point.x, point.y] as [number, number]))];
   return [[primitivePolygon(element)]];
 }
@@ -128,6 +210,10 @@ export function rotationHandlePoints(element: Element, offsetMm: number): readon
   }
   if (element.type === "contour") {
     const bounds = contourBounds(element);
+    return rotationHandlePoints({ type: "rectangle", id: element.id, layerId: element.layerId, position: { x: bounds.x, y: bounds.y }, size: { width: Math.max(bounds.width, 1), height: Math.max(bounds.height, 1) }, cornerRadius: 0, rotation: 0, style: element.style }, offsetMm);
+  }
+  if (element.type === "path") {
+    const bounds = pathBounds(element);
     return rotationHandlePoints({ type: "rectangle", id: element.id, layerId: element.layerId, position: { x: bounds.x, y: bounds.y }, size: { width: Math.max(bounds.width, 1), height: Math.max(bounds.height, 1) }, cornerRadius: 0, rotation: 0, style: element.style }, offsetMm);
   }
   return rotatedCorners(element).map((corner) => {
@@ -183,6 +269,7 @@ export function realGeometryNodes(element: Element): readonly RealGeometryNode[]
     }
     return nodes;
   }
+  if (element.type === "path") return pathGeometryNodes(element);
   const half = { x: element.size.width / 2, y: element.size.height / 2 };
   const center = { x: element.position.x + half.x, y: element.position.y + half.y };
   if (element.type === "rectangle") {
@@ -274,6 +361,7 @@ export function boundsOf(element: Element): Bounds {
     return { x: Math.min(start.x, end.x), y: Math.min(start.y, end.y), width: Math.abs(end.x - start.x), height: Math.abs(end.y - start.y) };
   }
   if (element.type === "contour") return contourBounds(element);
+  if (element.type === "path") return pathBounds(element);
   const points = corners(element); const xs = points.map((point) => point.x); const ys = points.map((point) => point.y);
   return { x: Math.min(...xs), y: Math.min(...ys), width: Math.max(...xs) - Math.min(...xs), height: Math.max(...ys) - Math.min(...ys) };
 }
@@ -306,9 +394,11 @@ export function resizeGroup(elements: readonly Element[], handle: ResizeHandle, 
     ? { ...e, start: { x: x + (e.start.x - bounds.x) * sx, y: y + (e.start.y - bounds.y) * sy }, end: { x: x + (e.end.x - bounds.x) * sx, y: y + (e.end.y - bounds.y) * sy } }
     : e.type === "contour"
       ? contourWithPoints(e, e.contours.map((contour) => contour.points.map((point) => ({ x: x + (point.x - bounds.x) * sx, y: y + (point.y - bounds.y) * sy }))))
+    : e.type === "path"
+      ? { ...e, nodes: e.nodes.map((node) => ({ ...node, anchor: { x: x + (node.anchor.x - bounds.x) * sx, y: y + (node.anchor.y - bounds.y) * sy } })), segments: e.segments.map((segment) => segment.type === "cubicBezier" ? { ...segment, control1: { x: x + (segment.control1.x - bounds.x) * sx, y: y + (segment.control1.y - bounds.y) * sy }, control2: { x: x + (segment.control2.x - bounds.x) * sx, y: y + (segment.control2.y - bounds.y) * sy } } : segment) }
     : { ...e, position: { x: x + (elementCenter(e).x - bounds.x) * sx - e.size.width * sx / 2, y: y + (elementCenter(e).y - bounds.y) * sy - e.size.height * sy / 2 }, size: { width: e.size.width * sx, height: e.size.height * sy } });
 }
-export function rotateElements(elements: readonly Element[], center: PointMm, delta: number): readonly Element[] { const rotatePoint = (p: PointMm) => transformPoint({ x: p.x - center.x, y: p.y - center.y }, center, delta); return elements.map((e) => e.type === "line" ? { ...e, start: rotatePoint(e.start), end: rotatePoint(e.end) } : e.type === "contour" ? contourWithPoints(e, e.contours.map((contour) => contour.points.map(rotatePoint))) : (() => { const c = rotatePoint(elementCenter(e)); return { ...e, position: { x: c.x - e.size.width / 2, y: c.y - e.size.height / 2 }, rotation: normalizeAngle(e.rotation + delta) }; })()); }
+export function rotateElements(elements: readonly Element[], center: PointMm, delta: number): readonly Element[] { const rotatePoint = (p: PointMm) => transformPoint({ x: p.x - center.x, y: p.y - center.y }, center, delta); return elements.map((e) => e.type === "line" ? { ...e, start: rotatePoint(e.start), end: rotatePoint(e.end) } : e.type === "contour" ? contourWithPoints(e, e.contours.map((contour) => contour.points.map(rotatePoint))) : e.type === "path" ? { ...e, nodes: e.nodes.map((node) => ({ ...node, anchor: rotatePoint(node.anchor) })), segments: e.segments.map((segment) => segment.type === "cubicBezier" ? { ...segment, control1: rotatePoint(segment.control1), control2: rotatePoint(segment.control2) } : segment) } : (() => { const c = rotatePoint(elementCenter(e)); return { ...e, position: { x: c.x - e.size.width / 2, y: c.y - e.size.height / 2 }, rotation: normalizeAngle(e.rotation + delta) }; })()); }
 
 const distanceToSegment = (point: PointMm, start: PointMm, end: PointMm): number => {
   const dx = end.x - start.x; const dy = end.y - start.y; const lengthSquared = dx * dx + dy * dy;
@@ -326,11 +416,23 @@ export function hitTest(element: Element, point: PointMm, toleranceMm = 0): bool
   if (element.type === "contour") {
     return element.contours.reduce((inside, contour) => inside !== pointInRing(point, contour.points.map((value) => [value.x, value.y] as [number, number])), false);
   }
+  if (element.type === "path") return pathHitTest(element, point, toleranceMm);
   const center = { x: element.position.x + element.size.width / 2, y: element.position.y + element.size.height / 2 };
   const local = rotate({ x: point.x - center.x, y: point.y - center.y }, -element.rotation);
   if (element.type === "rectangle") return Math.abs(local.x) <= element.size.width / 2 + toleranceMm && Math.abs(local.y) <= element.size.height / 2 + toleranceMm;
   const rx = element.size.width / 2 + toleranceMm; const ry = element.size.height / 2 + toleranceMm;
   return (local.x * local.x) / (rx * rx) + (local.y * local.y) / (ry * ry) <= 1;
+}
+export function pathHitTest(path: PathElement, point: PointMm, toleranceMm = 0): boolean {
+  const distance = (a: PointMm, b: PointMm): number => { const dx = b.x - a.x; const dy = b.y - a.y; const length = dx * dx + dy * dy; const t = length === 0 ? 0 : Math.max(0, Math.min(1, ((point.x - a.x) * dx + (point.y - a.y) * dy) / length)); return Math.hypot(point.x - (a.x + t * dx), point.y - (a.y + t * dy)); };
+  const onStroke = path.segments.some((segment) => {
+    if (segment.type === "line") { const a = path.nodes.find((node) => node.id === segment.startNodeId)!.anchor; const b = path.nodes.find((node) => node.id === segment.endNodeId)!.anchor; return distance(a, b) <= toleranceMm; }
+    return flattenCubicBezier(cubic(segment, path), Math.max(toleranceMm, 0.1)).some((item, index, points) => index > 0 && distance(points[index - 1]!, item) <= toleranceMm);
+  });
+  if (onStroke) return true;
+  if (!path.closed) return false;
+  const polygon = flattenPath(path);
+  return pointInRing(point, polygon.map((value) => [value.x, value.y] as [number, number]));
 }
 
 export function mmToScreen(point: PointMm, viewport: Viewport): PointPx { assertPositive(viewport.zoom, "zoom"); return { x: (point.x - viewport.panMm.x) * viewport.zoom, y: (point.y - viewport.panMm.y) * viewport.zoom }; }

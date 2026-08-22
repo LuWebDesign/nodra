@@ -1,4 +1,4 @@
-import { CURRENT_SCHEMA_VERSION, type Element } from "@nodra/domain";
+import { CURRENT_SCHEMA_VERSION, type Element, type PathElement } from "@nodra/domain";
 import { mmToScreen, type Viewport } from "@nodra/geometry";
 import { validateDocument } from "@nodra/validation";
 
@@ -21,7 +21,8 @@ export type RenderResult =
 const escapeAttribute = (value: string): string => value.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 const number = (value: number): string => Number(value.toFixed(6)).toString();
 const degrees = (radians: number): string => number((radians * 180) / Math.PI);
-const transform = (element: Element, cx: number, cy: number): string => `translate(${number(cx)} ${number(cy)}) rotate(${degrees(element.rotation)}) scale(${element.flipX ? -1 : 1} ${element.flipY ? -1 : 1}) translate(${number(-cx)} ${number(-cy)})`;
+type TransformElement = Extract<Element, { type: "rectangle" | "ellipse" | "line" }>;
+const transform = (element: TransformElement, cx: number, cy: number): string => `translate(${number(cx)} ${number(cy)}) rotate(${degrees(element.rotation)}) scale(${element.flipX ? -1 : 1} ${element.flipY ? -1 : 1}) translate(${number(-cx)} ${number(-cy)})`;
 
 function viewportResult(input: unknown): { success: true; data: Viewport } | { success: false; error: string } {
   if (typeof input !== "object" || input === null) return { success: false, error: "viewport must be an object" };
@@ -59,17 +60,32 @@ function renderElement(element: Element, viewport: Viewport): string {
     }).join(" ") + " Z").join(" ");
     return `<path data-element-id="${escapeAttribute(element.id)}" d="${escapeAttribute(path)}" fill-rule="${element.fillRule}" ${visualAttributes(element)} />`;
   }
+  if (element.type === "path") return renderPath(element, viewport);
   const start = screen(element.start);
   const end = screen(element.end);
   const center = { x: (start.x + end.x) / 2, y: (start.y + end.y) / 2 };
   return `<line data-element-id="${escapeAttribute(element.id)}" x1="${number(start.x)}" y1="${number(start.y)}" x2="${number(end.x)}" y2="${number(end.y)}" transform="${transform(element, center.x, center.y)}" ${visualAttributes(element)} />`;
 }
 
+function renderPath(element: PathElement, viewport: Viewport): string {
+  const screen = (point: { x: number; y: number }) => mmToScreen(point, viewport);
+  const nodes = new Map(element.nodes.map((node) => [node.id, node.anchor]));
+  const first = nodes.get(element.nodes[0]!.id)!;
+  let path = `M${number(screen(first).x)} ${number(screen(first).y)}`;
+  for (const segment of element.segments) {
+    const end = screen(nodes.get(segment.endNodeId)!);
+    if (segment.type === "line") path += ` L${number(end.x)} ${number(end.y)}`;
+    else { const c1 = screen(segment.control1); const c2 = screen(segment.control2); path += ` C${number(c1.x)} ${number(c1.y)} ${number(c2.x)} ${number(c2.y)} ${number(end.x)} ${number(end.y)}`; }
+  }
+  if (element.closed) path += " Z";
+  return `<path data-element-id="${escapeAttribute(element.id)}" d="${escapeAttribute(path)}" ${visualAttributes(element)} />`;
+}
+
 export function renderSvg(document: unknown, viewport: unknown): RenderResult {
   const checked = validateDocument(document);
   if (!checked.success) {
     const candidate = typeof document === "object" && document !== null ? document as { schemaVersion?: unknown; elements?: unknown } : undefined;
-    const unsupported = !SUPPORTED_SCHEMA_VERSIONS.has(candidate?.schemaVersion as number) || (Array.isArray(candidate?.elements) && candidate.elements.some((element) => typeof element === "object" && element !== null && !["rectangle", "ellipse", "line", "contour"].includes((element as { type?: unknown }).type as string)));
+    const unsupported = !SUPPORTED_SCHEMA_VERSIONS.has(candidate?.schemaVersion as number) || (Array.isArray(candidate?.elements) && candidate.elements.some((element) => typeof element === "object" && element !== null && !["rectangle", "ellipse", "line", "contour", "path"].includes((element as { type?: unknown }).type as string)));
     return { success: false, reason: unsupported ? "unsupported" : "invalid", error: checked.error.slice(0, 512), issues: checked.issues.slice(0, MAX_ISSUES).map((issue) => `${issue.path.join(".") || "document"}: ${issue.message}`) };
   }
   const checkedViewport = viewportResult(viewport);

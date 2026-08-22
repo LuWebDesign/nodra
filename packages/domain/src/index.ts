@@ -89,7 +89,36 @@ export interface ContourElement {
   readonly style: VisualStyle;
   readonly operation?: OperationMetadata;
 }
-export type Element = RectangleElement | EllipseElement | LineElement | ContourElement;
+export type PathJoin = "corner" | "smooth" | "symmetric";
+export interface PathNode {
+  readonly id: string;
+  readonly anchor: PointMm;
+  readonly join: PathJoin;
+}
+export interface PathLineSegment {
+  readonly type: "line";
+  readonly startNodeId: string;
+  readonly endNodeId: string;
+}
+export interface PathCubicSegment {
+  readonly type: "cubicBezier";
+  readonly startNodeId: string;
+  readonly endNodeId: string;
+  readonly control1: PointMm;
+  readonly control2: PointMm;
+}
+export type PathSegment = PathLineSegment | PathCubicSegment;
+export interface PathElement {
+  readonly type: "path";
+  readonly id: ElementId;
+  readonly layerId: LayerId;
+  readonly nodes: readonly PathNode[];
+  readonly segments: readonly PathSegment[];
+  readonly closed: boolean;
+  readonly style: VisualStyle;
+  readonly operation?: OperationMetadata;
+}
+export type Element = RectangleElement | EllipseElement | LineElement | ContourElement | PathElement;
 export interface DocumentSnapshot {
   readonly schemaVersion: SchemaVersion;
   readonly id: DocumentId;

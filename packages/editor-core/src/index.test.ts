@@ -1,12 +1,28 @@
 import { describe, expect, it } from "vitest";
-import { createDocument, elementId, layerId, type RectangleElement } from "@nodra/domain";
-import { addToSelection, beginGesture, clearSelection, commitGesture, createEditor, createElement, dispatch, duplicateElements, flipElements, moveElement, moveElements, previewGesture, previewGestureFromBase, redo, removeFromSelection, reorderLayer, resizeElement, resizeElements, rotateElementsAroundCenter, select, selectForPointerDown, setLayerVisibility, shapeOperation, toggleSelection, undo, updateElement, updateElementStyles } from "./index.js";
+import { createDocument, elementId, layerId, type PathElement, type RectangleElement } from "@nodra/domain";
+import { addToSelection, beginGesture, clearSelection, closePath, commitGesture, createEditor, createElement, dispatch, duplicateElements, flipElements, moveElement, moveElements, movePathNode, movePathHandle, previewGesture, previewGestureFromBase, redo, removeFromSelection, reorderLayer, resizeElement, resizeElements, rotateElementsAroundCenter, select, selectForPointerDown, setLayerVisibility, setPathJoin, shapeOperation, toggleSelection, undo, updateElement, updateElementStyles } from "./index.js";
 import type { Direction } from "@nodra/geometry";
 
 const rectangle: RectangleElement = { type: "rectangle", id: elementId("r1"), layerId: layerId("default"), position: { x: 1, y: 2 }, size: { width: 10, height: 5 }, cornerRadius: 0, rotation: 0, style: { stroke: "#000", strokeWidth: 1 } };
 const document = createDocument("doc", [{ id: layerId("default"), name: "Default", visible: true, order: 0 }]);
+const path: PathElement = { type: "path", id: elementId("path"), layerId: layerId("default"), nodes: [{ id: "a", anchor: { x: 0, y: 0 }, join: "corner" }, { id: "b", anchor: { x: 10, y: 0 }, join: "corner" }], segments: [{ type: "cubicBezier", startNodeId: "a", endNodeId: "b", control1: { x: 2, y: 4 }, control2: { x: 8, y: 4 } }], closed: false, style: rectangle.style };
 
 describe("editor core", () => {
+  it("moves path nodes with adjacent handles and records one command", () => {
+    let state = dispatch(createEditor(document), createElement(path));
+    state = dispatch(state, movePathNode(path.id, "a", { x: 1, y: 2 }));
+    const movedPath = state.document.elements[0];
+    expect(movedPath?.type).toBe("path");
+    if (movedPath?.type === "path") {
+      expect(movedPath.nodes).toEqual(expect.arrayContaining([expect.objectContaining({ anchor: { x: 1, y: 2 } })]));
+      expect(movedPath.segments).toEqual(expect.arrayContaining([expect.objectContaining({ control1: { x: 3, y: 6 } })]));
+    }
+    state = dispatch(state, movePathHandle(path.id, 0, "control2", { x: 9, y: 3 }));
+    expect(state.undo).toHaveLength(3);
+    const closed = dispatch(state, closePath(path.id));
+    expect(closed.document.elements[0]).toMatchObject({ closed: true });
+    expect(dispatch(state, setPathJoin(path.id, "a", "smooth")).document.elements[0]).toBeDefined();
+  });
   it("applies explicit commands and keeps selection outside document history", () => {
     const created = dispatch(createEditor(document), createElement(rectangle));
     const selected = select(created, [rectangle.id]);
