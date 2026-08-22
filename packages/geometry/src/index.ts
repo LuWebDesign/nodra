@@ -18,6 +18,7 @@ export const ROUNDED_RECTANGLE_APPROXIMATION_SEGMENTS = 8;
 
 export interface CubicBezier { readonly p0: PointMm; readonly p1: PointMm; readonly p2: PointMm; readonly p3: PointMm }
 export interface PathGeometryNode { readonly kind: "anchor" | "control"; readonly nodeId: string; readonly segmentIndex?: number; readonly handle?: "control1" | "control2"; readonly point: PointMm }
+export interface PathSegmentHit { readonly elementId: ElementId; readonly segmentIndex: number; readonly distance: number }
 const cubic = (segment: PathCubicSegment, path: PathElement): CubicBezier => {
   const start = path.nodes.find((node) => node.id === segment.startNodeId);
   const end = path.nodes.find((node) => node.id === segment.endNodeId);
@@ -94,6 +95,23 @@ function flattenPath(path: PathElement): PointMm[] {
     points.push(...(index === 0 ? values : values.slice(1)));
   });
   return points;
+}
+
+/** Finds a path segment by document-space distance, excluding anchor hits. */
+export function pathSegmentAt(path: PathElement, point: PointMm, toleranceMm = 0): PathSegmentHit | undefined {
+  if (![point.x, point.y, toleranceMm].every(Number.isFinite) || toleranceMm < 0) throw new Error("path segment coordinates and tolerance must be valid");
+  let best: PathSegmentHit | undefined;
+  for (const [segmentIndex, segment] of path.segments.entries()) {
+    const start = path.nodes.find((node) => node.id === segment.startNodeId)?.anchor;
+    const end = path.nodes.find((node) => node.id === segment.endNodeId)?.anchor;
+    if (!start || !end) continue;
+    if (Math.hypot(point.x - start.x, point.y - start.y) <= toleranceMm || Math.hypot(point.x - end.x, point.y - end.y) <= toleranceMm) continue;
+    const points = segment.type === "cubicBezier" ? flattenCubicBezier(cubic(segment, path)) : [start, end];
+    let distance = Number.POSITIVE_INFINITY;
+    for (let index = 1; index < points.length; index += 1) distance = Math.min(distance, contourSegmentDistance(point, points[index - 1]!, points[index]!));
+    if (distance <= toleranceMm && (!best || distance < best.distance || distance === best.distance && segmentIndex < best.segmentIndex)) best = { elementId: path.id, segmentIndex, distance };
+  }
+  return best;
 }
 
 export function directionVector(direction: Direction): PointMm {

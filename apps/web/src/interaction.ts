@@ -1,5 +1,5 @@
 import type { DocumentSnapshot, Element, ElementId, PointMm } from "@nodra/domain";
-import { boundsOf, contourSegmentAt, contourVertexNodes, elementCenter, elementSegmentAt, hitTest, pathGeometryNodes, realGeometryNodes, type Bounds, type ContourSegmentHit, type ContourVertexNode, type PathGeometryNode, type RealGeometryNode } from "@nodra/geometry";
+import { boundsOf, contourSegmentAt, contourVertexNodes, elementCenter, elementSegmentAt, hitTest, pathGeometryNodes, pathSegmentAt, realGeometryNodes, type Bounds, type ContourSegmentHit, type ContourVertexNode, type PathGeometryNode, type RealGeometryNode, type PathSegmentHit } from "@nodra/geometry";
 
 export interface DragGeometry { readonly position: PointMm; readonly size: { readonly width: number; readonly height: number } }
 export interface SnapGuide { readonly source: PointMm; readonly target: PointMm }
@@ -8,6 +8,7 @@ export interface NodeHit { readonly elementId: ElementId; readonly nodeIndex: nu
 export interface PathNodeHit { readonly elementId: ElementId; readonly node: PathGeometryNode }
 export type ContourNodeHit = ContourVertexNode;
 export type ContourSegmentHitResult = ContourSegmentHit;
+export type PathSegmentHitResult = PathSegmentHit;
 export type FormaNodeHit = { readonly elementId: ElementId; readonly nodeIndex?: number; readonly contourNode?: ContourNodeHit; readonly point: PointMm };
 
 export type DrawingTool = "rectangle" | "ellipse" | "line";
@@ -37,6 +38,17 @@ export function pickPathNode(document: DocumentSnapshot, point: PointMm, zoom: n
     if (distance <= tolerancePx && (!best || distance < best.distance || distance === best.distance && order < best.order)) best = { hit: { elementId: element.id, node }, distance, order };
   }
   return best?.hit;
+}
+
+export function pickPathSegment(document: DocumentSnapshot, point: PointMm, zoom: number, tolerancePx = 8): PathSegmentHitResult | undefined {
+  if (![point.x, point.y, zoom, tolerancePx].every(Number.isFinite) || zoom <= 0 || tolerancePx < 0) throw new Error("path segment coordinates, zoom, and tolerance must be valid");
+  const visible = new Set(document.layers.filter((layer) => layer.visible).map((layer) => layer.id));
+  let best: PathSegmentHitResult | undefined;
+  for (const element of document.elements) if (element.type === "path" && visible.has(element.layerId)) {
+    const hit = pathSegmentAt(element, point, tolerancePx / zoom);
+    if (hit && (!best || hit.distance < best.distance || hit.distance === best.distance && `${hit.elementId}:${hit.segmentIndex}` < `${best.elementId}:${best.segmentIndex}`)) best = hit;
+  }
+  return best;
 }
 
 export function movementExceedsThreshold(start: PointMm, end: PointMm, threshold = 3): boolean {
