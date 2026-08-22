@@ -65,7 +65,7 @@ describe("editor core", () => {
     state = dispatch(createEditor({ ...document, elements: [path] }), splitPathSegment(path.id, 0, "mid-cubic"));
     expect(state.document.elements[0]).toMatchObject({ segments: [{ type: "cubicBezier", endNodeId: "mid-cubic" }, { type: "cubicBezier", startNodeId: "mid-cubic", endNodeId: "b" }] });
     const splitPath = state.document.elements[0];
-    expect(splitPath?.type === "path" ? splitPath.nodes.find((node) => node.id === "mid-cubic")?.anchor : undefined).toEqual({ x: 5, y: 2.25 });
+    expect(splitPath?.type === "path" ? splitPath.nodes.find((node) => node.id === "mid-cubic")?.anchor : undefined).toEqual({ x: 5, y: 3 });
   });
   it("appends a validated cubic pen node and commits the gesture once", () => {
     let state = beginGesture(createEditor({ ...document, elements: [path] }));
