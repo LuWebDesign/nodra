@@ -57,7 +57,7 @@ test("creates, transforms, and undoes a rectangle", async ({ page }) => {
   await expect(width).toHaveValue(String(originalWidth));
 });
 
-test("places appearance controls in Propiedades and duplicates directionally", async ({ page }) => {
+test("places the color palette in the status bar and duplicates directionally", async ({ page }) => {
   await page.goto("/");
   await drawRectangle(page);
   const rectangle = page.locator(".page-svg svg rect").first();
@@ -66,8 +66,8 @@ test("places appearance controls in Propiedades and duplicates directionally", a
   await page.mouse.click(rectangleBounds!.x + rectangleBounds!.width / 2, rectangleBounds!.y + rectangleBounds!.height / 2);
 
   await expect(page.getByRole("tab", { name: "Propiedades" })).toHaveAttribute("aria-selected", "true");
-  await expect(page.locator(".inspector").getByText("APARIENCIA")).toBeVisible();
-  await expect(page.locator(".inspector .palette")).toBeVisible();
+  await expect(page.locator(".statusbar .status-palette")).toBeVisible();
+  await expect(page.locator(".statusbar .palette")).toBeVisible();
   await page.getByRole("tab", { name: "Transformar" }).click();
   await page.getByRole("button", { name: "Este", exact: true }).click();
   await page.getByLabel("Distancia entre copias en milímetros").fill("5");
