@@ -218,7 +218,9 @@ export const updateElementNode = (id: ElementId, nodeIndex: number, point: Point
       const next = nodeIndex === 0 ? { ...current, start: point } : nodeIndex === 2 ? { ...current, end: point } : { ...current, start: { x: current.start.x + delta.x, y: current.start.y + delta.y }, end: { x: current.end.x + delta.x, y: current.end.y + delta.y } };
       return replaceElements(document, document.elements.map((element) => element.id === id ? next : element));
     }
-    if (node.kind === "center") return moveElement(id, { x: point.x - node.point.x, y: point.y - node.point.y }).apply(document);
+    if (node.kind === "center" || ((current.type === "rectangle" || current.type === "ellipse") && node.kind === "corner")) {
+      return moveElement(id, { x: point.x - node.point.x, y: point.y - node.point.y }).apply(document);
+    }
     const handle = current.type === "rectangle" || current.type === "ellipse"
       ? node.kind === "corner" ? (["nw", "ne", "se", "sw"] as const)[nodes.filter((candidate) => candidate.kind === "corner").findIndex((candidate) => candidate === node)]
         : node.kind === "cardinal" ? (["n", "e", "s", "w"] as const)[nodes.filter((candidate) => candidate.kind === "cardinal").findIndex((candidate) => candidate === node)]

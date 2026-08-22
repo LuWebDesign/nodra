@@ -166,7 +166,7 @@ const contourSegmentDistance = (point: PointMm, start: PointMm, end: PointMm): n
   const t = Math.max(0, Math.min(1, ((point.x - start.x) * dx + (point.y - start.y) * dy) / lengthSquared));
   return Math.hypot(point.x - (start.x + t * dx), point.y - (start.y + t * dy));
 };
-/** Finds a contour edge by document-space distance, excluding the stored closing duplicate. */
+/** Finds a contour edge by document-space distance, excluding the stored closing duplicate and endpoint hits. */
 export function contourSegmentAt(element: ContourElement, point: PointMm, toleranceMm = 0): ContourSegmentHit | undefined {
   if (![point.x, point.y, toleranceMm].every(Number.isFinite) || toleranceMm < 0) throw new Error("contour segment coordinates and tolerance must be valid");
   let best: ContourSegmentHit | undefined;
@@ -176,6 +176,7 @@ export function contourSegmentAt(element: ContourElement, point: PointMm, tolera
     for (let segmentIndex = 0; segmentIndex < vertices.length; segmentIndex += 1) {
       const start = vertices[segmentIndex]!; const end = vertices[(segmentIndex + 1) % vertices.length];
       if (!end) continue;
+      if (Math.hypot(point.x - start.x, point.y - start.y) <= toleranceMm || Math.hypot(point.x - end.x, point.y - end.y) <= toleranceMm) continue;
       const distance = contourSegmentDistance(point, start, end);
       if (distance <= toleranceMm && (!best || distance < best.distance || distance === best.distance && `${ringIndex}:${segmentIndex}` < `${best.ringIndex}:${best.segmentIndex}`)) best = { elementId: element.id, ringIndex, segmentIndex, distance };
     }

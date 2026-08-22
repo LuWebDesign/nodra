@@ -12,6 +12,11 @@ describe("canonical millimetre geometry", () => {
     expect(elementSegmentAt(rectangle, { x: 20, y: 20 }, 0.1)).toMatchObject({ elementId: rectangle.id, segmentIndex: 0 });
     expect(rectangle.type).toBe("rectangle");
   });
+  it("does not pick a contour segment at a vertex within the segment tolerance", () => {
+    const contour = { type: "contour" as const, id: elementId("segment-vertex"), layerId: layerId("l"), position: { x: 10, y: 20 }, size: { width: 20, height: 10 }, contours: [{ points: [{ x: 10, y: 20 }, { x: 30, y: 20 }, { x: 30, y: 30 }, { x: 10, y: 20 }] }], fillRule: "evenodd" as const, rotation: 0, style };
+    expect(elementSegmentAt(contour, { x: 10, y: 20 }, 0.1)).toBeUndefined();
+    expect(elementSegmentAt(contour, { x: 20, y: 20 }, 0.1)).toMatchObject({ segmentIndex: 0 });
+  });
   it("evaluates cubic curves and includes exact derivative extrema", () => {
     const curve = { p0: { x: 0, y: 0 }, p1: { x: 0, y: 10 }, p2: { x: 10, y: 10 }, p3: { x: 10, y: 0 } };
     expect(evaluateCubicBezier(curve, 0)).toEqual(curve.p0);
