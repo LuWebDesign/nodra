@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { boundsOf, boundsOfElements, closedElementToPolygon, degreesToRadians, elementCenter, elementSegmentAt, elementToContour, ELLIPSE_APPROXIMATION_SEGMENTS, groupCenter, groupHandlePoints, hitTest, mmToScreen, radiansToDegrees, realGeometryNodes, resizeGroup, resizeHandle, rotatedLineEndpoints, rotateElements, rotationFromDrag, rotationHandlePoints, screenToMm, shapeResultContours, validateSize } from "./index.js";
+import { boundsOf, boundsOfElements, closedElementToPolygon, cubicBezierBounds, cubicBezierDerivative, degreesToRadians, elementCenter, elementSegmentAt, elementToContour, evaluateCubicBezier, ELLIPSE_APPROXIMATION_SEGMENTS, groupCenter, groupHandlePoints, hitTest, mmToScreen, radiansToDegrees, realGeometryNodes, resizeGroup, resizeHandle, rotatedLineEndpoints, rotateElements, rotationFromDrag, rotationHandlePoints, screenToMm, shapeResultContours, splitCubicBezier, validateSize } from "./index.js";
 import { elementId, layerId } from "@nodra/domain";
 
 const style = { stroke: "#000", strokeWidth: 0.2 };
@@ -11,6 +11,18 @@ describe("canonical millimetre geometry", () => {
     expect(elementToContour(rectangle).contours[0]?.points).toHaveLength(5);
     expect(elementSegmentAt(rectangle, { x: 20, y: 20 }, 0.1)).toMatchObject({ elementId: rectangle.id, segmentIndex: 0 });
     expect(rectangle.type).toBe("rectangle");
+  });
+  it("evaluates cubic curves and includes exact derivative extrema", () => {
+    const curve = { p0: { x: 0, y: 0 }, p1: { x: 0, y: 10 }, p2: { x: 10, y: 10 }, p3: { x: 10, y: 0 } };
+    expect(evaluateCubicBezier(curve, 0)).toEqual(curve.p0);
+    expect(cubicBezierDerivative(curve, 0.5).y).toBe(0);
+    expect(cubicBezierBounds(curve).height).toBeCloseTo(7.5);
+    const [left, right] = splitCubicBezier(curve);
+    expect(left.p3).toEqual(right.p0);
+  });
+  it("handles linear and constant derivative polynomials", () => {
+    const curve = { p0: { x: 2, y: 4 }, p1: { x: 5, y: 4 }, p2: { x: 5, y: 10 }, p3: { x: 2, y: 10 } };
+    expect(cubicBezierBounds(curve)).toEqual({ x: 2, y: 4, width: 2.25, height: 6 });
   });
   it("round-trips viewport conversion", () => {
     const viewport = { zoom: 2, panMm: { x: 5, y: 7 } };

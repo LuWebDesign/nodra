@@ -3,6 +3,7 @@ import { degreesToRadians, radiansToDegrees } from "@nodra/geometry";
 
 export type GeometryField = "x" | "y" | "width" | "height";
 export type PropertyElement = Extract<Element, { type: "rectangle" | "ellipse" }>;
+export type RotatableElement = Exclude<Element, Extract<Element, { type: "path" }>>;
 
 export const formatMm = (value: number) => Number.isFinite(value) ? value.toFixed(3).replace(/\.?0+$/, "") : "";
 
@@ -32,7 +33,7 @@ export function cornerRadiusPatch(value: number): { cornerRadius: number } | und
   return Number.isFinite(value) && value >= 0 ? { cornerRadius: value } : undefined;
 }
 
-export const rotationDegreesValue = (element: Element): number => radiansToDegrees(element.rotation);
+export const rotationDegreesValue = (element: RotatableElement): number => radiansToDegrees(element.rotation);
 
 export function rotationPatch(raw: string, currentRotation: number): { rotation: number } | undefined {
   if (!raw.trim()) return undefined;

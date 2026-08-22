@@ -44,4 +44,10 @@ describe("native document validation", () => {
     expect(validateDocument({ ...base, elements: [contour] }).success).toBe(true);
     expect(validateDocument({ ...base, elements: [{ ...contour, contours: [{ points: contour.contours[0]!.points.slice(0, 3) }] }] }).success).toBe(false);
   });
+  it("validates ordered open and closed Bézier topology", () => {
+    const base = createDocument("doc-1", [{ id: layerId("layer-1"), name: "Design", visible: true, order: 0 }]);
+    const path = { type: "path", id: "bezier", layerId: "layer-1", nodes: [{ id: "a", anchor: { x: 0, y: 0 }, join: "corner" }, { id: "b", anchor: { x: 10, y: 0 }, join: "smooth" }], segments: [{ type: "cubicBezier", startNodeId: "a", endNodeId: "b", control1: { x: 2, y: 0 }, control2: { x: 8, y: 0 } }], closed: false, style: { stroke: "#000", strokeWidth: 1 } } as const;
+    expect(validateDocument({ ...base, elements: [path] }).success).toBe(true);
+    expect(validateDocument({ ...base, elements: [{ ...path, closed: true }] }).success).toBe(false);
+  });
 });

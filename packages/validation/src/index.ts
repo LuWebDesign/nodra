@@ -20,7 +20,24 @@ const contour = z.object({ ...common, type: z.literal("contour"), position: poin
     if (!first || !last || first.x !== last.x || first.y !== last.y) ctx.addIssue({ code: "custom", message: "Contour rings must be closed", path: ["contours", index, "points"] });
   });
 });
-export const elementSchema = z.discriminatedUnion("type", [rectangle, ellipse, line, contour]);
+const pathNode = z.object({ id: nonEmptyId, anchor: point, join: z.enum(["corner", "smooth", "symmetric"]) }).strict();
+const pathLineSegment = z.object({ type: z.literal("line"), startNodeId: nonEmptyId, endNodeId: nonEmptyId }).strict();
+const pathCubicSegment = z.object({ type: z.literal("cubicBezier"), startNodeId: nonEmptyId, endNodeId: nonEmptyId, control1: point, control2: point }).strict();
+const pathSegment = z.discriminatedUnion("type", [pathLineSegment, pathCubicSegment]);
+const path = z.object({ id: nonEmptyId, layerId: nonEmptyId, type: z.literal("path"), nodes: z.array(pathNode).min(2), segments: z.array(pathSegment).min(1), closed: z.boolean(), style, operation: operation.optional() }).strict().superRefine((value, ctx) => {
+  const nodeIds = value.nodes.map((node) => node.id);
+  if (new Set(nodeIds).size !== nodeIds.length) ctx.addIssue({ code: "custom", message: "Path node IDs must be unique", path: ["nodes"] });
+  const expectedCount = value.closed ? value.nodes.length : value.nodes.length - 1;
+  if (value.segments.length !== expectedCount) ctx.addIssue({ code: "custom", message: "Path segment count does not match topology", path: ["segments"] });
+  const known = new Set(nodeIds);
+  value.segments.forEach((segment, index) => {
+    if (!known.has(segment.startNodeId) || !known.has(segment.endNodeId)) ctx.addIssue({ code: "custom", message: "Path segment references an unknown node", path: ["segments", index] });
+    const start = value.nodes[index];
+    const end = value.nodes[value.closed ? (index + 1) % value.nodes.length : index + 1];
+    if (start && end && (segment.startNodeId !== start.id || segment.endNodeId !== end.id)) ctx.addIssue({ code: "custom", message: "Path segments must follow node order", path: ["segments", index] });
+  });
+});
+export const elementSchema = z.discriminatedUnion("type", [rectangle, ellipse, line, contour, path]);
 export const layerSchema = z.object({ id: nonEmptyId, name: z.string().min(1), visible: z.boolean(), order: finite.int().nonnegative() }).strict();
 const documentFields = { id: nonEmptyId, revision: finite.int().nonnegative(), origin: z.literal("top-left"), units: z.literal("mm"), page: size, layers: z.array(layerSchema), elements: z.array(elementSchema) };
 export const documentSchema = z.object({ schemaVersion: z.literal(CURRENT_SCHEMA_VERSION), ...documentFields }).strict().superRefine((value, ctx) => {

@@ -5,10 +5,12 @@ import { boundsOfElements, contourVertexNodes, elementCenter, groupCenter, group
 import { DebouncedAutosave, DexieProjectRepository, requestStoragePersistence } from "@nodra/persistence";
 import { renderSvg } from "@nodra/renderer-svg";
 import { canActivateRotation, centerPageInCanvas, clientPointToCanvas, formaNodeKey, hoveredSelectionCenter, isDrawingTool, marqueeSelection, movementExceedsThreshold, normalizeBounds, normalizeDrag, pagePointToCanvas, pickElement, pickFormaNode, pickFormaSegment, pickNode, pointerDownIntent, screenDeltaToMm, screenPointToMm, selectedNodeAnchor, snapMoveDelta, zoomAtPoint, type ContourNodeHit, type FormaNodeHit, type NodeHit, type SnapGuide, type TransformMode } from "./interaction.js";
-import { aspectGeometryPatch, aspectSize, cornerRadiusPatch, formatMm, geometryValue, rotationDegreesValue, rotationPatch, type GeometryField, type PropertyElement } from "./propertyBar.js";
+import { aspectGeometryPatch, aspectSize, cornerRadiusPatch, formatMm, geometryValue, rotationDegreesValue, rotationPatch, type GeometryField, type PropertyElement, type RotatableElement } from "./propertyBar.js";
 import { useDocumentStore, usePersistenceStore, useUiStore, useViewportStore, type Tool } from "./stores.js";
 
 const defaultStyle = { stroke: "#000000", strokeWidth: 0.7 };
+const isPropertyElement = (element: Element): element is PropertyElement => element.type === "rectangle" || element.type === "ellipse";
+const isRotatableElement = (element: Element): element is RotatableElement => element.type !== "path";
 const palette = [
   { name: "Negro", color: "#111827" }, { name: "Rojo", color: "#ef4444" }, { name: "Naranja", color: "#f59e0b" },
   { name: "Verde", color: "#22c55e" }, { name: "Azul", color: "#3b82f6" }, { name: "Violeta", color: "#a855f7" },
@@ -137,7 +139,7 @@ export function App() {
   const selectedBounds = selectedElements.length ? boundsOfElements(selectedElements) : undefined;
   const propertyElement = selectedElements.length > 1 && selectedBounds
     ? { type: "rectangle" as const, id: selectedElements[0]!.id, layerId: selectedElements[0]!.layerId, position: { x: selectedBounds.x, y: selectedBounds.y }, size: { width: selectedBounds.width, height: selectedBounds.height }, cornerRadius: 0, rotation: 0, style: selectedElements[0]!.style }
-    : selectedElement?.type !== "line" && selectedElement?.type !== "contour" ? selectedElement : undefined;
+    : selectedElement && isPropertyElement(selectedElement) ? selectedElement : undefined;
   const selectionKey = selection.join(":");
   useEffect(() => { setTransformMode("resize"); }, [tool, project.activePageId, selectionKey]);
 
@@ -326,7 +328,8 @@ export function App() {
       return;
     }
     const hit = pickElement(editorRef.current.document, point, zoom);
-    if (canActivateRotation(tool, editorRef.current.selection, hit)) {
+    const hitElement = hit ? editorRef.current.document.elements.find((element) => element.id === hit) : undefined;
+    if (canActivateRotation(tool, editorRef.current.selection, hit) && hitElement && isRotatableElement(hitElement)) {
       event.preventDefault();
       setCenterHover(undefined);
       setTransformMode("rotate");
@@ -345,14 +348,14 @@ export function App() {
     }
     if (active.kind === "resize" && active.ids && active.handle && active.handle !== "center") {
       const element = active.element;
-      const command = active.ids.length === 1 && element && element.type !== "line" && element.type !== "contour" ? (() => { const geometry = resizeHandle(element, active.handle as ResizeHandle, pointAt(event)); return resizeElement(element.id, geometry.position, geometry.size); })() : resizeElements(active.ids, active.handle as ResizeHandle, pointAt(event));
+      const command = active.ids.length === 1 && element && isPropertyElement(element) ? (() => { const geometry = resizeHandle(element, active.handle as ResizeHandle, pointAt(event)); return resizeElement(element.id, geometry.position, geometry.size); })() : resizeElements(active.ids, active.handle as ResizeHandle, pointAt(event));
       setEditorState(previewGestureFromBase(editorRef.current, command));
       active.dragged = true;
       return;
     }
     if (active.kind === "rotate" && active.ids && active.center && active.start) {
-      const rotation = rotationFromDrag(active.element?.rotation ?? 0, active.center, active.start, pointAt(event), event.shiftKey ? Math.PI / 12 : 0);
-      setEditorState(previewGestureFromBase(editorRef.current, active.ids.length === 1 && active.element ? rotateElement(active.element.id, rotation) : rotateElementsAroundCenter(active.ids, rotation - (active.element?.rotation ?? 0))));
+      const rotation = rotationFromDrag(active.element && isRotatableElement(active.element) ? active.element.rotation : 0, active.center, active.start, pointAt(event), event.shiftKey ? Math.PI / 12 : 0);
+      setEditorState(previewGestureFromBase(editorRef.current, active.ids.length === 1 && active.element && isRotatableElement(active.element) ? rotateElement(active.element.id, rotation) : rotateElementsAroundCenter(active.ids, rotation - (active.element && isRotatableElement(active.element) ? active.element.rotation : 0))));
       active.dragged = true;
       return;
     }
@@ -385,7 +388,7 @@ export function App() {
     }
     if (!active.start || !active.tool || !isDrawingTool(active.tool) || !active.ids?.[0] || !active.startClient || !movementExceedsThreshold(active.startClient, { x: event.clientX, y: event.clientY })) return;
     const element = newElement(active.tool, document.layers[0]?.id ?? "layer-1", active.start, pointAt(event), active.ids[0]);
-    const command = active.previewed ? updateElement(element.id, element.type === "line" ? { start: element.start, end: element.end } : { position: element.position, size: element.size }) : createElement(element);
+    const command = active.previewed ? updateElement(element.id, element.type === "line" ? { start: element.start, end: element.end } : isPropertyElement(element) ? { position: element.position, size: element.size } : {}) : createElement(element);
     setEditorState(previewGesture(editorRef.current, command));
     active.previewed = true;
     active.dragged = true;
@@ -408,12 +411,12 @@ export function App() {
       setMarquee(undefined);
     } else if (active.kind === "resize" && active.ids && active.handle && active.handle !== "center" && !cancelled) {
       const element = active.element;
-      const command = active.ids.length === 1 && element && element.type !== "line" && element.type !== "contour" ? (() => { const geometry = resizeHandle(element, active.handle as ResizeHandle, pointAt(event)); return resizeElement(element.id, geometry.position, geometry.size); })() : resizeElements(active.ids, active.handle as ResizeHandle, pointAt(event));
+      const command = active.ids.length === 1 && element && isPropertyElement(element) ? (() => { const geometry = resizeHandle(element, active.handle as ResizeHandle, pointAt(event)); return resizeElement(element.id, geometry.position, geometry.size); })() : resizeElements(active.ids, active.handle as ResizeHandle, pointAt(event));
       setEditorState(commitGesture(previewGestureFromBase(editorRef.current, command)));
     } else if (active.kind === "rotate" && active.ids && active.center && active.start && !cancelled) {
-      const rotation = rotationFromDrag(active.element?.rotation ?? 0, active.center, active.start, pointAt(event), event.shiftKey ? Math.PI / 12 : 0);
-      setEditorState(commitGesture(previewGestureFromBase(editorRef.current, active.ids.length === 1 && active.element ? rotateElement(active.element.id, rotation) : rotateElementsAroundCenter(active.ids, rotation - (active.element?.rotation ?? 0)))));
-     } else if (["resize", "rotate", "move", "contour-node"].includes(active.kind)) {
+      const rotation = rotationFromDrag(active.element && isRotatableElement(active.element) ? active.element.rotation : 0, active.center, active.start, pointAt(event), event.shiftKey ? Math.PI / 12 : 0);
+      setEditorState(commitGesture(previewGestureFromBase(editorRef.current, active.ids.length === 1 && active.element && isRotatableElement(active.element) ? rotateElement(active.element.id, rotation) : rotateElementsAroundCenter(active.ids, rotation - (active.element && isRotatableElement(active.element) ? active.element.rotation : 0)))));
+      } else if (["resize", "rotate", "move", "contour-node"].includes(active.kind)) {
       setEditorState(cancelled ? cancelGesture(editorRef.current) : commitGesture(editorRef.current));
     } else if (active.kind === "draw") {
       const end = active.start ? pointAt(event) : undefined;
@@ -421,7 +424,7 @@ export function App() {
       if (cancelled || !active.dragged || zeroLengthLine) setEditorState(cancelGesture(editorRef.current));
       else if (active.start && active.tool && isDrawingTool(active.tool) && active.ids?.[0] && end) {
         const element = newElement(active.tool, editorRef.current.document.layers[0]?.id ?? "layer-1", active.start, end, active.ids[0]);
-        const command = active.previewed ? updateElement(element.id, element.type === "line" ? { start: element.start, end: element.end } : { position: element.position, size: element.size }) : createElement(element);
+        const command = active.previewed ? updateElement(element.id, element.type === "line" ? { start: element.start, end: element.end } : isPropertyElement(element) ? { position: element.position, size: element.size } : {}) : createElement(element);
         setEditorState(commitGesture(previewGesture(editorRef.current, command)));
       }
     }
@@ -474,7 +477,7 @@ export function App() {
 
     const formaNodes = tool === "forma" ? selectedElements.flatMap((element) => element.type === "contour" ? contourVertexNodes(element).map((node) => ({ key: `${node.elementId}:c:${node.ringIndex}:${node.pointIndex}`, elementId: node.elementId, point: node.point, contour: node })) : realGeometryNodes(element).map((node, nodeIndex) => ({ key: `${element.id}:p:${nodeIndex}`, elementId: element.id, point: node.point, nodeIndex }))) : [];
    const groupPoints = selectedBounds ? groupHandlePoints(selectedBounds) : undefined;
-  const handlePoints = selectedElement?.type === "line" ? undefined : selectedElement?.type === "contour" && selectedBounds ? [groupHandlePoints(selectedBounds).nw, groupHandlePoints(selectedBounds).n, groupHandlePoints(selectedBounds).ne, groupHandlePoints(selectedBounds).e, groupHandlePoints(selectedBounds).se, groupHandlePoints(selectedBounds).s, groupHandlePoints(selectedBounds).sw, groupHandlePoints(selectedBounds).w] as const : selectedElement && selectedElement.type !== "contour" ? rotatedResizeHandles(selectedElement) : undefined;
+   const handlePoints = selectedElement?.type === "line" || selectedElement?.type === "path" ? undefined : selectedElement?.type === "contour" && selectedBounds ? [groupHandlePoints(selectedBounds).nw, groupHandlePoints(selectedBounds).n, groupHandlePoints(selectedBounds).ne, groupHandlePoints(selectedBounds).e, groupHandlePoints(selectedBounds).se, groupHandlePoints(selectedBounds).s, groupHandlePoints(selectedBounds).sw, groupHandlePoints(selectedBounds).w] as const : selectedElement && selectedElement.type !== "contour" ? rotatedResizeHandles(selectedElement) : undefined;
   const handleNames: readonly ResizeHandle[] = ["nw", "n", "ne", "e", "se", "s", "sw", "w"];
   const handleStyle = (handle: GroupHandle) => {
      const point = selectedElements.length > 1 ? groupPoints?.[handle] : handle === "center" ? undefined : handlePoints?.[handleNames.indexOf(handle)];
@@ -482,7 +485,7 @@ export function App() {
     const screen = pagePointToCanvas(point, zoom, panMm);
     return { left: `${screen.x}px`, top: `${screen.y}px` };
   };
-  const rotationPoints = selectedElements.length > 1 && selectedBounds && transformMode === "rotate" ? [groupHandlePoints(selectedBounds).nw, groupHandlePoints(selectedBounds).ne, groupHandlePoints(selectedBounds).se, groupHandlePoints(selectedBounds).sw] : selectedElement && transformMode === "rotate" ? rotationHandlePoints(selectedElement, 18 / zoom) : [];
+  const rotationPoints = selectedElements.length > 1 && selectedBounds && transformMode === "rotate" ? [groupHandlePoints(selectedBounds).nw, groupHandlePoints(selectedBounds).ne, groupHandlePoints(selectedBounds).se, groupHandlePoints(selectedBounds).sw] : selectedElement && isRotatableElement(selectedElement) && transformMode === "rotate" ? rotationHandlePoints(selectedElement, 18 / zoom) : [];
   const centerStyle = selectedElement ? (() => {
     const point = pagePointToCanvas(elementCenter(selectedElement), zoom, panMm);
     return { left: point.x, top: point.y };
@@ -569,7 +572,7 @@ export function App() {
       }
     }} /></label>;
   };
-  const rotationField = (element: Element) => {
+  const rotationField = (element: RotatableElement) => {
     const key = `${element.id}:rotation`;
     const restore = () => setDrafts((current) => ({ ...current, [key]: formatMm(rotationDegreesValue(element)) }));
     const commit = () => {
@@ -624,7 +627,7 @@ export function App() {
   const mirrorButton = (axis: FlipAxis) => {
     const label = axis === "horizontal" ? "Espejo horizontal" : "Espejo vertical";
     const description = axis === "horizontal" ? "Voltear la selección horizontalmente." : "Voltear la selección verticalmente.";
-    const isActive = selectedElements.some((element) => Boolean(axis === "horizontal" ? element.flipX : element.flipY));
+    const isActive = selectedElements.some((element) => isRotatableElement(element) && Boolean(axis === "horizontal" ? element.flipX : element.flipY));
     return <button type="button" className={isActive ? "property-transform-button active" : "property-transform-button"} aria-label={label} aria-pressed={isActive} title={description} aria-description={description} onClick={() => {
       const current = editorRef.current;
       if (current.selection.length) setEditorState(dispatch(current, flipElements(current.selection, axis)));
@@ -667,7 +670,7 @@ export function App() {
        {aspectLockButton()}
      </div>}
     {selectedElement?.type === "rectangle" && <div className={inspector ? "inspector-property-card inspector-radius-card" : "property-card property-card-radius"} role="group" aria-label="Radio de esquina">{cornerRadiusField(selectedElement)}</div>}
-    {selectedElement && rotationField(selectedElement)}
+    {selectedElement && isRotatableElement(selectedElement) && rotationField(selectedElement)}
   </> : null;
 
   return <main className="app-shell">
@@ -704,7 +707,7 @@ export function App() {
            <button type="button" role="tab" aria-selected={inspectorTab === "text"} className={inspectorTab === "text" ? "active" : ""} onClick={() => setInspectorTab("text")}>Texto</button>
          </div>
          <div className="inspector-tab-content" role="tabpanel">
-              {inspectorTab === "properties" && <>{selectedElements.length === 0 ? <section className="inspector-card"><div className="panel-title">PÁGINA</div><div className="preset-row"><button onClick={() => setPage(1200, 900)}>Horizontal</button><button onClick={() => setPage(900, 1200)}>Vertical</button></div><div className="fields"><Field label="W" value={document.page.width} onChange={(value) => setPage(value, document.page.height)} /><Field label="H" value={document.page.height} onChange={(value) => setPage(document.page.width, value)} /></div><label className="grid-toggle"><input type="checkbox" checked={grid} onChange={(event) => setGrid(event.target.checked)} /> Mostrar cuadrícula del espacio de trabajo</label></section> : <section className="inspector-card inspector-object-card"><div className="panel-title">OBJETO</div>{propertyElement ? <div className="inspector-object-properties">{objectPropertySections(true)}</div> : <><div className="selected-type">{selectedElement?.type === "contour" ? "CONTORNO" : "LÍNEA"}</div><p className="muted">{selectedElement?.type === "contour" ? "Los contornos conservan su geometría real; las dimensiones no están disponibles." : "Las líneas no tienen dimensiones rectangulares."}</p>{selectedElement && rotationField(selectedElement)}</>}</section>}</>}
+               {inspectorTab === "properties" && <>{selectedElements.length === 0 ? <section className="inspector-card"><div className="panel-title">PÁGINA</div><div className="preset-row"><button onClick={() => setPage(1200, 900)}>Horizontal</button><button onClick={() => setPage(900, 1200)}>Vertical</button></div><div className="fields"><Field label="W" value={document.page.width} onChange={(value) => setPage(value, document.page.height)} /><Field label="H" value={document.page.height} onChange={(value) => setPage(document.page.width, value)} /></div><label className="grid-toggle"><input type="checkbox" checked={grid} onChange={(event) => setGrid(event.target.checked)} /> Mostrar cuadrícula del espacio de trabajo</label></section> : <section className="inspector-card inspector-object-card"><div className="panel-title">OBJETO</div>{propertyElement ? <div className="inspector-object-properties">{objectPropertySections(true)}</div> : <><div className="selected-type">{selectedElement?.type === "contour" ? "CONTORNO" : selectedElement?.type === "path" ? "TRAZADO" : "LÍNEA"}</div><p className="muted">{selectedElement?.type === "contour" ? "Los contornos conservan su geometría real; las dimensiones no están disponibles." : selectedElement?.type === "path" ? "Los trazados conservan sus nodos y segmentos." : "Las líneas no tienen dimensiones rectangulares."}</p>{selectedElement && isRotatableElement(selectedElement) && rotationField(selectedElement)}</>}</section>}</>}
               {inspectorTab === "transform" && transformControls()}
            {inspectorTab === "text" && <section className="inspector-card"><div className="panel-title">TEXTO</div><p className="muted">Las propiedades de texto estarán disponibles en una próxima iteración.</p></section>}
          </div>
