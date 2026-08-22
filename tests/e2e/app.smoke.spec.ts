@@ -3,9 +3,26 @@ import { expect, test, type Page } from "@playwright/test";
 async function drawRectangle(page: Page) {
   await page.getByRole("button", { name: "Rectángulo" }).click();
   const pageBounds = await page.locator(".page").boundingBox();
+  const canvasBounds = await page.locator(".canvas").boundingBox();
   expect(pageBounds).not.toBeNull();
-  const start = { x: pageBounds!.x + 40, y: pageBounds!.y + 40 };
-  const end = { x: pageBounds!.x + 180, y: pageBounds!.y + 130 };
+  expect(canvasBounds).not.toBeNull();
+
+  const visibleLeft = Math.max(pageBounds!.x, canvasBounds!.x);
+  const visibleTop = Math.max(pageBounds!.y, canvasBounds!.y);
+  const visibleRight = Math.min(pageBounds!.x + pageBounds!.width, canvasBounds!.x + canvasBounds!.width);
+  const visibleBottom = Math.min(pageBounds!.y + pageBounds!.height, canvasBounds!.y + canvasBounds!.height);
+  const availableWidth = visibleRight - visibleLeft - 2;
+  const availableHeight = visibleBottom - visibleTop - 2;
+  expect(availableWidth).toBeGreaterThan(0);
+  expect(availableHeight).toBeGreaterThan(0);
+
+  const rectangleWidth = Math.min(140, availableWidth);
+  const rectangleHeight = Math.min(90, availableHeight);
+  const start = {
+    x: visibleLeft + 1 + Math.min(40, availableWidth - rectangleWidth),
+    y: visibleTop + 1 + Math.min(40, availableHeight - rectangleHeight),
+  };
+  const end = { x: start.x + rectangleWidth, y: start.y + rectangleHeight };
   await page.mouse.move(start.x, start.y);
   await page.mouse.down();
   await page.mouse.move(end.x, end.y);
@@ -40,7 +57,7 @@ test("creates, transforms, and undoes a rectangle", async ({ page }) => {
   await expect(width).toHaveValue(String(originalWidth));
 });
 
-test("places appearance controls in Propiedades and duplicates directionally", async ({ page }) => {
+test("places the color palette in the status bar and duplicates directionally", async ({ page }) => {
   await page.goto("/");
   await drawRectangle(page);
   const rectangle = page.locator(".page-svg svg rect").first();
@@ -49,8 +66,8 @@ test("places appearance controls in Propiedades and duplicates directionally", a
   await page.mouse.click(rectangleBounds!.x + rectangleBounds!.width / 2, rectangleBounds!.y + rectangleBounds!.height / 2);
 
   await expect(page.getByRole("tab", { name: "Propiedades" })).toHaveAttribute("aria-selected", "true");
-  await expect(page.locator(".inspector").getByText("APARIENCIA")).toBeVisible();
-  await expect(page.locator(".inspector .palette")).toBeVisible();
+  await expect(page.locator(".statusbar .status-palette")).toBeVisible();
+  await expect(page.locator(".statusbar .palette")).toBeVisible();
   await page.getByRole("tab", { name: "Transformar" }).click();
   await page.getByRole("button", { name: "Este", exact: true }).click();
   await page.getByLabel("Distancia entre copias en milímetros").fill("5");

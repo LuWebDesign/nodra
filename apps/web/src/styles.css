@@ -55,7 +55,7 @@
 .shape-operation-copy .panel-title { margin:0; font-size:9px; white-space:nowrap; }
 .shape-operation-group .shape-operation-buttons { flex:0 0 auto; }
 .direction-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:5px; margin:12px 0; }.direction-button { display:grid; place-items:center; aspect-ratio:1; color:var(--muted); background:var(--bg); border:1px solid var(--line); border-radius:4px; font-size:22px; line-height:1; }.direction-button:hover,.direction-button:focus-visible,.direction-button.active { color:var(--accent); border-color:var(--accent); background:#172b36; }.transform-fields { display:grid; grid-template-columns:1fr 1fr; gap:8px; }.transform-fields .field { display:grid; gap:4px; }.transform-action { width:100%; margin-top:12px; padding:8px; color:#071117; background:var(--accent); border-radius:4px; font-size:11px; font-weight:700; }.transform-action:disabled { cursor:not-allowed; opacity:.45; }
- .transform-card { min-height:0; padding:10px; }
+  .transform-card { min-height:0; padding:10px; }
  .transform-card .panel-title { margin-bottom:7px; }
   .transform-layout { display:grid; grid-template-columns:1.5cm minmax(0,1fr); grid-template-rows:1.5cm auto; align-items:start; column-gap:3mm; row-gap:3mm; margin-top:8px; }
   .transform-card .direction-grid { position:relative; box-sizing:border-box; width:1.5cm; height:1.5cm; grid-template-rows:repeat(3,minmax(0,1fr)); gap:4px; margin:0; border:1px solid var(--line); }
@@ -68,4 +68,11 @@
   .transform-card .transform-fields .field:nth-child(1) { grid-column:2; grid-row:1; }
   .transform-card .transform-fields .field:nth-child(2) { grid-column:2; grid-row:2; }
    .transform-card .transform-action { grid-column:1; grid-row:2; align-self:end; justify-self:start; width:max-content; margin-top:0; padding:6px 5px; white-space:nowrap; }
-   .canvas.drawing-tool { cursor:crosshair; }
+    .canvas.drawing-tool { cursor:crosshair; }
+ .statusbar { justify-content:space-between; }
+ .status-message { display:flex; align-items:center; gap:8px; min-width:0; }
+ .status-palette { display:flex; align-items:center; gap:8px; margin-left:auto; }
+ .status-palette-label { color:var(--muted); font-size:9px; letter-spacing:.12em; }
+ .status-palette .palette { flex-wrap:nowrap; gap:5px; margin:0; }
+ .status-palette .swatch { width:18px; height:18px; }
+ .status-palette .swatch.no-fill { font-size:13px; line-height:16px; }

@@ -114,8 +114,8 @@ export function screenPointToMm(point: PointMm, origin: PointMm, zoom: number, p
 }
 
 export const ZOOM_100_PERCENT = 3;
-export const INITIAL_ZOOM = ZOOM_100_PERCENT / 10;
-export const MIN_ZOOM = INITIAL_ZOOM;
+export const INITIAL_ZOOM = ZOOM_100_PERCENT / 4;
+export const MIN_ZOOM = ZOOM_100_PERCENT / 10;
 export const MAX_ZOOM = 8;
 
 export function centerPageInCanvas(canvas: { readonly width: number; readonly height: number }, page: { readonly width: number; readonly height: number }, zoom: number): PointMm {
