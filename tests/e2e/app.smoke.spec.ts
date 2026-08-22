@@ -53,6 +53,26 @@ test("creates an open path with Pluma and exposes its anchors", async ({ page })
   await expect(page.locator(".contour-node")).toHaveCount(3);
 });
 
+test("deletes a selected Pluma anchor without deleting the path", async ({ page }) => {
+  await page.goto("/");
+  const pageBounds = await page.locator(".page").boundingBox();
+  expect(pageBounds).not.toBeNull();
+  await page.getByRole("button", { name: "Pluma" }).click();
+  const x = pageBounds!.x + 80;
+  const y = pageBounds!.y + 80;
+  await page.mouse.click(x, y);
+  await page.mouse.click(x + 80, y + 30);
+  await page.mouse.click(x + 160, y);
+  const nodes = page.locator(".contour-node");
+  await expect(nodes).toHaveCount(3);
+  const middle = await nodes.nth(1).boundingBox();
+  expect(middle).not.toBeNull();
+  await page.mouse.click(middle!.x + middle!.width / 2, middle!.y + middle!.height / 2);
+  await page.keyboard.press("Backspace");
+  await expect(page.locator(".page-svg svg path[data-element-id]")).toHaveCount(1);
+  await expect(nodes).toHaveCount(2);
+});
+
 test("splits a selected path segment from Forma and supports undo and redo", async ({ page }) => {
   await page.goto("/");
   const pageBounds = await page.locator(".page").boundingBox();

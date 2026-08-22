@@ -1,4 +1,4 @@
-import type { DocumentSnapshot, Element, ElementId, PointMm } from "@nodra/domain";
+import type { DocumentSnapshot, Element, ElementId, PathElement, PointMm } from "@nodra/domain";
 import { boundsOf, contourSegmentAt, contourVertexNodes, elementCenter, elementSegmentAt, hitTest, pathGeometryNodes, pathSegmentAt, realGeometryNodes, type Bounds, type ContourSegmentHit, type ContourVertexNode, type PathGeometryNode, type RealGeometryNode, type PathSegmentHit } from "@nodra/geometry";
 
 export interface DragGeometry { readonly position: PointMm; readonly size: { readonly width: number; readonly height: number } }
@@ -10,6 +10,14 @@ export type ContourNodeHit = ContourVertexNode;
 export type ContourSegmentHitResult = ContourSegmentHit;
 export type PathSegmentHitResult = PathSegmentHit;
 export type FormaNodeHit = { readonly elementId: ElementId; readonly nodeIndex?: number; readonly contourNode?: ContourNodeHit; readonly point: PointMm };
+
+export function selectedPathAnchorIds(path: PathElement, keys: readonly string[]): string[] {
+  return [...new Set(keys.flatMap((key) => {
+    const match = key.match(new RegExp(`^${path.id}:p:(\\d+)$`));
+    const node = match ? pathGeometryNodes(path)[Number(match[1])] : undefined;
+    return node?.kind === "anchor" ? [node.nodeId] : [];
+  }))];
+}
 
 export type DrawingTool = "rectangle" | "ellipse" | "line";
 
