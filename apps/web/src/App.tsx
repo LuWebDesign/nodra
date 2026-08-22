@@ -587,9 +587,9 @@ export function App() {
       ? contourVertexNodes(element).map((node) => ({ kind: "contour" as const, key: `${node.elementId}:c:${node.ringIndex}:${node.pointIndex}`, elementId: node.elementId, point: node.point, contour: node }))
        : element.type === "path" ? pathGeometryNodes(element).map((node, nodeIndex) => ({ kind: "path" as const, key: `${element.id}:p:${nodeIndex}`, elementId: element.id, point: node.point, nodeIndex, pathNode: { elementId: element.id, node } }))
        : realGeometryNodes(element).map((node, nodeIndex) => ({ kind: "path" as const, key: `${element.id}:p:${nodeIndex}`, elementId: element.id, point: node.point, nodeIndex }))) : [];
-   const selectedPathAnchor = selectedElement?.type === "path"
-     ? (() => { const anchor = formaNodes.find((node) => node.kind === "path" && node.pathNode?.node.kind === "anchor" && selectedFormaNodeKeys.includes(node.key))?.pathNode?.node; return anchor?.kind === "anchor" ? selectedElement.nodes.find((node) => node.id === anchor.nodeId) : undefined; })()
-     : undefined;
+    const selectedPathAnchor = selectedElement?.type === "path"
+      ? (() => { const selectedPathOverlay = formaNodes.find((node): node is Extract<FormaNodeOverlay, { readonly kind: "path" }> => node.kind === "path" && "pathNode" in node && node.pathNode?.node.kind === "anchor" && selectedFormaNodeKeys.includes(node.key)); const anchor = selectedPathOverlay?.pathNode?.node; return anchor?.kind === "anchor" ? selectedElement.nodes.find((node) => node.id === anchor.nodeId) : undefined; })()
+      : undefined;
    const pathJoinControls = selectedElement?.type === "path" && selectedPathAnchor ? <section className="path-join-card" role="group" aria-label="Unión del ancla seleccionada">
      <div className="panel-title">UNIÓN DEL ANCLA</div>
      <p className="muted">{pathJoinGuidance}</p>
