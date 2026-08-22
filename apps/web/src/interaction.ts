@@ -1,5 +1,5 @@
 import type { DocumentSnapshot, Element, ElementId, PointMm } from "@nodra/domain";
-import { boundsOf, contourSegmentAt, contourVertexNodes, hitTest, realGeometryNodes, type Bounds, type ContourSegmentHit, type ContourVertexNode, type RealGeometryNode } from "@nodra/geometry";
+import { boundsOf, contourSegmentAt, contourVertexNodes, elementSegmentAt, hitTest, realGeometryNodes, type Bounds, type ContourSegmentHit, type ContourVertexNode, type RealGeometryNode } from "@nodra/geometry";
 
 export interface DragGeometry { readonly position: PointMm; readonly size: { readonly width: number; readonly height: number } }
 export interface SnapGuide { readonly source: PointMm; readonly target: PointMm }
@@ -7,6 +7,7 @@ export interface SnapMoveResult { readonly delta: PointMm; readonly guide: SnapG
 export interface NodeHit { readonly elementId: ElementId; readonly nodeIndex: number; readonly node: RealGeometryNode }
 export type ContourNodeHit = ContourVertexNode;
 export type ContourSegmentHitResult = ContourSegmentHit;
+export type FormaNodeHit = { readonly elementId: ElementId; readonly nodeIndex?: number; readonly contourNode?: ContourNodeHit; readonly point: PointMm };
 
 export type DrawingTool = "rectangle" | "ellipse" | "line";
 
@@ -92,6 +93,36 @@ export function pickContourSegment(document: DocumentSnapshot, point: PointMm, z
   }
   return best;
 }
+
+export function pickFormaNode(document: DocumentSnapshot, point: PointMm, zoom: number, tolerancePx = 8): FormaNodeHit | undefined {
+  const visible = new Set(document.layers.filter((layer) => layer.visible).map((layer) => layer.id));
+  let best: { hit: FormaNodeHit; distance: number; order: string } | undefined;
+  for (const element of document.elements) if (visible.has(element.layerId)) {
+    if (element.type === "contour") for (const node of contourVertexNodes(element)) {
+      const distance = Math.hypot(node.point.x - point.x, node.point.y - point.y) * zoom;
+      const order = `${element.id}:c:${node.ringIndex}:${node.pointIndex}`;
+      if (distance <= tolerancePx && (!best || distance < best.distance || distance === best.distance && order < best.order)) best = { hit: { elementId: element.id, contourNode: node, point: node.point }, distance, order };
+    }
+    else for (const [nodeIndex, node] of realGeometryNodes(element).entries()) {
+      const distance = Math.hypot(node.point.x - point.x, node.point.y - point.y) * zoom;
+      const order = `${element.id}:p:${nodeIndex}`;
+      if (distance <= tolerancePx && (!best || distance < best.distance || distance === best.distance && order < best.order)) best = { hit: { elementId: element.id, nodeIndex, point: node.point }, distance, order };
+    }
+  }
+  return best?.hit;
+}
+
+export function pickFormaSegment(document: DocumentSnapshot, point: PointMm, zoom: number, tolerancePx = 8): ContourSegmentHitResult | undefined {
+  const visible = new Set(document.layers.filter((layer) => layer.visible).map((layer) => layer.id));
+  let best: ContourSegmentHitResult | undefined;
+  for (const element of document.elements) if (visible.has(element.layerId)) {
+    const hit = elementSegmentAt(element, point, tolerancePx / zoom);
+    if (hit && (!best || hit.distance < best.distance || hit.distance === best.distance && `${hit.elementId}:${hit.ringIndex}:${hit.segmentIndex}` < `${best.elementId}:${best.ringIndex}:${best.segmentIndex}`)) best = hit;
+  }
+  return best;
+}
+
+export function formaNodeKey(node: FormaNodeHit): string { return node.contourNode ? `${node.elementId}:c:${node.contourNode.ringIndex}:${node.contourNode.pointIndex}` : `${node.elementId}:p:${node.nodeIndex}`; }
 
 /** Keeps a node anchor only when the pointer-down selection includes its element. */
 export function selectedNodeAnchor(node: NodeHit | undefined, selectedIds: readonly ElementId[]): NodeHit | undefined {

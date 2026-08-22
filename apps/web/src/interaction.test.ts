@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createDocument, elementId, layerId } from "@nodra/domain";
-import { canActivateRotation, centerPageInCanvas, clientPointToCanvas, hoveredSelectionCenter, INITIAL_ZOOM, isDrawingTool, marqueeSelection, MAX_ZOOM, MIN_ZOOM, movementExceedsThreshold, normalizeBounds, normalizeDrag, pagePointToCanvas, pagePointToScreen, screenDeltaToMm, screenPointToMm, containsBounds, elementsContainedBy, pickContourNode, pickContourSegment, pickElement, pickNode, pointerDownIntent, selectedNodeAnchor, selectionCenter, selectionFrame, snapMoveDelta, zoomAtPoint } from "./interaction.js";
+import { canActivateRotation, centerPageInCanvas, clientPointToCanvas, hoveredSelectionCenter, INITIAL_ZOOM, isDrawingTool, marqueeSelection, MAX_ZOOM, MIN_ZOOM, movementExceedsThreshold, normalizeBounds, normalizeDrag, pagePointToCanvas, pagePointToScreen, screenDeltaToMm, screenPointToMm, containsBounds, elementsContainedBy, pickContourNode, pickContourSegment, pickElement, pickFormaNode, pickFormaSegment, pickNode, pointerDownIntent, selectedNodeAnchor, selectionCenter, selectionFrame, snapMoveDelta, zoomAtPoint } from "./interaction.js";
 import { geometryPatch, geometryValue } from "./propertyBar.js";
 
 describe("canvas coordinates", () => {
@@ -235,5 +235,13 @@ describe("drag geometry", () => {
     expect(pickContourNode(document, { x: 10, y: 10 }, 1)).toMatchObject({ ringIndex: 0, pointIndex: 0 });
     expect(pickContourSegment(document, { x: 20, y: 10 }, 1)).toMatchObject({ elementId: contour.id, ringIndex: 0, segmentIndex: 0 });
     expect(pickContourSegment(document, { x: 10, y: 10 }, 1)).toBeUndefined();
+  });
+
+  it("picks Forma nodes and segments for primitives", () => {
+    const layer = { id: layerId("forma-primitive"), name: "Forma primitive", visible: true, order: 0 };
+    const rectangle = { type: "rectangle" as const, id: elementId("forma-rectangle"), layerId: layer.id, position: { x: 10, y: 10 }, size: { width: 20, height: 10 }, cornerRadius: 0, rotation: 0, style: { stroke: "#000", strokeWidth: 1 } };
+    const document = { ...createDocument("forma-primitive-document", [layer]), elements: [rectangle] };
+    expect(pickFormaNode(document, { x: 10, y: 10 }, 1)).toMatchObject({ elementId: rectangle.id, nodeIndex: 0 });
+    expect(pickFormaSegment(document, { x: 20, y: 10 }, 1)).toMatchObject({ elementId: rectangle.id, segmentIndex: 0 });
   });
 });

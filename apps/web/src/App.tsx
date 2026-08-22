@@ -1,10 +1,10 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent, type PointerEvent, type ReactNode, type WheelEvent } from "react";
 import { createProject, elementId, layerId, pageId, revision, type DocumentSnapshot, type Element, type ElementId, type PointMm, type ProjectSnapshot } from "@nodra/domain";
-import { addToSelection, beginGesture, cancelGesture, clearSelection, commitGesture, createElement, deleteElement, dispatch, duplicateElements, flipElements, insertContourNode, moveElements, previewGesture, previewGestureFromBase, redo, resizeElement, resizeElements, rotateElement, rotateElementsAroundCenter, select, selectForPointerDown, shapeOperation, undo, updateContourNode, updateElement, updateElementStyles, updatePage, type FlipAxis, type ShapeOperation } from "@nodra/editor-core";
+import { addToSelection, beginGesture, cancelGesture, clearSelection, commitGesture, createElement, deleteContourNodes, deleteElement, deleteElementNodes, dispatch, duplicateElements, flipElements, insertFormaNode, moveElements, previewGesture, previewGestureFromBase, redo, resizeElement, resizeElements, rotateElement, rotateElementsAroundCenter, select, selectForPointerDown, shapeOperation, undo, updateContourNode, updateElement, updateElementNode, updateElementStyles, updatePage, type FlipAxis, type ShapeOperation } from "@nodra/editor-core";
 import { boundsOfElements, contourVertexNodes, elementCenter, groupCenter, groupHandlePoints, realGeometryNodes, resizeHandle, rotatedResizeHandles, rotationFromDrag, rotationHandlePoints, type Direction, type GroupHandle, type ResizeHandle } from "@nodra/geometry";
 import { DebouncedAutosave, DexieProjectRepository, requestStoragePersistence } from "@nodra/persistence";
 import { renderSvg } from "@nodra/renderer-svg";
-import { canActivateRotation, centerPageInCanvas, clientPointToCanvas, hoveredSelectionCenter, isDrawingTool, marqueeSelection, movementExceedsThreshold, normalizeBounds, normalizeDrag, pagePointToCanvas, pickContourNode, pickContourSegment, pickElement, pickNode, pointerDownIntent, screenDeltaToMm, screenPointToMm, selectedNodeAnchor, snapMoveDelta, zoomAtPoint, type ContourNodeHit, type NodeHit, type SnapGuide, type TransformMode } from "./interaction.js";
+import { canActivateRotation, centerPageInCanvas, clientPointToCanvas, formaNodeKey, hoveredSelectionCenter, isDrawingTool, marqueeSelection, movementExceedsThreshold, normalizeBounds, normalizeDrag, pagePointToCanvas, pickElement, pickFormaNode, pickFormaSegment, pickNode, pointerDownIntent, screenDeltaToMm, screenPointToMm, selectedNodeAnchor, snapMoveDelta, zoomAtPoint, type ContourNodeHit, type FormaNodeHit, type NodeHit, type SnapGuide, type TransformMode } from "./interaction.js";
 import { aspectGeometryPatch, aspectSize, cornerRadiusPatch, formatMm, geometryValue, rotationDegreesValue, rotationPatch, type GeometryField, type PropertyElement } from "./propertyBar.js";
 import { useDocumentStore, usePersistenceStore, useUiStore, useViewportStore, type Tool } from "./stores.js";
 
@@ -35,6 +35,7 @@ type ActiveInteraction = {
   tool?: Exclude<Tool, "select" | "pan">;
   handle?: GroupHandle;
   anchor?: NodeHit;
+  formaNode?: FormaNodeHit;
   element?: Element;
   document?: DocumentSnapshot;
   shiftKey?: boolean;
@@ -64,6 +65,7 @@ export function App() {
   const [centerHover, setCenterHover] = useState<{ elementId: ElementId; point: PointMm }>();
   const [transformMode, setTransformMode] = useState<TransformMode>("resize");
   const [activeContourNodeKey, setActiveContourNodeKey] = useState<string>();
+  const [selectedFormaNodeKeys, setSelectedFormaNodeKeys] = useState<readonly string[]>([]);
   const [inspectorTab, setInspectorTab] = useState<InspectorTab>("properties");
   const [transformDirection, setTransformDirection] = useState<Direction>("center");
   const [directionTooltipVisible, setDirectionTooltipVisible] = useState(false);
@@ -273,9 +275,10 @@ export function App() {
       return;
     }
     const point = pointAt(event);
-     const contourNodeHit = tool === "forma" ? pickContourNode(editorRef.current.document, point, zoom) : undefined;
-     const nodeHit = tool !== "forma" && transformMode === "resize" ? pickNode(editorRef.current.document, point, zoom) : undefined;
-     const hit = contourNodeHit?.elementId ?? nodeHit?.elementId ?? pickElement(editorRef.current.document, point, zoom);
+      const formaNodeHit = tool === "forma" ? pickFormaNode(editorRef.current.document, point, zoom) : undefined;
+      const contourNodeHit = formaNodeHit?.contourNode;
+      const nodeHit = tool !== "forma" && transformMode === "resize" ? pickNode(editorRef.current.document, point, zoom) : undefined;
+      const hit = formaNodeHit?.elementId ?? nodeHit?.elementId ?? pickElement(editorRef.current.document, point, zoom);
     if (isDrawingTool(tool) && pointerDownIntent(tool, hit) === "draw") {
       event.currentTarget.setPointerCapture(event.pointerId);
       setEditorState(beginGesture(editorRef.current));
@@ -288,9 +291,11 @@ export function App() {
       if (!next.selection.includes(hit)) return;
       event.currentTarget.setPointerCapture(event.pointerId);
        if (tool === "forma") {
-         if (contourNodeHit && next.selection.includes(contourNodeHit.elementId)) {
-           setEditorState(beginGesture(next));
-           interaction.current = { pointerId: event.pointerId, lastX: event.clientX, lastY: event.clientY, kind: "contour-node", contourNode: contourNodeHit, startClient: { x: event.clientX, y: event.clientY }, dragged: false };
+          if (formaNodeHit && next.selection.includes(formaNodeHit.elementId)) {
+            const key = formaNodeKey(formaNodeHit);
+            setSelectedFormaNodeKeys((current) => event.shiftKey ? current.includes(key) ? current.filter((value) => value !== key) : [...current, key] : [key]);
+            setEditorState(beginGesture(next));
+            interaction.current = { pointerId: event.pointerId, lastX: event.clientX, lastY: event.clientY, kind: "contour-node", ...(contourNodeHit ? { contourNode: contourNodeHit } : {}), formaNode: formaNodeHit, startClient: { x: event.clientX, y: event.clientY }, dragged: false };
          }
          return;
        }
@@ -311,11 +316,11 @@ export function App() {
   const onCanvasDoubleClick = (event: MouseEvent<HTMLDivElement>) => {
     const point = screenPointToMm(clientPointToCanvas({ x: event.clientX, y: event.clientY }, event.currentTarget.getBoundingClientRect()), { x: 0, y: 0 }, zoom, panMm);
     if (tool === "forma") {
-      if (pickContourNode(editorRef.current.document, point, zoom)) return;
-      const segment = pickContourSegment(editorRef.current.document, point, zoom);
-      if (segment && editorRef.current.selection.includes(segment.elementId)) {
+      if (pickFormaNode(editorRef.current.document, point, zoom)) return;
+      const segment = pickFormaSegment(editorRef.current.document, point, zoom);
+      if (segment) {
         const nextPointIndex = segment.segmentIndex + 1;
-        setEditorState(dispatch(select(editorRef.current, [segment.elementId]), insertContourNode(segment.elementId, segment, point)));
+        setEditorState(dispatch(select(editorRef.current, [segment.elementId]), insertFormaNode(segment.elementId, segment, point)));
         setActiveContourNodeKey(`${segment.elementId}:${segment.ringIndex}:${nextPointIndex}`);
       }
       return;
@@ -370,11 +375,12 @@ export function App() {
       setEditorState(previewGestureFromBase(editorRef.current, moveElements(active.ids, snapped.delta)));
       return;
     }
-    if (active.kind === "contour-node" && active.contourNode) {
+    if (active.kind === "contour-node" && active.formaNode) {
       const point = pointAt(event);
       if (!active.startClient || !movementExceedsThreshold(active.startClient, { x: event.clientX, y: event.clientY })) return;
       active.dragged = true;
-      setEditorState(previewGestureFromBase(editorRef.current, updateContourNode(active.contourNode.elementId, active.contourNode, point)));
+      const command = active.formaNode.contourNode ? updateContourNode(active.formaNode.elementId, active.formaNode.contourNode, point) : updateElementNode(active.formaNode.elementId, active.formaNode.nodeIndex ?? -1, point);
+      setEditorState(previewGestureFromBase(editorRef.current, command));
       return;
     }
     if (!active.start || !active.tool || !isDrawingTool(active.tool) || !active.ids?.[0] || !active.startClient || !movementExceedsThreshold(active.startClient, { x: event.clientX, y: event.clientY })) return;
@@ -390,8 +396,14 @@ export function App() {
     if (!active || active.pointerId !== event.pointerId) return;
     if (active.kind === "marquee") {
       if (!cancelled && active.start && active.dragged && active.document) {
-        const nextIds = marqueeSelection(active.document, active.start, pointAt(event));
-        setEditorState(active.shiftKey ? addToSelection(editorRef.current, nextIds) : select(editorRef.current, nextIds));
+        if (tool === "forma") {
+          const bounds = normalizeBounds(active.start, pointAt(event));
+          const keys = formaNodes.filter((node) => node.point.x >= bounds.x && node.point.x <= bounds.x + bounds.width && node.point.y >= bounds.y && node.point.y <= bounds.y + bounds.height).map((node) => node.key);
+          setSelectedFormaNodeKeys((current) => active.shiftKey ? [...new Set([...current, ...keys])] : keys);
+        } else {
+          const nextIds = marqueeSelection(active.document, active.start, pointAt(event));
+          setEditorState(active.shiftKey ? addToSelection(editorRef.current, nextIds) : select(editorRef.current, nextIds));
+        }
       } else if (!cancelled && !active.dragged) setEditorState(clearSelection(editorRef.current));
       setMarquee(undefined);
     } else if (active.kind === "resize" && active.ids && active.handle && active.handle !== "center" && !cancelled) {
@@ -437,7 +449,16 @@ export function App() {
         setTransformMode("resize");
         return;
       }
-      if (selection.length && event.key === "Delete") {
+      if ((event.key === "Delete" || event.key === "Backspace") && tool === "forma" && selectedFormaNodeKeys.length) {
+        let next = editorRef.current;
+        for (const element of selectedElements) {
+          const contourAddresses = selectedFormaNodeKeys.flatMap((key) => { const match = key.match(new RegExp(`^${element.id}:c:(\\d+):(\\d+)$`)); return match ? [{ ringIndex: Number(match[1]), pointIndex: Number(match[2]) }] : []; });
+          const primitiveIndexes = selectedFormaNodeKeys.flatMap((key) => { const match = key.match(new RegExp(`^${element.id}:p:(\\d+)$`)); return match ? [Number(match[1])] : []; });
+          if (contourAddresses.length) next = dispatch(next, deleteContourNodes(element.id, contourAddresses));
+          if (primitiveIndexes.length) next = dispatch(next, deleteElementNodes(element.id, primitiveIndexes));
+        }
+        setSelectedFormaNodeKeys([]); setEditorState(next);
+      } else if (selection.length && event.key === "Delete") {
         let next = editorRef.current;
         for (const selectedId of selection) next = dispatch(next, deleteElement(selectedId));
         setEditorState(next);
@@ -449,9 +470,9 @@ export function App() {
     };
     addEventListener("keydown", onKey);
     return () => removeEventListener("keydown", onKey);
-  }, [selectionKey]);
+    }, [selectionKey, selectedFormaNodeKeys, tool, selectedElements]);
 
-   const contourNodes = tool === "forma" ? selectedElements.flatMap((element) => element.type === "contour" ? contourVertexNodes(element) : []) : [];
+    const formaNodes = tool === "forma" ? selectedElements.flatMap((element) => element.type === "contour" ? contourVertexNodes(element).map((node) => ({ key: `${node.elementId}:c:${node.ringIndex}:${node.pointIndex}`, elementId: node.elementId, point: node.point, contour: node })) : realGeometryNodes(element).map((node, nodeIndex) => ({ key: `${element.id}:p:${nodeIndex}`, elementId: element.id, point: node.point, nodeIndex }))) : [];
    const groupPoints = selectedBounds ? groupHandlePoints(selectedBounds) : undefined;
   const handlePoints = selectedElement?.type === "line" ? undefined : selectedElement?.type === "contour" && selectedBounds ? [groupHandlePoints(selectedBounds).nw, groupHandlePoints(selectedBounds).n, groupHandlePoints(selectedBounds).ne, groupHandlePoints(selectedBounds).e, groupHandlePoints(selectedBounds).se, groupHandlePoints(selectedBounds).s, groupHandlePoints(selectedBounds).sw, groupHandlePoints(selectedBounds).w] as const : selectedElement && selectedElement.type !== "contour" ? rotatedResizeHandles(selectedElement) : undefined;
   const handleNames: readonly ResizeHandle[] = ["nw", "n", "ne", "e", "se", "s", "sw", "w"];
@@ -667,12 +688,12 @@ export function App() {
         <header className="canvas-header"><span>DISEÑO / SIN TÍTULO</span><span>{document.elements.length} objetos · {document.page.width} × {document.page.height} mm</span><div className="zoom-controls"><button aria-label="Alejar" onClick={() => setZoom(zoom - 0.5)}>−</button><span className="zoom-label">{Math.round(zoom * 100 / 3)}%</span><button aria-label="Acercar" onClick={() => setZoom(zoom + 0.5)}>+</button></div></header>
            <div ref={canvas} className={`${grid ? "canvas" : "canvas no-grid"}${isDrawingTool(tool) ? " drawing-tool" : ""}`} onPointerDown={onCanvasPointerDown} onPointerMove={onCanvasPointerMove} onPointerUp={(event) => finishPointer(event, false)} onPointerCancel={(event) => finishPointer(event, true)} onPointerLeave={() => setCursorPoint(undefined)} onDoubleClick={onCanvasDoubleClick} onWheel={onWheel}>
            <div className="page" style={pageStyle}><div className="page-svg" dangerouslySetInnerHTML={{ __html: rendered.success ? rendered.svg : "" }} /></div>
-            {contourNodes.length > 0 && <div className="contour-node-overlay" role="group" aria-label="Nodos de forma">{contourNodes.map((node) => { const key = `${node.elementId}:${node.ringIndex}:${node.pointIndex}`; const screen = pagePointToCanvas(node.point, zoom, panMm); return <button key={key} type="button" className={`contour-node${activeContourNodeKey === key ? " active" : ""}`} data-contour-node={key} aria-label={`Nodo del contorno, anillo ${node.ringIndex + 1}, punto ${node.pointIndex + 1}`} style={{ left: screen.x, top: screen.y }} onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); setActiveContourNodeKey(key); event.currentTarget.setPointerCapture(event.pointerId); setEditorState(beginGesture(editorRef.current)); interaction.current = { pointerId: event.pointerId, lastX: event.clientX, lastY: event.clientY, kind: "contour-node", contourNode: node, startClient: { x: event.clientX, y: event.clientY }, dragged: false }; }} onPointerUp={(event) => finishPointer(event, false)} onPointerCancel={(event) => finishPointer(event, true)} />; })}</div>}
+             {formaNodes.length > 0 && <div className="contour-node-overlay" role="group" aria-label="Nodos de forma">{formaNodes.map((node) => { const screen = pagePointToCanvas(node.point, zoom, panMm); const selected = selectedFormaNodeKeys.includes(node.key); return <button key={node.key} type="button" className={`contour-node${selected ? " active selected" : ""}`} data-contour-node={node.key} aria-label={node.contour ? `Nodo del contorno, anillo ${node.contour.ringIndex + 1}, punto ${node.contour.pointIndex + 1}` : `Nodo editable ${node.nodeIndex! + 1}`} style={{ left: screen.x, top: screen.y }} onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); setSelectedFormaNodeKeys((current) => event.shiftKey ? current.includes(node.key) ? current.filter((value) => value !== node.key) : [...current, node.key] : [node.key]); event.currentTarget.setPointerCapture(event.pointerId); setEditorState(beginGesture(editorRef.current)); interaction.current = { pointerId: event.pointerId, lastX: event.clientX, lastY: event.clientY, kind: "contour-node", ...(node.contour ? { contourNode: node.contour } : {}), formaNode: node.contour ? { elementId: node.contour.elementId, contourNode: node.contour, point: node.point } : { elementId: node.elementId, nodeIndex: node.nodeIndex, point: node.point }, startClient: { x: event.clientX, y: event.clientY }, dragged: false }; }} onPointerUp={(event) => finishPointer(event, false)} onPointerCancel={(event) => finishPointer(event, true)} />; })}</div>}
           {centerHoverStyle && <div className="selection-center-feedback" style={centerHoverStyle} aria-hidden="true"><span className="selection-center-mark">×</span><span className="selection-center-label">centro</span></div>}
             {tool !== "forma" && transformMode === "resize" && (handlePoints || groupPoints) && <div className="resize-handles">{handleNames.map((handle) => <button key={handle} type="button" className={`resize-handle resize-handle-${handle}`} data-resize-handle={handle} aria-label={`Redimensionar ${handle}`} style={handleStyle(handle)} onPointerDown={(event) => resizePointerDown(event, handle)} onPointerUp={(event) => finishPointer(event, false)} onPointerCancel={(event) => finishPointer(event, true)} />)}{groupPoints && !isDrawingTool(tool) && <button type="button" className="resize-handle resize-handle-center" data-resize-handle="center" aria-label="Centro del grupo" style={handleStyle("center")} onPointerDown={(event) => event.stopPropagation()} />}</div>}
            {transformMode === "rotate" && selectedElements.length > 0 && <div className="rotation-controls" aria-label="Controles de rotación"><span className="rotation-center" style={selectedElements.length > 1 && selectedBounds ? { left: pagePointToCanvas(groupCenter(selectedBounds), zoom, panMm).x, top: pagePointToCanvas(groupCenter(selectedBounds), zoom, panMm).y } : centerStyle} aria-hidden="true" />{rotationPoints.map((point, index) => { const screen = pagePointToCanvas(point, zoom, panMm); return <button key={index} type="button" className="rotation-handle" aria-label={`Rotar objeto, control ${index + 1}`} style={{ left: screen.x, top: screen.y }} onPointerDown={rotationPointerDown} onPointerUp={(event) => finishPointer(event, false)} onPointerCancel={(event) => finishPointer(event, true)}><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M15.5 8A6 6 0 1 0 16 12" /><path d="m12.5 4 3 4-5 .5" /></svg></button>; })}</div>}
           {marqueeStyle && <div className="marquee" style={marqueeStyle} />}
-          {cursorPoint && <span className="tool-cursor" style={{ left: cursorPoint.x, top: cursorPoint.y }} aria-label={`Herramienta activa: ${toolCursorLabels[tool]}`}>{toolCursorIcons[tool]}</span>}
+           {cursorPoint && <span className="tool-cursor" style={{ left: cursorPoint.x, top: cursorPoint.y }} aria-label={`Herramienta activa: ${toolCursorLabels[tool]}`} title={tool === "forma" && pickFormaSegment(document, screenPointToMm(cursorPoint, { x: 0, y: 0 }, zoom, panMm), zoom) ? "Doble clic para insertar un nodo" : undefined}>{toolCursorIcons[tool]}</span>}
           <span className="canvas-hint">Clic: relleno · clic derecho: contorno · {toolCursorLabels[tool]}</span>
         </div>
       </section>

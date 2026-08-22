@@ -1,11 +1,17 @@
 import { describe, expect, it } from "vitest";
-import { boundsOf, boundsOfElements, closedElementToPolygon, degreesToRadians, elementCenter, ELLIPSE_APPROXIMATION_SEGMENTS, groupCenter, groupHandlePoints, hitTest, mmToScreen, radiansToDegrees, realGeometryNodes, resizeGroup, resizeHandle, rotatedLineEndpoints, rotateElements, rotationFromDrag, rotationHandlePoints, screenToMm, shapeResultContours, validateSize } from "./index.js";
+import { boundsOf, boundsOfElements, closedElementToPolygon, degreesToRadians, elementCenter, elementSegmentAt, elementToContour, ELLIPSE_APPROXIMATION_SEGMENTS, groupCenter, groupHandlePoints, hitTest, mmToScreen, radiansToDegrees, realGeometryNodes, resizeGroup, resizeHandle, rotatedLineEndpoints, rotateElements, rotationFromDrag, rotationHandlePoints, screenToMm, shapeResultContours, validateSize } from "./index.js";
 import { elementId, layerId } from "@nodra/domain";
 
 const style = { stroke: "#000", strokeWidth: 0.2 };
 const rectangle = { type: "rectangle" as const, id: elementId("r"), layerId: layerId("l"), position: { x: 10, y: 20 }, size: { width: 20, height: 10 }, cornerRadius: 0, rotation: 0, style };
 
 describe("canonical millimetre geometry", () => {
+  it("projects primitives to editable nodes and segments without changing the primitive", () => {
+    expect(realGeometryNodes(rectangle)).toHaveLength(9);
+    expect(elementToContour(rectangle).contours[0]?.points).toHaveLength(5);
+    expect(elementSegmentAt(rectangle, { x: 20, y: 20 }, 0.1)).toMatchObject({ elementId: rectangle.id, segmentIndex: 0 });
+    expect(rectangle.type).toBe("rectangle");
+  });
   it("round-trips viewport conversion", () => {
     const viewport = { zoom: 2, panMm: { x: 5, y: 7 } };
     const point = { x: 12, y: 18 };

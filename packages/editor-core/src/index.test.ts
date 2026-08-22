@@ -1,12 +1,25 @@
 import { describe, expect, it } from "vitest";
 import { createDocument, elementId, layerId, type RectangleElement } from "@nodra/domain";
-import { addToSelection, beginGesture, clearSelection, commitGesture, createEditor, createElement, dispatch, duplicateElements, flipElements, insertContourNode, moveElement, moveElements, previewGesture, previewGestureFromBase, redo, removeFromSelection, reorderLayer, resizeElement, resizeElements, rotateElementsAroundCenter, select, selectForPointerDown, setLayerVisibility, shapeOperation, toggleSelection, undo, updateContourNode, updateElement, updateElementStyles } from "./index.js";
+import { addToSelection, beginGesture, clearSelection, commitGesture, createEditor, createElement, deleteContourNodes, deleteElementNodes, dispatch, duplicateElements, flipElements, insertContourNode, moveElement, moveElements, previewGesture, previewGestureFromBase, redo, removeFromSelection, reorderLayer, resizeElement, resizeElements, rotateElementsAroundCenter, select, selectForPointerDown, setLayerVisibility, shapeOperation, toggleSelection, undo, updateContourNode, updateElement, updateElementStyles } from "./index.js";
 import type { Direction } from "@nodra/geometry";
 
 const rectangle: RectangleElement = { type: "rectangle", id: elementId("r1"), layerId: layerId("default"), position: { x: 1, y: 2 }, size: { width: 10, height: 5 }, cornerRadius: 0, rotation: 0, style: { stroke: "#000", strokeWidth: 1 } };
 const document = createDocument("doc", [{ id: layerId("default"), name: "Default", visible: true, order: 0 }]);
 
 describe("editor core", () => {
+  it("deletes contour nodes through validation and keeps a ring valid", () => {
+    const contour = { type: "contour" as const, id: elementId("delete-contour-node"), layerId: rectangle.layerId, position: { x: 1, y: 2 }, size: { width: 10, height: 5 }, contours: [{ points: [{ x: 1, y: 2 }, { x: 11, y: 2 }, { x: 11, y: 7 }, { x: 1, y: 7 }, { x: 1, y: 2 }] }], fillRule: "evenodd" as const, rotation: 0, style: rectangle.style };
+    const state = dispatch(createEditor({ ...document, elements: [contour] }), deleteContourNodes(contour.id, [{ ringIndex: 0, pointIndex: 1 }]));
+    expect(state.document.elements[0]).toMatchObject({ type: "contour", contours: [{ points: [{ x: 1, y: 2 }, { x: 11, y: 7 }, { x: 1, y: 7 }, { x: 1, y: 2 }] }] });
+    expect(state.undo).toHaveLength(1);
+    expect(dispatch(state, deleteContourNodes(contour.id, [{ ringIndex: 0, pointIndex: 0 }, { ringIndex: 0, pointIndex: 1 }]))).toBe(state);
+  });
+
+  it("converts a primitive before deleting a Forma node", () => {
+    const state = dispatch(createEditor({ ...document, elements: [rectangle] }), deleteElementNodes(rectangle.id, [0]));
+    expect(state.document.elements[0]?.type).toBe("contour");
+    expect(state.document.elements[0]?.type === "contour" ? state.document.elements[0].contours[0]?.points : []).toHaveLength(4);
+  });
   it("applies explicit commands and keeps selection outside document history", () => {
     const created = dispatch(createEditor(document), createElement(rectangle));
     const selected = select(created, [rectangle.id]);

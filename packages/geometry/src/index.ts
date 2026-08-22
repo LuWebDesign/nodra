@@ -47,7 +47,7 @@ export function contourWithPoints(element: ContourElement, points: readonly (rea
   const xs = flattened.map((point) => point.x);
   const ys = flattened.map((point) => point.y);
   const position = { x: Math.min(...xs), y: Math.min(...ys) };
-  return { ...element, position, size: { width: Math.max(...xs) - position.x, height: Math.max(...ys) - position.y }, contours: points.map((ring) => ({ points: [...ring] })), rotation: 0 };
+  return { ...element, position, size: { width: Math.max(0.001, Math.max(...xs) - position.x), height: Math.max(0.001, Math.max(...ys) - position.y) }, contours: points.map((ring) => ({ points: [...ring] })), rotation: 0 };
 }
 
 /** Returns only stored polygon vertices, with stable ring/point identity. A repeated closing point is represented by pointIndex 0. */
@@ -57,6 +57,27 @@ export function contourVertexNodes(element: ContourElement): readonly ContourVer
     const isClosingDuplicate = pointIndex === contour.points.length - 1 && contour.points.length > 1 && first?.x === point.x && first.y === point.y;
     return isClosingDuplicate ? [] : [{ elementId: element.id, ringIndex, pointIndex, point }];
   }));
+}
+
+/** Projects any drawable element to the polygon representation used by the SVG/polygon model. */
+export function elementToContour(element: Element): ContourElement {
+  const contours = element.type === "line"
+    ? [{ points: [element.start, element.end, element.start] }]
+    : contoursFromMultiPolygon(closedElementToPolygon(element));
+  const points = contours.flatMap((ring) => ring.points);
+  const xs = points.map((point) => point.x); const ys = points.map((point) => point.y);
+  return { type: "contour", id: element.id, layerId: element.layerId, position: { x: Math.min(...xs), y: Math.min(...ys) }, size: { width: Math.max(0.001, Math.max(...xs) - Math.min(...xs)), height: Math.max(0.001, Math.max(...ys) - Math.min(...ys)) }, contours, fillRule: "evenodd", rotation: 0, style: element.style, ...(element.operation ? { operation: element.operation } : {}) };
+}
+
+export function elementSegmentAt(element: Element, point: PointMm, toleranceMm = 0): ContourSegmentHit | undefined {
+  if (element.type === "contour") return contourSegmentAt(element, point, toleranceMm);
+  if (element.type === "line") {
+    const [start, end] = rotatedLineEndpoints(element);
+    const distance = contourSegmentDistance(point, start, end);
+    return distance <= toleranceMm ? { elementId: element.id, ringIndex: 0, segmentIndex: 0, distance } : undefined;
+  }
+  const projected = elementToContour(element);
+  return contourSegmentAt(projected, point, toleranceMm);
 }
 const contourSegmentDistance = (point: PointMm, start: PointMm, end: PointMm): number => {
   const dx = end.x - start.x; const dy = end.y - start.y; const lengthSquared = dx * dx + dy * dy;
