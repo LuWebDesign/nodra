@@ -1,11 +1,12 @@
 import type { DocumentSnapshot, Element, ElementId, PointMm } from "@nodra/domain";
-import { boundsOf, contourVertexNodes, hitTest, realGeometryNodes, type Bounds, type ContourVertexNode, type RealGeometryNode } from "@nodra/geometry";
+import { boundsOf, contourSegmentAt, contourVertexNodes, hitTest, realGeometryNodes, type Bounds, type ContourSegmentHit, type ContourVertexNode, type RealGeometryNode } from "@nodra/geometry";
 
 export interface DragGeometry { readonly position: PointMm; readonly size: { readonly width: number; readonly height: number } }
 export interface SnapGuide { readonly source: PointMm; readonly target: PointMm }
 export interface SnapMoveResult { readonly delta: PointMm; readonly guide: SnapGuide | undefined }
 export interface NodeHit { readonly elementId: ElementId; readonly nodeIndex: number; readonly node: RealGeometryNode }
 export type ContourNodeHit = ContourVertexNode;
+export type ContourSegmentHitResult = ContourSegmentHit;
 
 export type DrawingTool = "rectangle" | "ellipse" | "line";
 
@@ -79,6 +80,17 @@ export function pickContourNode(document: DocumentSnapshot, point: PointMm, zoom
     if (distance <= tolerancePx && (!best || distance < best.distance || distance === best.distance && order < best.order)) best = { hit: node, distance, order };
   }
   return best?.hit;
+}
+
+export function pickContourSegment(document: DocumentSnapshot, point: PointMm, zoom: number, tolerancePx = 8): ContourSegmentHitResult | undefined {
+  if (![point.x, point.y, zoom, tolerancePx].every(Number.isFinite) || zoom <= 0 || tolerancePx < 0) throw new Error("contour segment coordinates, zoom, and tolerance must be valid");
+  const visible = new Set(document.layers.filter((layer) => layer.visible).map((layer) => layer.id));
+  let best: ContourSegmentHitResult | undefined;
+  for (const element of document.elements) if (element.type === "contour" && visible.has(element.layerId)) {
+    const hit = contourSegmentAt(element, point, tolerancePx / zoom);
+    if (hit && (!best || hit.distance < best.distance || hit.distance === best.distance && `${hit.elementId}:${hit.ringIndex}:${hit.segmentIndex}` < `${best.elementId}:${best.ringIndex}:${best.segmentIndex}`)) best = hit;
+  }
+  return best;
 }
 
 /** Keeps a node anchor only when the pointer-down selection includes its element. */

@@ -12,6 +12,7 @@ export interface ResizeGeometry { readonly position: PointMm; readonly size: Siz
 export type RealGeometryNodeKind = "corner" | "edge-midpoint" | "endpoint" | "center" | "cardinal";
 export interface RealGeometryNode { readonly kind: RealGeometryNodeKind; readonly point: PointMm }
 export interface ContourVertexNode { readonly elementId: ElementId; readonly ringIndex: number; readonly pointIndex: number; readonly point: PointMm }
+export interface ContourSegmentHit { readonly elementId: ElementId; readonly ringIndex: number; readonly segmentIndex: number; readonly distance: number }
 export const ELLIPSE_APPROXIMATION_SEGMENTS = 64;
 export const ROUNDED_RECTANGLE_APPROXIMATION_SEGMENTS = 8;
 
@@ -56,6 +57,28 @@ export function contourVertexNodes(element: ContourElement): readonly ContourVer
     const isClosingDuplicate = pointIndex === contour.points.length - 1 && contour.points.length > 1 && first?.x === point.x && first.y === point.y;
     return isClosingDuplicate ? [] : [{ elementId: element.id, ringIndex, pointIndex, point }];
   }));
+}
+const contourSegmentDistance = (point: PointMm, start: PointMm, end: PointMm): number => {
+  const dx = end.x - start.x; const dy = end.y - start.y; const lengthSquared = dx * dx + dy * dy;
+  if (lengthSquared === 0) return Number.POSITIVE_INFINITY;
+  const t = Math.max(0, Math.min(1, ((point.x - start.x) * dx + (point.y - start.y) * dy) / lengthSquared));
+  return Math.hypot(point.x - (start.x + t * dx), point.y - (start.y + t * dy));
+};
+/** Finds a contour edge by document-space distance, excluding the stored closing duplicate. */
+export function contourSegmentAt(element: ContourElement, point: PointMm, toleranceMm = 0): ContourSegmentHit | undefined {
+  if (![point.x, point.y, toleranceMm].every(Number.isFinite) || toleranceMm < 0) throw new Error("contour segment coordinates and tolerance must be valid");
+  let best: ContourSegmentHit | undefined;
+  for (const [ringIndex, contour] of element.contours.entries()) {
+    const closing = contour.points.length > 1 && contour.points.at(-1)?.x === contour.points[0]?.x && contour.points.at(-1)?.y === contour.points[0]?.y;
+    const vertices = closing ? contour.points.slice(0, -1) : contour.points;
+    for (let segmentIndex = 0; segmentIndex < vertices.length; segmentIndex += 1) {
+      const start = vertices[segmentIndex]!; const end = vertices[(segmentIndex + 1) % vertices.length];
+      if (!end) continue;
+      const distance = contourSegmentDistance(point, start, end);
+      if (distance <= toleranceMm && (!best || distance < best.distance || distance === best.distance && `${ringIndex}:${segmentIndex}` < `${best.ringIndex}:${best.segmentIndex}`)) best = { elementId: element.id, ringIndex, segmentIndex, distance };
+    }
+  }
+  return best;
 }
 const pointInRing = (point: PointMm, ring: readonly [number, number][]): boolean => {
   let inside = false;
@@ -320,7 +343,7 @@ export function resizeGroup(elements: readonly Element[], handle: ResizeHandle, 
 }
 export function rotateElements(elements: readonly Element[], center: PointMm, delta: number): readonly Element[] { const rotatePoint = (p: PointMm) => transformPoint({ x: p.x - center.x, y: p.y - center.y }, center, delta); return elements.map((e) => e.type === "line" ? { ...e, start: rotatePoint(e.start), end: rotatePoint(e.end) } : e.type === "contour" ? contourWithPoints(e, e.contours.map((contour) => contour.points.map(rotatePoint))) : (() => { const c = rotatePoint(elementCenter(e)); return { ...e, position: { x: c.x - e.size.width / 2, y: c.y - e.size.height / 2 }, rotation: normalizeAngle(e.rotation + delta) }; })()); }
 
-const distanceToSegment = (point: PointMm, start: PointMm, end: PointMm): number => {
+const lineDistanceToSegment = (point: PointMm, start: PointMm, end: PointMm): number => {
   const dx = end.x - start.x; const dy = end.y - start.y; const lengthSquared = dx * dx + dy * dy;
   if (lengthSquared === 0) throw new Error("Line endpoints must differ");
   const t = Math.max(0, Math.min(1, ((point.x - start.x) * dx + (point.y - start.y) * dy) / lengthSquared));
@@ -331,7 +354,7 @@ export function hitTest(element: Element, point: PointMm, toleranceMm = 0): bool
   assertFinite(toleranceMm, "toleranceMm"); if (toleranceMm < 0) throw new Error("toleranceMm must not be negative");
   if (element.type === "line") {
     const [start, end] = rotatedLineEndpoints(element);
-    return distanceToSegment(point, start, end) <= toleranceMm;
+    return lineDistanceToSegment(point, start, end) <= toleranceMm;
   }
   if (element.type === "contour") {
     return element.contours.reduce((inside, contour) => inside !== pointInRing(point, contour.points.map((value) => [value.x, value.y] as [number, number])), false);

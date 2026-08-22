@@ -18,6 +18,7 @@ import { boundsOfElements, contourWithPoints, directionVector, elementCenter, gr
 
 export type ElementPatch = { readonly position?: PointMm; readonly size?: SizeMm; readonly rotation?: number; readonly cornerRadius?: number; readonly style?: VisualStyle; readonly operation?: OperationMetadata; readonly start?: PointMm; readonly end?: PointMm };
 export interface ContourNodeAddress { readonly ringIndex: number; readonly pointIndex: number }
+export interface ContourSegmentAddress { readonly ringIndex: number; readonly segmentIndex: number }
 export type StylePatch = { readonly stroke?: string; readonly fill?: string | null; readonly strokeWidth?: number };
 export type EditorCommand = { readonly name: string; readonly apply: (document: DocumentSnapshot) => CommandResult };
 export type CommandResult = { readonly success: true; readonly document: DocumentSnapshot } | { readonly success: false; readonly error: string };
@@ -148,6 +149,24 @@ export const updateContourNode = (id: ElementId, address: ContourNodeAddress, po
       const closesRing = ringIndex === address.ringIndex && address.pointIndex === 0 && pointIndex === candidate.points.length - 1 && candidate.points.at(-1)?.x === candidate.points[0]?.x && candidate.points.at(-1)?.y === candidate.points[0]?.y;
       return isAddress || closesRing ? point : candidatePoint;
     }));
+    return replaceElements(document, document.elements.map((element) => element.id === id && element.type === "contour" ? contourWithPoints(element, points) : element));
+  },
+});
+
+export const insertContourNode = (id: ElementId, address: ContourSegmentAddress, point: PointMm): EditorCommand => ({
+  name: `contour-node-insert:${id}:${address.ringIndex}:${address.segmentIndex}`,
+  apply: (document) => {
+    if (![point.x, point.y].every(Number.isFinite)) return { success: false, error: "Contour node coordinates must be finite" };
+    const current = document.elements.find((element) => element.id === id);
+    if (!current) return { success: false, error: `Element not found: ${id}` };
+    if (current.type !== "contour") return { success: false, error: "Contour node insertion requires a contour" };
+    const ring = current.contours[address.ringIndex];
+    if (!ring) return { success: false, error: "Contour segment ring not found" };
+    const closing = ring.points.length > 1 && ring.points.at(-1)?.x === ring.points[0]?.x && ring.points.at(-1)?.y === ring.points[0]?.y;
+    const vertexCount = closing ? ring.points.length - 1 : ring.points.length;
+    if (!Number.isInteger(address.segmentIndex) || address.segmentIndex < 0 || address.segmentIndex >= vertexCount) return { success: false, error: "Contour segment not found" };
+    const insertIndex = address.segmentIndex + 1;
+    const points = current.contours.map((candidate, ringIndex) => ringIndex !== address.ringIndex ? candidate.points : [...candidate.points.slice(0, insertIndex), point, ...candidate.points.slice(insertIndex)]);
     return replaceElements(document, document.elements.map((element) => element.id === id && element.type === "contour" ? contourWithPoints(element, points) : element));
   },
 });
