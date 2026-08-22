@@ -1,5 +1,5 @@
 import type { DocumentSnapshot, Element, ElementId, PointMm } from "@nodra/domain";
-import { boundsOf, hitTest, realGeometryNodes, type Bounds, type RealGeometryNode } from "@nodra/geometry";
+import { boundsOf, elementCenter, hitTest, realGeometryNodes, type Bounds, type RealGeometryNode } from "@nodra/geometry";
 
 export interface DragGeometry { readonly position: PointMm; readonly size: { readonly width: number; readonly height: number } }
 export interface SnapGuide { readonly source: PointMm; readonly target: PointMm }
@@ -92,9 +92,7 @@ export function selectionFrame(element: Element, zoom: number, panMm: PointMm): 
 
 /** Returns the geometric center used by selection feedback, in page millimetres. */
 export function selectionCenter(element: Element): PointMm {
-  return element.type === "line"
-    ? { x: (element.start.x + element.end.x) / 2, y: (element.start.y + element.end.y) / 2 }
-    : { x: element.position.x + element.size.width / 2, y: element.position.y + element.size.height / 2 };
+  return elementCenter(element);
 }
 
 /** Returns the selected object's center only when the pointer picks that object. */

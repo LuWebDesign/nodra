@@ -21,7 +21,8 @@ export type RenderResult =
 const escapeAttribute = (value: string): string => value.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 const number = (value: number): string => Number(value.toFixed(6)).toString();
 const degrees = (radians: number): string => number((radians * 180) / Math.PI);
-const transform = (element: Element, cx: number, cy: number): string => `translate(${number(cx)} ${number(cy)}) rotate(${degrees(element.rotation)}) scale(${element.flipX ? -1 : 1} ${element.flipY ? -1 : 1}) translate(${number(-cx)} ${number(-cy)})`;
+type TransformElement = Extract<Element, { type: "rectangle" | "ellipse" | "line" }>;
+const transform = (element: TransformElement, cx: number, cy: number): string => `translate(${number(cx)} ${number(cy)}) rotate(${degrees(element.rotation)}) scale(${element.flipX ? -1 : 1} ${element.flipY ? -1 : 1}) translate(${number(-cx)} ${number(-cy)})`;
 
 function viewportResult(input: unknown): { success: true; data: Viewport } | { success: false; error: string } {
   if (typeof input !== "object" || input === null) return { success: false, error: "viewport must be an object" };
