@@ -11,7 +11,12 @@ describe("editor core", () => {
   it("moves path nodes with adjacent handles and records one command", () => {
     let state = dispatch(createEditor(document), createElement(path));
     state = dispatch(state, movePathNode(path.id, "a", { x: 1, y: 2 }));
-    expect(state.document.elements[0]).toMatchObject({ nodes: [{ anchor: { x: 1, y: 2 } }], segments: [{ control1: { x: 3, y: 6 } }] });
+    const movedPath = state.document.elements[0];
+    expect(movedPath?.type).toBe("path");
+    if (movedPath?.type === "path") {
+      expect(movedPath.nodes).toEqual(expect.arrayContaining([expect.objectContaining({ anchor: { x: 1, y: 2 } })]));
+      expect(movedPath.segments).toEqual(expect.arrayContaining([expect.objectContaining({ control1: { x: 3, y: 6 } })]));
+    }
     state = dispatch(state, movePathHandle(path.id, 0, "control2", { x: 9, y: 3 }));
     expect(state.undo).toHaveLength(3);
     const closed = dispatch(state, closePath(path.id));

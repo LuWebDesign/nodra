@@ -14,6 +14,10 @@ describe("canonical millimetre geometry", () => {
     const [left, right] = splitCubicBezier(curve);
     expect(left.p3).toEqual(right.p0);
   });
+  it("handles linear and constant derivative polynomials", () => {
+    const curve = { p0: { x: 2, y: 4 }, p1: { x: 5, y: 4 }, p2: { x: 5, y: 10 }, p3: { x: 2, y: 10 } };
+    expect(cubicBezierBounds(curve)).toEqual({ x: 2, y: 4, width: 2.25, height: 6 });
+  });
   it("round-trips viewport conversion", () => {
     const viewport = { zoom: 2, panMm: { x: 5, y: 7 } };
     const point = { x: 12, y: 18 };

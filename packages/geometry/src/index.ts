@@ -31,16 +31,27 @@ export function cubicBezierDerivative(curve: CubicBezier, t: number): PointMm {
   const u = 1 - t;
   return { x: 3 * (u ** 2 * (curve.p1.x - curve.p0.x) + 2 * u * t * (curve.p2.x - curve.p1.x) + t ** 2 * (curve.p3.x - curve.p2.x)), y: 3 * (u ** 2 * (curve.p1.y - curve.p0.y) + 2 * u * t * (curve.p2.y - curve.p1.y) + t ** 2 * (curve.p3.y - curve.p2.y)) };
 }
-function derivativeRoots(a: number, b: number, c: number): number[] {
-  const A = a - 2 * b + c; const B = 2 * (b - a); const C = a;
-  if (Math.abs(A) < 1e-12) return Math.abs(B) < 1e-12 ? [] : [-C / B].filter((t) => t > 0 && t < 1);
+function derivativeRoots(p0: number, p1: number, p2: number, p3: number): number[] {
+  // B'(t) / 3 = A t² + B t + C for the scalar cubic Bézier coordinate.
+  const A = -p0 + 3 * p1 - 3 * p2 + p3;
+  const B = 2 * (p0 - 2 * p1 + p2);
+  const C = p1 - p0;
+  const scale = Math.max(Math.abs(A), Math.abs(B), Math.abs(C));
+  if (scale === 0) return [];
+  const epsilon = 1e-12 * scale;
+  if (Math.abs(A) <= epsilon) return Math.abs(B) <= epsilon ? [] : [-C / B].filter((t) => t > 0 && t < 1);
   const discriminant = B * B - 4 * A * C;
+  if (discriminant < -epsilon * epsilon) return [];
+  if (Math.abs(discriminant) <= epsilon * epsilon) {
+    const t = -B / (2 * A);
+    return t > 0 && t < 1 ? [t] : [];
+  }
   if (discriminant < 0) return [];
   const root = Math.sqrt(discriminant);
   return [-1, 1].map((sign) => (-B + sign * root) / (2 * A)).filter((t) => t > 0 && t < 1);
 }
 export function cubicBezierBounds(curve: CubicBezier): Bounds {
-  const ts = [0, 1, ...derivativeRoots(curve.p0.x, curve.p1.x, curve.p2.x), ...derivativeRoots(curve.p0.y, curve.p1.y, curve.p2.y)];
+  const ts = [0, 1, ...derivativeRoots(curve.p0.x, curve.p1.x, curve.p2.x, curve.p3.x), ...derivativeRoots(curve.p0.y, curve.p1.y, curve.p2.y, curve.p3.y)];
   const points = ts.map((t) => evaluateCubicBezier(curve, t));
   const xs = points.map((point) => point.x); const ys = points.map((point) => point.y);
   return { x: Math.min(...xs), y: Math.min(...ys), width: Math.max(...xs) - Math.min(...xs), height: Math.max(...ys) - Math.min(...ys) };
