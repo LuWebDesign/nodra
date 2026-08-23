@@ -37,10 +37,12 @@ const path = z.object({ id: nonEmptyId, layerId: nonEmptyId, type: z.literal("pa
     if (start && end && (segment.startNodeId !== start.id || segment.endNodeId !== end.id)) ctx.addIssue({ code: "custom", message: "Path segments must follow node order", path: ["segments", index] });
   });
 });
+export const splineNodeSchema = z.object({ id: nonEmptyId, anchor: point, continuity: z.enum(["corner", "smooth", "symmetric"]), inHandle: z.object({ dx: finite, dy: finite }).strict().optional(), outHandle: z.object({ dx: finite, dy: finite }).strict().optional() }).strict();
+export const splineElementSchema = z.object({ id: nonEmptyId, layerId: nonEmptyId, type: z.literal("spline"), nodes: z.array(splineNodeSchema).min(2), closed: z.boolean(), style, operation: operation.optional() }).strict();
 export const elementSchema = z.discriminatedUnion("type", [rectangle, ellipse, line, contour, path]);
 export const layerSchema = z.object({ id: nonEmptyId, name: z.string().min(1), visible: z.boolean(), order: finite.int().nonnegative() }).strict();
 const documentFields = { id: nonEmptyId, revision: finite.int().nonnegative(), origin: z.literal("top-left"), units: z.literal("mm"), page: size, layers: z.array(layerSchema), elements: z.array(elementSchema) };
-export const documentSchema = z.object({ schemaVersion: z.literal(CURRENT_SCHEMA_VERSION), ...documentFields }).strict().superRefine((value, ctx) => {
+export const documentSchema = z.object({ schemaVersion: z.literal(CURRENT_SCHEMA_VERSION), ...documentFields, capabilities: z.object({ spline: z.literal(1).optional() }).strict().optional() }).strict().superRefine((value, ctx) => {
   const layerIds = new Set(value.layers.map((layer) => layer.id));
   for (const [index, element] of value.elements.entries()) if (!layerIds.has(element.layerId)) ctx.addIssue({ code: "custom", message: "Element references an unknown layer", path: ["elements", index, "layerId"] });
 });
@@ -53,7 +55,8 @@ export const projectSchema = z.object({ schemaVersion: z.literal(CURRENT_SCHEMA_
 export type ValidationIssue = { readonly path: readonly (string | number)[]; readonly message: string };
 export type ValidationResult = { readonly success: true; readonly data: DocumentSnapshot } | { readonly success: false; readonly issues: readonly ValidationIssue[]; readonly error: string };
 
-export function migrateDocument(input: unknown): unknown {
+export type JsonValue = object | boolean | number | string | null;
+export function migrateDocument(input: JsonValue): JsonValue {
   if (typeof input !== "object" || input === null || Array.isArray(input)) return input;
   const candidate = input as Record<string, unknown>;
   if (candidate.schemaVersion === 1) return { ...candidate, schemaVersion: CURRENT_SCHEMA_VERSION, page: { width: 1200, height: 900 } };
@@ -63,17 +66,23 @@ export function migrateDocument(input: unknown): unknown {
   return input;
 }
 
+export type DocumentLoadResult = { readonly mode: "editable"; readonly document: DocumentSnapshot; readonly issues: readonly [] } | { readonly mode: "diagnostic" | "recovery"; readonly raw: unknown; readonly issues: readonly ValidationIssue[]; readonly error: string };
+export function loadDocument(input: unknown): DocumentLoadResult { const checked = validateDocument(input); if (checked.success) return { mode: "editable", document: checked.data, issues: [] }; const candidate = typeof input === "object" && input !== null && !Array.isArray(input) ? input as Record<string, unknown> : undefined; const capabilities = candidate?.capabilities; const unknown = typeof capabilities === "object" && capabilities !== null && !Array.isArray(capabilities) && Object.keys(capabilities).some((key) => key !== "spline"); return { mode: unknown ? "diagnostic" : "recovery", raw: input, issues: checked.issues, error: checked.error }; }
 export function validateDocument(input: unknown): ValidationResult {
-  const migrated = migrateDocument(input);
+  const migrated = migrateDocument(input as JsonValue);
   const result = documentSchema.safeParse(migrated);
-  if (result.success) return { success: true, data: result.data as unknown as DocumentSnapshot };
+  if (result.success) { // SAFETY: documentSchema validated the complete shape; branded IDs are runtime strings.
+    return { success: true, data: result.data as unknown as DocumentSnapshot };
+  }
   const issues = result.error.issues.map((issue) => ({ path: issue.path.filter((part): part is string | number => typeof part === "string" || typeof part === "number"), message: issue.message }));
   return { success: false, issues, error: issues.map((issue) => `${issue.path.join(".") || "document"}: ${issue.message}`).join("; ") };
 }
 
 export function validateProject(input: unknown): { readonly success: true; readonly data: ProjectSnapshot } | { readonly success: false; readonly issues: readonly ValidationIssue[]; readonly error: string } {
   const result = projectSchema.safeParse(input);
-  if (result.success) return { success: true, data: result.data as unknown as ProjectSnapshot };
+  if (result.success) { // SAFETY: projectSchema validated the complete shape; branded IDs are runtime strings.
+    return { success: true, data: result.data as unknown as ProjectSnapshot };
+  }
   const issues = result.error.issues.map((issue) => ({ path: issue.path.filter((part): part is string | number => typeof part === "string" || typeof part === "number"), message: issue.message }));
   return { success: false, issues, error: issues.map((issue) => `${issue.path.join(".") || "project"}: ${issue.message}`).join("; ") };
 }
