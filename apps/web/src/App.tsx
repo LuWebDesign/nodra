@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent, type PointerEvent, type ReactNode, type WheelEvent } from "react";
 import { createProject, elementId, layerId, pageId, revision, type DocumentSnapshot, type Element, type ElementId, type PointMm, type ProjectSnapshot } from "@nodra/domain";
-import { addToSelection, beginGesture, cancelGesture, clearSelection, closePath, commitGesture, createElement, createPathCubicNode, createPathNode, deleteContourNodes, deleteElement, deleteElementNodes, deletePathNodes, dispatch, duplicateElements, flipElements, insertFormaNode, moveElements, movePathHandle, movePathNode, openPath, previewGesture, previewGestureFromBase, redo, resizeElement, resizeElements, rotateElement, rotateElementsAroundCenter, select, selectForPointerDown, setPathJoin, shapeOperation, splitPathSegment, undo, updateContourNode, updateElement, updateElementNode, updateElementStyles, updatePage, type FlipAxis, type ShapeOperation } from "@nodra/editor-core";
+import { splineToPathElement, addToSelection, beginGesture, cancelGesture, clearSelection, closePath, commitGesture, createElement, createPathCubicNode, createPathNode, deleteContourNodes, deleteElement, deleteElementNodes, deletePathNodes, dispatch, duplicateElements, flipElements, insertFormaNode, moveElements, movePathHandle, movePathNode, openPath, previewGesture, previewGestureFromBase, redo, resizeElement, resizeElements, rotateElement, rotateElementsAroundCenter, select, selectForPointerDown, setPathJoin, shapeOperation, splitPathSegment, undo, updateContourNode, updateElement, updateElementNode, updateElementStyles, updatePage, type FlipAxis, type ShapeOperation } from "@nodra/editor-core";
 import { boundsOfElements, contourVertexNodes, elementCenter, groupCenter, groupHandlePoints, pathGeometryNodes, realGeometryNodes, resizeHandle, rotatedResizeHandles, rotationFromDrag, rotationHandlePoints, type Direction, type GroupHandle, type ResizeHandle } from "@nodra/geometry";
 import { DebouncedAutosave, DexieProjectRepository, requestStoragePersistence } from "@nodra/persistence";
 import { renderSvg } from "@nodra/renderer-svg";
@@ -56,7 +56,7 @@ type FormaNodeOverlay =
 type InspectorTab = "properties" | "transform" | "text";
 
 const toolCursorIcons: Record<Tool, string> = { select: "↖", forma: "⌘", pen: "✒", rectangle: "□", ellipse: "○", line: "╱", pan: "✣" };
-const toolCursorLabels: Record<Tool, string> = { select: "Seleccion", forma: "Forma", pen: "Pluma", rectangle: "Rectángulo", ellipse: "Elipse", line: "Línea", pan: "Desplazar" };
+const toolCursorLabels: Record<Tool, string> = { select: "Seleccion", forma: "Forma", pen: "Spline", rectangle: "Rectángulo", ellipse: "Elipse", line: "Línea", pan: "Desplazar" };
 
 export function App() {
   const { mode, tool, setMode, setTool } = useUiStore();
@@ -286,15 +286,8 @@ export function App() {
     }
     const firstId = `path-node-${crypto.randomUUID()}`;
     const secondId = `path-node-${crypto.randomUUID()}`;
-    const path = {
-      type: "path" as const,
-      id: id(),
-      layerId: layerId(current.document.layers[0]?.id ?? "layer-1"),
-      nodes: [{ id: firstId, anchor: penDraftPoint, join: "corner" as const }, { id: secondId, anchor: point, join: "corner" as const }],
-      segments: [{ type: "line" as const, startNodeId: firstId, endNodeId: secondId }],
-      closed: false,
-      style: defaultStyle,
-    };
+    const spline = { type: "spline" as const, id: id(), layerId: layerId(current.document.layers[0]?.id ?? "layer-1"), nodes: [{ id: firstId, anchor: penDraftPoint, continuity: "corner" as const }, { id: secondId, anchor: point, continuity: "corner" as const }], closed: false, style: defaultStyle };
+    const path = splineToPathElement(spline);
     const next = dispatch(current, createElement(path));
     setPenDraftPoint(undefined);
     setEditorState(select(next, [path.id]));
@@ -327,7 +320,7 @@ export function App() {
     setCenterHover(undefined);
     setCursorPoint(canvasPointAt(event));
     setSnapGuide(undefined);
-     const resizeTarget = tool !== "forma" ? (event.target as HTMLElement).closest<HTMLElement>("[data-resize-handle]") : null;
+     const resizeTarget = tool === "forma" ? null : (event.target as HTMLElement).closest<HTMLElement>("[data-resize-handle]");
     if (resizeTarget) { resizePointerDown(event, resizeTarget.dataset.resizeHandle as ResizeHandle); return; }
     if (tool === "pan") {
       event.currentTarget.setPointerCapture(event.pointerId);
@@ -564,7 +557,7 @@ export function App() {
 
   const onWheel = (event: WheelEvent<HTMLDivElement>) => {
     event.preventDefault();
-    const next = zoomAtPoint(zoom, panMm, canvasPointAt(event), zoom * Math.pow(1.0015, -event.deltaY));
+    const next = zoomAtPoint(zoom, panMm, canvasPointAt(event), zoom * 1.0015 ** -event.deltaY);
     setZoom(next.zoom);
     setPanMm(next.panMm);
   };
@@ -871,7 +864,7 @@ export function App() {
       <section className="canvas-area">
         <header className="canvas-header"><span>DISEÑO / SIN TÍTULO</span><span>{document.elements.length} objetos · {document.page.width} × {document.page.height} mm</span><div className="zoom-controls"><button aria-label="Alejar" onClick={() => setZoom(zoom - 0.5)}>−</button><span className="zoom-label">{Math.round(zoom * 100 / 3)}%</span><button aria-label="Acercar" onClick={() => setZoom(zoom + 0.5)}>+</button></div></header>
             <div ref={canvas} className={`${grid ? "canvas" : "canvas no-grid"}${isDrawingTool(tool) ? " drawing-tool" : ""}${closeTargetActive ? " close-target-active" : ""}`} onPointerDown={onCanvasPointerDown} onPointerMove={onCanvasPointerMove} onPointerUp={(event) => finishPointer(event, false)} onPointerCancel={(event) => finishPointer(event, true)} onPointerLeave={() => setCursorPoint(undefined)} onDoubleClick={onCanvasDoubleClick} onWheel={onWheel}>
-           <div className="page" style={pageStyle}><div className="page-svg" dangerouslySetInnerHTML={{ __html: rendered.success ? rendered.svg : "" }} /></div>
+           <div className="page" style={pageStyle}>{/* SAFETY: renderSvg emits allowlisted SVG from validated document data. */}<div className="page-svg" dangerouslySetInnerHTML={{ __html: rendered.success ? rendered.svg : "" }} /></div>
             {formaNodes.length > 0 && <div className="contour-node-overlay" role="group" aria-label={tool === "pen" ? "Nodos y controles del trazado" : "Nodos de forma"}>{formaNodes.map((node) => { const screen = pagePointToCanvas(node.point, zoom, panMm); const selected = selectedFormaNodeKeys.includes(node.key); const pathNode = node.kind === "path" ? node.pathNode : undefined; return <button key={node.key} type="button" className={`contour-node${selected ? " active selected" : ""}`} data-contour-node={node.key} aria-label={node.kind === "contour" ? `Nodo del contorno, anillo ${node.contour.ringIndex + 1}, punto ${node.contour.pointIndex + 1}` : pathNode?.node.kind === "control" ? `Control Bézier ${pathNode.node.handle === "control1" ? "saliente" : "entrante"}` : `Nodo editable ${node.nodeIndex + 1}`} style={{ left: screen.x, top: screen.y }} onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); setSelectedFormaNodeKeys((current) => event.shiftKey ? current.includes(node.key) ? current.filter((value) => value !== node.key) : [...current, node.key] : [node.key]); if (tool === "pen" && pathNode?.node.kind === "anchor") { const currentPath = editorRef.current.document.elements.find((element) => element.id === node.elementId && element.type === "path"); if (currentPath?.type === "path" && !currentPath.closed && currentPath.nodes[0]?.id === pathNode.node.nodeId) { setPenDraftPoint(undefined); setEditorState(dispatch(select(editorRef.current, [node.elementId]), closePath(node.elementId))); return; } } canvas.current?.setPointerCapture(event.pointerId); if (pathNode) { setEditorState(beginGesture(select(editorRef.current, [node.elementId]))); interaction.current = { pointerId: event.pointerId, lastX: event.clientX, lastY: event.clientY, kind: "path-node", pathNode, startClient: { x: event.clientX, y: event.clientY }, dragged: false }; } else { setEditorState(beginGesture(editorRef.current)); interaction.current = { pointerId: event.pointerId, lastX: event.clientX, lastY: event.clientY, kind: "contour-node", ...(node.kind === "contour" ? { contourNode: node.contour } : {}), formaNode: node.kind === "contour" ? { elementId: node.contour.elementId, contourNode: node.contour, point: node.point } : { elementId: node.elementId, nodeIndex: node.nodeIndex, point: node.point }, startClient: { x: event.clientX, y: event.clientY }, dragged: false }; } }} />; })}</div>}
           {centerHoverStyle && <div className="selection-center-feedback" style={centerHoverStyle} aria-hidden="true"><span className="selection-center-mark">×</span><span className="selection-center-label">centro</span></div>}
             {tool !== "forma" && transformMode === "resize" && (handlePoints || groupPoints) && <div className="resize-handles">{handleNames.map((handle) => <button key={handle} type="button" className={`resize-handle resize-handle-${handle}`} data-resize-handle={handle} aria-label={`Redimensionar ${handle}`} style={handleStyle(handle)} onPointerDown={(event) => resizePointerDown(event, handle)} onPointerUp={(event) => finishPointer(event, false)} onPointerCancel={(event) => finishPointer(event, true)} />)}{groupPoints && !isDrawingTool(tool) && <button type="button" className="resize-handle resize-handle-center" data-resize-handle="center" aria-label="Centro del grupo" style={handleStyle("center")} onPointerDown={(event) => event.stopPropagation()} />}</div>}
@@ -902,7 +895,7 @@ export function App() {
   </main>;
 }
 
-const toolDescriptions: Record<string, string> = { Seleccion: "Seleccione, coloque o transforme objetos.", Forma: "Editar la forma mediante sus nodos.", Pluma: "Cree un trazado abierto con clics. Haga clic en el primer nodo para cerrarlo; arrastre nodos y controles para editarlos.", Rectángulo: "Dibuje formas rectangulares.", Elipse: "Dibuje formas elípticas.", Línea: "Dibuje líneas rectas.", Desplazar: "Desplace el espacio de trabajo." };
+const toolDescriptions: Record<string, string> = { Seleccion: "Seleccione, coloque o transforme objetos.", Forma: "Editar la forma mediante sus nodos.", Spline: "Cree curvas con nodos y handles. Haga clic en el primer nodo para cerrarla; arrastre nodos y controles para editarla.", Rectángulo: "Dibuje formas rectangulares.", Elipse: "Dibuje formas elípticas.", Línea: "Dibuje líneas rectas.", Desplazar: "Desplace el espacio de trabajo." };
 function ToolIcon({ icon }: { icon: Tool }) {
   const shape = icon === "select" ? <path d="m5 3 13 8-6 2-3 6z" /> : icon === "forma" ? <><path d="M5 6h14v12H5z" /><circle cx="5" cy="6" r="1.5" fill="currentColor" /><circle cx="19" cy="6" r="1.5" fill="currentColor" /><circle cx="19" cy="18" r="1.5" fill="currentColor" /><circle cx="5" cy="18" r="1.5" fill="currentColor" /></> : icon === "pen" ? <><path d="M5 19 18 6l2 2L7 21z" /><path d="m14 7 3 3" /><circle cx="5" cy="19" r="1.5" /></> : icon === "rectangle" ? <rect x="5" y="5" width="14" height="14" rx="1" /> : icon === "ellipse" ? <circle cx="12" cy="12" r="7" /> : icon === "line" ? <path d="M5 19 19 5" /> : <><path d="M12 4v16M4 12h16" /><path d="m9 7 3-3 3 3M9 17l3 3 3-3M7 9l-3 3 3 3M17 9l3 3-3 3" /></>;
   return <svg className="tool-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{shape}</svg>;

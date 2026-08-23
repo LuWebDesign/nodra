@@ -18,6 +18,8 @@ import {
 import { validateDocument } from "@nodra/validation";
 import { boundsOfElements, contourWithPoints, directionVector, elementCenter, elementToContour, groupCenter, realGeometryNodes, resizeGroup, rotateElements, shapeResultContours, transformPoint, type Direction } from "@nodra/geometry";
 
+export * from "./spline.js";
+
 export type ElementPatch = { readonly position?: PointMm; readonly size?: SizeMm; readonly rotation?: number; readonly cornerRadius?: number; readonly style?: VisualStyle; readonly operation?: OperationMetadata; readonly start?: PointMm; readonly end?: PointMm };
 export interface ContourNodeAddress { readonly ringIndex: number; readonly pointIndex: number }
 export interface ContourSegmentAddress { readonly ringIndex: number; readonly segmentIndex: number }
@@ -268,7 +270,7 @@ export const insertContourNode = (id: ElementId, address: ContourSegmentAddress,
     const vertexCount = closing ? ring.points.length - 1 : ring.points.length;
     if (!Number.isInteger(address.segmentIndex) || address.segmentIndex < 0 || address.segmentIndex >= vertexCount) return { success: false, error: "Contour segment not found" };
     const insertIndex = address.segmentIndex + 1;
-    const points = current.contours.map((candidate, ringIndex) => ringIndex !== address.ringIndex ? candidate.points : [...candidate.points.slice(0, insertIndex), point, ...candidate.points.slice(insertIndex)]);
+    const points = current.contours.map((candidate, ringIndex) => ringIndex === address.ringIndex ? [...candidate.points.slice(0, insertIndex), point, ...candidate.points.slice(insertIndex)] : candidate.points);
     return replaceElements(document, document.elements.map((element) => element.id === id && element.type === "contour" ? contourWithPoints(element, points) : element));
   },
 });

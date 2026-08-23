@@ -36,14 +36,14 @@ test("loads the editor workspace", async ({ page }) => {
   await expect(page).toHaveTitle("Nodra Editor");
   await expect(page.getByRole("region", { name: "Barra de propiedades" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Seleccion" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Pluma" })).toHaveAttribute("aria-description", /Cree un trazado abierto/);
+  await expect(page.getByRole("button", { name: "Spline" })).toHaveAttribute("aria-description", /Cree curvas con nodos/);
 });
 
-test("creates an open path with Pluma and exposes its anchors", async ({ page }) => {
+test("creates an open spline with Spline and exposes its anchors", async ({ page }) => {
   await page.goto("/");
   const pageBounds = await page.locator(".page").boundingBox();
   expect(pageBounds).not.toBeNull();
-  await page.getByRole("button", { name: "Pluma" }).click();
+  await page.getByRole("button", { name: "Spline" }).click();
   const x = pageBounds!.x + 80;
   const y = pageBounds!.y + 80;
   await page.mouse.click(x, y);

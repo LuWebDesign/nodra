@@ -1,5 +1,5 @@
 import polygonClipping, { type MultiPolygon } from "polygon-clipping";
-import type { ContourElement, Element, ElementId, EllipseElement, LineElement, PathCubicSegment, PathElement, PointMm, RectangleElement, SizeMm } from "@nodra/domain";
+import type { ContourElement, Element, ElementId, EllipseElement, HandleOffset, LineElement, PathCubicSegment, PathElement, PointMm, RectangleElement, SizeMm, SplineNode } from "@nodra/domain";
 
 export interface Bounds { readonly x: number; readonly y: number; readonly width: number; readonly height: number }
 export interface Viewport { readonly zoom: number; readonly panMm: PointMm }
@@ -17,6 +17,8 @@ export const ELLIPSE_APPROXIMATION_SEGMENTS = 64;
 export const ROUNDED_RECTANGLE_APPROXIMATION_SEGMENTS = 8;
 
 export interface CubicBezier { readonly p0: PointMm; readonly p1: PointMm; readonly p2: PointMm; readonly p3: PointMm }
+export const resolveHandle = (anchor: PointMm, offset: HandleOffset): PointMm => ({ x: anchor.x + offset.dx, y: anchor.y + offset.dy });
+export const splineCubicBezier = (start: SplineNode, end: SplineNode): CubicBezier => ({ p0: start.anchor, p1: resolveHandle(start.anchor, start.outHandle ?? { dx: 0, dy: 0 }), p2: resolveHandle(end.anchor, end.inHandle ?? { dx: 0, dy: 0 }), p3: end.anchor });
 export interface PathGeometryNode { readonly kind: "anchor" | "control"; readonly nodeId: string; readonly segmentIndex?: number; readonly handle?: "control1" | "control2"; readonly point: PointMm }
 export interface PathSegmentHit { readonly elementId: ElementId; readonly segmentIndex: number; readonly distance: number }
 const cubic = (segment: PathCubicSegment, path: PathElement): CubicBezier => {

@@ -118,13 +118,20 @@ export interface PathElement {
   readonly style: VisualStyle;
   readonly operation?: OperationMetadata;
 }
+export type SplineContinuity = PathJoin;
+export interface HandleOffset { readonly dx: number; readonly dy: number }
+export interface SplineNode { readonly id: string; readonly anchor: PointMm; readonly continuity: SplineContinuity; readonly inHandle?: HandleOffset; readonly outHandle?: HandleOffset }
+export interface SplineElement { readonly type: "spline"; readonly id: ElementId; readonly layerId: LayerId; readonly nodes: readonly SplineNode[]; readonly closed: boolean; readonly style: VisualStyle; readonly operation?: OperationMetadata }
 export type Element = RectangleElement | EllipseElement | LineElement | ContourElement | PathElement;
+export interface DocumentCapabilities { readonly spline?: 1 }
+export interface DocumentCapabilities { readonly spline?: 1 }
 export interface DocumentSnapshot {
   readonly schemaVersion: SchemaVersion;
   readonly id: DocumentId;
   readonly revision: Revision;
   readonly origin: "top-left";
   readonly units: "mm";
+  readonly capabilities?: DocumentCapabilities;
   readonly page: SizeMm;
   readonly layers: readonly Layer[];
   readonly elements: readonly Element[];
@@ -143,6 +150,7 @@ export interface ProjectSnapshot {
   readonly revision: Revision;
   readonly origin: "top-left";
   readonly units: "mm";
+  readonly capabilities?: DocumentCapabilities;
   readonly pages: readonly PageSnapshot[];
   readonly activePageId: PageId;
 }

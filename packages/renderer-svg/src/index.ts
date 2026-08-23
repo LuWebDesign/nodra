@@ -1,4 +1,4 @@
-import { CURRENT_SCHEMA_VERSION, type Element, type PathElement } from "@nodra/domain";
+import { CURRENT_SCHEMA_VERSION, type Element, type PathElement, type SplineElement } from "@nodra/domain";
 import { mmToScreen, type Viewport } from "@nodra/geometry";
 import { validateDocument } from "@nodra/validation";
 
@@ -99,4 +99,5 @@ export function renderSvg(document: unknown, viewport: unknown): RenderResult {
   return { success: true, svg: `<svg xmlns="http://www.w3.org/2000/svg" data-units="mm" width="${number(checked.data.page.width)}" height="${number(checked.data.page.height)}" viewBox="0 0 ${number(checked.data.page.width)} ${number(checked.data.page.height)}"><g>${contents}</g></svg>`, renderedElementIds: elements.map((element) => element.id) };
 }
 
+export function renderSplineSvg(element: SplineElement, viewport: Viewport): string { const screen = (point: { x: number; y: number }) => mmToScreen(point, viewport); const first = element.nodes[0]; if (!first) throw new Error("Spline must contain at least one node"); let path = `M${number(screen(first.anchor).x)} ${number(screen(first.anchor).y)}`; for (let index = 1; index < element.nodes.length; index += 1) { const start = element.nodes[index - 1]!; const end = element.nodes[index]!; const out = start.outHandle ? { x: start.anchor.x + start.outHandle.dx, y: start.anchor.y + start.outHandle.dy } : start.anchor; const incoming = end.inHandle ? { x: end.anchor.x + end.inHandle.dx, y: end.anchor.y + end.inHandle.dy } : end.anchor; const a = screen(out); const c = screen(incoming); const d = screen(end.anchor); path += ` C${number(a.x)} ${number(a.y)} ${number(c.x)} ${number(c.y)} ${number(d.x)} ${number(d.y)}`; } if (element.closed) path += " Z"; const fill = element.style.fill === undefined ? "none" : escapeAttribute(element.style.fill); return `<path data-element-id="${escapeAttribute(element.id)}" d="${escapeAttribute(path)}" stroke="${escapeAttribute(element.style.stroke)}" stroke-width="${number(element.style.strokeWidth)}" fill="${fill}" />`; }
 export const svgRenderer: SvgRenderer = { render: renderSvg };
