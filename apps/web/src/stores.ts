@@ -5,7 +5,7 @@ import { createEditor, type EditorState } from "@nodra/editor-core";
 import type { SaveResult } from "@nodra/persistence";
 import { INITIAL_ZOOM, MAX_ZOOM, MIN_ZOOM } from "./interaction.js";
 
-export type Tool = "select" | "forma" | "pen" | "rectangle" | "ellipse" | "line" | "pan";
+export type Tool = "select" | "forma" | "pen" | "spline" | "rectangle" | "ellipse" | "line" | "pan";
 export const useUiStore = create<{ mode: "design" | "prepare"; tool: Tool; setMode: (mode: "design" | "prepare") => void; setTool: (tool: Tool) => void }>((set) => ({ mode: "design", tool: "select", setMode: (mode) => set({ mode }), setTool: (tool) => set({ tool }) }));
 export const useDocumentStore = create<{ editor: EditorState; project: ProjectSnapshot; document: DocumentSnapshot; setEditor: (editor: EditorState) => void; setProject: (project: ProjectSnapshot) => void }>((set) => { const document = createDocument("nodra-local", [{ id: "layer-1" as never, name: "Capa de diseño", visible: true, order: 0 }]); const project = createProject(document); return { editor: createEditor(document), project, document, setEditor: (editor) => set((state) => ({ editor, document: editor.document, project: editor.gesture ? state.project : projectFromDocument(state.project, editor.document) })), setProject: (project) => { const document = documentFromProject(project); set({ project, document, editor: createEditor(document) }); } }; });
 export const useSelectionStore = create<{ selected: ElementId | undefined; setSelected: (selected: ElementId | undefined) => void }>((set) => ({ selected: undefined, setSelected: (selected) => set({ selected }) }));
