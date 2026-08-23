@@ -49,8 +49,11 @@ test("creates an open spline with Spline and exposes its anchors", async ({ page
   await page.mouse.click(x, y);
   await page.mouse.click(x + 80, y + 30);
   await page.mouse.click(x + 160, y);
-  await expect(page.locator(".page-svg svg path[data-element-id]")).toHaveCount(1);
-  await expect(page.locator(".contour-node")).toHaveCount(3);
+  const spline = page.locator('[data-spline-layer] path[data-spline-id]');
+  await expect(spline).toHaveCount(1);
+  await expect(spline).toHaveAttribute("d", / C /);
+  await expect(page.locator("[data-spline-node]")).toHaveCount(3);
+  await expect(page.locator(".page-svg svg path[data-element-id]")).toHaveCount(0);
 });
 
 test("closes a Pluma silhouette by clicking its first anchor and supports fill and undo", async ({ page }) => {

@@ -124,7 +124,6 @@ export interface SplineNode { readonly id: string; readonly anchor: PointMm; rea
 export interface SplineElement { readonly type: "spline"; readonly id: ElementId; readonly layerId: LayerId; readonly nodes: readonly SplineNode[]; readonly closed: boolean; readonly style: VisualStyle; readonly operation?: OperationMetadata }
 export type Element = RectangleElement | EllipseElement | LineElement | ContourElement | PathElement;
 export interface DocumentCapabilities { readonly spline?: 1 }
-export interface DocumentCapabilities { readonly spline?: 1 }
 export interface DocumentSnapshot {
   readonly schemaVersion: SchemaVersion;
   readonly id: DocumentId;
