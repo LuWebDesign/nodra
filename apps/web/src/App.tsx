@@ -220,10 +220,10 @@ export function App() {
        arrow.setAttribute("d", "M 0 0 L 6 3 L 0 6 z"); arrow.setAttribute("fill", color); marker.append(arrow); defs.append(marker);
      }
      overlay.append(defs);
-     const guideLine = (anchor: PointMm, control: PointMm, direction: "incoming" | "outgoing", placement = false) => {
+     const guideLine = (anchor: PointMm, control: PointMm, direction: "incoming" | "outgoing") => {
        const line = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "line");
-       const a = point(anchor); const b = point(control); const color = direction === "incoming" ? "#f59e0b" : "#2563eb";
-       line.dataset.bezierGuide = direction; line.setAttribute("x1", String(a.x)); line.setAttribute("y1", String(a.y)); line.setAttribute("x2", String(b.x)); line.setAttribute("y2", String(b.y)); line.setAttribute("stroke", color); line.setAttribute("stroke-width", placement ? "1.5" : "1"); line.setAttribute("stroke-dasharray", placement ? "3 2" : "4 2"); line.setAttribute("marker-end", `url(#bezier-guide-${direction})`); line.style.pointerEvents = "none"; overlay.append(line);
+       const a = point(anchor); const b = point(control); const color = "#1683ff";
+       line.dataset.bezierGuide = direction; line.setAttribute("x1", String(a.x)); line.setAttribute("y1", String(a.y)); line.setAttribute("x2", String(b.x)); line.setAttribute("y2", String(b.y)); line.setAttribute("stroke", color); line.setAttribute("stroke-width", "0.75"); line.setAttribute("stroke-dasharray", "3 2"); line.style.pointerEvents = "none"; overlay.append(line);
      };
      for (const element of selectedElements) if (element.type === "path") for (const guide of pathGuides(element)) guideLine(guide.anchor, guide.control, guide.direction);
     if (transformMode === "resize" && tool !== "forma") for (const element of selectedElements.filter((candidate) => candidate.type !== "spline")) for (const [nodeIndex, node] of realGeometryNodes(element).entries()) {
@@ -286,8 +286,8 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
       const end = pen.placement;
       const pointer = screenPointToMm(cursorPoint, { x: 0, y: 0 }, zoom, panMm);
       const controls = cubicPlacementControls(pen.start, end, pointer);
-       guideLine(pen.start, controls.control1, "outgoing", true);
-       guideLine(end, controls.control2, "incoming", true);
+       guideLine(pen.start, controls.control1, "outgoing");
+       guideLine(end, controls.control2, "incoming");
        for (const [value, direction] of [[controls.control1, "outgoing"], [controls.control2, "incoming"]] as const) {
          const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "circle");
          const screen = point(value); mark.dataset.bezierGuideControl = direction; mark.setAttribute("cx", String(screen.x)); mark.setAttribute("cy", String(screen.y)); mark.setAttribute("r", "4"); mark.setAttribute("fill", "#ffffff"); mark.setAttribute("stroke", direction === "incoming" ? "#f59e0b" : "#2563eb"); mark.setAttribute("stroke-width", "1.5"); mark.style.pointerEvents = "none"; overlay.append(mark);
@@ -818,7 +818,7 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
       const visible = selection.includes(spline.id) || selectedSplineNodeKey?.startsWith(`${spline.id}:`);
       return <g key={`spline-overlay-${spline.id}`} data-spline-overlay={spline.id}>
         {spline.closed && <path d={splinePathData(spline)} fill={defaultClosedFill} stroke="none" pointerEvents="none" />}
-        {editing && visible && <path data-spline-edit-path={spline.id} d={splinePathData(spline)} fill="none" stroke="#1683ff" strokeWidth={1 / zoom} pointerEvents="none" />}
+        {editing && visible && <path data-spline-edit-path={spline.id} d={splinePathData(spline)} fill="none" stroke="#1683ff" strokeWidth={0.75 / zoom} pointerEvents="none" />}
         <path data-spline-hit={spline.id} d={splinePathData(spline)} fill={spline.closed ? "transparent" : "none"} stroke="#2563eb" strokeOpacity={0.01} strokeWidth={12 / zoom} style={{ pointerEvents: tool === "select" ? "visiblePainted" : "none", cursor: tool === "select" ? "move" : "default" }} onPointerDown={(event) => selectSplineObject(event, spline)} onPointerMove={(event) => onCanvasPointerMove(event as unknown as PointerEvent<HTMLDivElement>)} onPointerUp={(event) => finishPointer(event as unknown as PointerEvent<HTMLDivElement>, false)} onPointerCancel={(event) => finishPointer(event as unknown as PointerEvent<HTMLDivElement>, true)} />
         {visible && spline.nodes.map((node, nodeIndex) => {
           const selectedNodeIndex = spline.nodes.findIndex((candidate) => selectedSplineNodeKey === `${spline.id}:${candidate.id}`);
@@ -827,13 +827,14 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
           const showHandles = editing && selectedNodeIndex >= 0 && (nodeIndex === selectedNodeIndex || nodeIndex === previousNodeIndex || nodeIndex === nextNodeIndex);
           const selected = selectedSplineNodeKey === `${spline.id}:${node.id}`;
           const controlColor = editing ? "#1683ff" : "#111827";
+              const nodeSize = editing ? 8 / zoom : 5 / zoom;
           const handle = (kind: "in" | "out", offset: { readonly dx: number; readonly dy: number }) => {
             const point = { x: node.anchor.x + offset.dx, y: node.anchor.y + offset.dy };
             return <g key={`${node.id}-${kind}`}><line x1={node.anchor.x} y1={node.anchor.y} x2={point.x} y2={point.y} stroke="#1683ff" strokeWidth={0.75 / zoom} strokeDasharray={`${3 / zoom} ${2 / zoom}`} /><rect role="button" aria-label={`Mover handle ${kind === "in" ? "entrante" : "saliente"} de spline`} data-spline-handle={`${spline.id}:${node.id}:${kind}`} x={point.x - 3 / zoom} y={point.y - 3 / zoom} width={6 / zoom} height={6 / zoom} fill="#ffffff" stroke="#1683ff" strokeWidth={1 / zoom} style={{ pointerEvents: "auto", cursor: "move" }} onPointerDown={(event) => beginSplineHandle(event, spline.id, node.id, kind)} onPointerMove={moveSplineHandle} onPointerUp={(event) => finishSplineHandle(event, false)} onPointerCancel={(event) => finishSplineHandle(event, true)} /></g>;
           };
           return <g key={node.id}>
             {editing && spline.closed && nodeIndex === 0 && <polygon data-spline-close-marker={spline.id} points={`${node.anchor.x - 4 / zoom},${node.anchor.y + 6 / zoom} ${node.anchor.x},${node.anchor.y - 6 / zoom} ${node.anchor.x + 4 / zoom},${node.anchor.y + 6 / zoom}`} fill="#ffffff" stroke="#1683ff" strokeWidth={1 / zoom} pointerEvents="none" />}
-            <rect role="button" aria-label={nodeIndex === 0 && splineCloseTarget ? "Cerrar spline en el primer nodo" : "Ancla de spline"} data-spline-node={node.id} data-spline-close-target={nodeIndex === 0 && splineCloseTarget ? "true" : undefined} x={node.anchor.x - 4 / zoom} y={node.anchor.y - 4 / zoom} width={8 / zoom} height={8 / zoom} fill={nodeIndex === 0 && splineCloseTarget ? "#14b8a6" : selected ? "#dbeafe" : "#ffffff"} stroke={nodeIndex === 0 && splineCloseTarget ? "#0f766e" : controlColor} strokeWidth={1 / zoom} transform={editing ? `rotate(45 ${node.anchor.x} ${node.anchor.y})` : undefined} style={{ pointerEvents: "auto", cursor: nodeIndex === 0 && splineCloseTarget ? "crosshair" : "move" }} onPointerDown={(event) => selectSplineAnchor(event, spline, node.id)} onPointerMove={(event) => onCanvasPointerMove(event as unknown as PointerEvent<HTMLDivElement>)} onPointerUp={(event) => finishPointer(event as unknown as PointerEvent<HTMLDivElement>, false)} onPointerCancel={(event) => finishPointer(event as unknown as PointerEvent<HTMLDivElement>, true)} />
+            <rect role="button" aria-label={nodeIndex === 0 && splineCloseTarget ? "Cerrar spline en el primer nodo" : "Ancla de spline"} data-spline-node={node.id} data-spline-close-target={nodeIndex === 0 && splineCloseTarget ? "true" : undefined} x={node.anchor.x - nodeSize / 2} y={node.anchor.y - nodeSize / 2} width={nodeSize} height={nodeSize} fill={nodeIndex === 0 && splineCloseTarget ? "#14b8a6" : selected ? "#dbeafe" : "#ffffff"} stroke={nodeIndex === 0 && splineCloseTarget ? "#0f766e" : controlColor} strokeWidth={1 / zoom} transform={editing ? `rotate(45 ${node.anchor.x} ${node.anchor.y})` : undefined} style={{ pointerEvents: "auto", cursor: nodeIndex === 0 && splineCloseTarget ? "crosshair" : "move" }} onPointerDown={(event) => selectSplineAnchor(event, spline, node.id)} onPointerMove={(event) => onCanvasPointerMove(event as unknown as PointerEvent<HTMLDivElement>)} onPointerUp={(event) => finishPointer(event as unknown as PointerEvent<HTMLDivElement>, false)} onPointerCancel={(event) => finishPointer(event as unknown as PointerEvent<HTMLDivElement>, true)} />
             {showHandles && node.inHandle && handle("in", node.inHandle)}{showHandles && node.outHandle && handle("out", node.outHandle)}
           </g>;
         })}
