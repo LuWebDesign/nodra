@@ -16,7 +16,8 @@ describe("SVG renderer boundary", () => {
     expect(result.success).toBe(true);
     if (result.success) {
       expect(result.svg).toContain('x="10" y="20" width="60" height="20"');
-      expect(result.svg).toContain('fill="none"');
+      expect(result.svg).toContain('fill="#e5e7eb"');
+          expect(result.svg).toContain('data-element-id="line"');
       expect(result.svg).toContain('cx="110" cy="30" rx="20" ry="10"');
       expect(result.svg).toContain('x1="-10" y1="-20" x2="10" y2="-10"');
       expect(result.renderedElementIds).toEqual(["rect", "ellipse", "line"]);

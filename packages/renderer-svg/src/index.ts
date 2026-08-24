@@ -32,8 +32,11 @@ function viewportResult(input: unknown): { success: true; data: Viewport } | { s
   return { success: true, data: { zoom: candidate.zoom, panMm: { x: candidate.panMm.x, y: candidate.panMm.y } } };
 }
 
+const DEFAULT_CLOSED_FILL = "#e5e7eb";
+
 function visualAttributes(element: Element): string {
-  const fill = element.style.fill === undefined ? "none" : escapeAttribute(element.style.fill);
+  const closed = element.type === "path" || element.type === "spline" ? element.closed : element.type !== "line";
+  const fill = closed ? escapeAttribute(element.style.fill ?? DEFAULT_CLOSED_FILL) : "none";
   return `stroke="${escapeAttribute(element.style.stroke)}" stroke-width="${number(element.style.strokeWidth)}" fill="${fill}"`;
 }
 

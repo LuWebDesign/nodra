@@ -92,3 +92,7 @@
 .page-svg svg [data-element-id] { stroke: #111827; }
 .tool-cursor.close-cursor { color: #0f766e; font-weight: 800; font-size: 22px; }
 .canvas.close-target-active [data-spline-close-target="true"] { filter: drop-shadow(0 0 2px #14b8a6); }
+
+/* Shared node language: square anchors in Selection, diamond anchors in node-editing modes. */
+.contour-node { border-radius: 0; }
+.contour-node.editing-node { transform: translate(-50%,-50%) rotate(45deg); }
