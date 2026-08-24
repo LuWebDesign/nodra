@@ -10,6 +10,7 @@ import {
   type OperationMetadata,
   type PathElement,
   type PathJoin,
+  type SplineElement,
   elementId,
   nextRevision,
   revision,
@@ -145,8 +146,8 @@ export const shapeOperation = (ids: readonly ElementId[], operation: ShapeOperat
 export const createPath = (path: PathElement): EditorCommand => createElement(path);
 
 const pathAt = (document: DocumentSnapshot, id: ElementId): PathElement | undefined => document.elements.find((element): element is PathElement => element.id === id && element.type === "path");
-const splineAt = (document: DocumentSnapshot, id: ElementId) => document.elements.find((element) => element.id === id && element.type === "spline");
-const updateSpline = (document: DocumentSnapshot, id: ElementId, apply: (spline: Extract<Element, { type: "spline" }>) => CommandResult): CommandResult => {
+const splineAt = (document: DocumentSnapshot, id: ElementId): SplineElement | undefined => document.elements.find((element): element is SplineElement => element.id === id && element.type === "spline");
+const updateSpline = (document: DocumentSnapshot, id: ElementId, apply: (spline: SplineElement) => CommandResult): CommandResult => {
   const spline = splineAt(document, id);
   if (!spline) return { success: false, error: "Spline not found" };
   return apply(spline);
