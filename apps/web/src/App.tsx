@@ -366,7 +366,7 @@ export function App() {
     const selected = select(editorRef.current, [spline.id]);
     if (tool === "spline" && nodeId === spline.nodes[0]?.id && activeSplineId === spline.id && !spline.closed && spline.nodes.length >= 3) {
       setEditorState(dispatch(selected, closeSplineElement(spline.id)));
-      setSelectedSplineNodeKey(`${spline.id}:${nodeId}`);
+      setSelectedSplineNodeKey(undefined);
       setActiveSplineId(undefined);
       return;
     }
