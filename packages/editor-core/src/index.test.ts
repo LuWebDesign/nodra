@@ -34,7 +34,8 @@ describe("editor core", () => {
     const initial = dispatch(createEditor({ ...document, elements: [spline] }), createElement(spline));
     const preview = previewGestureFromBase(beginGesture(initial), updateSplineHandle(spline.id, "a", "out", { x: 4, y: 3 }));
     expect(preview.gesture).toBeDefined();
-    expect(preview.document.elements[0]).toMatchObject({ nodes: [{ outHandle: { dx: 4, dy: 3, } }] });
+    const previewElement = preview.document.elements[0];
+    expect(previewElement?.type === "spline" ? previewElement.nodes[0] : undefined).toMatchObject({ outHandle: { dx: 4, dy: 3 } });
     expect(commitGesture(preview).undo).toHaveLength(initial.undo.length + 1);
     expect(cancelGesture(preview)).toMatchObject({ document: initial.document, gesture: undefined });
   });
