@@ -174,4 +174,23 @@ describe("canonical millimetre geometry", () => {
     expect(next[1]).toMatchObject({ rotation: Math.PI / 2 });
     expect(rotateElements([line], { x: 5, y: 0 }, Math.PI / 2)[0]).toMatchObject({ start: { x: 5, y: -5 }, end: { x: 5, y: 5 }, rotation: 0 });
   });
+
+  it("rotates spline handles as relative offsets", () => {
+    const spline = {
+      type: "spline" as const,
+      id: elementId("spline-transform"),
+      layerId: layerId("l"),
+      nodes: [{
+        id: "spline-node",
+        anchor: { x: 10, y: 0 },
+        continuity: "smooth" as const,
+        inHandle: { dx: -2, dy: 0 },
+        outHandle: { dx: 2, dy: 0 },
+      }],
+      closed: false,
+      style,
+    };
+    const rotated = rotateElements([spline], { x: 0, y: 0 }, Math.PI / 2)[0];
+    expect(rotated).toMatchObject({ nodes: [{ anchor: { x: 0, y: 10 }, inHandle: { dx: 0, dy: -2 }, outHandle: { dx: 0, dy: 2 } }] });
+  });
 });
