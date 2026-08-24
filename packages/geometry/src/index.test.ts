@@ -191,6 +191,14 @@ describe("canonical millimetre geometry", () => {
       style,
     };
     const rotated = rotateElements([spline], { x: 0, y: 0 }, Math.PI / 2)[0];
-    expect(rotated).toMatchObject({ nodes: [{ anchor: { x: 0, y: 10 }, inHandle: { dx: 0, dy: -2 }, outHandle: { dx: 0, dy: 2 } }] });
+    expect(rotated?.type).toBe("spline");
+    if (rotated?.type === "spline") {
+      expect(rotated.nodes[0]?.anchor.x).toBeCloseTo(0);
+      expect(rotated.nodes[0]?.anchor.y).toBeCloseTo(10);
+      expect(rotated.nodes[0]?.inHandle?.dx).toBeCloseTo(0);
+      expect(rotated.nodes[0]?.inHandle?.dy).toBeCloseTo(-2);
+      expect(rotated.nodes[0]?.outHandle?.dx).toBeCloseTo(0);
+      expect(rotated.nodes[0]?.outHandle?.dy).toBeCloseTo(2);
+    }
   });
 });
