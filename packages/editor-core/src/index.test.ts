@@ -39,6 +39,27 @@ describe("editor core", () => {
     expect(commitGesture(preview).undo).toHaveLength(initial.undo.length + 1);
     expect(cancelGesture(preview)).toMatchObject({ document: initial.document, gesture: undefined });
   });
+
+  it("moves a spline with moveElement while preserving relative handles", () => {
+    const source: SplineElement = {
+      ...spline,
+      nodes: spline.nodes.map((node, index) => ({
+        ...node,
+        ...(index === 0 ? { outHandle: { dx: 2, dy: 3 } } : {}),
+        ...(index === 1 ? { inHandle: { dx: -2, dy: -3 } } : {}),
+      })),
+    };
+    const state = dispatch(createEditor({ ...document, elements: [source] }), moveElement(source.id, { x: 5, y: -2 }));
+    const moved = state.document.elements[0];
+    expect(moved?.type).toBe("spline");
+    if (moved?.type === "spline") {
+      expect(moved.nodes[0]?.anchor).toEqual({ x: 5, y: -2 });
+      expect(moved.nodes[0]?.outHandle).toEqual({ dx: 2, dy: 3 });
+      expect(moved.nodes[1]?.anchor).toEqual({ x: 15, y: -2 });
+      expect(moved.nodes[1]?.inHandle).toEqual({ dx: -2, dy: -3 });
+    }
+    expect(state.undo).toHaveLength(1);
+  });
   it("deletes contour nodes through validation and keeps a ring valid", () => {
     const contour = { type: "contour" as const, id: elementId("delete-contour-node"), layerId: rectangle.layerId, position: { x: 1, y: 2 }, size: { width: 10, height: 5 }, contours: [{ points: [{ x: 1, y: 2 }, { x: 11, y: 2 }, { x: 11, y: 7 }, { x: 1, y: 7 }, { x: 1, y: 2 }] }], fillRule: "evenodd" as const, rotation: 0, style: rectangle.style };
     const state = dispatch(createEditor({ ...document, elements: [contour] }), deleteContourNodes(contour.id, [{ ringIndex: 0, pointIndex: 1 }]));

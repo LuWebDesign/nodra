@@ -29,6 +29,36 @@ describe("canonical millimetre geometry", () => {
     const curve = { p0: { x: 2, y: 4 }, p1: { x: 5, y: 4 }, p2: { x: 5, y: 10 }, p3: { x: 2, y: 10 } };
     expect(cubicBezierBounds(curve)).toEqual({ x: 2, y: 4, width: 2.25, height: 6 });
   });
+  it("hit-tests open spline strokes and closed spline fills in document millimetres", () => {
+    const openSpline = {
+      type: "spline" as const,
+      id: elementId("spline-open-hit"),
+      layerId: layerId("l"),
+      nodes: [
+        { id: "a", anchor: { x: 0, y: 0 }, continuity: "smooth" as const, outHandle: { dx: 5, dy: 8 } },
+        { id: "b", anchor: { x: 10, y: 0 }, continuity: "smooth" as const, inHandle: { dx: -5, dy: 8 } },
+      ],
+      closed: false,
+      style,
+    };
+    expect(hitTest(openSpline, { x: 5, y: 6 }, 0.5)).toBe(true);
+    expect(hitTest(openSpline, { x: 5, y: 8 }, 0.5)).toBe(false);
+
+    const closedSpline = {
+      type: "spline" as const,
+      id: elementId("spline-closed-hit"),
+      layerId: layerId("l"),
+      nodes: [
+        { id: "a", anchor: { x: 0, y: 0 }, continuity: "smooth" as const },
+        { id: "b", anchor: { x: 20, y: 0 }, continuity: "smooth" as const },
+        { id: "c", anchor: { x: 10, y: 20 }, continuity: "smooth" as const },
+      ],
+      closed: true,
+      style,
+    };
+    expect(hitTest(closedSpline, { x: 10, y: 6 })).toBe(true);
+    expect(hitTest(closedSpline, { x: 10, y: 25 })).toBe(false);
+  });
   it("round-trips viewport conversion", () => {
     const viewport = { zoom: 2, panMm: { x: 5, y: 7 } };
     const point = { x: 12, y: 18 };
