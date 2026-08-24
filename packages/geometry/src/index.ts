@@ -538,7 +538,12 @@ export function hitTest(element: Element, point: PointMm, toleranceMm = 0): bool
     return element.contours.reduce((inside, contour) => inside !== pointInRing(point, contour.points.map((value) => [value.x, value.y] as [number, number])), false);
   }
   if (element.type === "path") return pathHitTest(element, point, toleranceMm);
-  if (element.type === "spline") return splinePoints(element).some((value, index, points) => index > 0 && contourSegmentDistance(point, points[index - 1]!, value) <= toleranceMm);
+      if (element.type === "spline") {
+        const points = splinePoints(element);
+        const onStroke = points.some((value, index) => index > 0 && contourSegmentDistance(point, points[index - 1]!, value) <= toleranceMm);
+        if (onStroke || !element.closed) return onStroke;
+        return pointInRing(point, points.map((value) => [value.x, value.y] as [number, number]));
+      }
   const center = { x: element.position.x + element.size.width / 2, y: element.position.y + element.size.height / 2 };
   const local = rotate({ x: point.x - center.x, y: point.y - center.y }, -element.rotation);
   if (element.type === "rectangle") return Math.abs(local.x) <= element.size.width / 2 + toleranceMm && Math.abs(local.y) <= element.size.height / 2 + toleranceMm;

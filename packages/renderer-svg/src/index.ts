@@ -32,9 +32,12 @@ function viewportResult(input: unknown): { success: true; data: Viewport } | { s
   return { success: true, data: { zoom: candidate.zoom, panMm: { x: candidate.panMm.x, y: candidate.panMm.y } } };
 }
 
+const DEFAULT_CLOSED_FILL = "rgba(101,217,255,0.22)";
+
 function visualAttributes(element: Element): string {
-  const fill = element.style.fill === undefined ? "none" : escapeAttribute(element.style.fill);
-  return `stroke="${escapeAttribute(element.style.stroke)}" stroke-width="${number(element.style.strokeWidth)}" fill="${fill}"`;
+  const closed = element.type === "path" || element.type === "spline" ? element.closed : element.type !== "line";
+  const fill = closed ? escapeAttribute(element.style.fill ?? DEFAULT_CLOSED_FILL) : "none";
+  return `stroke="${escapeAttribute(element.style.stroke)}" stroke-width="${number(Math.max(element.style.strokeWidth, 1))}" fill="${fill}"`;
 }
 
 function renderElement(element: Element, viewport: Viewport): string {

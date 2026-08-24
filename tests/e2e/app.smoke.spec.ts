@@ -58,18 +58,28 @@ test("creates an open spline with Spline and exposes its anchors", async ({ page
   const secondNode = await nodes.nth(1).boundingBox();
   expect(secondNode).not.toBeNull();
   await page.mouse.click(secondNode!.x + secondNode!.width / 2, secondNode!.y + secondNode!.height / 2);
-  await expect(page.locator("[data-spline-handle]")).toHaveCount(2);
+  await expect(page.locator("[data-spline-handle]")).toHaveCount(4);
   const firstNode = await nodes.first().boundingBox();
   expect(firstNode).not.toBeNull();
+  await page.mouse.move(firstNode!.x + firstNode!.width / 2, firstNode!.y + firstNode!.height / 2);
+  await expect(page.locator(".tool-cursor")).toBeHidden();
+  await expect(page.locator(".tool-cursor")).toHaveAttribute("title", "Cerrar trazado");
   await page.mouse.click(firstNode!.x + firstNode!.width / 2, firstNode!.y + firstNode!.height / 2);
   await expect(spline).toHaveAttribute("d", / Z$/);
-  await expect(page.locator('[data-spline-overlay-layer] path')).toHaveAttribute("fill", "rgba(107,114,128,0.25)");
-  await expect(page.locator("[data-spline-handle]")).toHaveCount(2);
+  await expect(page.locator("[data-spline-handle]")).toHaveCount(0);
   await page.getByRole("button", { name: "Forma" }).click();
   const selectedNode = await nodes.nth(1).boundingBox();
   expect(selectedNode).not.toBeNull();
   await page.mouse.click(selectedNode!.x + selectedNode!.width / 2, selectedNode!.y + selectedNode!.height / 2);
-  await expect(page.locator("[data-spline-handle]")).toHaveCount(2);
+  await expect(page.locator("[data-spline-handle]")).toHaveCount(6);
+  const beforeNodeDrag = await spline.getAttribute("d");
+  await page.mouse.move(selectedNode!.x + selectedNode!.width / 2, selectedNode!.y + selectedNode!.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(selectedNode!.x + selectedNode!.width / 2 + 20, selectedNode!.y + selectedNode!.height / 2 + 12);
+  await page.mouse.up();
+  await expect(spline).not.toHaveAttribute("d", beforeNodeDrag!);
+  await page.keyboard.press("Control+z");
+  await expect(spline).toHaveAttribute("d", beforeNodeDrag!);
   const beforeDrag = await spline.getAttribute("d");
   const handle = page.locator("[data-spline-handle]").first();
   const handleBounds = await handle.evaluate((element) => {
@@ -91,7 +101,72 @@ test("creates an open spline with Spline and exposes its anchors", async ({ page
   await expect(page.locator('.page-svg svg path[data-element-id]')).toHaveCount(1);
 });
 
-test("double-clicking empty canvas clears native Spline node selection", async ({ page }) => {
+test("selects and moves a Spline object like Pluma", async ({ page }) => {
+      await page.goto("/");
+      const pageBounds = await page.locator(".page").boundingBox();
+      expect(pageBounds).not.toBeNull();
+      await page.getByRole("button", { name: "Spline" }).click();
+      await page.mouse.click(pageBounds!.x + 100, pageBounds!.y + 100);
+      await page.mouse.click(pageBounds!.x + 180, pageBounds!.y + 140);
+      await page.mouse.click(pageBounds!.x + 260, pageBounds!.y + 100);
+      await page.getByRole("button", { name: "Seleccion" }).click();
+      const hit = page.locator("[data-spline-hit]");
+      await expect(hit).toHaveCount(1);
+      const hitPoint = await hit.evaluate((element) => {
+        const path = element as SVGPathElement;
+        const point = path.getPointAtLength(path.getTotalLength() * 0.35);
+        const svg = path.ownerSVGElement!.getBoundingClientRect();
+        const viewBox = path.ownerSVGElement!.viewBox.baseVal;
+        return { x: svg.x + point.x / viewBox.width * svg.width, y: svg.y + point.y / viewBox.height * svg.height };
+      });
+      await page.mouse.click(hitPoint.x, hitPoint.y);
+      await expect(page.locator('[data-resize-handle]:not([data-resize-handle="center"])')).toHaveCount(8);
+      await expect(page.locator('[data-resize-handle="center"]')).toHaveCount(1);
+      await expect(page.locator("[data-real-node]")).toHaveCount(0);
+      const beforeResize = await page.locator(".page-svg svg path[data-element-id]").getAttribute("d");
+      const resizeHandle = await page.locator('[data-resize-handle="se"]').boundingBox();
+      expect(resizeHandle).not.toBeNull();
+      await page.mouse.move(resizeHandle!.x + resizeHandle!.width / 2, resizeHandle!.y + resizeHandle!.height / 2);
+      await page.mouse.down();
+      await page.mouse.move(resizeHandle!.x + resizeHandle!.width / 2 + 20, resizeHandle!.y + resizeHandle!.height / 2 + 20);
+      await page.mouse.up();
+      await expect(page.locator(".page-svg svg path[data-element-id]")).not.toHaveAttribute("d", beforeResize!);
+      await page.keyboard.press("Control+z");
+      await expect(page.locator(".page-svg svg path[data-element-id]")).toHaveAttribute("d", beforeResize!);
+      const before = await page.locator(".page-svg svg path[data-element-id]").getAttribute("d");
+      await page.mouse.move(hitPoint.x, hitPoint.y);
+      await page.mouse.down();
+      await page.mouse.move(hitPoint.x + 35, hitPoint.y + 20);
+      await page.mouse.up();
+      await expect(page.locator(".page-svg svg path[data-element-id]")).not.toHaveAttribute("d", before!);
+      await expect(page.locator("[data-spline-handle]")).toHaveCount(0);
+    });
+
+    test("Selection selects a closed Spline from its interior", async ({ page }) => {
+      await page.goto("/");
+      const pageBounds = await page.locator(".page").boundingBox();
+      expect(pageBounds).not.toBeNull();
+      await page.getByRole("button", { name: "Spline" }).click();
+      await page.mouse.click(pageBounds!.x + 120, pageBounds!.y + 120);
+      await page.mouse.click(pageBounds!.x + 240, pageBounds!.y + 120);
+      await page.mouse.click(pageBounds!.x + 180, pageBounds!.y + 240);
+      const firstNode = page.locator("[data-spline-node]").first();
+      const firstBounds = await firstNode.boundingBox();
+      expect(firstBounds).not.toBeNull();
+      await page.mouse.click(firstBounds!.x + firstBounds!.width / 2, firstBounds!.y + firstBounds!.height / 2);
+      await page.getByRole("button", { name: "Seleccion" }).click();
+      const hit = page.locator("[data-spline-hit]");
+      const bounds = await hit.boundingBox();
+      expect(bounds).not.toBeNull();
+      const before = await page.locator(".page-svg svg path[data-element-id]").getAttribute("d");
+      await page.mouse.move(bounds!.x + bounds!.width / 2, bounds!.y + bounds!.height / 2);
+      await page.mouse.down();
+      await page.mouse.move(bounds!.x + bounds!.width / 2 + 20, bounds!.y + bounds!.height / 2 + 15);
+      await page.mouse.up();
+      await expect(page.locator(".page-svg svg path[data-element-id]")).not.toHaveAttribute("d", before!);
+    });
+
+    test("double-clicking empty canvas clears native Spline node selection", async ({ page }) => {
   await page.goto("/");
   const pageBounds = await page.locator(".page").boundingBox();
   expect(pageBounds).not.toBeNull();
@@ -104,7 +179,7 @@ test("double-clicking empty canvas clears native Spline node selection", async (
   const nodeBounds = await node.boundingBox();
   expect(nodeBounds).not.toBeNull();
   await page.mouse.click(nodeBounds!.x + nodeBounds!.width / 2, nodeBounds!.y + nodeBounds!.height / 2);
-  await expect(page.locator("[data-spline-handle]")).toHaveCount(2);
+  await expect(page.locator("[data-spline-handle]")).toHaveCount(4);
   await page.mouse.dblclick(pageBounds!.x + 500, pageBounds!.y + 500);
   await expect(page.locator("[data-spline-handle]")).toHaveCount(0);
   await expect(page.locator("[data-spline-node]")).toHaveCount(0);
@@ -127,12 +202,12 @@ test("closes a Pluma silhouette by clicking its first anchor and supports fill a
   await page.mouse.click(firstBounds!.x + firstBounds!.width / 2, firstBounds!.y + firstBounds!.height / 2);
   await expect(page.locator(".page-svg svg path[data-element-id]")).toHaveAttribute("d", / Z$/);
   await expect(page.getByRole("button", { name: "Reabrir trazado" })).toBeVisible();
-  await expect(page.getByText(/Relleno: Sin relleno/)).toBeVisible();
+  await expect(page.getByText("Relleno: rgba(101,217,255,0.22)")).toBeVisible();
 
   await page.getByRole("button", { name: "Azul", exact: true }).click();
   await expect(page.locator(".page-svg svg path[data-element-id]")).toHaveAttribute("fill", "#3b82f6");
   await page.getByRole("button", { name: "Deshacer" }).click();
-  await expect(page.locator(".page-svg svg path[data-element-id]")).toHaveAttribute("fill", "none");
+  await expect(page.locator(".page-svg svg path[data-element-id]")).toHaveAttribute("fill", "rgba(101,217,255,0.22)");
   await page.getByRole("button", { name: "Rehacer" }).click();
   await expect(page.locator(".page-svg svg path[data-element-id]")).toHaveAttribute("fill", "#3b82f6");
 });
