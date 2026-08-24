@@ -121,6 +121,30 @@ test("selects and moves a Spline object like Pluma", async ({ page }) => {
       await expect(page.locator("[data-spline-handle]")).toHaveCount(0);
     });
 
+    test("Selection selects a closed Spline from its interior", async ({ page }) => {
+      await page.goto("/");
+      const pageBounds = await page.locator(".page").boundingBox();
+      expect(pageBounds).not.toBeNull();
+      await page.getByRole("button", { name: "Spline" }).click();
+      await page.mouse.click(pageBounds!.x + 120, pageBounds!.y + 120);
+      await page.mouse.click(pageBounds!.x + 240, pageBounds!.y + 120);
+      await page.mouse.click(pageBounds!.x + 180, pageBounds!.y + 240);
+      const firstNode = page.locator("[data-spline-node]").first();
+      const firstBounds = await firstNode.boundingBox();
+      expect(firstBounds).not.toBeNull();
+      await page.mouse.click(firstBounds!.x + firstBounds!.width / 2, firstBounds!.y + firstBounds!.height / 2);
+      await page.getByRole("button", { name: "Seleccion" }).click();
+      const hit = page.locator("[data-spline-hit]");
+      const bounds = await hit.boundingBox();
+      expect(bounds).not.toBeNull();
+      const before = await page.locator(".page-svg svg path[data-element-id]").getAttribute("d");
+      await page.mouse.move(bounds!.x + bounds!.width / 2, bounds!.y + bounds!.height / 2);
+      await page.mouse.down();
+      await page.mouse.move(bounds!.x + bounds!.width / 2 + 20, bounds!.y + bounds!.height / 2 + 15);
+      await page.mouse.up();
+      await expect(page.locator(".page-svg svg path[data-element-id]")).not.toHaveAttribute("d", before!);
+    });
+
     test("double-clicking empty canvas clears native Spline node selection", async ({ page }) => {
   await page.goto("/");
   const pageBounds = await page.locator(".page").boundingBox();
