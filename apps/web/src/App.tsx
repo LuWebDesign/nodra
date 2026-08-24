@@ -366,6 +366,7 @@ export function App() {
     const selected = select(editorRef.current, [spline.id]);
     if (tool === "spline" && nodeId === spline.nodes[0]?.id && activeSplineId === spline.id && !spline.closed && spline.nodes.length >= 3) {
       setEditorState(dispatch(selected, closeSplineElement(spline.id)));
+      setSelectedSplineNodeKey(`${spline.id}:${nodeId}`);
       setActiveSplineId(undefined);
       return;
     }
@@ -798,24 +799,34 @@ export function App() {
     return { left: topLeft.x, top: topLeft.y, width: bounds.width * zoom, height: bounds.height * zoom };
   })() : undefined;
   const pageStyle = { width: document.page.width * zoom, height: document.page.height * zoom, left: -panMm.x * zoom, top: -panMm.y * zoom };
-   const splineOverlay = document.elements.filter((element): element is SplineElement => element.type === "spline").map((spline) => <g key={`spline-overlay-${spline.id}`} data-spline-overlay={spline.id}>
-     {spline.closed && <path d={splinePathData(spline)} fill="rgba(107,114,128,0.25)" stroke="none" pointerEvents="none" />}
-     <path data-spline-hit={spline.id} d={splinePathData(spline)} fill={spline.closed ? "transparent" : "none"} stroke="#2563eb" strokeOpacity={0.01} strokeWidth={12 / zoom} style={{ pointerEvents: tool === "select" ? "visiblePainted" : "none", cursor: tool === "select" ? "move" : "default" }} onPointerDown={(event) => selectSplineObject(event, spline)} onPointerMove={(event) => onCanvasPointerMove(event as unknown as PointerEvent<HTMLDivElement>)} onPointerUp={(event) => finishPointer(event as unknown as PointerEvent<HTMLDivElement>, false)} onPointerCancel={(event) => finishPointer(event as unknown as PointerEvent<HTMLDivElement>, true)} />
-     {(selection.includes(spline.id) || selectedSplineNodeKey?.startsWith(`${spline.id}:`)) && spline.nodes.map((node, nodeIndex) => {
-      const selectedNodeIndex = spline.nodes.findIndex((candidate) => selectedSplineNodeKey === `${spline.id}:${candidate.id}`);
-      const previousNodeIndex = selectedNodeIndex > 0 ? selectedNodeIndex - 1 : spline.closed && selectedNodeIndex === 0 ? spline.nodes.length - 1 : -1;
-      const nextNodeIndex = selectedNodeIndex >= 0 && selectedNodeIndex < spline.nodes.length - 1 ? selectedNodeIndex + 1 : spline.closed && selectedNodeIndex === spline.nodes.length - 1 ? 0 : -1;
-      const showHandles = (tool === "spline" && spline.closed && selection.includes(spline.id)) || ((tool === "forma" || tool === "spline") && selectedNodeIndex >= 0 && (nodeIndex === selectedNodeIndex || nodeIndex === previousNodeIndex || nodeIndex === nextNodeIndex));
-      const handle = (kind: "in" | "out", offset: { readonly dx: number; readonly dy: number }) => {
-        const point = { x: node.anchor.x + offset.dx, y: node.anchor.y + offset.dy };
-        return <g key={`${node.id}-${kind}`}><line x1={node.anchor.x} y1={node.anchor.y} x2={point.x} y2={point.y} stroke="#2563eb" strokeWidth={0.75 / zoom} strokeDasharray={`${3 / zoom} ${2 / zoom}`} /><rect role="button" aria-label={`Mover handle ${kind === "in" ? "entrante" : "saliente"} de spline`} data-spline-handle={`${spline.id}:${node.id}:${kind}`} x={point.x - 3 / zoom} y={point.y - 3 / zoom} width={6 / zoom} height={6 / zoom} fill="#ffffff" stroke="#2563eb" strokeWidth={1 / zoom} style={{ pointerEvents: "auto", cursor: "move" }} onPointerDown={(event) => beginSplineHandle(event, spline.id, node.id, kind)} onPointerMove={moveSplineHandle} onPointerUp={(event) => finishSplineHandle(event, false)} onPointerCancel={(event) => finishSplineHandle(event, true)} /></g>;
-      };
-      const selected = selectedSplineNodeKey === `${spline.id}:${node.id}`;
-      return <g key={node.id}><rect role="button" aria-label={nodeIndex === 0 && splineCloseTarget ? "Cerrar spline en el primer nodo" : "Ancla de spline"} data-spline-node={node.id} data-spline-close-target={nodeIndex === 0 && splineCloseTarget ? "true" : undefined} x={node.anchor.x - 4 / zoom} y={node.anchor.y - 4 / zoom} width={8 / zoom} height={8 / zoom} fill={nodeIndex === 0 && splineCloseTarget ? "#14b8a6" : selected ? "#dbeafe" : "#ffffff"} stroke={nodeIndex === 0 && splineCloseTarget ? "#0f766e" : "#2563eb"} strokeWidth={1 / zoom} style={{ pointerEvents: "auto", cursor: nodeIndex === 0 && splineCloseTarget ? "crosshair" : "move" }} onPointerDown={(event) => selectSplineAnchor(event, spline, node.id)} />{showHandles && node.inHandle && handle("in", node.inHandle)}{showHandles && node.outHandle && handle("out", node.outHandle)}</g>;
-    })}
-  </g>);
-
-  const setPage = (width: number, height: number) => {
+   const splineOverlay = document.elements.filter((element): element is SplineElement => element.type === "spline").map((spline) => {
+      const editing = tool === "forma" || tool === "spline";
+      const visible = selection.includes(spline.id) || selectedSplineNodeKey?.startsWith(`${spline.id}:`);
+      return <g key={`spline-overlay-${spline.id}`} data-spline-overlay={spline.id}>
+        {spline.closed && <path d={splinePathData(spline)} fill="rgba(107,114,128,0.25)" stroke="none" pointerEvents="none" />}
+        {editing && visible && <path data-spline-edit-path={spline.id} d={splinePathData(spline)} fill="none" stroke="#1683ff" strokeWidth={1 / zoom} pointerEvents="none" />}
+        <path data-spline-hit={spline.id} d={splinePathData(spline)} fill={spline.closed ? "transparent" : "none"} stroke="#2563eb" strokeOpacity={0.01} strokeWidth={12 / zoom} style={{ pointerEvents: tool === "select" ? "visiblePainted" : "none", cursor: tool === "select" ? "move" : "default" }} onPointerDown={(event) => selectSplineObject(event, spline)} onPointerMove={(event) => onCanvasPointerMove(event as unknown as PointerEvent<HTMLDivElement>)} onPointerUp={(event) => finishPointer(event as unknown as PointerEvent<HTMLDivElement>, false)} onPointerCancel={(event) => finishPointer(event as unknown as PointerEvent<HTMLDivElement>, true)} />
+        {visible && spline.nodes.map((node, nodeIndex) => {
+          const selectedNodeIndex = spline.nodes.findIndex((candidate) => selectedSplineNodeKey === `${spline.id}:${candidate.id}`);
+          const previousNodeIndex = selectedNodeIndex > 0 ? selectedNodeIndex - 1 : spline.closed && selectedNodeIndex === 0 ? spline.nodes.length - 1 : -1;
+          const nextNodeIndex = selectedNodeIndex >= 0 && selectedNodeIndex < spline.nodes.length - 1 ? selectedNodeIndex + 1 : spline.closed && selectedNodeIndex === spline.nodes.length - 1 ? 0 : -1;
+          const showHandles = editing && selectedNodeIndex >= 0 && (nodeIndex === selectedNodeIndex || nodeIndex === previousNodeIndex || nodeIndex === nextNodeIndex);
+          const selected = selectedSplineNodeKey === `${spline.id}:${node.id}`;
+          const controlColor = editing ? "#1683ff" : "#111827";
+          const handle = (kind: "in" | "out", offset: { readonly dx: number; readonly dy: number }) => {
+            const point = { x: node.anchor.x + offset.dx, y: node.anchor.y + offset.dy };
+            return <g key={`${node.id}-${kind}`}><line x1={node.anchor.x} y1={node.anchor.y} x2={point.x} y2={point.y} stroke="#1683ff" strokeWidth={0.75 / zoom} strokeDasharray={`${3 / zoom} ${2 / zoom}`} /><rect role="button" aria-label={`Mover handle ${kind === "in" ? "entrante" : "saliente"} de spline`} data-spline-handle={`${spline.id}:${node.id}:${kind}`} x={point.x - 3 / zoom} y={point.y - 3 / zoom} width={6 / zoom} height={6 / zoom} fill="#ffffff" stroke="#1683ff" strokeWidth={1 / zoom} style={{ pointerEvents: "auto", cursor: "move" }} onPointerDown={(event) => beginSplineHandle(event, spline.id, node.id, kind)} onPointerMove={moveSplineHandle} onPointerUp={(event) => finishSplineHandle(event, false)} onPointerCancel={(event) => finishSplineHandle(event, true)} /></g>;
+          };
+          return <g key={node.id}>
+            {editing && spline.closed && nodeIndex === 0 && <polygon data-spline-close-marker={spline.id} points={`${node.anchor.x - 4 / zoom},${node.anchor.y + 6 / zoom} ${node.anchor.x},${node.anchor.y - 6 / zoom} ${node.anchor.x + 4 / zoom},${node.anchor.y + 6 / zoom}`} fill="#ffffff" stroke="#1683ff" strokeWidth={1 / zoom} pointerEvents="none" />}
+            <rect role="button" aria-label={nodeIndex === 0 && splineCloseTarget ? "Cerrar spline en el primer nodo" : "Ancla de spline"} data-spline-node={node.id} data-spline-close-target={nodeIndex === 0 && splineCloseTarget ? "true" : undefined} x={node.anchor.x - 4 / zoom} y={node.anchor.y - 4 / zoom} width={8 / zoom} height={8 / zoom} fill={nodeIndex === 0 && splineCloseTarget ? "#14b8a6" : selected ? "#dbeafe" : "#ffffff"} stroke={nodeIndex === 0 && splineCloseTarget ? "#0f766e" : controlColor} strokeWidth={1 / zoom} transform={editing ? `rotate(45 ${node.anchor.x} ${node.anchor.y})` : undefined} style={{ pointerEvents: "auto", cursor: nodeIndex === 0 && splineCloseTarget ? "crosshair" : "move" }} onPointerDown={(event) => selectSplineAnchor(event, spline, node.id)} />
+            {showHandles && node.inHandle && handle("in", node.inHandle)}{showHandles && node.outHandle && handle("out", node.outHandle)}
+          </g>;
+        })}
+      </g>;
+    });
+    
+      const setPage = (width: number, height: number) => {
     if (Number.isFinite(width) && width > 0 && Number.isFinite(height) && height > 0) setEditorState(dispatch(editorRef.current, updatePage(width, height)));
   };
   const resetPageInteraction = () => {

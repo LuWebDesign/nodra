@@ -67,7 +67,7 @@ test("creates an open spline with Spline and exposes its anchors", async ({ page
   await page.mouse.click(firstNode!.x + firstNode!.width / 2, firstNode!.y + firstNode!.height / 2);
   await expect(spline).toHaveAttribute("d", / Z$/);
   await expect(page.locator('[data-spline-overlay-layer] path[fill="rgba(107,114,128,0.25)"]')).toHaveAttribute("fill", "rgba(107,114,128,0.25)");
-  await expect(page.locator("[data-spline-handle]")).toHaveCount(6);
+  await expect(page.locator("[data-spline-handle]")).toHaveCount(0);
   await page.getByRole("button", { name: "Forma" }).click();
   const selectedNode = await nodes.nth(1).boundingBox();
   expect(selectedNode).not.toBeNull();
