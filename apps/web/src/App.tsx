@@ -23,7 +23,26 @@ const newElement = (tool: Exclude<Tool, "select" | "pan" | "forma" | "pen" | "sp
   ? { type: "line", id: nextId, layerId: layerId(layer), start, end, rotation: 0, style: defaultStyle }
   : tool === "rectangle"
     ? { type: "rectangle", id: nextId, layerId: layerId(layer), ...normalizeDrag(start, end), cornerRadius: 0, rotation: 0, style: defaultStyle }
-    : { type: tool, id: nextId, layerId: layerId(layer), ...normalizeDrag(start, end), rotation: 0, style: defaultStyle };
+     : { type: tool, id: nextId, layerId: layerId(layer), ...normalizeDrag(start, end), rotation: 0, style: defaultStyle };
+const splinePathData = (spline: SplineElement): string => {
+  const first = spline.nodes[0];
+  if (!first) return "";
+  let path = `M ${first.anchor.x} ${first.anchor.y}`;
+  for (let index = 1; index < spline.nodes.length; index += 1) {
+    const start = spline.nodes[index - 1]!;
+    const end = spline.nodes[index]!;
+    const out = start.outHandle ? { x: start.anchor.x + start.outHandle.dx, y: start.anchor.y + start.outHandle.dy } : start.anchor;
+    const incoming = end.inHandle ? { x: end.anchor.x + end.inHandle.dx, y: end.anchor.y + end.inHandle.dy } : end.anchor;
+    path += ` C ${out.x} ${out.y} ${incoming.x} ${incoming.y} ${end.anchor.x} ${end.anchor.y}`;
+  }
+  if (spline.closed && spline.nodes.length > 1) {
+    const last = spline.nodes.at(-1)!;
+    const out = last.outHandle ? { x: last.anchor.x + last.outHandle.dx, y: last.anchor.y + last.outHandle.dy } : last.anchor;
+    const incoming = first.inHandle ? { x: first.anchor.x + first.inHandle.dx, y: first.anchor.y + first.inHandle.dy } : first.anchor;
+    path += ` C ${out.x} ${out.y} ${incoming.x} ${incoming.y} ${first.anchor.x} ${first.anchor.y} Z`;
+  }
+  return path;
+};
 
 type ActiveInteraction = {
   pointerId: number;
@@ -78,6 +97,7 @@ export function App() {
   const [centerHover, setCenterHover] = useState<{ elementId: ElementId; point: PointMm }>();
   const [transformMode, setTransformMode] = useState<TransformMode>("resize");
   const [selectedFormaNodeKeys, setSelectedFormaNodeKeys] = useState<readonly string[]>([]);
+  const [selectedSplineNodeKey, setSelectedSplineNodeKey] = useState<string>();
   const [selectedPathSegment, setSelectedPathSegment] = useState<{ readonly elementId: ElementId; readonly segmentIndex: number }>();
   const [inspectorTab, setInspectorTab] = useState<InspectorTab>("properties");
   const [transformDirection, setTransformDirection] = useState<Direction>("center");
@@ -159,7 +179,8 @@ export function App() {
   useEffect(() => {
     setActiveSplineId(undefined);
     setSplineDraftPoint(undefined);
-    if (tool !== "select" && editorRef.current.selection.some((id) => editorRef.current.document.elements.some((element) => element.id === id && element.type === "spline"))) setEditorState(clearSelection(editorRef.current));
+    setSelectedSplineNodeKey(undefined);
+    if (tool !== "spline" && tool !== "forma" && editorRef.current.selection.some((id) => editorRef.current.document.elements.some((element) => element.id === id && element.type === "spline"))) setEditorState(clearSelection(editorRef.current));
   }, [tool]);
   useEffect(() => { setSelectedPathSegment(undefined); setSelectedFormaNodeKeys([]); }, [tool, project.activePageId]);
 
@@ -324,7 +345,20 @@ export function App() {
       return;
     }
     const next = dispatch(current, appendSplineNode(active.id, { id: `spline-node-${crypto.randomUUID()}`, anchor: point, continuity: "smooth" }));
-    setEditorState(next);
+    setEditorState(select(next, [active.id]));
+  };
+
+  const selectSplineAnchor = (event: PointerEvent<SVGCircleElement>, spline: SplineElement, nodeId: string) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setSelectedSplineNodeKey(`${spline.id}:${nodeId}`);
+    const selected = select(editorRef.current, [spline.id]);
+    if (tool === "spline" && nodeId === spline.nodes[0]?.id && activeSplineId === spline.id && !spline.closed && spline.nodes.length >= 3) {
+      setEditorState(dispatch(selected, closeSplineElement(spline.id)));
+      setActiveSplineId(undefined);
+      return;
+    }
+    setEditorState(selected);
   };
 
   const beginSplineHandle = (event: PointerEvent<SVGCircleElement>, splineId: ElementId, nodeId: string, handle: "in" | "out") => {
@@ -377,9 +411,10 @@ export function App() {
 
   const onCanvasPointerDown = (event: PointerEvent<HTMLDivElement>) => {
     if (interaction.current) return;
-    setCenterHover(undefined);
-    setCursorPoint(canvasPointAt(event));
-    setSnapGuide(undefined);
+     setCenterHover(undefined);
+     setCursorPoint(canvasPointAt(event));
+     setSnapGuide(undefined);
+     setSelectedSplineNodeKey(undefined);
      const resizeTarget = tool === "forma" ? null : (event.target as HTMLElement).closest<HTMLElement>("[data-resize-handle]");
     if (resizeTarget) { resizePointerDown(event, resizeTarget.dataset.resizeHandle as ResizeHandle); return; }
     if (tool === "pan") {
@@ -466,6 +501,12 @@ export function App() {
 
   const onCanvasDoubleClick = (event: MouseEvent<HTMLDivElement>) => {
     const point = screenPointToMm(clientPointToCanvas({ x: event.clientX, y: event.clientY }, event.currentTarget.getBoundingClientRect()), { x: 0, y: 0 }, zoom, panMm);
+    if (!pickElement(editorRef.current.document, point, zoom)) {
+      setSelectedSplineNodeKey(undefined);
+      setActiveSplineId(undefined);
+      setEditorState(clearSelection(editorRef.current));
+      return;
+    }
     if (tool === "forma") {
       if (pickFormaNode(editorRef.current.document, point, zoom)) return;
       const segment = pickFormaSegment(editorRef.current.document, point, zoom);
@@ -740,13 +781,14 @@ export function App() {
     return { left: topLeft.x, top: topLeft.y, width: bounds.width * zoom, height: bounds.height * zoom };
   })() : undefined;
   const pageStyle = { width: document.page.width * zoom, height: document.page.height * zoom, left: -panMm.x * zoom, top: -panMm.y * zoom };
-  const splineOverlay = selectedElements.filter((element): element is SplineElement => element.type === "spline").map((spline) => <g key={`spline-overlay-${spline.id}`} data-spline-overlay={spline.id}>
-    {spline.nodes.map((node) => {
+  const splineOverlay = document.elements.filter((element): element is SplineElement => element.type === "spline").map((spline) => <g key={`spline-overlay-${spline.id}`} data-spline-overlay={spline.id}>
+    {spline.closed && <path d={splinePathData(spline)} fill="rgba(107,114,128,0.25)" stroke="none" pointerEvents="none" />}
+    {selection.includes(spline.id) && spline.nodes.map((node) => {
       const handle = (kind: "in" | "out", offset: { readonly dx: number; readonly dy: number }) => {
         const point = { x: node.anchor.x + offset.dx, y: node.anchor.y + offset.dy };
-        return <g key={`${node.id}-${kind}`}><line x1={node.anchor.x} y1={node.anchor.y} x2={point.x} y2={point.y} stroke="#a78bfa" strokeWidth={0.5} /><circle role="button" aria-label={`Mover handle ${kind === "in" ? "entrante" : "saliente"} de spline`} data-spline-handle={`${spline.id}:${node.id}:${kind}`} cx={point.x} cy={point.y} r={2.5} fill="#7c3aed" style={{ pointerEvents: "auto", cursor: "move" }} onPointerDown={(event) => beginSplineHandle(event, spline.id, node.id, kind)} onPointerMove={moveSplineHandle} onPointerUp={(event) => finishSplineHandle(event, false)} onPointerCancel={(event) => finishSplineHandle(event, true)} /></g>;
+        return <g key={`${node.id}-${kind}`} style={selectedSplineNodeKey === `${spline.id}:${node.id}` ? {} : { display: "none" }}><line x1={node.anchor.x} y1={node.anchor.y} x2={point.x} y2={point.y} stroke="#a78bfa" strokeWidth={0.5} /><circle role="button" aria-label={`Mover handle ${kind === "in" ? "entrante" : "saliente"} de spline`} data-spline-handle={`${spline.id}:${node.id}:${kind}`} cx={point.x} cy={point.y} r={2.5} fill="#7c3aed" style={{ pointerEvents: "auto", cursor: "move" }} onPointerDown={(event) => beginSplineHandle(event, spline.id, node.id, kind)} onPointerMove={moveSplineHandle} onPointerUp={(event) => finishSplineHandle(event, false)} onPointerCancel={(event) => finishSplineHandle(event, true)} /></g>;
       };
-      return <g key={node.id}><circle data-spline-node={node.id} cx={node.anchor.x} cy={node.anchor.y} r={2.5} fill="#ffffff" stroke="#7c3aed" strokeWidth={1} /><g>{node.inHandle && handle("in", node.inHandle)}{node.outHandle && handle("out", node.outHandle)}</g></g>;
+      return <g key={node.id}><circle role="button" aria-label="Ancla de spline" data-spline-node={node.id} cx={node.anchor.x} cy={node.anchor.y} r={5 / zoom} fill={selectedSplineNodeKey === `${spline.id}:${node.id}` ? "#f6c85f" : "#ffffff"} stroke="#111827" strokeWidth={1 / zoom} style={{ pointerEvents: "auto", cursor: "move" }} onPointerDown={(event) => selectSplineAnchor(event, spline, node.id)} />{node.inHandle && handle("in", node.inHandle)}{node.outHandle && handle("out", node.outHandle)}</g>;
     })}
   </g>);
 
