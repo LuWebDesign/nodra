@@ -116,6 +116,16 @@ test("selects and moves a Spline object like Pluma", async ({ page }) => {
       await expect(page.locator('[data-resize-handle]:not([data-resize-handle="center"])')).toHaveCount(8);
       await expect(page.locator('[data-resize-handle="center"]')).toHaveCount(1);
       await expect(page.locator("[data-real-node]")).toHaveCount(0);
+      const beforeResize = await page.locator(".page-svg svg path[data-element-id]").getAttribute("d");
+      const resizeHandle = await page.locator('[data-resize-handle="se"]').boundingBox();
+      expect(resizeHandle).not.toBeNull();
+      await page.mouse.move(resizeHandle!.x + resizeHandle!.width / 2, resizeHandle!.y + resizeHandle!.height / 2);
+      await page.mouse.down();
+      await page.mouse.move(resizeHandle!.x + resizeHandle!.width / 2 + 20, resizeHandle!.y + resizeHandle!.height / 2 + 20);
+      await page.mouse.up();
+      await expect(page.locator(".page-svg svg path[data-element-id]")).not.toHaveAttribute("d", beforeResize!);
+      await page.keyboard.press("Control+z");
+      await expect(page.locator(".page-svg svg path[data-element-id]")).toHaveAttribute("d", beforeResize!);
       const before = await page.locator(".page-svg svg path[data-element-id]").getAttribute("d");
       await page.mouse.move(hitPoint.x, hitPoint.y);
       await page.mouse.down();
