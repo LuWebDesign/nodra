@@ -9,8 +9,8 @@ import { aspectGeometryPatch, aspectSize, cornerRadiusPatch, formatMm, geometryV
 import { useDocumentStore, usePersistenceStore, useUiStore, useViewportStore, type Tool } from "./stores.js";
 import { pathJoinGuidance, pathJoinOptions } from "./pathJoins.js";
 
-const defaultStyle = { stroke: "#000000", strokeWidth: 0.7 };
-const defaultClosedFill = "#e5e7eb";
+const defaultStyle = { stroke: "#000000", strokeWidth: 1 };
+const defaultClosedFill = "rgba(101,217,255,0.22)";
 const isPropertyElement = (element: Element): element is PropertyElement => element.type === "rectangle" || element.type === "ellipse";
 const isRotatableElement = (element: Element): element is RotatableElement => element.type !== "path" && element.type !== "spline";
 const palette = [
@@ -223,7 +223,7 @@ export function App() {
      const guideLine = (anchor: PointMm, control: PointMm, direction: "incoming" | "outgoing") => {
        const line = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "line");
        const a = point(anchor); const b = point(control); const color = "#1683ff";
-       line.dataset.bezierGuide = direction; line.setAttribute("x1", String(a.x)); line.setAttribute("y1", String(a.y)); line.setAttribute("x2", String(b.x)); line.setAttribute("y2", String(b.y)); line.setAttribute("stroke", color); line.setAttribute("stroke-width", "0.7"); line.setAttribute("stroke-dasharray", "3 2"); line.style.pointerEvents = "none"; overlay.append(line);
+       line.dataset.bezierGuide = direction; line.setAttribute("x1", String(a.x)); line.setAttribute("y1", String(a.y)); line.setAttribute("x2", String(b.x)); line.setAttribute("y2", String(b.y)); line.setAttribute("stroke", color); line.setAttribute("stroke-width", "1"); line.setAttribute("stroke-dasharray", "3 2"); line.style.pointerEvents = "none"; overlay.append(line);
      };
      for (const element of selectedElements) if (element.type === "path") for (const guide of pathGuides(element)) guideLine(guide.anchor, guide.control, guide.direction);
     if (transformMode === "resize" && tool !== "forma") for (const element of selectedElements.filter((candidate) => candidate.type !== "spline")) for (const [nodeIndex, node] of realGeometryNodes(element).entries()) {
@@ -811,14 +811,14 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
        const pathGuideOverlay = selectedElements.filter((element): element is Extract<Element, { type: "path" }> => element.type === "path").flatMap((path) => path.segments.flatMap((segment) => segment.type === "cubicBezier" ? (() => {
          const start = path.nodes.find((node) => node.id === segment.startNodeId)?.anchor;
          const end = path.nodes.find((node) => node.id === segment.endNodeId)?.anchor;
-         return start && end ? [<line key={`${path.id}-${segment.startNodeId}-out`} x1={start.x} y1={start.y} x2={segment.control1.x} y2={segment.control1.y} stroke="#1683ff" strokeWidth={0.7 / zoom} strokeDasharray={`${3 / zoom} ${2 / zoom}`} pointerEvents="none" />, <line key={`${path.id}-${segment.endNodeId}-in`} x1={end.x} y1={end.y} x2={segment.control2.x} y2={segment.control2.y} stroke="#1683ff" strokeWidth={0.7 / zoom} strokeDasharray={`${3 / zoom} ${2 / zoom}`} pointerEvents="none" />] : [];
+         return start && end ? [<line key={`${path.id}-${segment.startNodeId}-out`} x1={start.x} y1={start.y} x2={segment.control1.x} y2={segment.control1.y} stroke="#1683ff" strokeWidth={1 / zoom} strokeDasharray={`${3 / zoom} ${2 / zoom}`} pointerEvents="none" />, <line key={`${path.id}-${segment.endNodeId}-in`} x1={end.x} y1={end.y} x2={segment.control2.x} y2={segment.control2.y} stroke="#1683ff" strokeWidth={1 / zoom} strokeDasharray={`${3 / zoom} ${2 / zoom}`} pointerEvents="none" />] : [];
        })() : []));
        const splineOverlay = document.elements.filter((element): element is SplineElement => element.type === "spline").map((spline) => {
       const editing = tool === "forma" || tool === "spline";
       const visible = selection.includes(spline.id) || selectedSplineNodeKey?.startsWith(`${spline.id}:`);
       return <g key={`spline-overlay-${spline.id}`} data-spline-overlay={spline.id}>
         {spline.closed && <path d={splinePathData(spline)} fill={defaultClosedFill} stroke="none" pointerEvents="none" />}
-        {editing && visible && <path data-spline-edit-path={spline.id} d={splinePathData(spline)} fill="none" stroke="#1683ff" strokeWidth={0.7 / zoom} pointerEvents="none" />}
+        {editing && visible && <path data-spline-edit-path={spline.id} d={splinePathData(spline)} fill="none" stroke="#1683ff" strokeWidth={1 / zoom} pointerEvents="none" />}
         <path data-spline-hit={spline.id} d={splinePathData(spline)} fill={spline.closed ? "transparent" : "none"} stroke="#2563eb" strokeOpacity={0.01} strokeWidth={12 / zoom} style={{ pointerEvents: tool === "select" ? "visiblePainted" : "none", cursor: tool === "select" ? "move" : "default" }} onPointerDown={(event) => selectSplineObject(event, spline)} onPointerMove={(event) => onCanvasPointerMove(event as unknown as PointerEvent<HTMLDivElement>)} onPointerUp={(event) => finishPointer(event as unknown as PointerEvent<HTMLDivElement>, false)} onPointerCancel={(event) => finishPointer(event as unknown as PointerEvent<HTMLDivElement>, true)} />
         {visible && spline.nodes.map((node, nodeIndex) => {
           const selectedNodeIndex = spline.nodes.findIndex((candidate) => selectedSplineNodeKey === `${spline.id}:${candidate.id}`);
@@ -830,7 +830,7 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
               const nodeSize = 5 / zoom;
           const handle = (kind: "in" | "out", offset: { readonly dx: number; readonly dy: number }) => {
             const point = { x: node.anchor.x + offset.dx, y: node.anchor.y + offset.dy };
-            return <g key={`${node.id}-${kind}`}><line x1={node.anchor.x} y1={node.anchor.y} x2={point.x} y2={point.y} stroke="#1683ff" strokeWidth={0.7 / zoom} strokeDasharray={`${3 / zoom} ${2 / zoom}`} /><rect role="button" aria-label={`Mover handle ${kind === "in" ? "entrante" : "saliente"} de spline`} data-spline-handle={`${spline.id}:${node.id}:${kind}`} x={point.x - 3 / zoom} y={point.y - 3 / zoom} width={6 / zoom} height={6 / zoom} fill="#ffffff" stroke="#1683ff" strokeWidth={1 / zoom} style={{ pointerEvents: "auto", cursor: "move" }} onPointerDown={(event) => beginSplineHandle(event, spline.id, node.id, kind)} onPointerMove={moveSplineHandle} onPointerUp={(event) => finishSplineHandle(event, false)} onPointerCancel={(event) => finishSplineHandle(event, true)} /></g>;
+            return <g key={`${node.id}-${kind}`}><line x1={node.anchor.x} y1={node.anchor.y} x2={point.x} y2={point.y} stroke="#1683ff" strokeWidth={1 / zoom} strokeDasharray={`${3 / zoom} ${2 / zoom}`} /><rect role="button" aria-label={`Mover handle ${kind === "in" ? "entrante" : "saliente"} de spline`} data-spline-handle={`${spline.id}:${node.id}:${kind}`} x={point.x - 3 / zoom} y={point.y - 3 / zoom} width={6 / zoom} height={6 / zoom} fill="#ffffff" stroke="#1683ff" strokeWidth={1 / zoom} style={{ pointerEvents: "auto", cursor: "move" }} onPointerDown={(event) => beginSplineHandle(event, spline.id, node.id, kind)} onPointerMove={moveSplineHandle} onPointerUp={(event) => finishSplineHandle(event, false)} onPointerCancel={(event) => finishSplineHandle(event, true)} /></g>;
           };
           return <g key={node.id}>
             {editing && spline.closed && nodeIndex === 0 && <polygon data-spline-close-marker={spline.id} points={`${node.anchor.x - 4 / zoom},${node.anchor.y + 6 / zoom} ${node.anchor.x},${node.anchor.y - 6 / zoom} ${node.anchor.x + 4 / zoom},${node.anchor.y + 6 / zoom}`} fill="#ffffff" stroke="#1683ff" strokeWidth={1 / zoom} pointerEvents="none" />}

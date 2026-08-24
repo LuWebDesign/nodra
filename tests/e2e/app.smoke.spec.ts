@@ -66,7 +66,7 @@ test("creates an open spline with Spline and exposes its anchors", async ({ page
   await expect(page.locator(".tool-cursor")).toHaveAttribute("title", "Cerrar trazado");
   await page.mouse.click(firstNode!.x + firstNode!.width / 2, firstNode!.y + firstNode!.height / 2);
   await expect(spline).toHaveAttribute("d", / Z$/);
-  await expect(page.locator('[data-spline-overlay-layer] path[fill="#e5e7eb"]')).toHaveAttribute("fill", "#e5e7eb");
+  await expect(page.locator('[data-spline-overlay-layer] path[fill="rgba(101,217,255,0.22)"]')).toHaveAttribute("fill", "rgba(101,217,255,0.22)");
   await expect(page.locator("[data-spline-handle]")).toHaveCount(0);
   await page.getByRole("button", { name: "Forma" }).click();
   const selectedNode = await nodes.nth(1).boundingBox();
@@ -203,12 +203,12 @@ test("closes a Pluma silhouette by clicking its first anchor and supports fill a
   await page.mouse.click(firstBounds!.x + firstBounds!.width / 2, firstBounds!.y + firstBounds!.height / 2);
   await expect(page.locator(".page-svg svg path[data-element-id]")).toHaveAttribute("d", / Z$/);
   await expect(page.getByRole("button", { name: "Reabrir trazado" })).toBeVisible();
-  await expect(page.getByText(/Relleno: #e5e7eb/)).toBeVisible();
+  await expect(page.getByText("Relleno: rgba(101,217,255,0.22)")).toBeVisible();
 
   await page.getByRole("button", { name: "Azul", exact: true }).click();
   await expect(page.locator(".page-svg svg path[data-element-id]")).toHaveAttribute("fill", "#3b82f6");
   await page.getByRole("button", { name: "Deshacer" }).click();
-  await expect(page.locator(".page-svg svg path[data-element-id]")).toHaveAttribute("fill", "#e5e7eb");
+  await expect(page.locator(".page-svg svg path[data-element-id]")).toHaveAttribute("fill", "rgba(101,217,255,0.22)");
   await page.getByRole("button", { name: "Rehacer" }).click();
   await expect(page.locator(".page-svg svg path[data-element-id]")).toHaveAttribute("fill", "#3b82f6");
 });
