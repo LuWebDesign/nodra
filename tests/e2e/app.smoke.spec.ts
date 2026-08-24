@@ -64,9 +64,13 @@ test("creates an open spline with Spline and exposes its anchors", async ({ page
   await spline.click({ force: true });
   const beforeDrag = await spline.getAttribute("d");
   const handle = page.locator("[data-spline-handle]").first();
-  const handleBounds = await handle.boundingBox();
-  expect(handleBounds).not.toBeNull();
-  await page.mouse.move(handleBounds!.x + handleBounds!.width / 2, handleBounds!.y + handleBounds!.height / 2);
+  const handleBounds = await handle.evaluate((element) => {
+    const bounds = element.getBoundingClientRect();
+    return { x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height };
+  });
+  expect(handleBounds.width).toBeGreaterThan(0);
+  expect(handleBounds.height).toBeGreaterThan(0);
+  await page.mouse.move(handleBounds.x + handleBounds.width / 2, handleBounds.y + handleBounds.height / 2);
   await page.mouse.down();
   await page.mouse.move(handleBounds!.x + 25, handleBounds!.y - 15);
   await page.mouse.up();
