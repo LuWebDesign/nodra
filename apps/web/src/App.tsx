@@ -827,7 +827,7 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
           const showHandles = editing && selectedNodeIndex >= 0 && (nodeIndex === selectedNodeIndex || nodeIndex === previousNodeIndex || nodeIndex === nextNodeIndex);
           const selected = selectedSplineNodeKey === `${spline.id}:${node.id}`;
           const controlColor = editing ? "#1683ff" : "#111827";
-              const nodeSize = editing ? 8 / zoom : 5 / zoom;
+              const nodeSize = 5 / zoom;
           const handle = (kind: "in" | "out", offset: { readonly dx: number; readonly dy: number }) => {
             const point = { x: node.anchor.x + offset.dx, y: node.anchor.y + offset.dy };
             return <g key={`${node.id}-${kind}`}><line x1={node.anchor.x} y1={node.anchor.y} x2={point.x} y2={point.y} stroke="#1683ff" strokeWidth={0.75 / zoom} strokeDasharray={`${3 / zoom} ${2 / zoom}`} /><rect role="button" aria-label={`Mover handle ${kind === "in" ? "entrante" : "saliente"} de spline`} data-spline-handle={`${spline.id}:${node.id}:${kind}`} x={point.x - 3 / zoom} y={point.y - 3 / zoom} width={6 / zoom} height={6 / zoom} fill="#ffffff" stroke="#1683ff" strokeWidth={1 / zoom} style={{ pointerEvents: "auto", cursor: "move" }} onPointerDown={(event) => beginSplineHandle(event, spline.id, node.id, kind)} onPointerMove={moveSplineHandle} onPointerUp={(event) => finishSplineHandle(event, false)} onPointerCancel={(event) => finishSplineHandle(event, true)} /></g>;
