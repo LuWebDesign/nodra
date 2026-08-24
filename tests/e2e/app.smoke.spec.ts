@@ -51,7 +51,7 @@ test("creates an open spline with Spline and exposes its anchors", async ({ page
   await page.mouse.click(x + 160, y);
   const spline = page.locator('.page-svg svg path[data-element-id]');
   await expect(spline).toHaveCount(1);
-  await expect(spline).toHaveAttribute("d", / C /);
+  await expect(spline).toHaveAttribute("d", /C/);
   const nodes = page.locator("[data-spline-node]");
   await expect(nodes).toHaveCount(3);
   await expect(page.locator("[data-spline-handle]")).toHaveCount(4);
