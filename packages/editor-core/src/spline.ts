@@ -73,6 +73,15 @@ export function splineToPathElement(spline: SplineElement): PathElement {
         }
       : { type: "line" as const, startNodeId: start.id, endNodeId: node.id };
   });
+  if (spline.closed) {
+    const start = spline.nodes.at(-1)!;
+    const end = spline.nodes[0]!;
+    const out = start.outHandle ? resolveHandle(start.anchor, start.outHandle) : start.anchor;
+    const incoming = end.inHandle ? resolveHandle(end.anchor, end.inHandle) : end.anchor;
+    segments.push(start.outHandle || end.inHandle
+      ? { type: "cubicBezier" as const, startNodeId: start.id, endNodeId: end.id, control1: out, control2: incoming }
+      : { type: "line" as const, startNodeId: start.id, endNodeId: end.id });
+  }
   return {
     type: "path",
     id: spline.id,

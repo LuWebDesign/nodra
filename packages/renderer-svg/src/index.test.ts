@@ -87,4 +87,17 @@ describe("SVG renderer boundary", () => {
     expect(result.success).toBe(true);
     if (result.success) expect(result.svg).toContain("M0 0 L10 0 C12 5 18 5 20 0");
   });
+  it("renders native splines through the canonical path pipeline", () => {
+    const source = withElements(createDocument("spline", [layer]), [{ type: "spline", id: elementId("spline"), layerId: layer.id, nodes: [{ id: "a", anchor: { x: 0, y: 0 }, continuity: "smooth", outHandle: { dx: 3, dy: 0 } }, { id: "b", anchor: { x: 10, y: 0 }, continuity: "smooth", inHandle: { dx: -3, dy: 0 } }, { id: "c", anchor: { x: 10, y: 10 }, continuity: "smooth" }], closed: true, style: { stroke: "#123456", fill: "#abcdef", strokeWidth: 2 } }]);
+    const result = renderSvg(source, { zoom: 1, panMm: { x: 0, y: 0 } });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.svg).toContain('data-element-id="spline"');
+      expect(result.svg).toContain("C3 0 7 0 10 0");
+      expect(result.svg).toContain("L10 10");
+      expect(result.svg).toContain("Z");
+      expect(result.svg).toContain('stroke="#123456"');
+      expect(result.svg).toContain('fill="#abcdef"');
+    }
+  });
 });

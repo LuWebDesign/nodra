@@ -1,5 +1,5 @@
 import polygonClipping, { type MultiPolygon } from "polygon-clipping";
-import type { ContourElement, Element, ElementId, EllipseElement, HandleOffset, LineElement, PathCubicSegment, PathElement, PointMm, RectangleElement, SizeMm, SplineNode } from "@nodra/domain";
+import type { ContourElement, Element, ElementId, EllipseElement, HandleOffset, LineElement, PathCubicSegment, PathElement, PointMm, RectangleElement, SizeMm, SplineElement, SplineNode } from "@nodra/domain";
 
 export interface Bounds { readonly x: number; readonly y: number; readonly width: number; readonly height: number }
 export interface Viewport { readonly zoom: number; readonly panMm: PointMm }
@@ -83,6 +83,17 @@ export function pathBounds(path: PathElement): Bounds {
   const x = Math.min(...bounds.map((item) => item.x)); const y = Math.min(...bounds.map((item) => item.y)); const right = Math.max(...bounds.map((item) => item.x + item.width)); const bottom = Math.max(...bounds.map((item) => item.y + item.height));
   return { x, y, width: right - x, height: bottom - y };
 }
+function splineBounds(spline: SplineElement): Bounds {
+  const points = spline.nodes.flatMap((node) => [node.anchor, ...(node.inHandle ? [resolveHandle(node.anchor, node.inHandle)] : []), ...(node.outHandle ? [resolveHandle(node.anchor, node.outHandle)] : [])]);
+  const xs = points.map((point) => point.x); const ys = points.map((point) => point.y);
+  return { x: Math.min(...xs), y: Math.min(...ys), width: Math.max(...xs) - Math.min(...xs), height: Math.max(...ys) - Math.min(...ys) };
+}
+function splinePoints(spline: SplineElement): PointMm[] {
+  const points: PointMm[] = [];
+  for (let index = 1; index < spline.nodes.length; index += 1) points.push(...flattenCubicBezier(splineCubicBezier(spline.nodes[index - 1]!, spline.nodes[index]!), 0.1).slice(points.length ? 1 : 0));
+  if (spline.closed) points.push(...flattenCubicBezier(splineCubicBezier(spline.nodes.at(-1)!, spline.nodes[0]!), 0.1).slice(1));
+  return points;
+}
 export function pathGeometryNodes(path: PathElement): readonly PathGeometryNode[] {
   const result: PathGeometryNode[] = path.nodes.map((node) => ({ kind: "anchor", nodeId: node.id, point: node.anchor }));
   path.segments.forEach((segment, index) => { if (segment.type === "cubicBezier") { result.push({ kind: "control", nodeId: segment.startNodeId, segmentIndex: index, handle: "control1", point: segment.control1 }, { kind: "control", nodeId: segment.endNodeId, segmentIndex: index, handle: "control2", point: segment.control2 }); } });
@@ -135,6 +146,7 @@ export function elementCenter(element: Element): PointMm {
     ? { x: (element.start.x + element.end.x) / 2, y: (element.start.y + element.end.y) / 2 }
     : element.type === "contour" ? groupCenter(contourBounds(element))
     : element.type === "path" ? groupCenter(pathBounds(element))
+    : element.type === "spline" ? groupCenter(splineBounds(element))
     : { x: element.position.x + element.size.width / 2, y: element.position.y + element.size.height / 2 };
 }
 
@@ -164,6 +176,7 @@ export function contourVertexNodes(element: ContourElement): readonly ContourVer
 export function elementToContour(element: Element): ContourElement {
   const contours = element.type === "line"
     ? [{ points: [element.start, element.end, element.start] }]
+    : element.type === "spline" ? [{ points: splinePoints(element) }]
     : contoursFromMultiPolygon(closedElementToPolygon(element));
   const points = contours.flatMap((ring) => ring.points);
   const xs = points.map((point) => point.x); const ys = points.map((point) => point.y);
@@ -245,6 +258,7 @@ function primitivePolygon(element: RectangleElement | EllipseElement): [number, 
 export function closedElementToPolygon(element: Element): MultiPolygon {
   if (element.type === "line") throw new Error("Shape operations require closed objects");
   if (element.type === "path") { if (!element.closed) throw new Error("Shape operations require closed objects"); return [[flattenPath(element).map((point) => [point.x, point.y] as [number, number])]]; }
+  if (element.type === "spline") { if (!element.closed) throw new Error("Shape operations require closed objects"); return [[splinePoints(element).map((point) => [point.x, point.y] as [number, number])]]; }
   if (element.type === "contour") return [element.contours.map((contour) => contour.points.map((point) => [point.x, point.y] as [number, number]))];
   return [[primitivePolygon(element)]];
 }
@@ -289,6 +303,10 @@ export function rotationHandlePoints(element: Element, offsetMm: number): readon
   }
   if (element.type === "path") {
     const bounds = pathBounds(element);
+    return rotationHandlePoints({ type: "rectangle", id: element.id, layerId: element.layerId, position: { x: bounds.x, y: bounds.y }, size: { width: Math.max(bounds.width, 1), height: Math.max(bounds.height, 1) }, cornerRadius: 0, rotation: 0, style: element.style }, offsetMm);
+  }
+  if (element.type === "spline") {
+    const bounds = splineBounds(element);
     return rotationHandlePoints({ type: "rectangle", id: element.id, layerId: element.layerId, position: { x: bounds.x, y: bounds.y }, size: { width: Math.max(bounds.width, 1), height: Math.max(bounds.height, 1) }, cornerRadius: 0, rotation: 0, style: element.style }, offsetMm);
   }
   return rotatedCorners(element).map((corner) => {
@@ -345,6 +363,7 @@ export function realGeometryNodes(element: Element): readonly RealGeometryNode[]
     return nodes;
   }
   if (element.type === "path") return pathGeometryNodes(element);
+  if (element.type === "spline") return element.nodes.flatMap((node) => [{ kind: "anchor" as const, nodeId: node.id, point: node.anchor }, ...(node.inHandle ? [{ kind: "control" as const, nodeId: node.id, point: resolveHandle(node.anchor, node.inHandle), handle: "control2" as const }] : []), ...(node.outHandle ? [{ kind: "control" as const, nodeId: node.id, point: resolveHandle(node.anchor, node.outHandle), handle: "control1" as const }] : [])]);
   const half = { x: element.size.width / 2, y: element.size.height / 2 };
   const center = { x: element.position.x + half.x, y: element.position.y + half.y };
   if (element.type === "rectangle") {
@@ -437,6 +456,7 @@ export function boundsOf(element: Element): Bounds {
   }
   if (element.type === "contour") return contourBounds(element);
   if (element.type === "path") return pathBounds(element);
+  if (element.type === "spline") return splineBounds(element);
   const points = corners(element); const xs = points.map((point) => point.x); const ys = points.map((point) => point.y);
   return { x: Math.min(...xs), y: Math.min(...ys), width: Math.max(...xs) - Math.min(...xs), height: Math.max(...ys) - Math.min(...ys) };
 }
@@ -469,11 +489,37 @@ export function resizeGroup(elements: readonly Element[], handle: ResizeHandle, 
     ? { ...e, start: { x: x + (e.start.x - bounds.x) * sx, y: y + (e.start.y - bounds.y) * sy }, end: { x: x + (e.end.x - bounds.x) * sx, y: y + (e.end.y - bounds.y) * sy } }
     : e.type === "contour"
       ? contourWithPoints(e, e.contours.map((contour) => contour.points.map((point) => ({ x: x + (point.x - bounds.x) * sx, y: y + (point.y - bounds.y) * sy }))))
-    : e.type === "path"
-      ? { ...e, nodes: e.nodes.map((node) => ({ ...node, anchor: { x: x + (node.anchor.x - bounds.x) * sx, y: y + (node.anchor.y - bounds.y) * sy } })), segments: e.segments.map((segment) => segment.type === "cubicBezier" ? { ...segment, control1: { x: x + (segment.control1.x - bounds.x) * sx, y: y + (segment.control1.y - bounds.y) * sy }, control2: { x: x + (segment.control2.x - bounds.x) * sx, y: y + (segment.control2.y - bounds.y) * sy } } : segment) }
-    : { ...e, position: { x: x + (elementCenter(e).x - bounds.x) * sx - e.size.width * sx / 2, y: y + (elementCenter(e).y - bounds.y) * sy - e.size.height * sy / 2 }, size: { width: e.size.width * sx, height: e.size.height * sy } });
+     : e.type === "path"
+       ? { ...e, nodes: e.nodes.map((node) => ({ ...node, anchor: { x: x + (node.anchor.x - bounds.x) * sx, y: y + (node.anchor.y - bounds.y) * sy } })), segments: e.segments.map((segment) => segment.type === "cubicBezier" ? { ...segment, control1: { x: x + (segment.control1.x - bounds.x) * sx, y: y + (segment.control1.y - bounds.y) * sy }, control2: { x: x + (segment.control2.x - bounds.x) * sx, y: y + (segment.control2.y - bounds.y) * sy } } : segment) }
+     : e.type === "spline"
+       ? { ...e, nodes: e.nodes.map((node) => ({ ...node, anchor: { x: x + (node.anchor.x - bounds.x) * sx, y: y + (node.anchor.y - bounds.y) * sy }, ...(node.inHandle ? { inHandle: { dx: node.inHandle.dx * sx, dy: node.inHandle.dy * sy } } : {}), ...(node.outHandle ? { outHandle: { dx: node.outHandle.dx * sx, dy: node.outHandle.dy * sy } } : {}) })) }
+     : { ...e, position: { x: x + (elementCenter(e).x - bounds.x) * sx - e.size.width * sx / 2, y: y + (elementCenter(e).y - bounds.y) * sy - e.size.height * sy / 2 }, size: { width: e.size.width * sx, height: e.size.height * sy } });
 }
-export function rotateElements(elements: readonly Element[], center: PointMm, delta: number): readonly Element[] { const rotatePoint = (p: PointMm) => transformPoint({ x: p.x - center.x, y: p.y - center.y }, center, delta); return elements.map((e) => e.type === "line" ? { ...e, start: rotatePoint(e.start), end: rotatePoint(e.end) } : e.type === "contour" ? contourWithPoints(e, e.contours.map((contour) => contour.points.map(rotatePoint))) : e.type === "path" ? { ...e, nodes: e.nodes.map((node) => ({ ...node, anchor: rotatePoint(node.anchor) })), segments: e.segments.map((segment) => segment.type === "cubicBezier" ? { ...segment, control1: rotatePoint(segment.control1), control2: rotatePoint(segment.control2) } : segment) } : (() => { const c = rotatePoint(elementCenter(e)); return { ...e, position: { x: c.x - e.size.width / 2, y: c.y - e.size.height / 2 }, rotation: normalizeAngle(e.rotation + delta) }; })()); }
+export function rotateElements(elements: readonly Element[], center: PointMm, delta: number): readonly Element[] {
+  const rotatePoint = (point: PointMm): PointMm => transformPoint({ x: point.x - center.x, y: point.y - center.y }, center, delta);
+  const rotateOffset = (offset: HandleOffset): HandleOffset => {
+    const rotated = rotate({ x: offset.dx, y: offset.dy }, delta);
+    return { dx: rotated.x, dy: rotated.y };
+  };
+  const rotateSplineNode = (node: SplineNode): SplineNode => ({
+    ...node,
+    anchor: rotatePoint(node.anchor),
+    ...(node.inHandle ? { inHandle: rotateOffset(node.inHandle) } : {}),
+    ...(node.outHandle ? { outHandle: rotateOffset(node.outHandle) } : {}),
+  });
+  return elements.map((element) => element.type === "line"
+    ? { ...element, start: rotatePoint(element.start), end: rotatePoint(element.end) }
+    : element.type === "contour"
+      ? contourWithPoints(element, element.contours.map((contour) => contour.points.map(rotatePoint)))
+      : element.type === "path"
+        ? { ...element, nodes: element.nodes.map((node) => ({ ...node, anchor: rotatePoint(node.anchor) })), segments: element.segments.map((segment) => segment.type === "cubicBezier" ? { ...segment, control1: rotatePoint(segment.control1), control2: rotatePoint(segment.control2) } : segment) }
+        : element.type === "spline"
+          ? { ...element, nodes: element.nodes.map(rotateSplineNode) }
+          : (() => {
+            const c = rotatePoint(elementCenter(element));
+            return { ...element, position: { x: c.x - element.size.width / 2, y: c.y - element.size.height / 2 }, rotation: normalizeAngle(element.rotation + delta) };
+          })());
+}
 
 const lineDistanceToSegment = (point: PointMm, start: PointMm, end: PointMm): number => {
   const dx = end.x - start.x; const dy = end.y - start.y; const lengthSquared = dx * dx + dy * dy;
@@ -492,6 +538,7 @@ export function hitTest(element: Element, point: PointMm, toleranceMm = 0): bool
     return element.contours.reduce((inside, contour) => inside !== pointInRing(point, contour.points.map((value) => [value.x, value.y] as [number, number])), false);
   }
   if (element.type === "path") return pathHitTest(element, point, toleranceMm);
+  if (element.type === "spline") return splinePoints(element).some((value, index, points) => index > 0 && contourSegmentDistance(point, points[index - 1]!, value) <= toleranceMm);
   const center = { x: element.position.x + element.size.width / 2, y: element.position.y + element.size.height / 2 };
   const local = rotate({ x: point.x - center.x, y: point.y - center.y }, -element.rotation);
   if (element.type === "rectangle") return Math.abs(local.x) <= element.size.width / 2 + toleranceMm && Math.abs(local.y) <= element.size.height / 2 + toleranceMm;

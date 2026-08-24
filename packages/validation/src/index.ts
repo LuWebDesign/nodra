@@ -38,8 +38,11 @@ const path = z.object({ id: nonEmptyId, layerId: nonEmptyId, type: z.literal("pa
   });
 });
 export const splineNodeSchema = z.object({ id: nonEmptyId, anchor: point, continuity: z.enum(["corner", "smooth", "symmetric"]), inHandle: z.object({ dx: finite, dy: finite }).strict().optional(), outHandle: z.object({ dx: finite, dy: finite }).strict().optional() }).strict();
-export const splineElementSchema = z.object({ id: nonEmptyId, layerId: nonEmptyId, type: z.literal("spline"), nodes: z.array(splineNodeSchema).min(2), closed: z.boolean(), style, operation: operation.optional() }).strict();
-export const elementSchema = z.discriminatedUnion("type", [rectangle, ellipse, line, contour, path]);
+export const splineElementSchema = z.object({ id: nonEmptyId, layerId: nonEmptyId, type: z.literal("spline"), nodes: z.array(splineNodeSchema).min(2), closed: z.boolean(), style, operation: operation.optional() }).strict().superRefine((value, ctx) => {
+  const nodeIds = value.nodes.map((node) => node.id);
+  if (new Set(nodeIds).size !== nodeIds.length) ctx.addIssue({ code: "custom", message: "Spline node IDs must be unique", path: ["nodes"] });
+});
+export const elementSchema = z.discriminatedUnion("type", [rectangle, ellipse, line, contour, path, splineElementSchema]);
 export const layerSchema = z.object({ id: nonEmptyId, name: z.string().min(1), visible: z.boolean(), order: finite.int().nonnegative() }).strict();
 const documentFields = { id: nonEmptyId, revision: finite.int().nonnegative(), origin: z.literal("top-left"), units: z.literal("mm"), page: size, layers: z.array(layerSchema), elements: z.array(elementSchema) };
 export const documentSchema = z.object({ schemaVersion: z.literal(CURRENT_SCHEMA_VERSION), ...documentFields, capabilities: z.object({ spline: z.literal(1).optional() }).strict().optional() }).strict().superRefine((value, ctx) => {

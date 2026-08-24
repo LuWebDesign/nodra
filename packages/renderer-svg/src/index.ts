@@ -61,10 +61,36 @@ function renderElement(element: Element, viewport: Viewport): string {
     return `<path data-element-id="${escapeAttribute(element.id)}" d="${escapeAttribute(path)}" fill-rule="${element.fillRule}" ${visualAttributes(element)} />`;
   }
   if (element.type === "path") return renderPath(element, viewport);
+  if (element.type === "spline") return renderPath(splineToPathElement(element), viewport);
   const start = screen(element.start);
   const end = screen(element.end);
   const center = { x: (start.x + end.x) / 2, y: (start.y + end.y) / 2 };
   return `<line data-element-id="${escapeAttribute(element.id)}" x1="${number(start.x)}" y1="${number(start.y)}" x2="${number(end.x)}" y2="${number(end.y)}" transform="${transform(element, center.x, center.y)}" ${visualAttributes(element)} />`;
+}
+
+/** Convert the native spline model to the canonical path renderer boundary. */
+function splineToPathElement(element: SplineElement): PathElement {
+  const segmentFor = (startIndex: number, endIndex: number) => {
+    const start = element.nodes[startIndex]!;
+    const end = element.nodes[endIndex]!;
+    const control1 = start.outHandle ? { x: start.anchor.x + start.outHandle.dx, y: start.anchor.y + start.outHandle.dy } : start.anchor;
+    const control2 = end.inHandle ? { x: end.anchor.x + end.inHandle.dx, y: end.anchor.y + end.inHandle.dy } : end.anchor;
+    return start.outHandle || end.inHandle
+      ? { type: "cubicBezier" as const, startNodeId: start.id, endNodeId: end.id, control1, control2 }
+      : { type: "line" as const, startNodeId: start.id, endNodeId: end.id };
+  };
+  const segments = element.nodes.slice(1).map((_, index) => segmentFor(index, index + 1));
+  if (element.closed) segments.push(segmentFor(element.nodes.length - 1, 0));
+  return {
+    type: "path",
+    id: element.id,
+    layerId: element.layerId,
+    nodes: element.nodes.map((node) => ({ id: node.id, anchor: node.anchor, join: node.continuity })),
+    segments,
+    closed: element.closed,
+    style: element.style,
+    ...(element.operation ? { operation: element.operation } : {}),
+  };
 }
 
 function renderPath(element: PathElement, viewport: Viewport): string {
@@ -85,7 +111,7 @@ export function renderSvg(document: unknown, viewport: unknown): RenderResult {
   const checked = validateDocument(document);
   if (!checked.success) {
     const candidate = typeof document === "object" && document !== null ? document as { schemaVersion?: unknown; elements?: unknown } : undefined;
-    const unsupported = !SUPPORTED_SCHEMA_VERSIONS.has(candidate?.schemaVersion as number) || (Array.isArray(candidate?.elements) && candidate.elements.some((element) => typeof element === "object" && element !== null && !["rectangle", "ellipse", "line", "contour", "path"].includes((element as { type?: unknown }).type as string)));
+    const unsupported = !SUPPORTED_SCHEMA_VERSIONS.has(candidate?.schemaVersion as number) || (Array.isArray(candidate?.elements) && candidate.elements.some((element) => typeof element === "object" && element !== null && !["rectangle", "ellipse", "line", "contour", "path", "spline"].includes((element as { type?: unknown }).type as string)));
     return { success: false, reason: unsupported ? "unsupported" : "invalid", error: checked.error.slice(0, 512), issues: checked.issues.slice(0, MAX_ISSUES).map((issue) => `${issue.path.join(".") || "document"}: ${issue.message}`) };
   }
   const checkedViewport = viewportResult(viewport);
@@ -99,5 +125,5 @@ export function renderSvg(document: unknown, viewport: unknown): RenderResult {
   return { success: true, svg: `<svg xmlns="http://www.w3.org/2000/svg" data-units="mm" width="${number(checked.data.page.width)}" height="${number(checked.data.page.height)}" viewBox="0 0 ${number(checked.data.page.width)} ${number(checked.data.page.height)}"><g>${contents}</g></svg>`, renderedElementIds: elements.map((element) => element.id) };
 }
 
-export function renderSplineSvg(element: SplineElement, viewport: Viewport): string { const screen = (point: { x: number; y: number }) => mmToScreen(point, viewport); const first = element.nodes[0]; if (!first) throw new Error("Spline must contain at least one node"); let path = `M${number(screen(first.anchor).x)} ${number(screen(first.anchor).y)}`; for (let index = 1; index < element.nodes.length; index += 1) { const start = element.nodes[index - 1]!; const end = element.nodes[index]!; const out = start.outHandle ? { x: start.anchor.x + start.outHandle.dx, y: start.anchor.y + start.outHandle.dy } : start.anchor; const incoming = end.inHandle ? { x: end.anchor.x + end.inHandle.dx, y: end.anchor.y + end.inHandle.dy } : end.anchor; const a = screen(out); const c = screen(incoming); const d = screen(end.anchor); path += ` C${number(a.x)} ${number(a.y)} ${number(c.x)} ${number(c.y)} ${number(d.x)} ${number(d.y)}`; } if (element.closed) path += " Z"; const fill = element.style.fill === undefined ? "none" : escapeAttribute(element.style.fill); return `<path data-element-id="${escapeAttribute(element.id)}" d="${escapeAttribute(path)}" stroke="${escapeAttribute(element.style.stroke)}" stroke-width="${number(element.style.strokeWidth)}" fill="${fill}" />`; }
+export function renderSplineSvg(element: SplineElement, viewport: Viewport): string { return renderPath(splineToPathElement(element), viewport); }
 export const svgRenderer: SvgRenderer = { render: renderSvg };

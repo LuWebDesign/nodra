@@ -11,6 +11,11 @@ describe("domain contracts", () => {
     expect(next.revision).toBe(revision(1));
     expect(next.elements).toEqual([element]);
   });
+  it("accepts spline elements as native document elements", () => {
+    const layer = { id: layerId("design"), name: "Design", visible: true, order: 0 } as const;
+    const spline = { type: "spline" as const, id: elementId("spline-1"), layerId: layer.id, nodes: [{ id: "a", anchor: { x: 0, y: 0 }, continuity: "smooth" as const }, { id: "b", anchor: { x: 10, y: 0 }, continuity: "smooth" as const }], closed: false, style: { stroke: "#000", strokeWidth: 0.2 } };
+    expect(withElements(createDocument("doc-1", [layer]), [spline]).elements).toEqual([spline]);
+  });
   it("switches active pages by stable id without using dimensions as identity", () => {
     const first = createDocument("doc-1");
     const project = createProject(first);

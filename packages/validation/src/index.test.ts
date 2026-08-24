@@ -50,4 +50,10 @@ describe("native document validation", () => {
     expect(validateDocument({ ...base, elements: [path] }).success).toBe(true);
     expect(validateDocument({ ...base, elements: [{ ...path, closed: true }] }).success).toBe(false);
   });
+  it("validates native splines and rejects duplicate node IDs", () => {
+    const base = createDocument("doc-1", [{ id: layerId("layer-1"), name: "Design", visible: true, order: 0 }]);
+    const spline = { type: "spline" as const, id: "spline", layerId: "layer-1", nodes: [{ id: "a", anchor: { x: 0, y: 0 }, continuity: "smooth" as const, outHandle: { dx: 4, dy: 0 } }, { id: "b", anchor: { x: 10, y: 0 }, continuity: "smooth" as const, inHandle: { dx: -4, dy: 0 } }], closed: false, style: { stroke: "#000", fill: "#fff", strokeWidth: 1 } };
+    expect(validateDocument({ ...base, elements: [spline] }).success).toBe(true);
+    expect(validateDocument({ ...base, elements: [{ ...spline, nodes: [spline.nodes[0]!, { ...spline.nodes[1]!, id: "a" }] }] }).success).toBe(false);
+  });
 });
