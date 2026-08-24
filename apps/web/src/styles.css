@@ -87,3 +87,8 @@
  .status-palette .palette { flex-wrap:nowrap; gap:5px; margin:0; }
  .status-palette .swatch { width:18px; height:18px; }
  .status-palette .swatch.no-fill { font-size:13px; line-height:16px; }
+
+/* Unedited document geometry uses a neutral black contour; editing overlays provide the active colors. */
+.page-svg svg [data-element-id] { stroke: #111827; }
+.tool-cursor.close-cursor { color: #0f766e; font-weight: 800; font-size: 22px; }
+.canvas.close-target-active [data-spline-close-target="true"] { filter: drop-shadow(0 0 2px #14b8a6); }
