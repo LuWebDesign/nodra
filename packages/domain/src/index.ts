@@ -122,7 +122,7 @@ export type SplineContinuity = PathJoin;
 export interface HandleOffset { readonly dx: number; readonly dy: number }
 export interface SplineNode { readonly id: string; readonly anchor: PointMm; readonly continuity: SplineContinuity; readonly inHandle?: HandleOffset; readonly outHandle?: HandleOffset }
 export interface SplineElement { readonly type: "spline"; readonly id: ElementId; readonly layerId: LayerId; readonly nodes: readonly SplineNode[]; readonly closed: boolean; readonly style: VisualStyle; readonly operation?: OperationMetadata }
-export type Element = RectangleElement | EllipseElement | LineElement | ContourElement | PathElement;
+export type Element = RectangleElement | EllipseElement | LineElement | ContourElement | PathElement | SplineElement;
 export interface DocumentCapabilities { readonly spline?: 1 }
 export interface DocumentSnapshot {
   readonly schemaVersion: SchemaVersion;

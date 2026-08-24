@@ -362,6 +362,7 @@ const translateElement = (element: Element, delta: PointMm, id: ElementId): Elem
   if (element.type === "line") return { ...element, id, start: { x: element.start.x + delta.x, y: element.start.y + delta.y }, end: { x: element.end.x + delta.x, y: element.end.y + delta.y } };
   if (element.type === "contour") return { ...contourWithPoints(element, element.contours.map((contour) => contour.points.map((point) => ({ x: point.x + delta.x, y: point.y + delta.y })))), id, rotation: element.rotation };
   if (element.type === "path") return { ...translatePath(element, delta), id };
+  if (element.type === "spline") return { ...element, id, nodes: element.nodes.map((node) => ({ ...node, anchor: { x: node.anchor.x + delta.x, y: node.anchor.y + delta.y } })) };
   return { ...element, id, position: { x: element.position.x + delta.x, y: element.position.y + delta.y } };
 };
 
@@ -402,6 +403,7 @@ export const flipElements = (ids: readonly ElementId[], axis: FlipAxis): EditorC
         const reflect = (point: PointMm): PointMm => horizontal ? { x: center.x * 2 - point.x, y: point.y } : { x: point.x, y: center.y * 2 - point.y };
         return { ...element, nodes: element.nodes.map((node) => ({ ...node, anchor: reflect(node.anchor) })), segments: element.segments.map((segment) => segment.type === "cubicBezier" ? { ...segment, control1: reflect(segment.control1), control2: reflect(segment.control2) } : segment) };
       }
+      if (element.type === "spline") return { ...element, nodes: element.nodes.map((node) => ({ ...node, anchor: horizontal ? { x: center.x * 2 - node.anchor.x, y: node.anchor.y } : { x: node.anchor.x, y: center.y * 2 - node.anchor.y }, ...(node.inHandle ? { inHandle: horizontal ? { dx: -node.inHandle.dx, dy: node.inHandle.dy } : { dx: node.inHandle.dx, dy: -node.inHandle.dy } } : {}), ...(node.outHandle ? { outHandle: horizontal ? { dx: -node.outHandle.dx, dy: node.outHandle.dy } : { dx: node.outHandle.dx, dy: -node.outHandle.dy } } : {}) })) };
       const moved = element.type === "line"
         ? { ...element, start: { x: element.start.x + delta.x, y: element.start.y + delta.y }, end: { x: element.end.x + delta.x, y: element.end.y + delta.y } }
         : { ...element, position: { x: element.position.x + delta.x, y: element.position.y + delta.y } };

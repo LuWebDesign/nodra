@@ -11,7 +11,7 @@ import { pathJoinGuidance, pathJoinOptions } from "./pathJoins.js";
 
 const defaultStyle = { stroke: "#000000", strokeWidth: 0.7 };
 const isPropertyElement = (element: Element): element is PropertyElement => element.type === "rectangle" || element.type === "ellipse";
-const isRotatableElement = (element: Element): element is RotatableElement => element.type !== "path";
+const isRotatableElement = (element: Element): element is RotatableElement => element.type !== "path" && element.type !== "spline";
 const palette = [
   { name: "Negro", color: "#111827" }, { name: "Rojo", color: "#ef4444" }, { name: "Naranja", color: "#f59e0b" },
   { name: "Verde", color: "#22c55e" }, { name: "Azul", color: "#3b82f6" }, { name: "Violeta", color: "#a855f7" },
