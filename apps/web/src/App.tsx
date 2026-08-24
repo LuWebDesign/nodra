@@ -659,7 +659,6 @@ export function App() {
         setEditorState(next);
       }
       if (event.metaKey || event.ctrlKey) {
-        const wantsRedo = event.key === "y" || (event.key === "z" && event.shiftKey);
         if (event.key === "z") setEditorState(event.shiftKey ? redo(editorRef.current) : undo(editorRef.current));
         if (event.key === "y") setEditorState(redo(editorRef.current));
       }
