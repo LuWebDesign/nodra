@@ -63,7 +63,7 @@ test("creates an open spline with Spline and exposes its anchors", async ({ page
   expect(firstNode).not.toBeNull();
   await page.mouse.click(firstNode!.x + firstNode!.width / 2, firstNode!.y + firstNode!.height / 2);
   await expect(spline).toHaveAttribute("d", / Z$/);
-  await expect(page.locator('[data-spline-overlay-layer] path')).toHaveAttribute("fill", "rgba(107,114,128,0.25)");
+  await expect(page.locator('[data-spline-overlay-layer] path[fill="rgba(107,114,128,0.25)"]')).toHaveAttribute("fill", "rgba(107,114,128,0.25)");
   await expect(page.locator("[data-spline-handle]")).toHaveCount(2);
   await page.getByRole("button", { name: "Forma" }).click();
   const selectedNode = await nodes.nth(1).boundingBox();
@@ -91,7 +91,34 @@ test("creates an open spline with Spline and exposes its anchors", async ({ page
   await expect(page.locator('.page-svg svg path[data-element-id]')).toHaveCount(1);
 });
 
-test("double-clicking empty canvas clears native Spline node selection", async ({ page }) => {
+test("selects and moves a Spline object like Pluma", async ({ page }) => {
+      await page.goto("/");
+      const pageBounds = await page.locator(".page").boundingBox();
+      expect(pageBounds).not.toBeNull();
+      await page.getByRole("button", { name: "Spline" }).click();
+      await page.mouse.click(pageBounds!.x + 100, pageBounds!.y + 100);
+      await page.mouse.click(pageBounds!.x + 180, pageBounds!.y + 140);
+      await page.mouse.click(pageBounds!.x + 260, pageBounds!.y + 100);
+      await page.getByRole("button", { name: "Seleccion" }).click();
+      const hit = page.locator("[data-spline-hit]");
+      await expect(hit).toHaveCount(1);
+      const before = await page.locator(".page-svg svg path[data-element-id]").getAttribute("d");
+      const hitPoint = await hit.evaluate((element) => {
+        const path = element as SVGPathElement;
+        const point = path.getPointAtLength(path.getTotalLength() * 0.35);
+        const svg = path.ownerSVGElement!.getBoundingClientRect();
+        const viewBox = path.ownerSVGElement!.viewBox.baseVal;
+        return { x: svg.x + point.x / viewBox.width * svg.width, y: svg.y + point.y / viewBox.height * svg.height };
+      });
+      await page.mouse.move(hitPoint.x, hitPoint.y);
+      await page.mouse.down();
+      await page.mouse.move(hitPoint.x + 35, hitPoint.y + 20);
+      await page.mouse.up();
+      await expect(page.locator(".page-svg svg path[data-element-id]")).not.toHaveAttribute("d", before!);
+      await expect(page.locator("[data-spline-handle]")).toHaveCount(4);
+    });
+
+    test("double-clicking empty canvas clears native Spline node selection", async ({ page }) => {
   await page.goto("/");
   const pageBounds = await page.locator(".page").boundingBox();
   expect(pageBounds).not.toBeNull();
