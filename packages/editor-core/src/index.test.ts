@@ -1,13 +1,43 @@
 import { describe, expect, it } from "vitest";
-import { createDocument, elementId, layerId, type PathElement, type RectangleElement } from "@nodra/domain";
-import { addToSelection, beginGesture, cancelGesture, clearSelection, closePath, commitGesture, createEditor, createElement, createPathCubicNode, deleteContourNodes, deleteElementNodes, deletePathNodes, dispatch, duplicateElements, flipElements, insertContourNode, moveElement, moveElements, movePathNode, movePathHandle, openPath, previewGesture, previewGestureFromBase, redo, removeFromSelection, reorderLayer, resizeElement, resizeElements, rotateElementsAroundCenter, select, selectForPointerDown, setLayerVisibility, setPathJoin, shapeOperation, splitPathSegment, toggleSelection, undo, updateContourNode, updateElement, updateElementNode, updateElementStyles } from "./index.js";
+import { createDocument, elementId, layerId, type PathElement, type RectangleElement, type SplineElement } from "@nodra/domain";
+import { addToSelection, appendSplineNode, beginGesture, cancelGesture, clearSelection, closePath, closeSplineElement, commitGesture, createEditor, createElement, createPathCubicNode, deleteContourNodes, deleteElement, deleteElementNodes, deletePathNodes, dispatch, duplicateElements, flipElements, insertContourNode, moveElement, moveElements, movePathNode, movePathHandle, openPath, previewGesture, previewGestureFromBase, redo, removeFromSelection, reorderLayer, resizeElement, resizeElements, rotateElementsAroundCenter, select, selectForPointerDown, setLayerVisibility, setPathJoin, shapeOperation, splitPathSegment, toggleSelection, undo, updateContourNode, updateElement, updateElementNode, updateElementStyles, updateSplineHandle, updateSplineNode } from "./index.js";
 import type { Direction } from "@nodra/geometry";
 
 const rectangle: RectangleElement = { type: "rectangle", id: elementId("r1"), layerId: layerId("default"), position: { x: 1, y: 2 }, size: { width: 10, height: 5 }, cornerRadius: 0, rotation: 0, style: { stroke: "#000", strokeWidth: 1 } };
 const document = createDocument("doc", [{ id: layerId("default"), name: "Default", visible: true, order: 0 }]);
 const path: PathElement = { type: "path", id: elementId("path"), layerId: layerId("default"), nodes: [{ id: "a", anchor: { x: 0, y: 0 }, join: "corner" }, { id: "b", anchor: { x: 10, y: 0 }, join: "corner" }], segments: [{ type: "cubicBezier", startNodeId: "a", endNodeId: "b", control1: { x: 2, y: 4 }, control2: { x: 8, y: 4 } }], closed: false, style: rectangle.style };
+const spline: SplineElement = { type: "spline", id: elementId("spline"), layerId: layerId("default"), nodes: [{ id: "a", anchor: { x: 0, y: 0 }, continuity: "smooth" }, { id: "b", anchor: { x: 10, y: 0 }, continuity: "smooth" }, { id: "c", anchor: { x: 10, y: 10 }, continuity: "smooth" }], closed: false, style: rectangle.style };
 
 describe("editor core", () => {
+  it("creates, edits, closes, styles, deletes, and restores native splines through document history", () => {
+    let state = dispatch(createEditor(document), createElement(spline));
+    state = dispatch(state, appendSplineNode(spline.id, { id: "d", anchor: { x: 0, y: 10 }, continuity: "smooth" }));
+    state = dispatch(state, updateSplineNode(spline.id, "a", { x: 1, y: 2 }));
+    state = dispatch(state, updateSplineHandle(spline.id, "a", "out", { x: 4, y: 2 }));
+    state = dispatch(state, closeSplineElement(spline.id));
+    state = dispatch(state, updateElementStyles([spline.id], { stroke: "#f00" }));
+    expect(state.document.elements[0]).toMatchObject({ type: "spline", closed: true, style: { stroke: "#f00" } });
+    state = dispatch(state, deleteElement(spline.id));
+    expect(state.document.elements).toHaveLength(0);
+    expect(redo(undo(state)).document.elements).toHaveLength(0);
+    expect(undo(state).document.elements[0]).toMatchObject({ type: "spline", closed: true });
+  });
+
+  it("rejects invalid spline commands without history entries", () => {
+    const initial = createEditor({ ...document, elements: [spline] });
+    const state = dispatch(initial, closeSplineElement(elementId("missing")));
+    expect(state).toBe(initial);
+    expect(dispatch(state, updateSplineNode(spline.id, "missing", { x: 1, y: 1 }))).toBe(state);
+  });
+
+  it("previews spline handle movement and commits or cancels it as one gesture", () => {
+    const initial = dispatch(createEditor({ ...document, elements: [spline] }), createElement(spline));
+    const preview = previewGestureFromBase(beginGesture(initial), updateSplineHandle(spline.id, "a", "out", { x: 4, y: 3 }));
+    expect(preview.gesture).toBeDefined();
+    expect(preview.document.elements[0]).toMatchObject({ nodes: [{ outHandle: { dx: 4, dy: 3, } }] });
+    expect(commitGesture(preview).undo).toHaveLength(initial.undo.length + 1);
+    expect(cancelGesture(preview)).toMatchObject({ document: initial.document, gesture: undefined });
+  });
   it("deletes contour nodes through validation and keeps a ring valid", () => {
     const contour = { type: "contour" as const, id: elementId("delete-contour-node"), layerId: rectangle.layerId, position: { x: 1, y: 2 }, size: { width: 10, height: 5 }, contours: [{ points: [{ x: 1, y: 2 }, { x: 11, y: 2 }, { x: 11, y: 7 }, { x: 1, y: 7 }, { x: 1, y: 2 }] }], fillRule: "evenodd" as const, rotation: 0, style: rectangle.style };
     const state = dispatch(createEditor({ ...document, elements: [contour] }), deleteContourNodes(contour.id, [{ ringIndex: 0, pointIndex: 1 }]));

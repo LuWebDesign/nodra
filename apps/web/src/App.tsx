@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent, type PointerEvent, type ReactNode, type WheelEvent } from "react";
 import { createProject, elementId, layerId, pageId, revision, type DocumentSnapshot, type Element, type ElementId, type PointMm, type ProjectSnapshot, type SplineElement } from "@nodra/domain";
-import { addToSelection, beginGesture, cancelGesture, clearSelection, closePath, commitGesture, createElement, createPathCubicNode, createPathNode, deleteContourNodes, deleteElement, deleteElementNodes, deletePathNodes, dispatch, duplicateElements, flipElements, insertFormaNode, moveElements, movePathHandle, movePathNode, openPath, previewGesture, previewGestureFromBase, redo, resizeElement, resizeElements, rotateElement, rotateElementsAroundCenter, select, selectForPointerDown, setPathJoin, shapeOperation, splitPathSegment, undo, updateContourNode, updateElement, updateElementNode, updateElementStyles, updatePage, type FlipAxis, type ShapeOperation } from "@nodra/editor-core";
+import { addToSelection, appendSplineNode, beginGesture, cancelGesture, clearSelection, closePath, closeSplineElement, commitGesture, createElement, createPathCubicNode, createPathNode, deleteContourNodes, deleteElement, deleteElementNodes, deletePathNodes, dispatch, duplicateElements, flipElements, insertFormaNode, moveElements, movePathHandle, movePathNode, openPath, previewGesture, previewGestureFromBase, redo, resizeElement, resizeElements, rotateElement, rotateElementsAroundCenter, select, selectForPointerDown, setPathJoin, shapeOperation, splitPathSegment, undo, updateContourNode, updateElement, updateElementNode, updateElementStyles, updatePage, updateSplineHandle, type FlipAxis, type ShapeOperation } from "@nodra/editor-core";
 import { boundsOfElements, contourVertexNodes, elementCenter, groupCenter, groupHandlePoints, pathGeometryNodes, realGeometryNodes, resizeHandle, rotatedResizeHandles, rotationFromDrag, rotationHandlePoints, type Direction, type GroupHandle, type ResizeHandle } from "@nodra/geometry";
 import { DebouncedAutosave, DexieProjectRepository, requestStoragePersistence } from "@nodra/persistence";
 import { renderSvg } from "@nodra/renderer-svg";
@@ -29,7 +29,7 @@ type ActiveInteraction = {
   pointerId: number;
   lastX: number;
   lastY: number;
-  kind: "move" | "pan" | "draw" | "resize" | "rotate" | "marquee" | "contour-node" | "path-node" | "pen-place";
+  kind: "move" | "pan" | "draw" | "resize" | "rotate" | "marquee" | "contour-node" | "path-node" | "spline-handle" | "pen-place";
   ids?: readonly ElementId[];
   dragged: boolean;
   start?: PointMm;
@@ -47,6 +47,9 @@ type ActiveInteraction = {
   contourNode?: ContourNodeHit;
   pathNode?: PathNodeHit;
   pathId?: ElementId;
+  splineId?: ElementId;
+  splineNodeId?: string;
+  splineHandle?: "in" | "out";
 };
 
 type FormaNodeOverlay =
@@ -80,12 +83,7 @@ export function App() {
   const [transformDirection, setTransformDirection] = useState<Direction>("center");
   const [directionTooltipVisible, setDirectionTooltipVisible] = useState(false);
   const [penDraftPoint, setPenDraftPoint] = useState<PointMm>();
-  const [splines, setSplines] = useState<readonly SplineElement[]>([]);
   const [activeSplineId, setActiveSplineId] = useState<ElementId>();
-  const [selectedSplineId, setSelectedSplineId] = useState<ElementId>();
-  const splineUndoStack = useRef<readonly (readonly SplineElement[])[]>([]);
-  const splineRedoStack = useRef<readonly (readonly SplineElement[])[]>([]);
-  const splinesRef = useRef<readonly SplineElement[]>([]);
   const repository = useMemo(() => new DexieProjectRepository(), []);
   const autosave = useMemo(() => new DebouncedAutosave(repository), [repository]);
   const canvas = useRef<HTMLDivElement>(null);
@@ -96,7 +94,6 @@ export function App() {
   const recoveredNotice = useRef(false);
   const directionTooltipTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   editorRef.current = editor;
-  splinesRef.current = splines;
 
   useEffect(() => () => {
     if (directionTooltipTimer.current) clearTimeout(directionTooltipTimer.current);
@@ -158,6 +155,10 @@ export function App() {
     : selectedElement && isPropertyElement(selectedElement) ? selectedElement : undefined;
   const selectionKey = selection.join(":");
   useEffect(() => { setTransformMode("resize"); }, [tool, project.activePageId, selectionKey]);
+  useEffect(() => {
+    setActiveSplineId(undefined);
+    if (tool !== "select" && editorRef.current.selection.some((id) => editorRef.current.document.elements.some((element) => element.id === id && element.type === "spline"))) setEditorState(clearSelection(editorRef.current));
+  }, [tool]);
   useEffect(() => { setSelectedPathSegment(undefined); setSelectedFormaNodeKeys([]); }, [tool, project.activePageId]);
 
   useEffect(() => {
@@ -300,71 +301,48 @@ export function App() {
   };
 
   const addSplinePoint = (point: PointMm) => {
-    setSplines((current) => {
-      const active = current.find((spline) => spline.id === activeSplineId);
-      if (!active) {
-        const spline: SplineElement = { type: "spline", id: id(), layerId: layerId(document.layers[0]?.id ?? "layer-1"), nodes: [{ id: `spline-node-${crypto.randomUUID()}`, anchor: point, continuity: "smooth" }], closed: false, style: { ...defaultStyle, stroke: "#7c3aed" } };
-        splineUndoStack.current = [...splineUndoStack.current, current];
-        splineRedoStack.current = [];
-        setActiveSplineId(spline.id);
-        setSelectedSplineId(spline.id);
-        return [...current, spline];
-      }
-      splineUndoStack.current = [...splineUndoStack.current, current];
-      splineRedoStack.current = [];
-      const appended = [...active.nodes, { id: `spline-node-${crypto.randomUUID()}`, anchor: point, continuity: "smooth" as const }];
-      const nodes = appended.map((node, index) => {
-        const previous = appended[index - 1]?.anchor ?? node.anchor;
-        const next = appended[index + 1]?.anchor ?? node.anchor;
-        const tangent = { dx: (next.x - previous.x) / 6, dy: (next.y - previous.y) / 6 };
-        return { ...node, ...(index > 0 ? { inHandle: { dx: -tangent.dx, dy: -tangent.dy } } : {}), ...(index < appended.length - 1 ? { outHandle: tangent } : {}) };
-      });
-      const updated: SplineElement = { ...active, nodes };
-      return current.map((spline) => spline.id === updated.id ? updated : spline);
-    });
-  };
-
-  const splinePathData = (spline: SplineElement): string => {
-    const first = spline.nodes[0];
-    if (!first) return "";
-    let path = `M ${first.anchor.x} ${first.anchor.y}`;
-    for (let index = 1; index < spline.nodes.length; index += 1) {
-      const start = spline.nodes[index - 1]!;
-      const end = spline.nodes[index]!;
-      const out = start.outHandle ? { x: start.anchor.x + start.outHandle.dx, y: start.anchor.y + start.outHandle.dy } : start.anchor;
-      const incoming = end.inHandle ? { x: end.anchor.x + end.inHandle.dx, y: end.anchor.y + end.inHandle.dy } : end.anchor;
-      path += ` C ${out.x} ${out.y} ${incoming.x} ${incoming.y} ${end.anchor.x} ${end.anchor.y}`;
+    const current = editorRef.current;
+    const active = activeSplineId ? current.document.elements.find((element): element is SplineElement => element.id === activeSplineId && element.type === "spline") : undefined;
+    if (!active) {
+      const spline: SplineElement = { type: "spline", id: id(), layerId: layerId(document.layers[0]?.id ?? "layer-1"), nodes: [{ id: `spline-node-${crypto.randomUUID()}`, anchor: point, continuity: "smooth" }], closed: false, style: { ...defaultStyle, stroke: "#7c3aed" } };
+      setEditorState(dispatch(current, createElement(spline)));
+      setActiveSplineId(spline.id);
+      return;
     }
-    if (spline.closed && spline.nodes.length > 1) {
-      const last = spline.nodes.at(-1)!;
-      const out = last.outHandle ? { x: last.anchor.x + last.outHandle.dx, y: last.anchor.y + last.outHandle.dy } : last.anchor;
-      const incoming = first.inHandle ? { x: first.anchor.x + first.inHandle.dx, y: first.anchor.y + first.inHandle.dy } : first.anchor;
-      path += ` C ${out.x} ${out.y} ${incoming.x} ${incoming.y} ${first.anchor.x} ${first.anchor.y} Z`;
+    const first = active.nodes[0];
+    if (!active.closed && active.nodes.length >= 3 && first && Math.hypot(first.anchor.x - point.x, first.anchor.y - point.y) <= 8 / zoom) {
+      setEditorState(dispatch(current, closeSplineElement(active.id)));
+      setActiveSplineId(undefined);
+      return;
     }
-    return path;
+    const next = dispatch(current, appendSplineNode(active.id, { id: `spline-node-${crypto.randomUUID()}`, anchor: point, continuity: "smooth" }));
+    setEditorState(next);
   };
 
-  const closeSpline = (splineId: ElementId) => {
-    setSplines((current) => { splineUndoStack.current = [...splineUndoStack.current, current]; splineRedoStack.current = []; return current.map((spline) => {
-      if (spline.id !== splineId || spline.closed || spline.nodes.length < 3) return spline;
-      const nodes = spline.nodes.map((node, index) => {
-        const previous = spline.nodes[(index - 1 + spline.nodes.length) % spline.nodes.length]!.anchor;
-        const next = spline.nodes[(index + 1) % spline.nodes.length]!.anchor;
-        const tangent = { dx: (next.x - previous.x) / 6, dy: (next.y - previous.y) / 6 };
-        return { ...node, inHandle: { dx: -tangent.dx, dy: -tangent.dy }, outHandle: tangent };
-      });
-      return { ...spline, nodes, closed: true };
-    }); });
-    setActiveSplineId(undefined);
+  const beginSplineHandle = (event: PointerEvent<SVGCircleElement>, splineId: ElementId, nodeId: string, handle: "in" | "out") => {
+    event.preventDefault();
+    event.stopPropagation();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    const selected = select(editorRef.current, [splineId]);
+    setEditorState(beginGesture(selected));
+    interaction.current = { pointerId: event.pointerId, lastX: event.clientX, lastY: event.clientY, kind: "spline-handle", splineId, splineNodeId: nodeId, splineHandle: handle, dragged: false };
   };
 
-  const moveSplineHandle = (splineId: ElementId, nodeId: string, handle: "inHandle" | "outHandle", point: PointMm) => {
-    setSplines((current) => current.map((spline) => spline.id !== splineId ? spline : { ...spline, nodes: spline.nodes.map((node) => {
-      if (node.id !== nodeId) return node;
-      const offset = { dx: point.x - node.anchor.x, dy: point.y - node.anchor.y };
-      const opposite = { dx: -offset.dx, dy: -offset.dy };
-      return handle === "inHandle" ? { ...node, inHandle: offset, outHandle: opposite } : { ...node, outHandle: offset, inHandle: opposite };
-    }) }));
+  const moveSplineHandle = (event: PointerEvent<SVGCircleElement>) => {
+    const active = interaction.current;
+    if (!active || active.kind !== "spline-handle" || active.pointerId !== event.pointerId || !active.splineId || !active.splineNodeId || !active.splineHandle || !canvas.current) return;
+    const canvasPoint = clientPointToCanvas({ x: event.clientX, y: event.clientY }, canvas.current.getBoundingClientRect());
+    const point = screenPointToMm(canvasPoint, { x: 0, y: 0 }, zoom, panMm);
+    setEditorState(previewGestureFromBase(editorRef.current, updateSplineHandle(active.splineId, active.splineNodeId, active.splineHandle, point)));
+    active.dragged = true;
+  };
+
+  const finishSplineHandle = (event: PointerEvent<SVGCircleElement>, cancelled: boolean) => {
+    const active = interaction.current;
+    if (!active || active.kind !== "spline-handle" || active.pointerId !== event.pointerId) return;
+    setEditorState(cancelled ? cancelGesture(editorRef.current) : commitGesture(editorRef.current));
+    interaction.current = undefined;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
   };
 
   const resizePointerDown = (event: PointerEvent<HTMLElement>, handle: GroupHandle) => {
@@ -639,13 +617,6 @@ export function App() {
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if ((event.key === "Delete" || event.key === "Backspace") && selectedSplineId) {
-        event.preventDefault();
-        setSplines((current) => { splineUndoStack.current = [...splineUndoStack.current, current]; splineRedoStack.current = []; return current.filter((spline) => spline.id !== selectedSplineId); });
-        if (activeSplineId === selectedSplineId) setActiveSplineId(undefined);
-        setSelectedSplineId(undefined);
-        return;
-      }
       if (event.key === "Escape") {
         if (interaction.current) {
            setEditorState(cancelGesture(editorRef.current));
@@ -689,19 +660,13 @@ export function App() {
       }
       if (event.metaKey || event.ctrlKey) {
         const wantsRedo = event.key === "y" || (event.key === "z" && event.shiftKey);
-        if ((event.key === "z" || event.key === "y") && (splineUndoStack.current.length || splineRedoStack.current.length)) {
-          const source = wantsRedo ? splineRedoStack : splineUndoStack;
-          const destination = wantsRedo ? splineUndoStack : splineRedoStack;
-          const snapshot = source.current.at(-1);
-          if (snapshot) { event.preventDefault(); source.current = source.current.slice(0, -1); destination.current = [...destination.current, splinesRef.current]; setSplines(snapshot); setSelectedSplineId(snapshot.at(-1)?.id); setActiveSplineId(undefined); return; }
-        }
         if (event.key === "z") setEditorState(event.shiftKey ? redo(editorRef.current) : undo(editorRef.current));
         if (event.key === "y") setEditorState(redo(editorRef.current));
       }
     };
     addEventListener("keydown", onKey);
     return () => removeEventListener("keydown", onKey);
-    }, [activeSplineId, selectedSplineId, selectionKey, selectedFormaNodeKeys, tool, selectedElements]);
+    }, [activeSplineId, selectionKey, selectedFormaNodeKeys, tool, selectedElements]);
 
      const formaNodes: readonly FormaNodeOverlay[] = (tool === "forma" || tool === "pen") ? selectedElements.flatMap((element): readonly FormaNodeOverlay[] => element.type === "contour"
       ? contourVertexNodes(element).map((node) => ({ kind: "contour" as const, key: `${node.elementId}:c:${node.ringIndex}:${node.pointIndex}`, elementId: node.elementId, point: node.point, contour: node }))
@@ -733,12 +698,17 @@ export function App() {
      <p className="muted">{pathJoinGuidance}</p>
      <div className="path-join-buttons">{pathJoinOptions.map((option) => <button key={option.value} type="button" className="path-join-button" aria-label={option.label} aria-pressed={selectedPathAnchor.join === option.value} title={option.description} onClick={() => setEditorState(dispatch(editorRef.current, setPathJoin(selectedElement.id, selectedPathAnchor.id, option.value)))}>{option.label}</button>)}</div>
     </section> : null;
-    const pathClosureControls = selectedElement?.type === "path" ? <section className="path-join-card path-closure-card" role="group" aria-label="Cierre del trazado">
+     const pathClosureControls = selectedElement?.type === "path" ? <section className="path-join-card path-closure-card" role="group" aria-label="Cierre del trazado">
       <div className="panel-title">CIERRE DEL TRAZADO</div>
       <p className="muted">{selectedElement.closed ? "Este trazado está cerrado y conserva sus anclas y controles." : "Cierra el trazado seleccionado con un solo comando."}</p>
       <button type="button" aria-label={selectedElement.closed ? "Reabrir trazado" : "Cerrar trazado"} onClick={() => setEditorState(dispatch(editorRef.current, selectedElement.closed ? openPath(selectedElement.id) : closePath(selectedElement.id)))}>{selectedElement.closed ? "Reabrir trazado" : "Cerrar trazado"}</button>
       {selectedElement.closed && <p className="muted path-fill-hint">Relleno: {selectedElement.style.fill ?? "Sin relleno"}. Elija un color en COLORES para aplicar un relleno visible; Sin relleno mantiene solo el contorno.</p>}
-    </section> : null;
+     </section> : null;
+     const splineClosureControls = selectedElement?.type === "spline" ? <section className="path-join-card path-closure-card" role="group" aria-label="Cierre de la spline">
+       <div className="panel-title">CIERRE DE LA SPLINE</div>
+       <p className="muted">Cierra la spline y conserva la continuidad de sus handles relativos.</p>
+       <button type="button" aria-label="Cerrar spline" disabled={selectedElement.closed || selectedElement.nodes.length < 3} onClick={() => setEditorState(dispatch(editorRef.current, closeSplineElement(selectedElement.id)))}>Cerrar spline</button>
+     </section> : null;
    const groupPoints = selectedBounds ? groupHandlePoints(selectedBounds) : undefined;
    const handlePoints = selectedElement?.type === "line" || selectedElement?.type === "path" ? undefined : selectedElement?.type === "contour" && selectedBounds ? [groupHandlePoints(selectedBounds).nw, groupHandlePoints(selectedBounds).n, groupHandlePoints(selectedBounds).ne, groupHandlePoints(selectedBounds).e, groupHandlePoints(selectedBounds).se, groupHandlePoints(selectedBounds).s, groupHandlePoints(selectedBounds).sw, groupHandlePoints(selectedBounds).w] as const : selectedElement && isPropertyElement(selectedElement) ? rotatedResizeHandles(selectedElement) : undefined;
   const handleNames: readonly ResizeHandle[] = ["nw", "n", "ne", "e", "se", "s", "sw", "w"];
@@ -763,6 +733,15 @@ export function App() {
     return { left: topLeft.x, top: topLeft.y, width: bounds.width * zoom, height: bounds.height * zoom };
   })() : undefined;
   const pageStyle = { width: document.page.width * zoom, height: document.page.height * zoom, left: -panMm.x * zoom, top: -panMm.y * zoom };
+  const splineOverlay = selectedElements.filter((element): element is SplineElement => element.type === "spline").map((spline) => <g key={`spline-overlay-${spline.id}`} data-spline-overlay={spline.id}>
+    {spline.nodes.map((node) => {
+      const handle = (kind: "in" | "out", offset: { readonly dx: number; readonly dy: number }) => {
+        const point = { x: node.anchor.x + offset.dx, y: node.anchor.y + offset.dy };
+        return <g key={`${node.id}-${kind}`}><line x1={node.anchor.x} y1={node.anchor.y} x2={point.x} y2={point.y} stroke="#a78bfa" strokeWidth={0.5} /><circle role="button" aria-label={`Mover handle ${kind === "in" ? "entrante" : "saliente"} de spline`} data-spline-handle={`${spline.id}:${node.id}:${kind}`} cx={point.x} cy={point.y} r={2.5} fill="#7c3aed" style={{ pointerEvents: "auto", cursor: "move" }} onPointerDown={(event) => beginSplineHandle(event, spline.id, node.id, kind)} onPointerMove={moveSplineHandle} onPointerUp={(event) => finishSplineHandle(event, false)} onPointerCancel={(event) => finishSplineHandle(event, true)} /></g>;
+      };
+      return <g key={node.id}><circle data-spline-node={node.id} cx={node.anchor.x} cy={node.anchor.y} r={2.5} fill="#ffffff" stroke="#7c3aed" strokeWidth={1} /><g>{node.inHandle && handle("in", node.inHandle)}{node.outHandle && handle("out", node.outHandle)}</g></g>;
+    })}
+  </g>);
 
   const setPage = (width: number, height: number) => {
     if (Number.isFinite(width) && width > 0 && Number.isFinite(height) && height > 0) setEditorState(dispatch(editorRef.current, updatePage(width, height)));
@@ -953,7 +932,7 @@ export function App() {
       <section className="canvas-area">
         <header className="canvas-header"><span>DISEÑO / SIN TÍTULO</span><span>{document.elements.length} objetos · {document.page.width} × {document.page.height} mm</span><div className="zoom-controls"><button aria-label="Alejar" onClick={() => setZoom(zoom - 0.5)}>−</button><span className="zoom-label">{Math.round(zoom * 100 / 3)}%</span><button aria-label="Acercar" onClick={() => setZoom(zoom + 0.5)}>+</button></div></header>
             <div ref={canvas} className={`${grid ? "canvas" : "canvas no-grid"}${isDrawingTool(tool) ? " drawing-tool" : ""}${closeTargetActive ? " close-target-active" : ""}`} onPointerDown={onCanvasPointerDown} onPointerMove={onCanvasPointerMove} onPointerUp={(event) => finishPointer(event, false)} onPointerCancel={(event) => finishPointer(event, true)} onPointerLeave={() => setCursorPoint(undefined)} onDoubleClick={onCanvasDoubleClick} onWheel={onWheel}>
-           <div className="page" style={pageStyle}>{/* SAFETY: renderSvg emits allowlisted SVG from validated document data. */}<div className="page-svg" dangerouslySetInnerHTML={{ __html: rendered.success ? rendered.svg : "" }} />{splines.length > 0 && <svg data-spline-layer="true" viewBox={`0 0 ${document.page.width} ${document.page.height}`} style={{ position: "absolute", inset: 0, width: "100%", height: "100%", pointerEvents: "none" }}>{splines.map((spline) => <g key={spline.id}><path data-spline-id={spline.id} d={splinePathData(spline)} fill="none" stroke={selectedSplineId === spline.id ? "#2563eb" : spline.style.stroke} strokeWidth={selectedSplineId === spline.id ? 1.4 : spline.style.strokeWidth} style={{ pointerEvents: tool === "select" ? "stroke" : "none", cursor: tool === "select" ? "pointer" : "default" }} onPointerDown={(event) => { if (tool !== "select") return; event.stopPropagation(); setSelectedSplineId(spline.id); setActiveSplineId(undefined); setEditorState(clearSelection(editorRef.current)); }} />{spline.nodes.map((node, nodeIndex) => { const incoming = node.inHandle ? { x: node.anchor.x + node.inHandle.dx, y: node.anchor.y + node.inHandle.dy } : undefined; const outgoing = node.outHandle ? { x: node.anchor.x + node.outHandle.dx, y: node.anchor.y + node.outHandle.dy } : undefined; const handle = (kind: "inHandle" | "outHandle", point: PointMm) => <g key={`${node.id}:${kind}`}><line x1={node.anchor.x} y1={node.anchor.y} x2={point.x} y2={point.y} stroke="#a78bfa" strokeWidth={0.5} /><circle role="button" aria-label={`Mover handle ${kind === "inHandle" ? "entrante" : "saliente"} de spline`} data-spline-handle={`${node.id}:${kind}`} cx={point.x} cy={point.y} r={2.5} fill="#7c3aed" style={{ pointerEvents: "auto", cursor: "move" }} onPointerDown={(event) => { event.stopPropagation(); splineUndoStack.current = [...splineUndoStack.current, splinesRef.current]; splineRedoStack.current = []; event.currentTarget.setPointerCapture(event.pointerId); }} onPointerMove={(event) => { if (!event.currentTarget.hasPointerCapture(event.pointerId) || !canvas.current) return; const canvasPoint = clientPointToCanvas({ x: event.clientX, y: event.clientY }, canvas.current.getBoundingClientRect()); moveSplineHandle(spline.id, node.id, kind, screenPointToMm(canvasPoint, { x: 0, y: 0 }, zoom, panMm)); }} onPointerUp={(event) => { if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId); }} /></g>; const showHandles = selectedSplineId === spline.id || activeSplineId === spline.id; return <g key={node.id}>{showHandles && incoming && handle("inHandle", incoming)}{showHandles && outgoing && handle("outHandle", outgoing)}<circle role="button" aria-label={nodeIndex === 0 && !spline.closed ? "Cerrar spline en el primer nodo" : "Nodo de spline"} data-spline-node={node.id} cx={node.anchor.x} cy={node.anchor.y} r={2} fill="#ffffff" stroke="#7c3aed" style={{ pointerEvents: "auto", cursor: nodeIndex === 0 && !spline.closed && spline.nodes.length >= 3 ? "pointer" : "default" }} onPointerDown={(event) => { event.stopPropagation(); setSelectedSplineId(spline.id); if (nodeIndex === 0 && spline.id === activeSplineId && spline.nodes.length >= 3) closeSpline(spline.id); }} /></g>; })}</g>)}</svg>}</div>
+           <div className="page" style={pageStyle}>{/* SAFETY: renderSvg emits allowlisted SVG from validated document data. */}<div className="page-svg" dangerouslySetInnerHTML={{ __html: rendered.success ? rendered.svg : "" }} />{splineOverlay.length > 0 && <svg data-spline-overlay-layer="true" viewBox={`0 0 ${document.page.width} ${document.page.height}`} style={{ position: "absolute", inset: 0, width: "100%", height: "100%", pointerEvents: "none", overflow: "visible" }}>{splineOverlay}</svg>}</div>
             {formaNodes.length > 0 && <div className="contour-node-overlay" role="group" aria-label={tool === "pen" ? "Nodos y controles del trazado" : "Nodos de forma"}>{formaNodes.map((node) => { const screen = pagePointToCanvas(node.point, zoom, panMm); const selected = selectedFormaNodeKeys.includes(node.key); const pathNode = node.kind === "path" ? node.pathNode : undefined; return <button key={node.key} type="button" className={`contour-node${selected ? " active selected" : ""}`} data-contour-node={node.key} aria-label={node.kind === "contour" ? `Nodo del contorno, anillo ${node.contour.ringIndex + 1}, punto ${node.contour.pointIndex + 1}` : pathNode?.node.kind === "control" ? `Control Bézier ${pathNode.node.handle === "control1" ? "saliente" : "entrante"}` : `Nodo editable ${node.nodeIndex + 1}`} style={{ left: screen.x, top: screen.y }} onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); setSelectedFormaNodeKeys((current) => event.shiftKey ? current.includes(node.key) ? current.filter((value) => value !== node.key) : [...current, node.key] : [node.key]); if (tool === "pen" && pathNode?.node.kind === "anchor") { const currentPath = editorRef.current.document.elements.find((element) => element.id === node.elementId && element.type === "path"); if (currentPath?.type === "path" && !currentPath.closed && currentPath.nodes[0]?.id === pathNode.node.nodeId) { setPenDraftPoint(undefined); setEditorState(dispatch(select(editorRef.current, [node.elementId]), closePath(node.elementId))); return; } } canvas.current?.setPointerCapture(event.pointerId); if (pathNode) { setEditorState(beginGesture(select(editorRef.current, [node.elementId]))); interaction.current = { pointerId: event.pointerId, lastX: event.clientX, lastY: event.clientY, kind: "path-node", pathNode, startClient: { x: event.clientX, y: event.clientY }, dragged: false }; } else { setEditorState(beginGesture(editorRef.current)); interaction.current = { pointerId: event.pointerId, lastX: event.clientX, lastY: event.clientY, kind: "contour-node", ...(node.kind === "contour" ? { contourNode: node.contour } : {}), formaNode: node.kind === "contour" ? { elementId: node.contour.elementId, contourNode: node.contour, point: node.point } : { elementId: node.elementId, nodeIndex: node.nodeIndex, point: node.point }, startClient: { x: event.clientX, y: event.clientY }, dragged: false }; } }} />; })}</div>}
           {centerHoverStyle && <div className="selection-center-feedback" style={centerHoverStyle} aria-hidden="true"><span className="selection-center-mark">×</span><span className="selection-center-label">centro</span></div>}
             {tool !== "forma" && transformMode === "resize" && (handlePoints || groupPoints) && <div className="resize-handles">{handleNames.map((handle) => <button key={handle} type="button" className={`resize-handle resize-handle-${handle}`} data-resize-handle={handle} aria-label={`Redimensionar ${handle}`} style={handleStyle(handle)} onPointerDown={(event) => resizePointerDown(event, handle)} onPointerUp={(event) => finishPointer(event, false)} onPointerCancel={(event) => finishPointer(event, true)} />)}{groupPoints && !isDrawingTool(tool) && <button type="button" className="resize-handle resize-handle-center" data-resize-handle="center" aria-label="Centro del grupo" style={handleStyle("center")} onPointerDown={(event) => event.stopPropagation()} />}</div>}
@@ -970,7 +949,7 @@ export function App() {
            <button type="button" role="tab" aria-selected={inspectorTab === "text"} className={inspectorTab === "text" ? "active" : ""} onClick={() => setInspectorTab("text")}>Texto</button>
          </div>
          <div className="inspector-tab-content" role="tabpanel">
-               {inspectorTab === "properties" && <>{selectedElements.length === 0 ? <section className="inspector-card"><div className="panel-title">PÁGINA</div><div className="preset-row"><button onClick={() => setPage(1200, 900)}>Horizontal</button><button onClick={() => setPage(900, 1200)}>Vertical</button></div><div className="fields"><Field label="W" value={document.page.width} onChange={(value) => setPage(value, document.page.height)} /><Field label="H" value={document.page.height} onChange={(value) => setPage(document.page.width, value)} /></div><label className="grid-toggle"><input type="checkbox" checked={grid} onChange={(event) => setGrid(event.target.checked)} /> Mostrar cuadrícula del espacio de trabajo</label></section> : <section className="inspector-card inspector-object-card"><div className="panel-title">OBJETO</div>{propertyElement ? <div className="inspector-object-properties">{objectPropertySections(true)}</div> : <><div className="selected-type">{selectedElement?.type === "contour" ? "CONTORNO" : selectedElement?.type === "path" ? "TRAZADO" : selectedElement?.type === "spline" ? "SPLINE" : "LÍNEA"}</div><p className="muted">{selectedElement?.type === "contour" ? "Los contornos conservan su geometría real; las dimensiones no están disponibles." : selectedElement?.type === "path" ? "Los trazados conservan sus nodos y segmentos." : selectedElement?.type === "spline" ? "Las splines conservan sus nodos y handles relativos." : "Las líneas no tienen dimensiones rectangulares."}</p>{selectedElement && isRotatableElement(selectedElement) && rotationField(selectedElement)}</>}</section>}{pathClosureControls}{pathJoinControls}{pathSegmentControls}</>}
+                {inspectorTab === "properties" && <>{selectedElements.length === 0 ? <section className="inspector-card"><div className="panel-title">PÁGINA</div><div className="preset-row"><button onClick={() => setPage(1200, 900)}>Horizontal</button><button onClick={() => setPage(900, 1200)}>Vertical</button></div><div className="fields"><Field label="W" value={document.page.width} onChange={(value) => setPage(value, document.page.height)} /><Field label="H" value={document.page.height} onChange={(value) => setPage(document.page.width, value)} /></div><label className="grid-toggle"><input type="checkbox" checked={grid} onChange={(event) => setGrid(event.target.checked)} /> Mostrar cuadrícula del espacio de trabajo</label></section> : <section className="inspector-card inspector-object-card"><div className="panel-title">OBJETO</div>{propertyElement ? <div className="inspector-object-properties">{objectPropertySections(true)}</div> : <><div className="selected-type">{selectedElement?.type === "contour" ? "CONTORNO" : selectedElement?.type === "path" ? "TRAZADO" : selectedElement?.type === "spline" ? "SPLINE" : "LÍNEA"}</div><p className="muted">{selectedElement?.type === "contour" ? "Los contornos conservan su geometría real; las dimensiones no están disponibles." : selectedElement?.type === "path" ? "Los trazados conservan sus nodos y segmentos." : selectedElement?.type === "spline" ? "Las splines conservan sus nodos y handles relativos." : "Las líneas no tienen dimensiones rectangulares."}</p>{selectedElement && isRotatableElement(selectedElement) && rotationField(selectedElement)}</>}</section>}{pathClosureControls}{splineClosureControls}{pathJoinControls}{pathSegmentControls}</>}
               {inspectorTab === "transform" && transformControls()}
            {inspectorTab === "text" && <section className="inspector-card"><div className="panel-title">TEXTO</div><p className="muted">Las propiedades de texto estarán disponibles en una próxima iteración.</p></section>}
          </div>
