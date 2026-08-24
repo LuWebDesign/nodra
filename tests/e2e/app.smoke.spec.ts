@@ -65,8 +65,7 @@ test("creates an open spline with Spline and exposes its anchors", async ({ page
   await expect(spline).toHaveAttribute("d", / Z$/);
   await expect(page.locator('[data-spline-overlay-layer] path')).toHaveAttribute("fill", "rgba(107,114,128,0.25)");
   await expect(page.locator("[data-spline-handle]")).toHaveCount(2);
-  await page.getByRole("button", { name: "Seleccion" }).click();
-  await spline.click({ force: true });
+  await page.getByRole("button", { name: "Forma" }).click();
   const selectedNode = await nodes.nth(1).boundingBox();
   expect(selectedNode).not.toBeNull();
   await page.mouse.click(selectedNode!.x + selectedNode!.width / 2, selectedNode!.y + selectedNode!.height / 2);
@@ -90,7 +89,6 @@ test("creates an open spline with Spline and exposes its anchors", async ({ page
   await expect(spline).toHaveCount(0);
   await page.keyboard.press("Control+z");
   await expect(page.locator('.page-svg svg path[data-element-id]')).toHaveCount(1);
-  await expect(page.locator(".page-svg svg path[data-element-id]")).toHaveCount(0);
 });
 
 test("double-clicking empty canvas clears native Spline node selection", async ({ page }) => {
@@ -101,7 +99,7 @@ test("double-clicking empty canvas clears native Spline node selection", async (
   await page.mouse.click(pageBounds!.x + 80, pageBounds!.y + 80);
   await page.mouse.click(pageBounds!.x + 160, pageBounds!.y + 110);
   await page.mouse.click(pageBounds!.x + 240, pageBounds!.y + 80);
-  await page.getByRole("button", { name: "Seleccion" }).click();
+  await page.getByRole("button", { name: "Forma" }).click();
   const node = page.locator("[data-spline-node]").nth(1);
   const nodeBounds = await node.boundingBox();
   expect(nodeBounds).not.toBeNull();
