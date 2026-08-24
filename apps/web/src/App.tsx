@@ -781,9 +781,9 @@ export function App() {
     return { left: topLeft.x, top: topLeft.y, width: bounds.width * zoom, height: bounds.height * zoom };
   })() : undefined;
   const pageStyle = { width: document.page.width * zoom, height: document.page.height * zoom, left: -panMm.x * zoom, top: -panMm.y * zoom };
-  const splineOverlay = document.elements.filter((element): element is SplineElement => element.type === "spline").map((spline) => <g key={`spline-overlay-${spline.id}`} data-spline-overlay={spline.id}>
-    {spline.closed && <path d={splinePathData(spline)} fill="rgba(107,114,128,0.25)" stroke="none" pointerEvents="none" />}
-    {selection.includes(spline.id) && spline.nodes.map((node) => {
+   const splineOverlay = document.elements.filter((element): element is SplineElement => element.type === "spline").map((spline) => <g key={`spline-overlay-${spline.id}`} data-spline-overlay={spline.id}>
+     {spline.closed && <path d={splinePathData(spline)} fill="rgba(107,114,128,0.25)" stroke="none" pointerEvents="none" />}
+     {(selection.includes(spline.id) || selectedSplineNodeKey?.startsWith(`${spline.id}:`)) && spline.nodes.map((node) => {
       const handle = (kind: "in" | "out", offset: { readonly dx: number; readonly dy: number }) => {
         const point = { x: node.anchor.x + offset.dx, y: node.anchor.y + offset.dy };
         return <g key={`${node.id}-${kind}`}><line x1={node.anchor.x} y1={node.anchor.y} x2={point.x} y2={point.y} stroke="#a78bfa" strokeWidth={0.5} /><circle role="button" aria-label={`Mover handle ${kind === "in" ? "entrante" : "saliente"} de spline`} data-spline-handle={`${spline.id}:${node.id}:${kind}`} cx={point.x} cy={point.y} r={2.5} fill="#7c3aed" style={{ pointerEvents: "auto", cursor: "move" }} onPointerDown={(event) => beginSplineHandle(event, spline.id, node.id, kind)} onPointerMove={moveSplineHandle} onPointerUp={(event) => finishSplineHandle(event, false)} onPointerCancel={(event) => finishSplineHandle(event, true)} /></g>;
