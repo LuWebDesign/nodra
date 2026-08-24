@@ -83,6 +83,7 @@ export function App() {
   const [transformDirection, setTransformDirection] = useState<Direction>("center");
   const [directionTooltipVisible, setDirectionTooltipVisible] = useState(false);
   const [penDraftPoint, setPenDraftPoint] = useState<PointMm>();
+  const [splineDraftPoint, setSplineDraftPoint] = useState<PointMm>();
   const [activeSplineId, setActiveSplineId] = useState<ElementId>();
   const repository = useMemo(() => new DexieProjectRepository(), []);
   const autosave = useMemo(() => new DebouncedAutosave(repository), [repository]);
@@ -157,6 +158,7 @@ export function App() {
   useEffect(() => { setTransformMode("resize"); }, [tool, project.activePageId, selectionKey]);
   useEffect(() => {
     setActiveSplineId(undefined);
+    setSplineDraftPoint(undefined);
     if (tool !== "select" && editorRef.current.selection.some((id) => editorRef.current.document.elements.some((element) => element.id === id && element.type === "spline"))) setEditorState(clearSelection(editorRef.current));
   }, [tool]);
   useEffect(() => { setSelectedPathSegment(undefined); setSelectedFormaNodeKeys([]); }, [tool, project.activePageId]);
@@ -304,8 +306,14 @@ export function App() {
     const current = editorRef.current;
     const active = activeSplineId ? current.document.elements.find((element): element is SplineElement => element.id === activeSplineId && element.type === "spline") : undefined;
     if (!active) {
-      const spline: SplineElement = { type: "spline", id: id(), layerId: layerId(document.layers[0]?.id ?? "layer-1"), nodes: [{ id: `spline-node-${crypto.randomUUID()}`, anchor: point, continuity: "smooth" }], closed: false, style: { ...defaultStyle, stroke: "#7c3aed" } };
-      setEditorState(dispatch(current, createElement(spline)));
+      if (!splineDraftPoint) {
+        setSplineDraftPoint(point);
+        return;
+      }
+      const spline: SplineElement = { type: "spline", id: id(), layerId: layerId(document.layers[0]?.id ?? "layer-1"), nodes: [{ id: `spline-node-${crypto.randomUUID()}`, anchor: splineDraftPoint, continuity: "smooth" }, { id: `spline-node-${crypto.randomUUID()}`, anchor: point, continuity: "smooth" }], closed: false, style: { ...defaultStyle, stroke: "#7c3aed" } };
+      const next = dispatch(current, createElement(spline));
+      setSplineDraftPoint(undefined);
+      setEditorState(select(next, [spline.id]));
       setActiveSplineId(spline.id);
       return;
     }
