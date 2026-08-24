@@ -62,7 +62,7 @@ test("creates an open spline with Spline and exposes its anchors", async ({ page
   const firstNode = await nodes.first().boundingBox();
   expect(firstNode).not.toBeNull();
   await page.mouse.move(firstNode!.x + firstNode!.width / 2, firstNode!.y + firstNode!.height / 2);
-  await expect(page.locator(".tool-cursor")).toHaveText("☝");
+  await expect(page.locator(".tool-cursor")).toBeHidden();
   await expect(page.locator(".tool-cursor")).toHaveAttribute("title", "Cerrar trazado");
   await page.mouse.click(firstNode!.x + firstNode!.width / 2, firstNode!.y + firstNode!.height / 2);
   await expect(spline).toHaveAttribute("d", / Z$/);
