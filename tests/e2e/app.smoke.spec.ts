@@ -105,7 +105,6 @@ test("selects and moves a Spline object like Pluma", async ({ page }) => {
       await page.getByRole("button", { name: "Seleccion" }).click();
       const hit = page.locator("[data-spline-hit]");
       await expect(hit).toHaveCount(1);
-      const before = await page.locator(".page-svg svg path[data-element-id]").getAttribute("d");
       const hitPoint = await hit.evaluate((element) => {
         const path = element as SVGPathElement;
         const point = path.getPointAtLength(path.getTotalLength() * 0.35);
@@ -113,6 +112,11 @@ test("selects and moves a Spline object like Pluma", async ({ page }) => {
         const viewBox = path.ownerSVGElement!.viewBox.baseVal;
         return { x: svg.x + point.x / viewBox.width * svg.width, y: svg.y + point.y / viewBox.height * svg.height };
       });
+      await page.mouse.click(hitPoint.x, hitPoint.y);
+      await expect(page.locator('[data-resize-handle]:not([data-resize-handle="center"])')).toHaveCount(8);
+      await expect(page.locator('[data-resize-handle="center"]')).toHaveCount(1);
+      await expect(page.locator("[data-real-node]")).toHaveCount(0);
+      const before = await page.locator(".page-svg svg path[data-element-id]").getAttribute("d");
       await page.mouse.move(hitPoint.x, hitPoint.y);
       await page.mouse.down();
       await page.mouse.move(hitPoint.x + 35, hitPoint.y + 20);

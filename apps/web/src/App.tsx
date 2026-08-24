@@ -225,7 +225,7 @@ export function App() {
        line.dataset.bezierGuide = direction; line.setAttribute("x1", String(a.x)); line.setAttribute("y1", String(a.y)); line.setAttribute("x2", String(b.x)); line.setAttribute("y2", String(b.y)); line.setAttribute("stroke", color); line.setAttribute("stroke-width", placement ? "1.5" : "1"); line.setAttribute("stroke-dasharray", placement ? "3 2" : "4 2"); line.setAttribute("marker-end", `url(#bezier-guide-${direction})`); line.style.pointerEvents = "none"; overlay.append(line);
      };
      for (const element of selectedElements) if (element.type === "path") for (const guide of pathGuides(element)) guideLine(guide.anchor, guide.control, guide.direction);
-    if (transformMode === "resize" && tool !== "forma") for (const element of selectedElements) for (const [nodeIndex, node] of realGeometryNodes(element).entries()) {
+    if (transformMode === "resize" && tool !== "forma") for (const element of selectedElements.filter((candidate) => candidate.type !== "spline")) for (const [nodeIndex, node] of realGeometryNodes(element).entries()) {
       const screen = point(node.point);
       const hitArea = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "circle");
       hitArea.dataset.realNode = element.id;
@@ -776,7 +776,7 @@ export function App() {
        <button type="button" aria-label="Cerrar spline" disabled={selectedElement.closed || selectedElement.nodes.length < 3} onClick={() => setEditorState(dispatch(editorRef.current, closeSplineElement(selectedElement.id)))}>Cerrar spline</button>
      </section> : null;
    const groupPoints = selectedBounds ? groupHandlePoints(selectedBounds) : undefined;
-   const handlePoints = selectedElement?.type === "line" || selectedElement?.type === "path" ? undefined : selectedElement?.type === "contour" && selectedBounds ? [groupHandlePoints(selectedBounds).nw, groupHandlePoints(selectedBounds).n, groupHandlePoints(selectedBounds).ne, groupHandlePoints(selectedBounds).e, groupHandlePoints(selectedBounds).se, groupHandlePoints(selectedBounds).s, groupHandlePoints(selectedBounds).sw, groupHandlePoints(selectedBounds).w] as const : selectedElement && isPropertyElement(selectedElement) ? rotatedResizeHandles(selectedElement) : undefined;
+   const handlePoints = selectedElement?.type === "line" || selectedElement?.type === "path" ? undefined : selectedElement?.type === "contour" && selectedBounds ? [groupHandlePoints(selectedBounds).nw, groupHandlePoints(selectedBounds).n, groupHandlePoints(selectedBounds).ne, groupHandlePoints(selectedBounds).e, groupHandlePoints(selectedBounds).se, groupHandlePoints(selectedBounds).s, groupHandlePoints(selectedBounds).sw, groupHandlePoints(selectedBounds).w] as const : selectedElement && isPropertyElement(selectedElement) ? rotatedResizeHandles(selectedElement) : selectedElement?.type === "spline" && selectedBounds ? [groupHandlePoints(selectedBounds).nw, groupHandlePoints(selectedBounds).n, groupHandlePoints(selectedBounds).ne, groupHandlePoints(selectedBounds).e, groupHandlePoints(selectedBounds).se, groupHandlePoints(selectedBounds).s, groupHandlePoints(selectedBounds).sw, groupHandlePoints(selectedBounds).w] as const : undefined;
   const handleNames: readonly ResizeHandle[] = ["nw", "n", "ne", "e", "se", "s", "sw", "w"];
   const handleStyle = (handle: GroupHandle) => {
      const point = selectedElements.length > 1 ? groupPoints?.[handle] : handle === "center" ? undefined : handlePoints?.[handleNames.indexOf(handle)];
