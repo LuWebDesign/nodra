@@ -73,6 +73,14 @@ test("creates an open spline with Spline and exposes its anchors", async ({ page
   expect(selectedNode).not.toBeNull();
   await page.mouse.click(selectedNode!.x + selectedNode!.width / 2, selectedNode!.y + selectedNode!.height / 2);
   await expect(page.locator("[data-spline-handle]")).toHaveCount(6);
+  const beforeNodeDrag = await spline.getAttribute("d");
+  await page.mouse.move(selectedNode!.x + selectedNode!.width / 2, selectedNode!.y + selectedNode!.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(selectedNode!.x + selectedNode!.width / 2 + 20, selectedNode!.y + selectedNode!.height / 2 + 12);
+  await page.mouse.up();
+  await expect(spline).not.toHaveAttribute("d", beforeNodeDrag!);
+  await page.keyboard.press("Control+z");
+  await expect(spline).toHaveAttribute("d", beforeNodeDrag!);
   const beforeDrag = await spline.getAttribute("d");
   const handle = page.locator("[data-spline-handle]").first();
   const handleBounds = await handle.evaluate((element) => {

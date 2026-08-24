@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent, type PointerEvent, type ReactNode, type WheelEvent } from "react";
 import { createProject, elementId, layerId, pageId, revision, type DocumentSnapshot, type Element, type ElementId, type PointMm, type ProjectSnapshot, type SplineElement } from "@nodra/domain";
-import { addToSelection, appendSplineNode, beginGesture, cancelGesture, clearSelection, closePath, closeSplineElement, commitGesture, createElement, createPathCubicNode, createPathNode, deleteContourNodes, deleteElement, deleteElementNodes, deletePathNodes, dispatch, duplicateElements, flipElements, insertFormaNode, moveElements, movePathHandle, movePathNode, openPath, previewGesture, previewGestureFromBase, redo, resizeElement, resizeElements, rotateElement, rotateElementsAroundCenter, select, selectForPointerDown, setPathJoin, shapeOperation, splitPathSegment, undo, updateContourNode, updateElement, updateElementNode, updateElementStyles, updatePage, updateSplineHandle, type FlipAxis, type ShapeOperation } from "@nodra/editor-core";
+import { addToSelection, appendSplineNode, beginGesture, cancelGesture, clearSelection, closePath, closeSplineElement, commitGesture, createElement, createPathCubicNode, createPathNode, deleteContourNodes, deleteElement, deleteElementNodes, deletePathNodes, dispatch, duplicateElements, flipElements, insertFormaNode, moveElements, movePathHandle, movePathNode, openPath, updateSplineNode, previewGesture, previewGestureFromBase, redo, resizeElement, resizeElements, rotateElement, rotateElementsAroundCenter, select, selectForPointerDown, setPathJoin, shapeOperation, splitPathSegment, undo, updateContourNode, updateElement, updateElementNode, updateElementStyles, updatePage, updateSplineHandle, type FlipAxis, type ShapeOperation } from "@nodra/editor-core";
 import { boundsOfElements, contourVertexNodes, elementCenter, groupCenter, groupHandlePoints, pathGeometryNodes, realGeometryNodes, resizeHandle, rotatedResizeHandles, rotationFromDrag, rotationHandlePoints, type Direction, type GroupHandle, type ResizeHandle } from "@nodra/geometry";
 import { DebouncedAutosave, DexieProjectRepository, requestStoragePersistence } from "@nodra/persistence";
 import { renderSvg } from "@nodra/renderer-svg";
@@ -49,7 +49,7 @@ type ActiveInteraction = {
   pointerId: number;
   lastX: number;
   lastY: number;
-  kind: "move" | "pan" | "draw" | "resize" | "rotate" | "marquee" | "contour-node" | "path-node" | "spline-handle" | "pen-place";
+  kind: "move" | "pan" | "draw" | "resize" | "rotate" | "marquee" | "contour-node" | "path-node" | "spline-node" | "spline-handle" | "pen-place";
   ids?: readonly ElementId[];
   dragged: boolean;
   start?: PointMm;
@@ -372,7 +372,9 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
       setActiveSplineId(undefined);
       return;
     }
-    setEditorState(selected);
+    event.currentTarget.setPointerCapture(event.pointerId);
+    setEditorState(beginGesture(selected));
+    interaction.current = { pointerId: event.pointerId, lastX: event.clientX, lastY: event.clientY, kind: "spline-node", splineId: spline.id, splineNodeId: nodeId, startClient: { x: event.clientX, y: event.clientY }, dragged: false };
   };
 
   const beginSplineHandle = (event: PointerEvent<SVGElement>, splineId: ElementId, nodeId: string, handle: "in" | "out") => {
@@ -580,7 +582,12 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
       setEditorState(previewGestureFromBase(editorRef.current, moveElements(active.ids, snapped.delta)));
       return;
     }
-    if (active.kind === "path-node" && active.pathNode && active.startClient && movementExceedsThreshold(active.startClient, { x: event.clientX, y: event.clientY })) {
+     if (active.kind === "spline-node" && active.splineId && active.splineNodeId) {
+       active.dragged = true;
+       setEditorState(previewGestureFromBase(editorRef.current, updateSplineNode(active.splineId, active.splineNodeId, pointAt(event))));
+       return;
+     }
+     if (active.kind === "path-node" && active.pathNode && active.startClient && movementExceedsThreshold(active.startClient, { x: event.clientX, y: event.clientY })) {
       const pathNode = active.pathNode.node;
       const point = pointAt(event);
       const command = pathNode.kind === "anchor"
@@ -637,7 +644,7 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
     } else if (active.kind === "rotate" && active.ids && active.center && active.start && !cancelled) {
       const rotation = rotationFromDrag(active.element && isRotatableElement(active.element) ? active.element.rotation : 0, active.center, active.start, pointAt(event), event.shiftKey ? Math.PI / 12 : 0);
       setEditorState(commitGesture(previewGestureFromBase(editorRef.current, active.ids.length === 1 && active.element && isRotatableElement(active.element) ? rotateElement(active.element.id, rotation) : rotateElementsAroundCenter(active.ids, rotation - (active.element && isRotatableElement(active.element) ? active.element.rotation : 0)))));
-      } else if (["resize", "rotate", "move", "contour-node", "path-node"].includes(active.kind)) {
+      } else if (["resize", "rotate", "move", "contour-node", "path-node", "spline-node"].includes(active.kind)) {
        setEditorState(cancelled ? cancelGesture(editorRef.current) : commitGesture(editorRef.current));
      } else if (active.kind === "pen-place") {
        if (cancelled || !active.start) { setEditorState(cancelGesture(editorRef.current)); setPenDraftPoint(undefined); }
@@ -821,7 +828,7 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
           };
           return <g key={node.id}>
             {editing && spline.closed && nodeIndex === 0 && <polygon data-spline-close-marker={spline.id} points={`${node.anchor.x - 4 / zoom},${node.anchor.y + 6 / zoom} ${node.anchor.x},${node.anchor.y - 6 / zoom} ${node.anchor.x + 4 / zoom},${node.anchor.y + 6 / zoom}`} fill="#ffffff" stroke="#1683ff" strokeWidth={1 / zoom} pointerEvents="none" />}
-            <rect role="button" aria-label={nodeIndex === 0 && splineCloseTarget ? "Cerrar spline en el primer nodo" : "Ancla de spline"} data-spline-node={node.id} data-spline-close-target={nodeIndex === 0 && splineCloseTarget ? "true" : undefined} x={node.anchor.x - 4 / zoom} y={node.anchor.y - 4 / zoom} width={8 / zoom} height={8 / zoom} fill={nodeIndex === 0 && splineCloseTarget ? "#14b8a6" : selected ? "#dbeafe" : "#ffffff"} stroke={nodeIndex === 0 && splineCloseTarget ? "#0f766e" : controlColor} strokeWidth={1 / zoom} transform={editing ? `rotate(45 ${node.anchor.x} ${node.anchor.y})` : undefined} style={{ pointerEvents: "auto", cursor: nodeIndex === 0 && splineCloseTarget ? "crosshair" : "move" }} onPointerDown={(event) => selectSplineAnchor(event, spline, node.id)} />
+            <rect role="button" aria-label={nodeIndex === 0 && splineCloseTarget ? "Cerrar spline en el primer nodo" : "Ancla de spline"} data-spline-node={node.id} data-spline-close-target={nodeIndex === 0 && splineCloseTarget ? "true" : undefined} x={node.anchor.x - 4 / zoom} y={node.anchor.y - 4 / zoom} width={8 / zoom} height={8 / zoom} fill={nodeIndex === 0 && splineCloseTarget ? "#14b8a6" : selected ? "#dbeafe" : "#ffffff"} stroke={nodeIndex === 0 && splineCloseTarget ? "#0f766e" : controlColor} strokeWidth={1 / zoom} transform={editing ? `rotate(45 ${node.anchor.x} ${node.anchor.y})` : undefined} style={{ pointerEvents: "auto", cursor: nodeIndex === 0 && splineCloseTarget ? "crosshair" : "move" }} onPointerDown={(event) => selectSplineAnchor(event, spline, node.id)} onPointerMove={(event) => onCanvasPointerMove(event as unknown as PointerEvent<HTMLDivElement>)} onPointerUp={(event) => finishPointer(event as unknown as PointerEvent<HTMLDivElement>, false)} onPointerCancel={(event) => finishPointer(event as unknown as PointerEvent<HTMLDivElement>, true)} />
             {showHandles && node.inHandle && handle("in", node.inHandle)}{showHandles && node.outHandle && handle("out", node.outHandle)}
           </g>;
         })}
