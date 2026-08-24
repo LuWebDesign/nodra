@@ -10,6 +10,7 @@ import {
   type OperationMetadata,
   type PathElement,
   type PathJoin,
+  type SplineElement,
   elementId,
   nextRevision,
   revision,
@@ -17,6 +18,7 @@ import {
 } from "@nodra/domain";
 import { validateDocument } from "@nodra/validation";
 import { boundsOfElements, contourWithPoints, directionVector, elementCenter, elementToContour, groupCenter, realGeometryNodes, resizeGroup, rotateElements, shapeResultContours, transformPoint, type Direction } from "@nodra/geometry";
+import { insertSplineNode, moveSplineHandle as moveSplineHandleData, moveSplineNode as moveSplineNodeData } from "./spline.js";
 
 export * from "./spline.js";
 
@@ -144,6 +146,72 @@ export const shapeOperation = (ids: readonly ElementId[], operation: ShapeOperat
 export const createPath = (path: PathElement): EditorCommand => createElement(path);
 
 const pathAt = (document: DocumentSnapshot, id: ElementId): PathElement | undefined => document.elements.find((element): element is PathElement => element.id === id && element.type === "path");
+const splineAt = (document: DocumentSnapshot, id: ElementId): SplineElement | undefined => document.elements.find((element): element is SplineElement => element.id === id && element.type === "spline");
+const updateSpline = (document: DocumentSnapshot, id: ElementId, apply: (spline: SplineElement) => CommandResult): CommandResult => {
+  const spline = splineAt(document, id);
+  if (!spline) return { success: false, error: "Spline not found" };
+  return apply(spline);
+};
+const replaceSpline = (document: DocumentSnapshot, spline: Extract<Element, { type: "spline" }>): CommandResult =>
+  replaceElements(document, document.elements.map((element) => element.id === spline.id ? spline : element));
+
+export const appendSplineNode = (splineId: ElementId, node: Extract<Element, { type: "spline" }>["nodes"][number]): EditorCommand => ({
+  name: `spline-create-node:${splineId}`,
+  apply: (document) => updateSpline(document, splineId, (spline) => {
+    const result = insertSplineNode(spline, node);
+    if (!result.success) return { success: false, error: result.error };
+    const nodes = result.spline.nodes.map((current, index, all) => {
+      const previous = all[index - 1]?.anchor ?? current.anchor;
+      const next = all[index + 1]?.anchor ?? current.anchor;
+      const tangent = { dx: (next.x - previous.x) / 6, dy: (next.y - previous.y) / 6 };
+      return { ...current, ...(index > 0 ? { inHandle: { dx: -tangent.dx, dy: -tangent.dy } } : {}), ...(index < all.length - 1 ? { outHandle: tangent } : {}) };
+    });
+    return replaceSpline(document, { ...result.spline, nodes });
+  }),
+});
+
+export const replaceSplineElement = (spline: Extract<Element, { type: "spline" }>): EditorCommand => ({
+  name: `spline-update:${spline.id}`,
+  apply: (document) => replaceSpline(document, spline),
+});
+
+export const updateSplineNode = (splineId: ElementId, nodeId: string, anchor: PointMm): EditorCommand => ({
+  name: `spline-move-node:${splineId}:${nodeId}`,
+  apply: (document) => updateSpline(document, splineId, (spline) => {
+    const result = moveSplineNodeData(spline, nodeId, anchor);
+    return result.success ? replaceSpline(document, result.spline) : { success: false, error: result.error };
+  }),
+});
+
+export const updateSplineHandle = (splineId: ElementId, nodeId: string, handle: "in" | "out", point: PointMm): EditorCommand => ({
+  name: `spline-move-handle:${splineId}:${nodeId}:${handle}`,
+  apply: (document) => updateSpline(document, splineId, (spline) => {
+    const node = spline.nodes.find((current) => current.id === nodeId);
+    if (!node) return { success: false, error: "Spline node not found" };
+    const offset = { dx: point.x - node.anchor.x, dy: point.y - node.anchor.y };
+    const result = moveSplineHandleData(spline, nodeId, handle, offset);
+    if (!result.success) return { success: false, error: result.error };
+    const updated = result.spline.nodes.map((current) => current.id === nodeId
+      ? { ...current, ...(handle === "in" ? { outHandle: { dx: -offset.dx, dy: -offset.dy } } : { inHandle: { dx: -offset.dx, dy: -offset.dy } }) }
+      : current);
+    return replaceSpline(document, { ...result.spline, nodes: updated });
+  }),
+});
+
+export const closeSplineElement = (splineId: ElementId): EditorCommand => ({
+  name: `spline-close:${splineId}`,
+  apply: (document) => updateSpline(document, splineId, (spline) => {
+    if (spline.closed) return { success: false, error: "Spline is already closed" };
+    if (spline.nodes.length < 3) return { success: false, error: "A spline must have at least three nodes to close" };
+    const nodes = spline.nodes.map((node, index) => {
+      const previous = spline.nodes[(index - 1 + spline.nodes.length) % spline.nodes.length]!.anchor;
+      const next = spline.nodes[(index + 1) % spline.nodes.length]!.anchor;
+      const tangent = { dx: (next.x - previous.x) / 6, dy: (next.y - previous.y) / 6 };
+      return { ...node, inHandle: { dx: -tangent.dx, dy: -tangent.dy }, outHandle: tangent };
+    });
+    return replaceSpline(document, { ...spline, nodes, closed: true });
+  }),
+});
 const updatePath = (document: DocumentSnapshot, path: PathElement): CommandResult => replaceElements(document, document.elements.map((element) => element.id === path.id ? path : element));
 const translatePath = (path: PathElement, delta: PointMm): PathElement => ({ ...path, nodes: path.nodes.map((node) => ({ ...node, anchor: { x: node.anchor.x + delta.x, y: node.anchor.y + delta.y } })), segments: path.segments.map((segment) => segment.type === "cubicBezier" ? { ...segment, control1: { x: segment.control1.x + delta.x, y: segment.control1.y + delta.y }, control2: { x: segment.control2.x + delta.x, y: segment.control2.y + delta.y } } : segment) });
 

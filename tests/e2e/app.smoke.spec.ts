@@ -49,24 +49,36 @@ test("creates an open spline with Spline and exposes its anchors", async ({ page
   await page.mouse.click(x, y);
   await page.mouse.click(x + 80, y + 30);
   await page.mouse.click(x + 160, y);
-  const spline = page.locator('[data-spline-layer] path[data-spline-id]');
+  const spline = page.locator('.page-svg svg path[data-element-id]');
   await expect(spline).toHaveCount(1);
-  await expect(spline).toHaveAttribute("d", / C /);
+  await expect(spline).toHaveAttribute("d", /C/);
   const nodes = page.locator("[data-spline-node]");
   await expect(nodes).toHaveCount(3);
-  await expect(page.locator("[data-spline-handle]")).toHaveCount(4);
+  await expect(page.locator("[data-spline-handle]")).toHaveCount(0);
+  const secondNode = await nodes.nth(1).boundingBox();
+  expect(secondNode).not.toBeNull();
+  await page.mouse.click(secondNode!.x + secondNode!.width / 2, secondNode!.y + secondNode!.height / 2);
+  await expect(page.locator("[data-spline-handle]")).toHaveCount(2);
   const firstNode = await nodes.first().boundingBox();
   expect(firstNode).not.toBeNull();
   await page.mouse.click(firstNode!.x + firstNode!.width / 2, firstNode!.y + firstNode!.height / 2);
   await expect(spline).toHaveAttribute("d", / Z$/);
-  await expect(page.locator("[data-spline-handle]")).toHaveCount(6);
-  await page.getByRole("button", { name: "Seleccion" }).click();
-  await spline.click({ force: true });
+  await expect(page.locator('[data-spline-overlay-layer] path')).toHaveAttribute("fill", "rgba(107,114,128,0.25)");
+  await expect(page.locator("[data-spline-handle]")).toHaveCount(2);
+  await page.getByRole("button", { name: "Forma" }).click();
+  const selectedNode = await nodes.nth(1).boundingBox();
+  expect(selectedNode).not.toBeNull();
+  await page.mouse.click(selectedNode!.x + selectedNode!.width / 2, selectedNode!.y + selectedNode!.height / 2);
+  await expect(page.locator("[data-spline-handle]")).toHaveCount(2);
   const beforeDrag = await spline.getAttribute("d");
   const handle = page.locator("[data-spline-handle]").first();
-  const handleBounds = await handle.boundingBox();
-  expect(handleBounds).not.toBeNull();
-  await page.mouse.move(handleBounds!.x + handleBounds!.width / 2, handleBounds!.y + handleBounds!.height / 2);
+  const handleBounds = await handle.evaluate((element) => {
+    const bounds = element.getBoundingClientRect();
+    return { x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height };
+  });
+  expect(handleBounds.width).toBeGreaterThan(0);
+  expect(handleBounds.height).toBeGreaterThan(0);
+  await page.mouse.move(handleBounds.x + handleBounds.width / 2, handleBounds.y + handleBounds.height / 2);
   await page.mouse.down();
   await page.mouse.move(handleBounds!.x + 25, handleBounds!.y - 15);
   await page.mouse.up();
@@ -76,8 +88,26 @@ test("creates an open spline with Spline and exposes its anchors", async ({ page
   await page.keyboard.press("Delete");
   await expect(spline).toHaveCount(0);
   await page.keyboard.press("Control+z");
-  await expect(page.locator('[data-spline-layer] path[data-spline-id]')).toHaveCount(1);
-  await expect(page.locator(".page-svg svg path[data-element-id]")).toHaveCount(0);
+  await expect(page.locator('.page-svg svg path[data-element-id]')).toHaveCount(1);
+});
+
+test("double-clicking empty canvas clears native Spline node selection", async ({ page }) => {
+  await page.goto("/");
+  const pageBounds = await page.locator(".page").boundingBox();
+  expect(pageBounds).not.toBeNull();
+  await page.getByRole("button", { name: "Spline" }).click();
+  await page.mouse.click(pageBounds!.x + 80, pageBounds!.y + 80);
+  await page.mouse.click(pageBounds!.x + 160, pageBounds!.y + 110);
+  await page.mouse.click(pageBounds!.x + 240, pageBounds!.y + 80);
+  await page.getByRole("button", { name: "Forma" }).click();
+  const node = page.locator("[data-spline-node]").nth(1);
+  const nodeBounds = await node.boundingBox();
+  expect(nodeBounds).not.toBeNull();
+  await page.mouse.click(nodeBounds!.x + nodeBounds!.width / 2, nodeBounds!.y + nodeBounds!.height / 2);
+  await expect(page.locator("[data-spline-handle]")).toHaveCount(2);
+  await page.mouse.dblclick(pageBounds!.x + 500, pageBounds!.y + 500);
+  await expect(page.locator("[data-spline-handle]")).toHaveCount(0);
+  await expect(page.locator("[data-spline-node]")).toHaveCount(0);
 });
 
 test("closes a Pluma silhouette by clicking its first anchor and supports fill and undo", async ({ page }) => {
