@@ -115,4 +115,20 @@ describe("SVG renderer boundary", () => {
       expect(result.svg).not.toContain("first\\nsecond");
     }
   });
+
+  it("renders text strokes with the configured positive model width", () => {
+    const source = withElements(createDocument("thin-text", [layer]), [{
+      type: "text", id: elementId("thin-text"), layerId: layer.id, position: { x: 10, y: 20 }, size: { width: 40, height: 20 },
+      text: "thin", fontFamily: "Arial", fontSize: 10, fontWeight: "normal", fontStyle: "normal", textAlign: "left", lineHeight: 1.2, rotation: 0,
+      style: { stroke: "#111", fill: "none", strokeWidth: 0.2 },
+    }]);
+    const result = renderSvg(source, { zoom: 1, panMm: { x: 0, y: 0 } });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.svg).toContain('<text data-element-id="thin-text"');
+      expect(result.svg).toContain('stroke-width="0.2"');
+      expect(result.svg).not.toContain('stroke-width="1"');
+    }
+  });
 });
