@@ -554,17 +554,12 @@ export function hitTest(element: Element, point: PointMm, toleranceMm = 0): bool
        if (onStroke || !element.closed) return onStroke;
         return pointInRing(point, points.map((value) => [value.x, value.y] as [number, number]));
       }
-  if (element.type === "text") {
-    const scaleX = Math.abs(element.scaleX ?? 1);
-    const scaleY = Math.abs(element.scaleY ?? 1);
-    const center = { x: element.position.x + element.size.width * scaleX / 2, y: element.position.y + element.size.height * scaleY / 2 };
-    const local = rotate({ x: point.x - center.x, y: point.y - center.y }, -element.rotation);
-    return Math.abs(local.x) <= element.size.width * scaleX / 2 + toleranceMm && Math.abs(local.y) <= element.size.height * scaleY / 2 + toleranceMm;
-  }
-  const center = { x: element.position.x + element.size.width / 2, y: element.position.y + element.size.height / 2 };
+  const width = element.type === "text" ? element.size.width * Math.abs(element.scaleX ?? 1) : element.size.width;
+  const height = element.type === "text" ? element.size.height * Math.abs(element.scaleY ?? 1) : element.size.height;
+  const center = { x: element.position.x + width / 2, y: element.position.y + height / 2 };
   const local = rotate({ x: point.x - center.x, y: point.y - center.y }, -element.rotation);
-  if (element.type === "rectangle") return Math.abs(local.x) <= element.size.width / 2 + toleranceMm && Math.abs(local.y) <= element.size.height / 2 + toleranceMm;
-  const rx = element.size.width / 2 + toleranceMm; const ry = element.size.height / 2 + toleranceMm;
+  if (element.type === "rectangle" || element.type === "text") return Math.abs(local.x) <= width / 2 + toleranceMm && Math.abs(local.y) <= height / 2 + toleranceMm;
+  const rx = width / 2 + toleranceMm; const ry = height / 2 + toleranceMm;
   return (local.x * local.x) / (rx * rx) + (local.y * local.y) / (ry * ry) <= 1;
 }
 export function pathHitTest(path: PathElement, point: PointMm, toleranceMm = 0): boolean {
