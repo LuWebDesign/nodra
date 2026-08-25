@@ -317,6 +317,28 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
   const canvasPointAt = (event: PointerEvent<HTMLElement> | WheelEvent<HTMLElement>) => clientPointToCanvas({ x: event.clientX, y: event.clientY }, canvas.current!.getBoundingClientRect());
   const pointAt = (event: PointerEvent<HTMLElement> | WheelEvent<HTMLElement>) => screenPointToMm(canvasPointAt(event), { x: 0, y: 0 }, zoom, panMm);
 
+  useEffect(() => {
+    if (!textDraft) return;
+    const frame = requestAnimationFrame(() => textInput.current?.focus());
+    return () => cancelAnimationFrame(frame);
+  }, [textDraft]);
+
+  const commitTextDraft = () => {
+    const draft = textDraft;
+    if (!draft?.value.trim()) { setTextDraft(undefined); return; }
+    const current = editorRef.current;
+    const lines = draft.value.split("\\n");
+    const text: TextElement = {
+      type: "text", id: draft.elementId ?? id(), layerId: layerId(current.document.layers[0]?.id ?? "layer-1"),
+      position: draft.position, size: { width: Math.max(24, Math.max(...lines.map((line) => line.length), 1) * 13), height: Math.max(24, lines.length * 29) }, text: draft.value,
+      fontFamily: textFontFamily, fontSize: 24, fontWeight: "normal", fontStyle: "normal", textAlign: "left", lineHeight: 1.2, rotation: 0,
+      style: { stroke: "#000000", fill: "#000000", strokeWidth: 0.1 },
+    };
+    const next = draft.elementId ? dispatch(current, updateElement(draft.elementId, { text: text.text, fontFamily: text.fontFamily })) : dispatch(current, createElement(text));
+    setEditorState(select(next, [text.id]));
+    setTextDraft(undefined);
+  };
+
   const addPenPoint = (point: PointMm) => {
     const current = editorRef.current;
     if (!penDraftPoint) {
@@ -1102,7 +1124,7 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
          <div className="inspector-tab-content" role="tabpanel">
                 {inspectorTab === "properties" && <>{selectedElements.length === 0 ? <section className="inspector-card"><div className="panel-title">PÁGINA</div><div className="preset-row"><button onClick={() => setPage(1200, 900)}>Horizontal</button><button onClick={() => setPage(900, 1200)}>Vertical</button></div><div className="fields"><Field label="W" value={document.page.width} onChange={(value) => setPage(value, document.page.height)} /><Field label="H" value={document.page.height} onChange={(value) => setPage(document.page.width, value)} /></div><label className="grid-toggle"><input type="checkbox" checked={grid} onChange={(event) => setGrid(event.target.checked)} /> Mostrar cuadrícula del espacio de trabajo</label></section> : <section className="inspector-card inspector-object-card"><div className="panel-title">OBJETO</div>{propertyElement ? <div className="inspector-object-properties">{objectPropertySections(true)}</div> : <><div className="selected-type">{selectedElement?.type === "contour" ? "CONTORNO" : selectedElement?.type === "path" ? "TRAZADO" : selectedElement?.type === "spline" ? "SPLINE" : "LÍNEA"}</div><p className="muted">{selectedElement?.type === "contour" ? "Los contornos conservan su geometría real; las dimensiones no están disponibles." : selectedElement?.type === "path" ? "Los trazados conservan sus nodos y segmentos." : selectedElement?.type === "spline" ? "Las splines conservan sus nodos y handles relativos." : "Las líneas no tienen dimensiones rectangulares."}</p>{selectedElement && isRotatableElement(selectedElement) && rotationField(selectedElement)}</>}</section>}{pathClosureControls}{splineClosureControls}{pathJoinControls}{pathSegmentControls}</>}
               {inspectorTab === "transform" && transformControls()}
-           {inspectorTab === "text" && <section className="inspector-card"><div className="panel-title">TEXTO</div><p className="muted">Las propiedades de texto estarán disponibles en una próxima iteración.</p></section>}
+           {inspectorTab === "text" && <section className="inspector-card"><div className="panel-title">TEXTO</div>{selectedElement?.type === "text" ? <div className="text-properties"><label className="field"><span>Tamaño (mm)</span><input type="number" min="1" value={selectedElement.fontSize} onChange={(event) => { const value = Number(event.target.value); if (Number.isFinite(value) && value > 0) setEditorState(dispatch(editorRef.current, updateElement(selectedElement.id, { fontSize: value }))); }} /></label><label className="field"><span>Tipografía</span><select value={selectedElement.fontFamily} onChange={(event) => setEditorState(dispatch(editorRef.current, updateElement(selectedElement.id, { fontFamily: event.target.value })))}><option>Arial</option><option>Helvetica</option><option>Times New Roman</option><option>Courier New</option><option>Inter</option></select></label><div className="text-style-buttons"><button type="button" aria-pressed={selectedElement.fontWeight === "bold"} onClick={() => setEditorState(dispatch(editorRef.current, updateElement(selectedElement.id, { fontWeight: selectedElement.fontWeight === "bold" ? "normal" : "bold" })))}>Negrita</button><button type="button" aria-pressed={selectedElement.fontStyle === "italic"} onClick={() => setEditorState(dispatch(editorRef.current, updateElement(selectedElement.id, { fontStyle: selectedElement.fontStyle === "italic" ? "normal" : "italic" })))}>Cursiva</button></div></div> : <p className="muted">Seleccione un texto para editar sus propiedades.</p>}</section>}
          </div>
          <section className="inspector-lower-card"><div className="panel-title">CAPAS</div>{document.layers.map((layer) => <div className="layer" key={layer.id}><span>{layer.name}</span><span>{layer.visible ? "Visible" : "Oculta"}</span></div>)}</section>
          <section className="inspector-lower-card"><div className="panel-title">OBJETOS</div><p className="muted">Estructura de objetos próximamente.</p></section>
