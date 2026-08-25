@@ -1099,7 +1099,7 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
        </div>
        {aspectLockButton()}
      </div>}
-    {selectedElement?.type === "rectangle" && <div className={inspector ? "inspector-property-card inspector-radius-card" : "property-card property-card-radius"} role="group" aria-label="Radio de esquina">{cornerRadiusField(selectedElement)}</div>}
+    {inspector && selectedElement?.type === "rectangle" && <div className="inspector-property-card inspector-radius-card" role="group" aria-label="Radio de esquina">{cornerRadiusField(selectedElement)}</div>}
     {selectedElement && isRotatableElement(selectedElement) && rotationField(selectedElement)}
   </> : null;
 
