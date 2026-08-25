@@ -40,7 +40,6 @@ type ActiveInteraction = {
   document?: DocumentSnapshot;
   shiftKey?: boolean;
   center?: PointMm;
-  dimensionAnchor?: NodeHit;
 };
 
 type InspectorTab = "properties" | "transform" | "text";
@@ -71,6 +70,7 @@ export function App() {
   const canvas = useRef<HTMLDivElement>(null);
   const editorRef = useRef(editor);
   const interaction = useRef<ActiveInteraction | undefined>(undefined);
+  const pendingDimensionAnchor = useRef<NodeHit | undefined>(undefined);
   const viewportInteracted = useRef(false);
   const centeredViewport = useRef<string | undefined>(undefined);
   const recoveredNotice = useRef(false);
@@ -131,7 +131,7 @@ export function App() {
     ? { type: "rectangle" as const, id: selectedElements[0]!.id, layerId: selectedElements[0]!.layerId, position: { x: selectedBounds.x, y: selectedBounds.y }, size: { width: selectedBounds.width, height: selectedBounds.height }, cornerRadius: 0, rotation: 0, style: selectedElements[0]!.style }
      : selectedElement?.type !== "line" && selectedElement?.type !== "dimension" && selectedElement?.type !== "contour" && selectedElement?.type !== "path" ? selectedElement : undefined;
   const selectionKey = selection.join(":");
-  useEffect(() => { setTransformMode("resize"); }, [tool, project.activePageId, selectionKey]);
+  useEffect(() => { pendingDimensionAnchor.current = undefined; setTransformMode("resize"); }, [tool, project.activePageId, selectionKey]);
 
   useEffect(() => {
     setCenterHover(undefined);
@@ -270,9 +270,14 @@ export function App() {
     const nodeHit = transformMode === "resize" ? pickNode(editorRef.current.document, point, zoom) : undefined;
     if (tool === "dimension") {
       if (!nodeHit) return;
-      event.currentTarget.setPointerCapture(event.pointerId);
-      setEditorState(beginGesture(editorRef.current));
-      interaction.current = { pointerId: event.pointerId, lastX: event.clientX, lastY: event.clientY, kind: "draw", dragged: false, start: point, startClient: { x: event.clientX, y: event.clientY }, ids: [id()], dimensionAnchor: nodeHit };
+      const first = pendingDimensionAnchor.current;
+      if (!first) {
+        pendingDimensionAnchor.current = nodeHit;
+        return;
+      }
+      pendingDimensionAnchor.current = undefined;
+      if (first.elementId === nodeHit.elementId && first.nodeIndex === nodeHit.nodeIndex) return;
+      setEditorState(dispatch(editorRef.current, createElement(newDimension(editorRef.current.document.layers[0]?.id ?? "layer-1", first, nodeHit))));
       return;
     }
     const hit = nodeHit?.elementId ?? pickElement(editorRef.current.document, point, zoom);
@@ -380,18 +385,12 @@ export function App() {
       setEditorState(cancelled ? cancelGesture(editorRef.current) : commitGesture(editorRef.current));
     } else if (active.kind === "draw") {
       const end = active.start ? pointAt(event) : undefined;
-      if (active.dimensionAnchor && active.ids?.[0]) {
-        const target = end ? pickNode(editorRef.current.gesture?.base ?? editorRef.current.document, end, zoom) : undefined;
-        if (cancelled || !target || target.elementId === active.dimensionAnchor.elementId && target.nodeIndex === active.dimensionAnchor.nodeIndex) setEditorState(cancelGesture(editorRef.current));
-        else setEditorState(commitGesture(previewGesture(editorRef.current, createElement(newDimension(editorRef.current.document.layers[0]?.id ?? "layer-1", active.dimensionAnchor, target, active.ids[0])))));
-      } else {
       const zeroLengthLine = active.tool === "line" && active.start && end && active.start.x === end.x && active.start.y === end.y;
       if (cancelled || !active.dragged || zeroLengthLine) setEditorState(cancelGesture(editorRef.current));
       else if (active.start && active.tool && active.ids?.[0] && end) {
         const element = newElement(active.tool, editorRef.current.document.layers[0]?.id ?? "layer-1", active.start, end, active.ids[0]);
         const command = active.previewed ? updateElement(element.id, element.type === "line" ? { start: element.start, end: element.end } : element.type === "rectangle" || element.type === "ellipse" ? { position: element.position, size: element.size } : {}) : createElement(element);
         setEditorState(commitGesture(previewGesture(editorRef.current, command)));
-      }
       }
     }
     interaction.current = undefined;
@@ -415,6 +414,7 @@ export function App() {
           setMarquee(undefined);
           setSnapGuide(undefined);
         }
+        pendingDimensionAnchor.current = undefined;
         setTransformMode("resize");
         return;
       }
