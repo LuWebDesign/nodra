@@ -17,6 +17,8 @@ Load for tools, pointer gestures, selection, commands, undo/redo, or editor stat
 - A successful no-op command must not advance revision, schedule persistence, or add undo/redo history; the command/dispatch layer owns this invariant.
 - Tools do not call IndexedDB; web orchestration schedules persistence.
 - Preserve Spanish UI copy and keep selection/tool state separate from domain data.
+- The Texto tool uses click-to-place editing; commit with Enter, Escape, blur, or outside click. After commit, select the text object so its black resize handles are available.
+- Text resizing is a geometry gesture: resize the text bounds and scale `fontSize` together; font family changes on the selected text are discrete editor commands.
 
 ## Decision Gates
 | Situation | Action |

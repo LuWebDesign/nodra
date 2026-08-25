@@ -16,6 +16,8 @@ Load for model fields, coordinates, transforms, bounds, rotation, hit testing, h
 - Keep domain != geometry != renderer/UI responsibilities.
 - Do not install or infer libraries; candidates are not selected dependencies.
 - Preview != persistent document and no premature spatial index/worker abstraction.
+- Text bounds are editable geometry: selection handles must resize the text box and font size together.
+- Rectangle radii support legacy uniform `cornerRadius` plus optional independent `cornerRadii` (top-left, top-right, bottom-left, bottom-right); linked editing belongs to UI state, not domain state.
 
 ## Decision Gates
 | Need | Current choice |
@@ -24,6 +26,7 @@ Load for model fields, coordinates, transforms, bounds, rotation, hit testing, h
 | Bounds/hit/handles | geometry functions |
 | Rendering projection | renderer-svg |
 | Large-scale acceleration | measure first; evaluate an index later |
+| Design checks | `validateDesign`: open paths/splines, duplicate line endpoints, and bounds outside page |
 
 ## Execution Steps
 1. State the invariant and coordinate frame.

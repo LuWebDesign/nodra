@@ -14,7 +14,7 @@ Load for test planning, CI evidence, docs audits, or release checks. Read root s
 - Treat manifests, source, configs, and CI as authoritative; stale OpenSpec metadata is not evidence.
 - Use the CI order: lint, typecheck, test, test:e2e, build.
 - Do not edit generated `.build` or `apps/web/dist`.
-- E2E `--pass-with-no-tests` is not product coverage; no real E2E files currently exist.
+- E2E `--pass-with-no-tests` is not product coverage; the repository currently has a Chromium smoke test at `tests/e2e/app.smoke.spec.ts`, but it is not comprehensive product coverage.
 - Test persisted committed state, not transient preview; preserve Spanish UI copy in UI assertions.
 - Record exact commands and their results separately from environment/tooling failures. A filtered package build is not evidence that the root build succeeded.
 - For renderer classification, test both invalid documents with supported schema versions and unsupported schema versions/features; use the repository's schema constant rather than hardcoding the current number.
@@ -24,7 +24,7 @@ Load for test planning, CI evidence, docs audits, or release checks. Read root s
 |---|---|
 | Pure docs | links, frontmatter, file existence |
 | Package logic | focused Vitest + typecheck/lint |
-| UI behavior | unit tests plus real E2E when available |
+| UI behavior | unit tests plus the real Chromium smoke E2E when the change affects covered workspace load or controls |
 | persistence | fake-indexeddb recovery/revision tests |
 
 ## Execution Steps
