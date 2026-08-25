@@ -101,4 +101,18 @@ describe("SVG renderer boundary", () => {
       expect(result.svg).toContain('fill="#abcdef"');
     }
   });
+
+  it("renders actual multiline text newlines as separate tspans", () => {
+    const source = withElements(createDocument("text", [layer]), [{
+      type: "text", id: elementId("text"), layerId: layer.id, position: { x: 10, y: 20 }, size: { width: 40, height: 20 },
+      text: "first\nsecond", fontFamily: "Arial", fontSize: 10, fontWeight: "normal", fontStyle: "normal", textAlign: "left", lineHeight: 1.2, rotation: 0,
+      style,
+    }]);
+    const result = renderSvg(source, { zoom: 1, panMm: { x: 0, y: 0 } });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.svg).toContain('<tspan x="10" dy="0">first</tspan><tspan x="10" dy="12">second</tspan>');
+      expect(result.svg).not.toContain("first\\nsecond");
+    }
+  });
 });
