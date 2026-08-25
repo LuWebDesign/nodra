@@ -5,7 +5,7 @@ import { boundsOfElements, contourVertexNodes, elementCenter, groupCenter, group
 import { DebouncedAutosave, DexieProjectRepository, requestStoragePersistence } from "@nodra/persistence";
 import { renderSvg } from "@nodra/renderer-svg";
 import { canActivateRotation, centerPageInCanvas, clientPointToCanvas, cubicPlacementControls, formaNodeKey, hoveredSelectionCenter, isDrawingTool, marqueeSelection, movementExceedsThreshold, normalizeBounds, normalizeDrag, pagePointToCanvas, pathGuides, pickElement, pickFormaNode, pickFormaSegment, pickNode, pickPathNode, pickPathSegment, pointerDownIntent, screenDeltaToMm, screenPointToMm, selectedNodeAnchor, selectedPathAnchorIds, alignmentGuides, snapMoveDelta, zoomAtPoint, type AlignmentGuide, type ContourNodeHit, type FormaNodeHit, type NodeHit, type PathNodeHit, type SnapGuide, type TransformMode } from "./interaction.js";
-import { aspectGeometryPatch, aspectSize, cornerRadiusPatch, formatMm, geometryValue, rotationDegreesValue, rotationPatch, type GeometryField, type PropertyElement, type RotatableElement } from "./propertyBar.js";
+import { aspectGeometryPatch, aspectSize, formatMm, geometryValue, rotationDegreesValue, rotationPatch, type GeometryField, type PropertyElement, type RotatableElement } from "./propertyBar.js";
 import { useDocumentStore, usePersistenceStore, useUiStore, useViewportStore, type Tool } from "./stores.js";
 import { pathJoinGuidance, pathJoinOptions } from "./pathJoins.js";
 
@@ -947,14 +947,9 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
   };
 
   const cornerRadiusField = (element: Extract<Element, { type: "rectangle" }>) => {
-    const key = `${element.id}:cornerRadius`;
-    return <label className="field"><span>Radio</span><input inputMode="decimal" min="0" aria-label="Radio de esquina en milímetros" value={drafts[key] ?? formatMm(element.cornerRadius)} onChange={(event) => setDrafts((current) => ({ ...current, [key]: event.target.value }))} onBlur={() => {
-      const value = Number((drafts[key] ?? "").trim());
-      if (Number.isFinite(value) && value >= 0) {
-        setDrafts((current) => { const next = { ...current }; delete next[key]; return next; });
-        setEditorState(dispatch(editorRef.current, updateElement(element.id, cornerRadiusPatch(value)!)));
-      } else setDrafts((current) => ({ ...current, [key]: formatMm(element.cornerRadius) }));
-    }} /></label>;
+    const values = element.cornerRadii ?? { topLeft: element.cornerRadius, topRight: element.cornerRadius, bottomRight: element.cornerRadius, bottomLeft: element.cornerRadius };
+    const corners = [{ key: "topLeft", label: "Sup. izq." }, { key: "topRight", label: "Sup. der." }, { key: "bottomRight", label: "Inf. der." }, { key: "bottomLeft", label: "Inf. izq." }] as const;
+    return <div className="corner-radius-fields">{corners.map(({ key, label }) => { const draftKey = `${element.id}:corner:${key}`; return <label className="field" key={key}><span>{label}</span><input inputMode="decimal" min="0" aria-label={`Radio ${label} en milímetros`} value={drafts[draftKey] ?? formatMm(values[key])} onChange={(event) => setDrafts((current) => ({ ...current, [draftKey]: event.target.value }))} onBlur={() => { const value = Number((drafts[draftKey] ?? "").trim()); if (Number.isFinite(value) && value >= 0) { setDrafts((current) => { const next = { ...current }; delete next[draftKey]; return next; }); setEditorState(dispatch(editorRef.current, updateElement(element.id, { cornerRadii: { ...values, [key]: value } }))); } else setDrafts((current) => ({ ...current, [draftKey]: formatMm(values[key]) })); }} /> </label>; })}</div>;
   };
 
   const dimensionIcon = (kind: "width" | "height", label: "Ancho" | "Alto") => <span className="dimension-icon" aria-label={label} title={label}><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{kind === "width" ? <><path d="M2 8h12M5 5 2 8l3 3M11 5l3 3-3 3" /><path d="M2 3v10M14 3v10" /></> : <><path d="M8 2v12M5 5l3-3 3 3M5 11l3 3 3-3" /><path d="M3 2h10M3 14h10" /></>}</svg></span>;
