@@ -8,10 +8,10 @@ import { canActivateRotation, centerPageInCanvas, clientPointToCanvas, cubicPlac
 import { aspectGeometryPatch, aspectSize, formatMm, geometryValue, rotationDegreesValue, rotationPatch, type GeometryField, type PropertyElement, type RotatableElement } from "./propertyBar.js";
 import { useDocumentStore, usePersistenceStore, useUiStore, useViewportStore, type Tool } from "./stores.js";
 import { pathJoinGuidance, pathJoinOptions } from "./pathJoins.js";
+import { textSizeFor } from "./textMetrics.js";
 
 const defaultStyle = { stroke: "#000000", strokeWidth: 1 };
 const defaultClosedFill = "rgba(101,217,255,0.22)";
-const textSizeFor = (value: string, fontSize: number) => { const lines = value.split("\n"); return { width: Math.max(fontSize * 2, Math.max(...lines.map((line) => line.length), 1) * fontSize * 0.98), height: Math.max(fontSize * 1.1, lines.length * fontSize * 1.1) }; };
 const isPropertyElement = (element: Element): element is PropertyElement => element.type === "rectangle" || element.type === "ellipse";
 const isRotatableElement = (element: Element): element is RotatableElement => element.type !== "path" && element.type !== "spline";
 const palette = [
@@ -111,6 +111,8 @@ export function App() {
   const [splineDraftPoint, setSplineDraftPoint] = useState<PointMm>();
   const [activeSplineId, setActiveSplineId] = useState<ElementId>();
   const [textFontFamily, setTextFontFamily] = useState("Arial");
+  const [textFontWeight, setTextFontWeight] = useState<"normal" | "bold">("normal");
+  const [textFontStyle, setTextFontStyle] = useState<"normal" | "italic">("normal");
   const [availableFonts, setAvailableFonts] = useState(["Arial", "Helvetica", "Times New Roman", "Courier New", "Inter"]);
   const [textDraft, setTextDraft] = useState<{ readonly position: PointMm; readonly value: string; readonly elementId?: ElementId; readonly fontSize?: number }>();
   const textDraftRef = useRef(textDraft);
@@ -349,8 +351,8 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
     const current = editorRef.current;
     const text: TextElement = {
       type: "text", id: draft.elementId ?? id(), layerId: layerId(current.document.layers[0]?.id ?? "layer-1"),
-      position: draft.position, size: textSizeFor(draft.value, draft.fontSize ?? 24), text: draft.value,
-      fontFamily: textFontFamily, fontSize: draft.fontSize ?? 24, fontWeight: "normal", fontStyle: "normal", textAlign: "left", lineHeight: 1.2, rotation: 0,
+      position: draft.position, size: textSizeFor(draft.value, draft.fontSize ?? 24, textFontFamily, textFontWeight, textFontStyle, 1.2), text: draft.value,
+       fontFamily: textFontFamily, fontSize: draft.fontSize ?? 24, fontWeight: textFontWeight, fontStyle: textFontStyle, textAlign: "left", lineHeight: 1.2, rotation: 0,
       style: { stroke: "#000000", fill: "#000000", strokeWidth: 0.1 },
     };
     const next = draft.elementId ? dispatch(current, updateElement(draft.elementId, { text: text.text, size: text.size, fontFamily: text.fontFamily, fontSize: text.fontSize })) : dispatch(current, createElement(text));
@@ -497,7 +499,7 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
     if (tool === "text") {
       const hit = pickElement(editorRef.current.document, point, zoom);
       const existing = hit ? editorRef.current.document.elements.find((element): element is TextElement => element.id === hit && element.type === "text") : undefined;
-      if (existing) { setEditorState(select(editorRef.current, [existing.id])); setTextFontFamily(existing.fontFamily); }
+       if (existing) { setEditorState(select(editorRef.current, [existing.id])); setTextFontFamily(existing.fontFamily); setTextFontWeight(existing.fontWeight); setTextFontStyle(existing.fontStyle); }
       setTextDraft({ position: existing?.position ?? point, value: existing?.text ?? "", ...(existing ? { elementId: existing.id, fontSize: existing.fontSize } : {}) });
       return;
     }
@@ -598,7 +600,9 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
     const hitElement = hit ? editorRef.current.document.elements.find((element) => element.id === hit) : undefined;
     if (hitElement?.type === "text") {
       setEditorState(select(editorRef.current, [hitElement.id]));
-      setTextFontFamily(hitElement.fontFamily);
+       setTextFontFamily(hitElement.fontFamily);
+       setTextFontWeight(hitElement.fontWeight);
+       setTextFontStyle(hitElement.fontStyle);
       setTextDraft({ position: hitElement.position, value: hitElement.text, elementId: hitElement.id, fontSize: hitElement.fontSize });
       return;
     }
