@@ -481,10 +481,28 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
     interaction.current = { pointerId: event.pointerId, lastX: event.clientX, lastY: event.clientY, kind: "rotate", ids: selection, ...(selectedElement ? { element: selectedElement } : {}), center, start, dragged: false };
   };
 
+  const beginTextEdit = (element: TextElement) => {
+    setEditorState(select(editorRef.current, [element.id]));
+    setTextFontFamily(element.fontFamily);
+    setTextFontWeight(element.fontWeight);
+    setTextFontStyle(element.fontStyle);
+    setTextDraft({ position: element.position, value: element.text, elementId: element.id, fontSize: element.fontSize });
+  };
+
   const onCanvasPointerDown = (event: PointerEvent<HTMLDivElement>) => {
      // Commit before handling the next canvas target. This makes pointer-down
      // the authoritative boundary for a draft instead of relying on blur order.
+     const hadTextDraft = Boolean(textDraftRef.current);
      commitTextDraft();
+     if (hadTextDraft) {
+       if (tool !== "text") return;
+       const point = pointAt(event);
+       const hit = pickElement(editorRef.current.document, point, zoom);
+       const existing = hit ? editorRef.current.document.elements.find((element): element is TextElement => element.id === hit && element.type === "text") : undefined;
+       if (!existing) return;
+       beginTextEdit(existing);
+       return;
+     }
      if (interaction.current) return;
      setCenterHover(undefined);
      setCursorPoint(canvasPointAt(event));
@@ -505,12 +523,12 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
       setEditorState(clearSelection(editorRef.current));
       return;
     }
-    if (tool === "text") {
-      const hit = pickElement(editorRef.current.document, point, zoom);
-      const existing = hit ? editorRef.current.document.elements.find((element): element is TextElement => element.id === hit && element.type === "text") : undefined;
-       if (existing) { setEditorState(select(editorRef.current, [existing.id])); setTextFontFamily(existing.fontFamily); setTextFontWeight(existing.fontWeight); setTextFontStyle(existing.fontStyle); }
-      setTextDraft({ position: existing?.position ?? point, value: existing?.text ?? "", ...(existing ? { elementId: existing.id, fontSize: existing.fontSize } : {}) });
-      return;
+     if (tool === "text") {
+       const hit = pickElement(editorRef.current.document, point, zoom);
+       const existing = hit ? editorRef.current.document.elements.find((element): element is TextElement => element.id === hit && element.type === "text") : undefined;
+       if (existing) beginTextEdit(existing);
+       else setTextDraft({ position: point, value: "" });
+       return;
     }
     if (tool === "spline") { addSplinePoint(point); return; }
     if (tool === "pen") {
@@ -607,13 +625,9 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
     if ((event.target as HTMLElement).closest("textarea")) return;
     const hit = pickElement(editorRef.current.document, point, zoom);
     const hitElement = hit ? editorRef.current.document.elements.find((element) => element.id === hit) : undefined;
-     if (hitElement?.type === "text") {
-      setEditorState(select(editorRef.current, [hitElement.id]));
-       setTextFontFamily(hitElement.fontFamily);
-       setTextFontWeight(hitElement.fontWeight);
-       setTextFontStyle(hitElement.fontStyle);
-       setTextDraft({ position: hitElement.position, value: hitElement.text, elementId: hitElement.id, fontSize: hitElement.fontSize });
-      return;
+      if (hitElement?.type === "text") {
+       beginTextEdit(hitElement);
+       return;
     }
     if (canActivateRotation(tool, editorRef.current.selection, hit) && hitElement && isRotatableElement(hitElement)) {
       event.preventDefault();

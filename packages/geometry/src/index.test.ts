@@ -69,6 +69,16 @@ describe("canonical millimetre geometry", () => {
     expect(hitTest(rectangle, { x: 10, y: 20 })).toBe(true);
     expect(hitTest(rectangle, { x: 31, y: 20 })).toBe(false);
   });
+  it("hit-tests text as a scaled, rotated rectangle rather than an ellipse", () => {
+    const text = { type: "text" as const, id: elementId("text-hit"), layerId: layerId("l"), position: { x: 10, y: 20 }, size: { width: 20, height: 10 }, scaleX: 2, scaleY: 0.5, text: "Text", fontFamily: "Arial", fontSize: 24, fontWeight: "normal" as const, fontStyle: "normal" as const, textAlign: "left" as const, lineHeight: 1.2, rotation: Math.PI / 4, style };
+    const center = { x: 30, y: 22.5 };
+    expect(hitTest(text, center)).toBe(true);
+    const outsideOnLongEdge = { x: center.x + 20.5 * Math.cos(Math.PI / 4), y: center.y + 20.5 * Math.sin(Math.PI / 4) };
+    expect(hitTest(text, outsideOnLongEdge, 0)).toBe(false);
+    expect(hitTest(text, outsideOnLongEdge, 1)).toBe(true);
+    const rectangleCorner = { x: center.x + (10 * Math.cos(Math.PI / 4) - 2.4 * Math.sin(Math.PI / 4)), y: center.y + (10 * Math.sin(Math.PI / 4) + 2.4 * Math.cos(Math.PI / 4)) };
+    expect(hitTest(text, rectangleCorner)).toBe(true);
+  });
   it("detects objects that cross the page export boundary, including negative coordinates", () => {
     expect(boundsOutsidePage({ ...rectangle, position: { x: -1, y: 20 } }, { width: 1200, height: 900 })).toBe(true);
     expect(boundsOutsidePage(rectangle, { width: 1200, height: 900 })).toBe(false);
