@@ -72,6 +72,14 @@ function renderElement(element: Element, viewport: Viewport): string {
   }
   if (element.type === "path") return renderPath(element, viewport);
   if (element.type === "spline") return renderPath(splineToPathElement(element), viewport);
+  if (element.type === "text") {
+    const position = screen(element.position);
+    const fontSize = element.fontSize * viewport.zoom;
+    const anchor = element.textAlign === "center" ? "middle" : element.textAlign === "right" ? "end" : "start";
+    const x = element.textAlign === "center" ? position.x + element.size.width * viewport.zoom / 2 : element.textAlign === "right" ? position.x + element.size.width * viewport.zoom : position.x;
+    const lines = element.text.split("\\n").map((line, index) => `<tspan x="${number(x)}" dy="${number(index === 0 ? fontSize : fontSize * element.lineHeight)}">${escapeAttribute(line)}</tspan>`).join("");
+    return `<text data-element-id="${escapeAttribute(element.id)}" x="${number(x)}" y="${number(position.y)}" text-anchor="${anchor}" font-family="${escapeAttribute(element.fontFamily)}" font-size="${number(fontSize)}" font-weight="${element.fontWeight}" font-style="${element.fontStyle}" fill="${escapeAttribute(element.style.fill ?? element.style.stroke)}" stroke="${escapeAttribute(element.style.stroke)}" stroke-width="${number(Math.max(element.style.strokeWidth, 1))}" transform="rotate(${degrees(element.rotation)} ${number(position.x)} ${number(position.y)})">${lines}</text>`;
+  }
   const start = screen(element.start);
   const end = screen(element.end);
   const center = { x: (start.x + end.x) / 2, y: (start.y + end.y) / 2 };
@@ -121,7 +129,7 @@ export function renderSvg(document: unknown, viewport: unknown): RenderResult {
   const checked = validateDocument(document);
   if (!checked.success) {
     const candidate = typeof document === "object" && document !== null ? document as { schemaVersion?: unknown; elements?: unknown } : undefined;
-    const unsupported = !SUPPORTED_SCHEMA_VERSIONS.has(candidate?.schemaVersion as number) || (Array.isArray(candidate?.elements) && candidate.elements.some((element) => typeof element === "object" && element !== null && !["rectangle", "ellipse", "line", "contour", "path", "spline"].includes((element as { type?: unknown }).type as string)));
+    const unsupported = !SUPPORTED_SCHEMA_VERSIONS.has(candidate?.schemaVersion as number) || (Array.isArray(candidate?.elements) && candidate.elements.some((element) => typeof element === "object" && element !== null && !["rectangle", "ellipse", "line", "contour", "path", "spline", "text"].includes((element as { type?: unknown }).type as string)));
     return { success: false, reason: unsupported ? "unsupported" : "invalid", error: checked.error.slice(0, 512), issues: checked.issues.slice(0, MAX_ISSUES).map((issue) => `${issue.path.join(".") || "document"}: ${issue.message}`) };
   }
   const checkedViewport = viewportResult(viewport);
