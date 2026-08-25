@@ -47,6 +47,13 @@ function renderElement(element: Element, viewport: Viewport): string {
     const width = element.size.width * viewport.zoom;
     const height = element.size.height * viewport.zoom;
     const center = { x: position.x + width / 2, y: position.y + height / 2 };
+    if (element.cornerRadii) {
+      const limit = Math.min(width, height) / 2;
+      const radii = { tl: Math.min(element.cornerRadii.topLeft * viewport.zoom, limit), tr: Math.min(element.cornerRadii.topRight * viewport.zoom, limit), br: Math.min(element.cornerRadii.bottomRight * viewport.zoom, limit), bl: Math.min(element.cornerRadii.bottomLeft * viewport.zoom, limit) };
+      const x = position.x; const y = position.y; const right = x + width; const bottom = y + height;
+      const d = `M${number(x + radii.tl)} ${number(y)} H${number(right - radii.tr)} Q${number(right)} ${number(y)} ${number(right)} ${number(y + radii.tr)} V${number(bottom - radii.br)} Q${number(right)} ${number(bottom)} ${number(right - radii.br)} ${number(bottom)} H${number(x + radii.bl)} Q${number(x)} ${number(bottom)} ${number(x)} ${number(bottom - radii.bl)} V${number(y + radii.tl)} Q${number(x)} ${number(y)} ${number(x + radii.tl)} ${number(y)} Z`;
+      return `<path data-element-id="${escapeAttribute(element.id)}" d="${d}" transform="${transform(element, center.x, center.y)}" ${visualAttributes(element)} />`;
+    }
     const radius = Math.min(element.cornerRadius * viewport.zoom, width / 2, height / 2);
     return `<rect data-element-id="${escapeAttribute(element.id)}" x="${number(position.x)}" y="${number(position.y)}" width="${number(width)}" height="${number(height)}" rx="${number(radius)}" ry="${number(radius)}" transform="${transform(element, center.x, center.y)}" ${visualAttributes(element)} />`;
   }
@@ -65,6 +72,14 @@ function renderElement(element: Element, viewport: Viewport): string {
   }
   if (element.type === "path") return renderPath(element, viewport);
   if (element.type === "spline") return renderPath(splineToPathElement(element), viewport);
+  if (element.type === "text") {
+    const position = screen(element.position);
+    const fontSize = element.fontSize * viewport.zoom;
+    const anchor = element.textAlign === "center" ? "middle" : element.textAlign === "right" ? "end" : "start";
+    const x = element.textAlign === "center" ? position.x + element.size.width * viewport.zoom / 2 : element.textAlign === "right" ? position.x + element.size.width * viewport.zoom : position.x;
+    const lines = element.text.split("\\n").map((line, index) => `<tspan x="${number(x)}" dy="${number(index === 0 ? fontSize : fontSize * element.lineHeight)}">${escapeAttribute(line)}</tspan>`).join("");
+    return `<text data-element-id="${escapeAttribute(element.id)}" x="${number(x)}" y="${number(position.y)}" text-anchor="${anchor}" font-family="${escapeAttribute(element.fontFamily)}" font-size="${number(fontSize)}" font-weight="${element.fontWeight}" font-style="${element.fontStyle}" fill="${escapeAttribute(element.style.fill ?? element.style.stroke)}" stroke="${escapeAttribute(element.style.stroke)}" stroke-width="${number(Math.max(element.style.strokeWidth, 1))}" transform="rotate(${degrees(element.rotation)} ${number(position.x)} ${number(position.y)})">${lines}</text>`;
+  }
   const start = screen(element.start);
   const end = screen(element.end);
   const center = { x: (start.x + end.x) / 2, y: (start.y + end.y) / 2 };
@@ -114,7 +129,7 @@ export function renderSvg(document: unknown, viewport: unknown): RenderResult {
   const checked = validateDocument(document);
   if (!checked.success) {
     const candidate = typeof document === "object" && document !== null ? document as { schemaVersion?: unknown; elements?: unknown } : undefined;
-    const unsupported = !SUPPORTED_SCHEMA_VERSIONS.has(candidate?.schemaVersion as number) || (Array.isArray(candidate?.elements) && candidate.elements.some((element) => typeof element === "object" && element !== null && !["rectangle", "ellipse", "line", "contour", "path", "spline"].includes((element as { type?: unknown }).type as string)));
+    const unsupported = !SUPPORTED_SCHEMA_VERSIONS.has(candidate?.schemaVersion as number) || (Array.isArray(candidate?.elements) && candidate.elements.some((element) => typeof element === "object" && element !== null && !["rectangle", "ellipse", "line", "contour", "path", "spline", "text"].includes((element as { type?: unknown }).type as string)));
     return { success: false, reason: unsupported ? "unsupported" : "invalid", error: checked.error.slice(0, 512), issues: checked.issues.slice(0, MAX_ISSUES).map((issue) => `${issue.path.join(".") || "document"}: ${issue.message}`) };
   }
   const checkedViewport = viewportResult(viewport);

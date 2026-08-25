@@ -34,14 +34,17 @@ export interface Layer {
   readonly visible: boolean;
   readonly order: number;
 }
+export interface CornerRadii { readonly topLeft: number; readonly topRight: number; readonly bottomRight: number; readonly bottomLeft: number }
 export interface RectangleElement {
   readonly type: "rectangle";
   readonly id: ElementId;
   readonly layerId: LayerId;
   readonly position: PointMm;
   readonly size: SizeMm;
-  /** Corner radius in millimetres. Values are non-negative; SVG clamps oversized radii. */
+  /** Legacy uniform radius in millimetres. */
   readonly cornerRadius: number;
+  /** Optional independent radii, in clockwise order from the top-left corner. */
+  readonly cornerRadii?: CornerRadii;
   readonly rotation: number;
   readonly flipX?: boolean;
   readonly flipY?: boolean;
@@ -122,7 +125,8 @@ export type SplineContinuity = PathJoin;
 export interface HandleOffset { readonly dx: number; readonly dy: number }
 export interface SplineNode { readonly id: string; readonly anchor: PointMm; readonly continuity: SplineContinuity; readonly inHandle?: HandleOffset; readonly outHandle?: HandleOffset }
 export interface SplineElement { readonly type: "spline"; readonly id: ElementId; readonly layerId: LayerId; readonly nodes: readonly SplineNode[]; readonly closed: boolean; readonly style: VisualStyle; readonly operation?: OperationMetadata }
-export type Element = RectangleElement | EllipseElement | LineElement | ContourElement | PathElement | SplineElement;
+export interface TextElement { readonly type: "text"; readonly id: ElementId; readonly layerId: LayerId; readonly position: PointMm; readonly size: SizeMm; readonly text: string; readonly fontFamily: string; readonly fontSize: number; readonly fontWeight: "normal" | "bold"; readonly fontStyle: "normal" | "italic"; readonly textAlign: "left" | "center" | "right"; readonly lineHeight: number; readonly rotation: number; readonly style: VisualStyle; readonly operation?: OperationMetadata }
+export type Element = RectangleElement | EllipseElement | LineElement | ContourElement | PathElement | SplineElement | TextElement;
 export interface DocumentCapabilities { readonly spline?: 1 }
 export interface DocumentSnapshot {
   readonly schemaVersion: SchemaVersion;
