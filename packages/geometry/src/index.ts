@@ -259,6 +259,7 @@ export function closedElementToPolygon(element: Element): MultiPolygon {
   if (element.type === "line") throw new Error("Shape operations require closed objects");
   if (element.type === "path") { if (!element.closed) throw new Error("Shape operations require closed objects"); return [[flattenPath(element).map((point) => [point.x, point.y] as [number, number])]]; }
   if (element.type === "spline") { if (!element.closed) throw new Error("Shape operations require closed objects"); return [[splinePoints(element).map((point) => [point.x, point.y] as [number, number])]]; }
+  if (element.type === "text") throw new Error("Shape operations require closed objects");
   if (element.type === "contour") return [element.contours.map((contour) => contour.points.map((point) => [point.x, point.y] as [number, number]))];
   return [[primitivePolygon(element)]];
 }
@@ -305,8 +306,8 @@ export function rotationHandlePoints(element: Element, offsetMm: number): readon
     const bounds = pathBounds(element);
     return rotationHandlePoints({ type: "rectangle", id: element.id, layerId: element.layerId, position: { x: bounds.x, y: bounds.y }, size: { width: Math.max(bounds.width, 1), height: Math.max(bounds.height, 1) }, cornerRadius: 0, rotation: 0, style: element.style }, offsetMm);
   }
-  if (element.type === "spline") {
-    const bounds = splineBounds(element);
+  if (element.type === "spline" || element.type === "text") {
+    const bounds = boundsOf(element);
     return rotationHandlePoints({ type: "rectangle", id: element.id, layerId: element.layerId, position: { x: bounds.x, y: bounds.y }, size: { width: Math.max(bounds.width, 1), height: Math.max(bounds.height, 1) }, cornerRadius: 0, rotation: 0, style: element.style }, offsetMm);
   }
   return rotatedCorners(element).map((corner) => {
@@ -457,6 +458,7 @@ export function boundsOf(element: Element): Bounds {
   if (element.type === "contour") return contourBounds(element);
   if (element.type === "path") return pathBounds(element);
   if (element.type === "spline") return splineBounds(element);
+  if (element.type === "text") return { x: element.position.x, y: element.position.y, width: element.size.width, height: element.size.height };
   const points = corners(element); const xs = points.map((point) => point.x); const ys = points.map((point) => point.y);
   return { x: Math.min(...xs), y: Math.min(...ys), width: Math.max(...xs) - Math.min(...xs), height: Math.max(...ys) - Math.min(...ys) };
 }
