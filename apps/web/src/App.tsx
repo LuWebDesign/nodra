@@ -1126,7 +1126,7 @@ function ToolIcon({ icon }: { icon: Tool }) {
 }
 function ToolButton({ label, icon, active, onClick }: { label: string; icon: Tool; active: boolean; onClick: () => void }) {
   const description = `${label} — ${toolDescriptions[label]}`;
-  return <button className={active ? "tool active" : "tool"} aria-label={label} aria-pressed={active} title={description} aria-description={description} onClick={onClick}><ToolIcon icon={icon} /><small>{label}</small><span className="tool-description" role="tooltip">{description}</span></button>;
+  return <button className={active ? "tool active" : "tool"} aria-label={label} aria-pressed={active} aria-description={description} onClick={onClick}><ToolIcon icon={icon} /><small>{label}</small><span className="tool-description" role="tooltip">{description}</span></button>;
 }
 function Field({ label, value, onChange }: { label: string; value: number; onChange: (value: number) => void }) {
   return <label className="field"><span>{label}</span><input type="number" min="1" step="0.1" value={value} onChange={(event) => onChange(Number(event.target.value))} /></label>;
