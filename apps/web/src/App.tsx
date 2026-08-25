@@ -468,6 +468,13 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
       return;
     }
     const point = pointAt(event);
+    if (tool === "text") {
+      const hit = pickElement(editorRef.current.document, point, zoom);
+      const existing = hit ? editorRef.current.document.elements.find((element): element is TextElement => element.id === hit && element.type === "text") : undefined;
+      if (existing) { setEditorState(select(editorRef.current, [existing.id])); setTextFontFamily(existing.fontFamily); }
+      setTextDraft({ position: existing?.position ?? point, value: existing?.text ?? "", ...(existing ? { elementId: existing.id } : {}) });
+      return;
+    }
     if (tool === "spline") { addSplinePoint(point); return; }
     if (tool === "pen") {
       const pathNode = pickPathNode(editorRef.current.document, point, zoom);
@@ -562,6 +569,12 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
     }
     const hit = pickElement(editorRef.current.document, point, zoom);
     const hitElement = hit ? editorRef.current.document.elements.find((element) => element.id === hit) : undefined;
+    if (hitElement?.type === "text") {
+      setEditorState(select(editorRef.current, [hitElement.id]));
+      setTextFontFamily(hitElement.fontFamily);
+      setTextDraft({ position: hitElement.position, value: hitElement.text, elementId: hitElement.id });
+      return;
+    }
     if (canActivateRotation(tool, editorRef.current.selection, hit) && hitElement && isRotatableElement(hitElement)) {
       event.preventDefault();
       setCenterHover(undefined);
@@ -970,7 +983,7 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
 
   const cornerRadiusField = (element: Extract<Element, { type: "rectangle" }>) => {
     const values = element.cornerRadii ?? { topLeft: element.cornerRadius, topRight: element.cornerRadius, bottomRight: element.cornerRadius, bottomLeft: element.cornerRadius };
-    const corners = [{ key: "topLeft", label: "Sup. izq." }, { key: "topRight", label: "Sup. der." }, { key: "bottomRight", label: "Inf. der." }, { key: "bottomLeft", label: "Inf. izq." }] as const;
+    const corners = [{ key: "topLeft", label: "Sup. izq." }, { key: "topRight", label: "Sup. der." }, { key: "bottomLeft", label: "Inf. izq." }, { key: "bottomRight", label: "Inf. der." }] as const;
     return <div className="corner-radius-fields">{corners.map(({ key, label }) => { const draftKey = `${element.id}:corner:${key}`; return <label className="field" key={key}><span>{label}</span><input inputMode="decimal" min="0" aria-label={`Radio ${label} en milímetros`} value={drafts[draftKey] ?? formatMm(values[key])} onChange={(event) => setDrafts((current) => ({ ...current, [draftKey]: event.target.value }))} onBlur={() => { const value = Number((drafts[draftKey] ?? "").trim()); if (Number.isFinite(value) && value >= 0) { setDrafts((current) => { const next = { ...current }; delete next[draftKey]; return next; }); setEditorState(dispatch(editorRef.current, updateElement(element.id, { cornerRadii: { ...values, [key]: value } }))); } else setDrafts((current) => ({ ...current, [draftKey]: formatMm(values[key]) })); }} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); event.stopPropagation(); event.currentTarget.blur(); } if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); setDrafts((current) => ({ ...current, [draftKey]: formatMm(values[key]) })); event.currentTarget.blur(); } }} /> </label>; })}</div>;
   };
 
