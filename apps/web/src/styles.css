@@ -97,3 +97,15 @@
 /* Shared node language: square anchors in Selection, diamond anchors in node-editing modes. */
 .contour-node { border-radius: 0; }
 .contour-node.editing-node { transform: translate(-50%,-50%) rotate(45deg); }
+
+.ruler-horizontal,.ruler-vertical { position:absolute; z-index:6; background:#d8dee7eF; color:#526172; font-size:9px; pointer-events:none; overflow:hidden; }
+.ruler-horizontal { inset:0 0 auto 24px; height:24px; border-bottom:1px solid #9aa8b8; }
+.ruler-vertical { inset:24px auto 0 0; width:24px; border-right:1px solid #9aa8b8; }
+.ruler-corner { position:absolute; z-index:7; left:0; top:0; width:24px; height:24px; background:#cbd4df; border-right:1px solid #9aa8b8; border-bottom:1px solid #9aa8b8; pointer-events:none; }
+.ruler-tick { position:absolute; display:block; }
+.ruler-tick-horizontal { top:0; height:24px; }
+.ruler-tick-horizontal i { display:block; width:1px; height:8px; margin-top:16px; background:#748397; }
+.ruler-tick-horizontal b { position:absolute; top:2px; left:3px; font-weight:500; white-space:nowrap; }
+.ruler-tick-vertical { left:0; width:24px; height:1px; }
+.ruler-tick-vertical i { display:block; width:8px; height:1px; margin-left:16px; background:#748397; }
+.ruler-tick-vertical b { position:absolute; top:-2px; left:1px; font-weight:500; writing-mode:vertical-rl; transform:rotate(180deg); white-space:nowrap; }

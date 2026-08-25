@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createDocument, elementId, layerId } from "@nodra/domain";
-import { canActivateRotation, centerPageInCanvas, clientPointToCanvas, cubicPlacementControls, hoveredSelectionCenter, INITIAL_ZOOM, isDrawingTool, marqueeSelection, MAX_ZOOM, MIN_ZOOM, movementExceedsThreshold, normalizeBounds, normalizeDrag, pagePointToCanvas, pagePointToScreen, screenDeltaToMm, screenPointToMm, containsBounds, elementsContainedBy, pathGuides, pickContourNode, pickContourSegment, pickElement, pickFormaNode, pickFormaSegment, pickNode, pickPathNode, pickPathSegment, pointerDownIntent, selectedNodeAnchor, selectedPathAnchorIds, selectionCenter, selectionFrame, snapMoveDelta, zoomAtPoint } from "./interaction.js";
+import { canActivateRotation, centerPageInCanvas, clientPointToCanvas, cubicPlacementControls, hoveredSelectionCenter, INITIAL_ZOOM, isDrawingTool, marqueeSelection, MAX_ZOOM, MIN_ZOOM, movementExceedsThreshold, normalizeBounds, normalizeDrag, pagePointToCanvas, pagePointToScreen, screenDeltaToMm, screenPointToMm, containsBounds, elementsContainedBy, alignmentGuides, pathGuides, pickContourNode, pickContourSegment, pickElement, pickFormaNode, pickFormaSegment, pickNode, pickPathNode, pickPathSegment, pointerDownIntent, selectedNodeAnchor, selectedPathAnchorIds, selectionCenter, selectionFrame, snapMoveDelta, zoomAtPoint } from "./interaction.js";
 import { geometryPatch, geometryValue } from "./propertyBar.js";
 
 describe("canvas coordinates", () => {
@@ -34,6 +34,30 @@ describe("canvas coordinates", () => {
     const checked = { ...document, elements: [rectangle] };
     expect(hoveredSelectionCenter(checked, rectangle, { x: 15, y: 15 }, 3)).toEqual({ x: 20, y: 15 });
     expect(hoveredSelectionCenter(checked, rectangle, { x: 100, y: 100 }, 3)).toBeUndefined();
+  });
+});
+
+describe("alignment guides", () => {
+  it("returns vertical and horizontal visual guides for a moved object", () => {
+    const layer = { id: layerId("alignment-layer"), name: "Alignment", visible: true, order: 0 };
+    const source = { type: "rectangle" as const, id: elementId("alignment-source"), layerId: layer.id, position: { x: 0, y: 0 }, size: { width: 10, height: 10 }, cornerRadius: 0, rotation: 0, style: { stroke: "#000", strokeWidth: 1 } };
+    const target = { ...source, id: elementId("alignment-target"), position: { x: 20, y: 12 } };
+    const result = alignmentGuides({ ...createDocument("alignment-doc", [layer]), elements: [source, target] }, [source.id], { x: 10, y: 12 }, 1, 8);
+    expect(result).toEqual(expect.arrayContaining([
+      expect.objectContaining({ orientation: "vertical", coordinate: 20 }),
+      expect.objectContaining({ orientation: "horizontal", coordinate: expect.any(Number) }),
+    ]));
+  });
+
+  it("uses the complete selected group and ignores hidden reference objects", () => {
+    const visible = { id: layerId("visible-alignment"), name: "Visible", visible: true, order: 0 };
+    const hidden = { id: layerId("hidden-alignment"), name: "Hidden", visible: false, order: 1 };
+    const make = (id: string, layerIdValue: typeof visible.id, x: number) => ({ type: "rectangle" as const, id: elementId(id), layerId: layerIdValue, position: { x, y: 0 }, size: { width: 10, height: 10 }, cornerRadius: 0, rotation: 0, style: { stroke: "#000", strokeWidth: 1 } });
+    const first = make("alignment-group-a", visible.id, 0);
+    const second = make("alignment-group-b", visible.id, 20);
+    const target = make("alignment-hidden-target", hidden.id, 30);
+    const result = alignmentGuides({ ...createDocument("alignment-group-doc", [visible, hidden]), elements: [first, second, target] }, [first.id, second.id], { x: 10, y: 0 }, 1, 8);
+    expect(result.some((guide) => guide.coordinate === 30)).toBe(false);
   });
 });
 
