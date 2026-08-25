@@ -314,6 +314,7 @@ test("moves text with Selection and edits it inline on double-click", async ({ p
 
   const text = page.locator('.page-svg svg text[data-element-id]');
   await expect(text).toHaveCount(1);
+  await expect(text).toBeVisible();
   const before = await text.boundingBox();
   expect(before).not.toBeNull();
 
@@ -330,10 +331,14 @@ test("moves text with Selection and edits it inline on double-click", async ({ p
     style: await text.getAttribute("font-style"),
   };
 
-  await page.mouse.move(before!.x + before!.width / 2, before!.y + before!.height / 2);
+  await expect(text).toBeVisible();
+  const beforeDrag = await text.boundingBox();
+  expect(beforeDrag).not.toBeNull();
+  await page.mouse.move(beforeDrag!.x + beforeDrag!.width / 2, beforeDrag!.y + beforeDrag!.height / 2);
   await page.mouse.down();
-  await page.mouse.move(before!.x + before!.width / 2 + 35, before!.y + before!.height / 2 + 20);
+  await page.mouse.move(beforeDrag!.x + beforeDrag!.width / 2 + 35, beforeDrag!.y + beforeDrag!.height / 2 + 20);
   await page.mouse.up();
+  await expect(text).toBeVisible();
   const moved = await text.boundingBox();
   expect(moved).not.toBeNull();
   expect(moved!.x).toBeGreaterThan(before!.x);

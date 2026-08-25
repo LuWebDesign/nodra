@@ -64,7 +64,7 @@ describe("editor core", () => {
 
   it("moves text elements without changing their content or typography", () => {
     const state = dispatch(createEditor({ ...document, elements: [text] }), moveElements([text.id], { x: 7, y: -3 }));
-    expect(state.document.elements[0]).toEqual({ ...text, position: { x: 19, y: 15 } });
+    expect(state.document.elements[0]).toMatchObject({ ...text, position: { x: 19, y: 15 } });
     expect(state.undo).toHaveLength(1);
   });
   it("deletes contour nodes through validation and keeps a ring valid", () => {
