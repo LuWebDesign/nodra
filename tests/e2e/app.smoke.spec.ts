@@ -287,6 +287,7 @@ test("creates, transforms, and undoes a rectangle", async ({ page }) => {
 
   const rectangle = page.locator(".page-svg svg rect").first();
   await expect(rectangle).toBeVisible();
+  await expect.poll(() => rectangle.boundingBox()).not.toBeNull();
   const rectangleBounds = await rectangle.boundingBox();
   expect(rectangleBounds).not.toBeNull();
   await page.getByRole("button", { name: "Seleccion" }).click();

@@ -113,7 +113,7 @@ export function App() {
   const [textFontWeight, setTextFontWeight] = useState<"normal" | "bold">("normal");
   const [textFontStyle, setTextFontStyle] = useState<"normal" | "italic">("normal");
   const [availableFonts, setAvailableFonts] = useState(["Arial", "Helvetica", "Times New Roman", "Courier New", "Inter"]);
-  const [textDraft, setTextDraft] = useState<{ readonly position: PointMm; readonly value: string; readonly elementId?: ElementId; readonly fontSize?: number }>();
+  const [textDraft, setTextDraft] = useState<{ readonly position: PointMm; readonly value: string; readonly elementId?: ElementId; readonly fontSize?: number; readonly element?: TextElement }>();
   const textDraftRef = useRef(textDraft);
   textDraftRef.current = textDraft;
   const textInput = useRef<HTMLTextAreaElement>(null);
@@ -237,7 +237,7 @@ export function App() {
        line.dataset.bezierGuide = direction; line.setAttribute("x1", String(a.x)); line.setAttribute("y1", String(a.y)); line.setAttribute("x2", String(b.x)); line.setAttribute("y2", String(b.y)); line.setAttribute("stroke", color); line.setAttribute("stroke-width", "1"); line.setAttribute("stroke-dasharray", "3 2"); line.style.pointerEvents = "none"; overlay.append(line);
      };
      for (const element of selectedElements) if (element.type === "path") for (const guide of pathGuides(element)) guideLine(guide.anchor, guide.control, guide.direction);
-    if (transformMode === "resize" && tool !== "forma") for (const element of selectedElements.filter((candidate) => candidate.type !== "spline")) for (const [nodeIndex, node] of realGeometryNodes(element).entries()) {
+    if (transformMode === "resize" && tool !== "forma") for (const element of selectedElements.filter((candidate) => candidate.type !== "spline" && candidate.type !== "text")) for (const [nodeIndex, node] of realGeometryNodes(element).entries()) {
       const screen = point(node.point);
       const hitArea = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "circle");
       hitArea.dataset.realNode = element.id;
@@ -344,17 +344,28 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
     } catch { /* The browser rejects invalid or unsupported font files. */ }
   };
 
-  const commitTextDraft = () => {
+  const commitTextDraft = (expectedDraft = textDraftRef.current) => {
     const draft = textDraftRef.current;
-    if (!draft?.value.trim()) { setTextDraft(undefined); return; }
+    if (!draft || draft !== expectedDraft) return;
+    // Clear the ref synchronously. Blur can run after the canvas pointer-down
+    // handler and must not commit the same draft a second time.
+    textDraftRef.current = undefined;
+    if (!draft.value.trim()) { setTextDraft(undefined); return; }
     const current = editorRef.current;
+    const source = draft.element;
+    const fontFamily = source?.fontFamily ?? textFontFamily;
+    const fontWeight = source?.fontWeight ?? textFontWeight;
+    const fontStyle = source?.fontStyle ?? textFontStyle;
+    const fontSize = source?.fontSize ?? draft.fontSize ?? 12;
     const text: TextElement = {
       type: "text", id: draft.elementId ?? id(), layerId: layerId(current.document.layers[0]?.id ?? "layer-1"),
-      position: draft.position, size: textSizeFor(draft.value, draft.fontSize ?? 12, textFontFamily, textFontWeight, textFontStyle, 1.2), text: draft.value,
-      fontFamily: textFontFamily, fontSize: draft.fontSize ?? 12, fontWeight: textFontWeight, fontStyle: textFontStyle, textAlign: "left", lineHeight: 1.2, rotation: 0,
-      style: { stroke: "#000000", fill: "#000000", strokeWidth: 0.1 },
+      position: draft.position, size: textSizeFor(draft.value, fontSize, fontFamily, fontWeight, fontStyle, source?.lineHeight ?? 1.2), text: draft.value,
+      fontFamily, fontSize, fontWeight, fontStyle, textAlign: source?.textAlign ?? "left", lineHeight: source?.lineHeight ?? 1.2, rotation: source?.rotation ?? 0,
+      style: source?.style ?? { stroke: "#000000", fill: "#000000", strokeWidth: 0.1 },
     };
-    const next = draft.elementId ? dispatch(current, updateElement(draft.elementId, { text: text.text, size: text.size, fontFamily: text.fontFamily, fontSize: text.fontSize })) : dispatch(current, createElement(text));
+    // Inline editing changes only the text content and its measured bounds. The
+    // existing element keeps its position and all typography/style properties.
+    const next = draft.elementId ? dispatch(current, updateElement(draft.elementId, { text: text.text, size: text.size })) : dispatch(current, createElement(text));
     setEditorState(select(next, [text.id]));
     setTextDraft(undefined);
     setTool("select");
@@ -474,8 +485,29 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
     interaction.current = { pointerId: event.pointerId, lastX: event.clientX, lastY: event.clientY, kind: "rotate", ids: selection, ...(selectedElement ? { element: selectedElement } : {}), center, start, dragged: false };
   };
 
+  const beginTextEdit = (element: TextElement) => {
+    setEditorState(select(editorRef.current, [element.id]));
+    setTextFontFamily(element.fontFamily);
+    setTextFontWeight(element.fontWeight);
+    setTextFontStyle(element.fontStyle);
+    setTextDraft({ position: element.position, value: element.text, elementId: element.id, fontSize: element.fontSize, element });
+  };
+
   const onCanvasPointerDown = (event: PointerEvent<HTMLDivElement>) => {
-    if (interaction.current) return;
+     // Commit before handling the next canvas target. This makes pointer-down
+     // the authoritative boundary for a draft instead of relying on blur order.
+     const hadTextDraft = Boolean(textDraftRef.current);
+     commitTextDraft();
+     if (hadTextDraft) {
+       if (tool !== "text") return;
+       const point = pointAt(event);
+       const hit = pickElement(editorRef.current.document, point, zoom);
+       const existing = hit ? editorRef.current.document.elements.find((element): element is TextElement => element.id === hit && element.type === "text") : undefined;
+       if (!existing) return;
+       beginTextEdit(existing);
+       return;
+     }
+     if (interaction.current) return;
      setCenterHover(undefined);
      setCursorPoint(canvasPointAt(event));
      setSnapGuide(undefined);
@@ -495,12 +527,12 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
       setEditorState(clearSelection(editorRef.current));
       return;
     }
-    if (tool === "text") {
-      const hit = pickElement(editorRef.current.document, point, zoom);
-      const existing = hit ? editorRef.current.document.elements.find((element): element is TextElement => element.id === hit && element.type === "text") : undefined;
-       if (existing) { setEditorState(select(editorRef.current, [existing.id])); setTextFontFamily(existing.fontFamily); setTextFontWeight(existing.fontWeight); setTextFontStyle(existing.fontStyle); }
-      setTextDraft({ position: existing?.position ?? point, value: existing?.text ?? "", ...(existing ? { elementId: existing.id, fontSize: existing.fontSize } : {}) });
-      return;
+     if (tool === "text") {
+       const hit = pickElement(editorRef.current.document, point, zoom);
+       const existing = hit ? editorRef.current.document.elements.find((element): element is TextElement => element.id === hit && element.type === "text") : undefined;
+       if (existing) beginTextEdit(existing);
+       else setTextDraft({ position: point, value: "" });
+       return;
     }
     if (tool === "spline") { addSplinePoint(point); return; }
     if (tool === "pen") {
@@ -597,13 +629,9 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
     if ((event.target as HTMLElement).closest("textarea")) return;
     const hit = pickElement(editorRef.current.document, point, zoom);
     const hitElement = hit ? editorRef.current.document.elements.find((element) => element.id === hit) : undefined;
-    if (hitElement?.type === "text") {
-      setEditorState(select(editorRef.current, [hitElement.id]));
-        setTextFontFamily(hitElement.fontFamily);
-       setTextFontWeight(hitElement.fontWeight);
-       setTextFontStyle(hitElement.fontStyle);
-      setTextDraft({ position: hitElement.position, value: hitElement.text, elementId: hitElement.id, fontSize: hitElement.fontSize });
-      return;
+      if (hitElement?.type === "text") {
+       beginTextEdit(hitElement);
+       return;
     }
     if (canActivateRotation(tool, editorRef.current.selection, hit) && hitElement && isRotatableElement(hitElement)) {
       event.preventDefault();
@@ -1149,7 +1177,14 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
             <div ref={canvas} className={`${grid ? "canvas" : "canvas no-grid"}${isDrawingTool(tool) ? " drawing-tool" : ""}${closeTargetActive ? " close-target-active" : ""}`} onPointerDown={onCanvasPointerDown} onPointerMove={onCanvasPointerMove} onPointerUp={(event) => finishPointer(event, false)} onPointerCancel={(event) => finishPointer(event, true)} onLostPointerCapture={cancelPointerInteraction} onPointerLeave={() => setCursorPoint(undefined)} onDoubleClick={onCanvasDoubleClick} onWheel={onWheel}>
            {rulerHorizontal}{rulerVertical}<span className="ruler-corner" aria-hidden="true" />
            <div className="page" style={pageStyle}>{/* SAFETY: renderSvg emits allowlisted SVG from validated document data. */}<div className={`page-svg${textDraft ? " editing-text" : ""}`} dangerouslySetInnerHTML={{ __html: rendered.success ? rendered.svg : "" }} />{(alignmentGuideOverlay.length > 0 || splineOverlay.length > 0 || selectedEditOverlay.length > 0 || pathGuideOverlay.length > 0) && <svg data-spline-overlay-layer="true" viewBox={`0 0 ${document.page.width} ${document.page.height}`} style={{ position: "absolute", inset: 0, width: "100%", height: "100%", pointerEvents: "none", overflow: "visible", zIndex: 5 }}>{alignmentGuideOverlay}{selectedEditOverlay}{pathGuideOverlay}{splineOverlay}</svg>}</div>
-             {textDraft && <textarea ref={textInput} autoFocus value={textDraft.value} onPointerDown={(event) => event.stopPropagation()} onDoubleClick={(event) => { event.preventDefault(); event.stopPropagation(); }} aria-label="Texto editable" rows={Math.max(1, textDraft.value.split("\n").length)} onChange={(event) => setTextDraft((current) => current ? { ...current, value: event.target.value } : current)} onKeyDown={(event) => { if (event.key === "Escape") { event.preventDefault(); setTextDraft(undefined); } else if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); commitTextDraft(); } }} onBlur={() => { window.setTimeout(() => { if (globalThis.document.activeElement !== textInput.current) commitTextDraft(); }, 0); }} placeholder="Escriba aquí…" style={{ caretColor: "#111827", position: "absolute", left: pagePointToCanvas(textDraft.position, zoom, panMm).x, top: pagePointToCanvas(textDraft.position, zoom, panMm).y, zIndex: 8, width: `${Math.max(70, Math.max(...textDraft.value.split("\n").map((line) => line.length), 1) * ((textDraft.fontSize ?? 12) * 0.98))}px`, height: `${Math.max(30, textDraft.value.split("\n").length * (textDraft.fontSize ?? 12) * 1.1)}px`, padding: 0, fontFamily: textFontFamily, fontSize: `${(textDraft.fontSize ?? 12) * zoom}px`, lineHeight: 1.2, color: "#111827", background: "transparent", border: "none", outline: "none", resize: "none", overflow: "hidden" }} />}
+              {textDraft && (() => {
+                const existing = textDraft.element;
+                const lines = textDraft.value.split("\n");
+                const inputWidth = existing ? existing.size.width * zoom : Math.max(70, Math.max(...lines.map((line) => line.length), 1) * ((textDraft.fontSize ?? 12) * 0.98));
+                const inputHeight = existing ? existing.size.height * zoom : Math.max(30, lines.length * (textDraft.fontSize ?? 12) * 1.2);
+                const inputFontSize = (existing?.fontSize ?? textDraft.fontSize ?? 12) * zoom;
+                return <textarea ref={textInput} autoFocus value={textDraft.value} onPointerDown={(event) => event.stopPropagation()} onDoubleClick={(event) => { event.preventDefault(); event.stopPropagation(); }} aria-label="Texto editable" rows={Math.max(1, lines.length)} wrap={existing ? "off" : undefined} onChange={(event) => setTextDraft((current) => current ? { ...current, value: event.target.value } : current)} onKeyDown={(event) => { if (event.key === "Escape") { event.preventDefault(); textDraftRef.current = undefined; setTextDraft(undefined); } else if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); commitTextDraft(); } }} onBlur={() => { const blurredDraft = textDraftRef.current; window.setTimeout(() => { if (globalThis.document.activeElement !== textInput.current) commitTextDraft(blurredDraft); }, 0); }} placeholder="Escriba aquí…" style={{ caretColor: "#111827", position: "absolute", left: pagePointToCanvas(textDraft.position, zoom, panMm).x, top: pagePointToCanvas(textDraft.position, zoom, panMm).y, zIndex: 8, width: `${inputWidth}px`, height: `${inputHeight}px`, padding: 0, fontFamily: existing?.fontFamily ?? textFontFamily, fontSize: `${inputFontSize}px`, fontWeight: existing?.fontWeight ?? textFontWeight, fontStyle: existing?.fontStyle ?? textFontStyle, textAlign: existing?.textAlign ?? "left", lineHeight: existing?.lineHeight ?? 1.2, color: "#111827", background: "transparent", border: "none", outline: "none", resize: "none", overflow: "hidden", transform: existing ? `rotate(${existing.rotation}rad) scale(${existing.scaleX ?? 1}, ${existing.scaleY ?? 1})` : undefined, transformOrigin: existing ? "top left" : undefined }} />;
+              })()}
             {formaNodes.length > 0 && <div className="contour-node-overlay" role="group" aria-label={tool === "pen" ? "Nodos y controles del trazado" : "Nodos de forma"}>{formaNodes.map((node) => { const screen = pagePointToCanvas(node.point, zoom, panMm); const selected = selectedFormaNodeKeys.includes(node.key); const pathNode = node.kind === "path" ? node.pathNode : undefined; return <button key={node.key} type="button" className={`contour-node${(tool === "forma" || tool === "pen") && !(node.kind === "path" && pathNode?.node.kind === "control") ? " editing-node" : ""}${selected ? " active selected" : ""}`} data-contour-node={node.key} aria-label={node.kind === "contour" ? `Nodo del contorno, anillo ${node.contour.ringIndex + 1}, punto ${node.contour.pointIndex + 1}` : pathNode?.node.kind === "control" ? `Control Bézier ${pathNode.node.handle === "control1" ? "saliente" : "entrante"}` : `Nodo editable ${node.nodeIndex + 1}`} style={{ left: screen.x, top: screen.y }} onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); setSelectedFormaNodeKeys((current) => event.shiftKey ? current.includes(node.key) ? current.filter((value) => value !== node.key) : [...current, node.key] : [node.key]); if (tool === "pen" && pathNode?.node.kind === "anchor") { const currentPath = editorRef.current.document.elements.find((element) => element.id === node.elementId && element.type === "path"); if (currentPath?.type === "path" && !currentPath.closed && currentPath.nodes[0]?.id === pathNode.node.nodeId) { setPenDraftPoint(undefined); setEditorState(dispatch(select(editorRef.current, [node.elementId]), closePath(node.elementId))); return; } } canvas.current?.setPointerCapture(event.pointerId); if (pathNode) { setEditorState(beginGesture(select(editorRef.current, [node.elementId]))); interaction.current = { pointerId: event.pointerId, lastX: event.clientX, lastY: event.clientY, kind: "path-node", pathNode, startClient: { x: event.clientX, y: event.clientY }, dragged: false }; } else { setEditorState(beginGesture(editorRef.current)); interaction.current = { pointerId: event.pointerId, lastX: event.clientX, lastY: event.clientY, kind: "contour-node", ...(node.kind === "contour" ? { contourNode: node.contour } : {}), formaNode: node.kind === "contour" ? { elementId: node.contour.elementId, contourNode: node.contour, point: node.point } : { elementId: node.elementId, nodeIndex: node.nodeIndex, point: node.point }, startClient: { x: event.clientX, y: event.clientY }, dragged: false }; } }} />; })}</div>}
           {centerHoverStyle && <div className="selection-center-feedback" style={centerHoverStyle} aria-hidden="true"><span className="selection-center-mark">×</span><span className="selection-center-label">centro</span></div>}
             {tool === "select" && transformMode === "resize" && (handlePoints || groupPoints) && <div className="resize-handles">{handleNames.map((handle) => <button key={handle} type="button" className={`resize-handle resize-handle-${handle}`} data-resize-handle={handle} aria-label={`Redimensionar ${handle}`} style={handleStyle(handle)} onPointerDown={(event) => resizePointerDown(event, handle)} onPointerUp={(event) => finishPointer(event, false)} onPointerCancel={(event) => finishPointer(event, true)} />)}{groupPoints && !isDrawingTool(tool) && <button type="button" className="resize-handle resize-handle-center" data-resize-handle="center" aria-label="Centro del grupo" style={handleStyle("center")} onPointerDown={(event) => event.stopPropagation()} />}</div>}
