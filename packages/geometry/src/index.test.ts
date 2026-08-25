@@ -1,18 +1,63 @@
 import { describe, expect, it } from "vitest";
-import { boundsOf, boundsOfElements, closedElementToPolygon, cubicBezierBounds, cubicBezierPoint, degreesToRadians, dimensionGeometry, dimensionValue, elementCenter, ELLIPSE_APPROXIMATION_SEGMENTS, groupCenter, groupHandlePoints, hitTest, mmToScreen, radiansToDegrees, realGeometryNodes, resolveDimensionReference, resizeGroup, resizeHandle, rotatedLineEndpoints, rotateElements, rotationFromDrag, rotationHandlePoints, screenToMm, shapeResultContours, splitCubicBezier, validateSize } from "./index.js";
+import { boundsOf, boundsOfElements, boundsOutsidePage, closedElementToPolygon, cubicBezierBounds, cubicBezierDerivative, degreesToRadians, elementCenter, elementSegmentAt, elementToContour, evaluateCubicBezier, ELLIPSE_APPROXIMATION_SEGMENTS, groupCenter, groupHandlePoints, hitTest, mmToScreen, radiansToDegrees, realGeometryNodes, resizeGroup, resizeHandle, rotatedLineEndpoints, rotateElements, rotationFromDrag, rotationHandlePoints, screenToMm, shapeResultContours, splitCubicBezier, validateSize } from "./index.js";
 import { elementId, layerId } from "@nodra/domain";
 
 const style = { stroke: "#000", strokeWidth: 0.2 };
 const rectangle = { type: "rectangle" as const, id: elementId("r"), layerId: layerId("l"), position: { x: 10, y: 20 }, size: { width: 20, height: 10 }, cornerRadius: 0, rotation: 0, style };
 
 describe("canonical millimetre geometry", () => {
-  it("finds cubic extrema and preserves a split curve", () => {
-    const curve = { p0: { x: 0, y: 0 }, p1: { x: 10, y: 30 }, p2: { x: 20, y: -30 }, p3: { x: 30, y: 0 } };
-    expect(cubicBezierBounds(curve).height).toBeGreaterThan(17);
-    const [left, right] = splitCubicBezier(curve, 0.4);
-    expect(cubicBezierPoint(left, 1)).toEqual(cubicBezierPoint(right, 0));
-    expect(cubicBezierPoint(left, 0.5).x).toBeCloseTo(cubicBezierPoint(curve, 0.2).x);
-    expect(cubicBezierPoint(left, 0.5).y).toBeCloseTo(cubicBezierPoint(curve, 0.2).y);
+  it("projects primitives to editable nodes and segments without changing the primitive", () => {
+    expect(realGeometryNodes(rectangle)).toHaveLength(9);
+    expect(elementToContour(rectangle).contours[0]?.points).toHaveLength(5);
+    expect(elementSegmentAt(rectangle, { x: 20, y: 20 }, 0.1)).toMatchObject({ elementId: rectangle.id, segmentIndex: 0 });
+    expect(rectangle.type).toBe("rectangle");
+  });
+  it("does not pick a contour segment at a vertex within the segment tolerance", () => {
+    const contour = { type: "contour" as const, id: elementId("segment-vertex"), layerId: layerId("l"), position: { x: 10, y: 20 }, size: { width: 20, height: 10 }, contours: [{ points: [{ x: 10, y: 20 }, { x: 30, y: 20 }, { x: 30, y: 30 }, { x: 10, y: 20 }] }], fillRule: "evenodd" as const, rotation: 0, style };
+    expect(elementSegmentAt(contour, { x: 10, y: 20 }, 0.1)).toBeUndefined();
+    expect(elementSegmentAt(contour, { x: 20, y: 20 }, 0.1)).toMatchObject({ segmentIndex: 0 });
+  });
+  it("evaluates cubic curves and includes exact derivative extrema", () => {
+    const curve = { p0: { x: 0, y: 0 }, p1: { x: 0, y: 10 }, p2: { x: 10, y: 10 }, p3: { x: 10, y: 0 } };
+    expect(evaluateCubicBezier(curve, 0)).toEqual(curve.p0);
+    expect(cubicBezierDerivative(curve, 0.5).y).toBe(0);
+    expect(cubicBezierBounds(curve).height).toBeCloseTo(7.5);
+    const [left, right] = splitCubicBezier(curve);
+    expect(left.p3).toEqual(right.p0);
+  });
+  it("handles linear and constant derivative polynomials", () => {
+    const curve = { p0: { x: 2, y: 4 }, p1: { x: 5, y: 4 }, p2: { x: 5, y: 10 }, p3: { x: 2, y: 10 } };
+    expect(cubicBezierBounds(curve)).toEqual({ x: 2, y: 4, width: 2.25, height: 6 });
+  });
+  it("hit-tests open spline strokes and closed spline fills in document millimetres", () => {
+    const openSpline = {
+      type: "spline" as const,
+      id: elementId("spline-open-hit"),
+      layerId: layerId("l"),
+      nodes: [
+        { id: "a", anchor: { x: 0, y: 0 }, continuity: "smooth" as const, outHandle: { dx: 5, dy: 8 } },
+        { id: "b", anchor: { x: 10, y: 0 }, continuity: "smooth" as const, inHandle: { dx: -5, dy: 8 } },
+      ],
+      closed: false,
+      style,
+    };
+    expect(hitTest(openSpline, { x: 5, y: 6 }, 0.5)).toBe(true);
+    expect(hitTest(openSpline, { x: 5, y: 8 }, 0.5)).toBe(false);
+
+    const closedSpline = {
+      type: "spline" as const,
+      id: elementId("spline-closed-hit"),
+      layerId: layerId("l"),
+      nodes: [
+        { id: "a", anchor: { x: 0, y: 0 }, continuity: "smooth" as const },
+        { id: "b", anchor: { x: 20, y: 0 }, continuity: "smooth" as const },
+        { id: "c", anchor: { x: 10, y: 20 }, continuity: "smooth" as const },
+      ],
+      closed: true,
+      style,
+    };
+    expect(hitTest(closedSpline, { x: 10, y: 6 })).toBe(true);
+    expect(hitTest(closedSpline, { x: 10, y: 25 })).toBe(false);
   });
   it("round-trips viewport conversion", () => {
     const viewport = { zoom: 2, panMm: { x: 5, y: 7 } };
@@ -23,6 +68,21 @@ describe("canonical millimetre geometry", () => {
     expect(boundsOf(rectangle)).toEqual({ x: 10, y: 20, width: 20, height: 10 });
     expect(hitTest(rectangle, { x: 10, y: 20 })).toBe(true);
     expect(hitTest(rectangle, { x: 31, y: 20 })).toBe(false);
+  });
+  it("hit-tests text as a scaled, rotated rectangle rather than an ellipse", () => {
+    const text = { type: "text" as const, id: elementId("text-hit"), layerId: layerId("l"), position: { x: 10, y: 20 }, size: { width: 20, height: 10 }, scaleX: 2, scaleY: 0.5, text: "Text", fontFamily: "Arial", fontSize: 24, fontWeight: "normal" as const, fontStyle: "normal" as const, textAlign: "left" as const, lineHeight: 1.2, rotation: Math.PI / 4, style };
+    const center = { x: 30, y: 22.5 };
+    expect(hitTest(text, center)).toBe(true);
+    const outsideOnLongEdge = { x: center.x + 20.5 * Math.cos(Math.PI / 4), y: center.y + 20.5 * Math.sin(Math.PI / 4) };
+    expect(hitTest(text, outsideOnLongEdge, 0)).toBe(false);
+    expect(hitTest(text, outsideOnLongEdge, 1)).toBe(true);
+    const rectangleCorner = { x: center.x + (10 * Math.cos(Math.PI / 4) - 2.4 * Math.sin(Math.PI / 4)), y: center.y + (10 * Math.sin(Math.PI / 4) + 2.4 * Math.cos(Math.PI / 4)) };
+    expect(hitTest(text, rectangleCorner)).toBe(true);
+  });
+  it("detects objects that cross the page export boundary, including negative coordinates", () => {
+    expect(boundsOutsidePage({ ...rectangle, position: { x: -1, y: 20 } }, { width: 1200, height: 900 })).toBe(true);
+    expect(boundsOutsidePage(rectangle, { width: 1200, height: 900 })).toBe(false);
+    expect(boundsOutsidePage({ ...rectangle, position: { x: 1190, y: 20 } }, { width: 1200, height: 900 })).toBe(true);
   });
   it("rejects degenerate geometry and viewports", () => {
     expect(() => validateSize({ width: 0, height: 2 })).toThrow();
@@ -69,13 +129,6 @@ describe("canonical millimetre geometry", () => {
     expect(realGeometryNodes(line).map(({ point }) => point)).toEqual([line.start, { x: 4, y: 5 }, line.end]);
     const ellipse = { type: "ellipse" as const, id: elementId("ellipse-nodes"), layerId: layerId("l"), position: { x: 10, y: 20 }, size: { width: 20, height: 10 }, rotation: Math.PI / 2, style };
     expect(realGeometryNodes(ellipse).map(({ point }) => point)).toEqual([{ x: 20, y: 25 }, { x: 25, y: 25 }, { x: 20, y: 35 }, { x: 15, y: 25 }, { x: 20, y: 15 }]);
-  });
-  it("resolves associative annotation dimensions from real geometry nodes", () => {
-    const dimension = { type: "dimension" as const, id: elementId("d"), layerId: layerId("l"), kind: "aligned" as const, references: [{ elementId: rectangle.id, nodeIndex: 0 }, { elementId: rectangle.id, nodeIndex: 1 }] as const, offset: { x: 0, y: -8 }, precision: 2, units: "mm" as const, rotation: 0 as const, style };
-    expect(resolveDimensionReference([rectangle, dimension], dimension.references[0])).toEqual({ x: 10, y: 20 });
-    expect(dimensionValue("horizontal", { x: 10, y: 20 }, { x: 30, y: 35 })).toBe(20);
-    expect(dimensionValue("vertical", { x: 10, y: 20 }, { x: 30, y: 35 })).toBe(15);
-    expect(dimensionGeometry(dimension, [rectangle, dimension])).toMatchObject({ lineStart: { x: 10, y: 12 }, lineEnd: { x: 30, y: 12 }, text: { x: 20, y: 12 }, value: 20 });
   });
   it("normalizes angle conversion and crosses the angle branch without jumping", () => {
     expect(radiansToDegrees(degreesToRadians(-90))).toBeCloseTo(270);
@@ -165,5 +218,32 @@ describe("canonical millimetre geometry", () => {
     expect(next[0]).toMatchObject({ position: { x: 25, y: 5 }, rotation: Math.PI / 2 });
     expect(next[1]).toMatchObject({ rotation: Math.PI / 2 });
     expect(rotateElements([line], { x: 5, y: 0 }, Math.PI / 2)[0]).toMatchObject({ start: { x: 5, y: -5 }, end: { x: 5, y: 5 }, rotation: 0 });
+  });
+
+  it("rotates spline handles as relative offsets", () => {
+    const spline = {
+      type: "spline" as const,
+      id: elementId("spline-transform"),
+      layerId: layerId("l"),
+      nodes: [{
+        id: "spline-node",
+        anchor: { x: 10, y: 0 },
+        continuity: "smooth" as const,
+        inHandle: { dx: -2, dy: 0 },
+        outHandle: { dx: 2, dy: 0 },
+      }],
+      closed: false,
+      style,
+    };
+    const rotated = rotateElements([spline], { x: 0, y: 0 }, Math.PI / 2)[0];
+    expect(rotated?.type).toBe("spline");
+    if (rotated?.type === "spline") {
+      expect(rotated.nodes[0]?.anchor.x).toBeCloseTo(0);
+      expect(rotated.nodes[0]?.anchor.y).toBeCloseTo(10);
+      expect(rotated.nodes[0]?.inHandle?.dx).toBeCloseTo(0);
+      expect(rotated.nodes[0]?.inHandle?.dy).toBeCloseTo(-2);
+      expect(rotated.nodes[0]?.outHandle?.dx).toBeCloseTo(0);
+      expect(rotated.nodes[0]?.outHandle?.dy).toBeCloseTo(2);
+    }
   });
 });

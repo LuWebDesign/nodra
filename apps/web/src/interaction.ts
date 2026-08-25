@@ -1,10 +1,54 @@
-import type { DocumentSnapshot, Element, ElementId, PointMm } from "@nodra/domain";
-import { boundsOf, dimensionGeometry, elementCenter, hitTest, realGeometryNodes, type Bounds, type RealGeometryNode } from "@nodra/geometry";
+import type { DocumentSnapshot, Element, ElementId, PathElement, PointMm } from "@nodra/domain";
+import { boundsOf, boundsOfElements, contourSegmentAt, contourVertexNodes, dimensionGeometry, elementCenter, elementSegmentAt, hitTest, pathGeometryNodes, pathSegmentAt, realGeometryNodes, type Bounds, type ContourSegmentHit, type ContourVertexNode, type PathGeometryNode, type RealGeometryNode, type PathSegmentHit } from "@nodra/geometry";
 
 export interface DragGeometry { readonly position: PointMm; readonly size: { readonly width: number; readonly height: number } }
 export interface SnapGuide { readonly source: PointMm; readonly target: PointMm }
 export interface SnapMoveResult { readonly delta: PointMm; readonly guide: SnapGuide | undefined }
+export type AlignmentGuideOrientation = "vertical" | "horizontal";
+export type AlignmentGuideKind = "edge" | "center" | "node";
+export interface AlignmentGuide {
+  readonly orientation: AlignmentGuideOrientation;
+  readonly coordinate: number;
+  readonly start: number;
+  readonly end: number;
+  readonly kind: AlignmentGuideKind;
+  readonly source: PointMm;
+  readonly target: PointMm;
+}
 export interface NodeHit { readonly elementId: ElementId; readonly nodeIndex: number; readonly node: RealGeometryNode }
+export interface PathNodeHit { readonly elementId: ElementId; readonly node: PathGeometryNode & { readonly ringIndex?: number } }
+export type PathGuideDirection = "incoming" | "outgoing";
+export interface PathGuide {
+  readonly elementId: ElementId;
+  readonly segmentIndex: number;
+  readonly nodeId: string;
+  readonly anchor: PointMm;
+  readonly control: PointMm;
+  readonly direction: PathGuideDirection;
+}
+export type ContourNodeHit = ContourVertexNode;
+export type ContourSegmentHitResult = ContourSegmentHit;
+export type PathSegmentHitResult = PathSegmentHit;
+export type FormaNodeHit = { readonly elementId: ElementId; readonly nodeIndex?: number; readonly contourNode?: ContourNodeHit; readonly point: PointMm };
+
+export function selectedPathAnchorIds(path: PathElement, keys: readonly string[]): string[] {
+  return [...new Set(keys.flatMap((key) => {
+    const match = key.match(new RegExp(`^${path.id}:p:(\\d+)$`));
+    const node = match ? pathGeometryNodes(path)[Number(match[1])] : undefined;
+    return node?.kind === "anchor" ? [node.nodeId] : [];
+  }))];
+}
+
+/** Derives editor-only handle guides from the path's existing geometry nodes. */
+export function pathGuides(path: PathElement): readonly PathGuide[] {
+  const nodes = pathGeometryNodes(path);
+  return nodes.flatMap((node) => {
+    if (node.kind !== "control" || node.segmentIndex === undefined || !node.handle) return [];
+    const anchor = nodes.find((candidate) => candidate.kind === "anchor" && candidate.nodeId === node.nodeId);
+    if (!anchor) return [];
+    return [{ elementId: path.id, segmentIndex: node.segmentIndex, nodeId: node.nodeId, anchor: anchor.point, control: node.point, direction: node.handle === "control1" ? "outgoing" : "incoming" }];
+  });
+}
 
 export type DrawingTool = "rectangle" | "ellipse" | "line";
 
@@ -23,9 +67,41 @@ export function isDrawingTool(tool: string): tool is DrawingTool {
   return tool === "rectangle" || tool === "ellipse" || tool === "line";
 }
 
+export function pickPathNode(document: DocumentSnapshot, point: PointMm, zoom: number, tolerancePx = 8): PathNodeHit | undefined {
+  if (![point.x, point.y, zoom, tolerancePx].every(Number.isFinite) || zoom <= 0 || tolerancePx < 0) throw new Error("path node coordinates, zoom, and tolerance must be valid");
+  const visible = new Set(document.layers.filter((layer) => layer.visible).map((layer) => layer.id));
+  let best: { hit: PathNodeHit; distance: number; order: string } | undefined;
+  for (const element of document.elements) if (element.type === "path" && visible.has(element.layerId)) for (const [index, node] of pathGeometryNodes(element).entries()) {
+    const distance = Math.hypot(node.point.x - point.x, node.point.y - point.y) * zoom;
+    const order = `${element.id}:${node.kind}:${node.nodeId}:${node.segmentIndex ?? -1}:${node.handle ?? ""}:${index}`;
+    if (distance <= tolerancePx && (!best || distance < best.distance || distance === best.distance && order < best.order)) best = { hit: { elementId: element.id, node }, distance, order };
+  }
+  return best?.hit;
+}
+
+export function pickPathSegment(document: DocumentSnapshot, point: PointMm, zoom: number, tolerancePx = 8): PathSegmentHitResult | undefined {
+  if (![point.x, point.y, zoom, tolerancePx].every(Number.isFinite) || zoom <= 0 || tolerancePx < 0) throw new Error("path segment coordinates, zoom, and tolerance must be valid");
+  const visible = new Set(document.layers.filter((layer) => layer.visible).map((layer) => layer.id));
+  let best: PathSegmentHitResult | undefined;
+  for (const element of document.elements) if (element.type === "path" && visible.has(element.layerId)) {
+    const hit = pathSegmentAt(element, point, tolerancePx / zoom);
+    if (hit && (!best || hit.distance < best.distance || hit.distance === best.distance && `${hit.elementId}:${hit.segmentIndex}` < `${best.elementId}:${best.segmentIndex}`)) best = hit;
+  }
+  return best;
+}
+
 export function movementExceedsThreshold(start: PointMm, end: PointMm, threshold = 3): boolean {
   if (![start.x, start.y, end.x, end.y, threshold].every(Number.isFinite) || threshold < 0) throw new Error("movement coordinates and threshold must be finite");
   return Math.hypot(end.x - start.x, end.y - start.y) >= threshold;
+}
+
+/** Derives the two controls for a pen endpoint drag in document millimetres. */
+export function cubicPlacementControls(start: PointMm, end: PointMm, pointer: PointMm): { readonly control1: PointMm; readonly control2: PointMm } {
+  if (![start.x, start.y, end.x, end.y, pointer.x, pointer.y].every(Number.isFinite)) throw new Error("cubic placement coordinates must be finite");
+  return {
+    control1: { x: start.x + (end.x - start.x) / 3, y: start.y + (end.y - start.y) / 3 },
+    control2: { x: end.x - (pointer.x - end.x), y: end.y - (pointer.y - end.y) },
+  };
 }
 
 export function screenDeltaToMm(delta: PointMm, zoom: number): PointMm {
@@ -53,6 +129,70 @@ export function snapMoveDelta(document: DocumentSnapshot, selectedIds: readonly 
   return { delta: { x: rawDelta.x + correction.x, y: rawDelta.y + correction.y }, guide: { source: { x: best.source.x + correction.x, y: best.source.y + correction.y }, target: best.target } };
 }
 
+type AlignmentCandidate = { readonly coordinate: number; readonly kind: AlignmentGuideKind; readonly point: PointMm; readonly start: number; readonly end: number; readonly order: string };
+const translatedBounds = (bounds: Bounds, delta: PointMm): Bounds => ({ x: bounds.x + delta.x, y: bounds.y + delta.y, width: bounds.width, height: bounds.height });
+const boundsCandidates = (bounds: Bounds, delta: PointMm, prefix: string): { readonly vertical: readonly AlignmentCandidate[]; readonly horizontal: readonly AlignmentCandidate[] } => {
+  const moved = translatedBounds(bounds, delta);
+  return {
+    vertical: [
+      { coordinate: moved.x, kind: "edge", point: { x: moved.x, y: moved.y }, start: moved.y, end: moved.y + moved.height, order: `${prefix}:left` },
+      { coordinate: moved.x + moved.width / 2, kind: "center", point: { x: moved.x + moved.width / 2, y: moved.y + moved.height / 2 }, start: moved.y, end: moved.y + moved.height, order: `${prefix}:center-x` },
+      { coordinate: moved.x + moved.width, kind: "edge", point: { x: moved.x + moved.width, y: moved.y + moved.height }, start: moved.y, end: moved.y + moved.height, order: `${prefix}:right` },
+    ],
+    horizontal: [
+      { coordinate: moved.y, kind: "edge", point: { x: moved.x, y: moved.y }, start: moved.x, end: moved.x + moved.width, order: `${prefix}:top` },
+      { coordinate: moved.y + moved.height / 2, kind: "center", point: { x: moved.x + moved.width / 2, y: moved.y + moved.height / 2 }, start: moved.x, end: moved.x + moved.width, order: `${prefix}:center-y` },
+      { coordinate: moved.y + moved.height, kind: "edge", point: { x: moved.x + moved.width, y: moved.y + moved.height }, start: moved.x, end: moved.x + moved.width, order: `${prefix}:bottom` },
+    ],
+  };
+};
+const nodeCandidates = (elements: readonly Element[], delta: PointMm, bounds: Bounds, prefix: string): { readonly vertical: readonly AlignmentCandidate[]; readonly horizontal: readonly AlignmentCandidate[] } => {
+  const vertical: AlignmentCandidate[] = []; const horizontal: AlignmentCandidate[] = [];
+  for (const element of elements) for (const [index, node] of realGeometryNodes(element).entries()) {
+    const point = { x: node.point.x + delta.x, y: node.point.y + delta.y };
+    vertical.push({ coordinate: point.x, kind: "node", point, start: bounds.y, end: bounds.y + bounds.height, order: `${prefix}:node-x:${index}` });
+    horizontal.push({ coordinate: point.y, kind: "node", point, start: bounds.x, end: bounds.x + bounds.width, order: `${prefix}:node-y:${index}` });
+  }
+  return { vertical, horizontal };
+};
+
+/** Returns visual alignment guides without changing the requested movement or resize. */
+export function alignmentGuides(document: DocumentSnapshot, selectedIds: readonly ElementId[], delta: PointMm = { x: 0, y: 0 }, zoom: number, tolerancePx = 8): readonly AlignmentGuide[] {
+  if (![delta.x, delta.y, zoom, tolerancePx].every(Number.isFinite) || zoom <= 0 || tolerancePx < 0) throw new Error("alignment coordinates, zoom, and tolerance must be valid");
+  const selected = new Set(selectedIds);
+  const visible = new Set(document.layers.filter((layer) => layer.visible).map((layer) => layer.id));
+  const movingElements = document.elements.filter((element) => selected.has(element.id) && visible.has(element.layerId));
+  if (!movingElements.length) return [];
+  const movingBounds = translatedBounds(boundsOfElements(movingElements), delta);
+  const movingBoundsCandidates = boundsCandidates(movingBounds, { x: 0, y: 0 }, "moving");
+  const movingNodes = nodeCandidates(movingElements, delta, movingBounds, "moving");
+  const targets = document.elements.filter((element) => !selected.has(element.id) && visible.has(element.layerId));
+  const targetCandidates = targets.flatMap((element) => {
+    const bounds = boundsOf(element);
+    const box = boundsCandidates(bounds, { x: 0, y: 0 }, element.id);
+    const nodes = nodeCandidates([element], { x: 0, y: 0 }, bounds, element.id);
+    return { vertical: [...box.vertical, ...nodes.vertical], horizontal: [...box.horizontal, ...nodes.horizontal], bounds };
+  });
+  const find = (orientation: AlignmentGuideOrientation): AlignmentGuide | undefined => {
+    const source = [...(orientation === "vertical" ? movingBoundsCandidates.vertical : movingBoundsCandidates.horizontal), ...(orientation === "vertical" ? movingNodes.vertical : movingNodes.horizontal)];
+    let best: { distance: number; source: AlignmentCandidate; target: AlignmentCandidate } | undefined;
+    for (const sourceCandidate of source) for (const target of targetCandidates) {
+      const targetCandidate = orientation === "vertical" ? target.vertical : target.horizontal;
+      for (const candidate of targetCandidate) {
+        const distance = Math.abs(sourceCandidate.coordinate - candidate.coordinate) * zoom;
+        if (distance > tolerancePx) continue;
+        const next = { distance, source: sourceCandidate, target: candidate };
+        if (!best || distance < best.distance || distance === best.distance && `${sourceCandidate.order}:${candidate.order}` < `${best.source.order}:${best.target.order}`) best = next;
+      }
+    }
+    if (!best) return undefined;
+    const start = Math.min(best.source.start, best.target.start) - 4 / zoom;
+    const end = Math.max(best.source.end, best.target.end) + 4 / zoom;
+    return { orientation, coordinate: (best.source.coordinate + best.target.coordinate) / 2, start, end, kind: best.source.kind === "node" || best.target.kind === "node" ? "node" : best.source.kind === "center" || best.target.kind === "center" ? "center" : "edge", source: best.source.point, target: best.target.point };
+  };
+  return [find("vertical"), find("horizontal")].filter((guide): guide is AlignmentGuide => guide !== undefined);
+}
+
 /** Finds a visible real node before falling back to shape hit-testing. Tolerance is screen-pixel based. */
 export function pickNode(document: DocumentSnapshot, point: PointMm, zoom: number, tolerancePx = 8): NodeHit | undefined {
   if (![point.x, point.y, zoom, tolerancePx].every(Number.isFinite) || zoom <= 0 || tolerancePx < 0) throw new Error("node coordinates, zoom, and tolerance must be valid");
@@ -67,6 +207,61 @@ export function pickNode(document: DocumentSnapshot, point: PointMm, zoom: numbe
   }
   return best?.hit;
 }
+
+export function pickContourNode(document: DocumentSnapshot, point: PointMm, zoom: number, tolerancePx = 8): ContourNodeHit | undefined {
+  if (![point.x, point.y, zoom, tolerancePx].every(Number.isFinite) || zoom <= 0 || tolerancePx < 0) throw new Error("contour node coordinates, zoom, and tolerance must be valid");
+  const visible = new Set(document.layers.filter((layer) => layer.visible).map((layer) => layer.id));
+  let best: { hit: ContourNodeHit; distance: number; order: string } | undefined;
+  for (const element of document.elements) if (element.type === "contour" && visible.has(element.layerId)) for (const node of contourVertexNodes(element)) {
+    const distance = Math.hypot(node.point.x - point.x, node.point.y - point.y) * zoom;
+    const order = `${node.elementId}:${node.ringIndex}:${node.pointIndex}`;
+    if (distance <= tolerancePx && (!best || distance < best.distance || distance === best.distance && order < best.order)) best = { hit: node, distance, order };
+  }
+  return best?.hit;
+}
+
+export function pickContourSegment(document: DocumentSnapshot, point: PointMm, zoom: number, tolerancePx = 8): ContourSegmentHitResult | undefined {
+  if (![point.x, point.y, zoom, tolerancePx].every(Number.isFinite) || zoom <= 0 || tolerancePx < 0) throw new Error("contour segment coordinates, zoom, and tolerance must be valid");
+  const visible = new Set(document.layers.filter((layer) => layer.visible).map((layer) => layer.id));
+  let best: ContourSegmentHitResult | undefined;
+  for (const element of document.elements) if (element.type === "contour" && visible.has(element.layerId)) {
+    const hit = contourSegmentAt(element, point, tolerancePx / zoom);
+    if (hit && (!best || hit.distance < best.distance || hit.distance === best.distance && `${hit.elementId}:${hit.ringIndex}:${hit.segmentIndex}` < `${best.elementId}:${best.ringIndex}:${best.segmentIndex}`)) best = hit;
+  }
+  return best;
+}
+
+export function pickFormaNode(document: DocumentSnapshot, point: PointMm, zoom: number, tolerancePx = 8): FormaNodeHit | undefined {
+  const visible = new Set(document.layers.filter((layer) => layer.visible).map((layer) => layer.id));
+  let best: { hit: FormaNodeHit; distance: number; order: string } | undefined;
+  for (const element of document.elements) if (visible.has(element.layerId)) {
+    if (element.type === "text") continue;
+    if (element.type === "contour") for (const node of contourVertexNodes(element)) {
+      const distance = Math.hypot(node.point.x - point.x, node.point.y - point.y) * zoom;
+      const order = `${element.id}:c:${node.ringIndex}:${node.pointIndex}`;
+      if (distance <= tolerancePx && (!best || distance < best.distance || distance === best.distance && order < best.order)) best = { hit: { elementId: element.id, contourNode: node, point: node.point }, distance, order };
+    }
+    else for (const [nodeIndex, node] of realGeometryNodes(element).entries()) {
+      const distance = Math.hypot(node.point.x - point.x, node.point.y - point.y) * zoom;
+      const order = `${element.id}:p:${nodeIndex}`;
+      if (distance <= tolerancePx && (!best || distance < best.distance || distance === best.distance && order < best.order)) best = { hit: { elementId: element.id, nodeIndex, point: node.point }, distance, order };
+    }
+  }
+  return best?.hit;
+}
+
+export function pickFormaSegment(document: DocumentSnapshot, point: PointMm, zoom: number, tolerancePx = 8): ContourSegmentHitResult | undefined {
+  const visible = new Set(document.layers.filter((layer) => layer.visible).map((layer) => layer.id));
+  let best: ContourSegmentHitResult | undefined;
+  for (const element of document.elements) if (visible.has(element.layerId)) {
+    if (element.type === "text") continue;
+    const hit = elementSegmentAt(element, point, tolerancePx / zoom);
+    if (hit && (!best || hit.distance < best.distance || hit.distance === best.distance && `${hit.elementId}:${hit.ringIndex}:${hit.segmentIndex}` < `${best.elementId}:${best.ringIndex}:${best.segmentIndex}`)) best = hit;
+  }
+  return best;
+}
+
+export function formaNodeKey(node: FormaNodeHit): string { return node.contourNode ? `${node.elementId}:c:${node.contourNode.ringIndex}:${node.contourNode.pointIndex}` : `${node.elementId}:p:${node.nodeIndex}`; }
 
 /** Keeps a node anchor only when the pointer-down selection includes its element. */
 export function selectedNodeAnchor(node: NodeHit | undefined, selectedIds: readonly ElementId[]): NodeHit | undefined {
@@ -152,7 +347,7 @@ export function pickElement(document: DocumentSnapshot, point: PointMm, zoom: nu
     if (!visible.has(element.layerId)) return false;
     if (element.type !== "dimension") return hitTest(element, point, tolerance);
     const geometry = dimensionGeometry(element, document.elements);
-    return Boolean(geometry && (Math.hypot(point.x - geometry.text.x, point.y - geometry.text.y) <= Math.max(tolerance, 3) || hitTest({ type: "line", id: element.id, layerId: element.layerId, start: geometry.lineStart, end: geometry.lineEnd, rotation: 0, style: element.style }, point, tolerance)));
+    return Boolean(geometry && (Math.hypot(point.x - geometry.text.x, point.y - geometry.text.y) <= Math.max(tolerance, 3) || Math.hypot(point.x - geometry.lineStart.x, point.y - geometry.lineStart.y) <= tolerance || Math.hypot(point.x - geometry.lineEnd.x, point.y - geometry.lineEnd.y) <= tolerance));
   })?.id;
 }
 

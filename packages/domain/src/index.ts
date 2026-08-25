@@ -34,14 +34,17 @@ export interface Layer {
   readonly visible: boolean;
   readonly order: number;
 }
+export interface CornerRadii { readonly topLeft: number; readonly topRight: number; readonly bottomRight: number; readonly bottomLeft: number }
 export interface RectangleElement {
   readonly type: "rectangle";
   readonly id: ElementId;
   readonly layerId: LayerId;
   readonly position: PointMm;
   readonly size: SizeMm;
-  /** Corner radius in millimetres. Values are non-negative; SVG clamps oversized radii. */
+  /** Legacy uniform radius in millimetres. */
   readonly cornerRadius: number;
+  /** Optional independent radii, in clockwise order from the top-left corner. */
+  readonly cornerRadii?: CornerRadii;
   readonly rotation: number;
   readonly flipX?: boolean;
   readonly flipY?: boolean;
@@ -73,17 +76,13 @@ export interface LineElement {
   readonly operation?: OperationMetadata;
 }
 export type DimensionKind = "aligned" | "horizontal" | "vertical";
-export interface DimensionReference {
-  readonly elementId: ElementId;
-  readonly nodeIndex: number;
-}
+export interface DimensionReference { readonly elementId: ElementId; readonly nodeIndex: number }
 export interface DimensionElement {
   readonly type: "dimension";
   readonly id: ElementId;
   readonly layerId: LayerId;
   readonly kind: DimensionKind;
   readonly references: readonly [DimensionReference, DimensionReference];
-  /** Visual offset from the measured midpoint in millimetres. The measured value remains associative. */
   readonly offset: PointMm;
   readonly precision: number;
   readonly units: "mm";
@@ -107,25 +106,25 @@ export interface ContourElement {
   readonly style: VisualStyle;
   readonly operation?: OperationMetadata;
 }
-export type PathJoinMode = "corner" | "smooth" | "symmetric";
+export type PathJoin = "corner" | "smooth" | "symmetric";
 export interface PathNode {
   readonly id: string;
   readonly anchor: PointMm;
-  readonly join: PathJoinMode;
+  readonly join: PathJoin;
 }
-export interface LinePathSegment {
+export interface PathLineSegment {
   readonly type: "line";
   readonly startNodeId: string;
   readonly endNodeId: string;
 }
-export interface CubicBezierPathSegment {
+export interface PathCubicSegment {
   readonly type: "cubicBezier";
   readonly startNodeId: string;
   readonly endNodeId: string;
   readonly control1: PointMm;
   readonly control2: PointMm;
 }
-export type PathSegment = LinePathSegment | CubicBezierPathSegment;
+export type PathSegment = PathLineSegment | PathCubicSegment;
 export interface PathElement {
   readonly type: "path";
   readonly id: ElementId;
@@ -133,19 +132,27 @@ export interface PathElement {
   readonly nodes: readonly PathNode[];
   readonly segments: readonly PathSegment[];
   readonly closed: boolean;
-  readonly rotation: number;
-  readonly flipX?: boolean;
-  readonly flipY?: boolean;
   readonly style: VisualStyle;
   readonly operation?: OperationMetadata;
 }
-export type Element = RectangleElement | EllipseElement | LineElement | DimensionElement | ContourElement | PathElement;
+export type SplineContinuity = PathJoin;
+export interface HandleOffset { readonly dx: number; readonly dy: number }
+export interface SplineNode { readonly id: string; readonly anchor: PointMm; readonly continuity: SplineContinuity; readonly inHandle?: HandleOffset; readonly outHandle?: HandleOffset }
+export interface SplineElement { readonly type: "spline"; readonly id: ElementId; readonly layerId: LayerId; readonly nodes: readonly SplineNode[]; readonly closed: boolean; readonly style: VisualStyle; readonly operation?: OperationMetadata }
+export interface TextElement { readonly type: "text"; readonly id: ElementId; readonly layerId: LayerId; readonly position: PointMm; readonly size: SizeMm; readonly text: string; readonly fontFamily: string; readonly fontSize: number; readonly fontWeight: "normal" | "bold"; readonly fontStyle: "normal" | "italic"; readonly textAlign: "left" | "center" | "right"; readonly lineHeight: number; readonly scaleX?: number; readonly scaleY?: number; readonly rotation: number; readonly style: VisualStyle; readonly operation?: OperationMetadata }
+/** A single closed outline compound. Coordinates are document-space millimetres. */
+export interface GlyphContour { readonly nodes: readonly PathNode[]; readonly segments: readonly PathSegment[] }
+/** Editable outline for one laid-out font glyph; multiple contours preserve holes. */
+export interface GlyphElement { readonly type: "glyph"; readonly id: ElementId; readonly layerId: LayerId; readonly position: PointMm; readonly size: SizeMm; readonly glyph: string; readonly contours: readonly GlyphContour[]; readonly fillRule: "evenodd"; readonly rotation: number; readonly flipX?: boolean; readonly flipY?: boolean; readonly style: VisualStyle; readonly operation?: OperationMetadata }
+export type Element = RectangleElement | EllipseElement | LineElement | DimensionElement | ContourElement | PathElement | SplineElement | TextElement | GlyphElement;
+export interface DocumentCapabilities { readonly spline?: 1 }
 export interface DocumentSnapshot {
   readonly schemaVersion: SchemaVersion;
   readonly id: DocumentId;
   readonly revision: Revision;
   readonly origin: "top-left";
   readonly units: "mm";
+  readonly capabilities?: DocumentCapabilities;
   readonly page: SizeMm;
   readonly layers: readonly Layer[];
   readonly elements: readonly Element[];
@@ -164,6 +171,7 @@ export interface ProjectSnapshot {
   readonly revision: Revision;
   readonly origin: "top-left";
   readonly units: "mm";
+  readonly capabilities?: DocumentCapabilities;
   readonly pages: readonly PageSnapshot[];
   readonly activePageId: PageId;
 }
