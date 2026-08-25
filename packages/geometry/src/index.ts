@@ -501,6 +501,8 @@ export function resizeGroup(elements: readonly Element[], handle: ResizeHandle, 
        ? { ...e, nodes: e.nodes.map((node) => ({ ...node, anchor: { x: x + (node.anchor.x - bounds.x) * sx, y: y + (node.anchor.y - bounds.y) * sy } })), segments: e.segments.map((segment) => segment.type === "cubicBezier" ? { ...segment, control1: { x: x + (segment.control1.x - bounds.x) * sx, y: y + (segment.control1.y - bounds.y) * sy }, control2: { x: x + (segment.control2.x - bounds.x) * sx, y: y + (segment.control2.y - bounds.y) * sy } } : segment) }
      : e.type === "spline"
        ? { ...e, nodes: e.nodes.map((node) => ({ ...node, anchor: { x: x + (node.anchor.x - bounds.x) * sx, y: y + (node.anchor.y - bounds.y) * sy }, ...(node.inHandle ? { inHandle: { dx: node.inHandle.dx * sx, dy: node.inHandle.dy * sy } } : {}), ...(node.outHandle ? { outHandle: { dx: node.outHandle.dx * sx, dy: node.outHandle.dy * sy } } : {}) })) }
+      : e.type === "text"
+        ? { ...e, position: { x: x + (elementCenter(e).x - bounds.x) * sx - e.size.width * sx / 2, y: y + (elementCenter(e).y - bounds.y) * sy - e.size.height * sy / 2 }, size: { width: e.size.width * sx, height: e.size.height * sy }, fontSize: Math.max(0.1, e.fontSize * (horizontal && vertical ? Math.sqrt(Math.abs(sx * sy)) : horizontal ? Math.abs(sx) : Math.abs(sy))) }
      : { ...e, position: { x: x + (elementCenter(e).x - bounds.x) * sx - e.size.width * sx / 2, y: y + (elementCenter(e).y - bounds.y) * sy - e.size.height * sy / 2 }, size: { width: e.size.width * sx, height: e.size.height * sy } });
 }
 export function rotateElements(elements: readonly Element[], center: PointMm, delta: number): readonly Element[] {

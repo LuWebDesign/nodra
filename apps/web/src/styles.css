@@ -91,7 +91,7 @@
  .status-palette .swatch.no-fill { font-size:13px; line-height:16px; }
 
 /* Unedited document geometry uses a neutral black contour; editing overlays provide the active colors. */
-.page-svg svg [data-element-id] { stroke: #111827; }
+.page-svg svg [data-element-id] { stroke: #111827; }.page-svg svg text { user-select:none; -webkit-user-select:none; }
 .tool-cursor.close-cursor { display:none; }
 .canvas.close-target-active [data-spline-close-target="true"] { fill:#ffffff; stroke:#0f766e; filter:drop-shadow(0 0 0 #ffffff) drop-shadow(0 0 4px #14b8a6); }
  .canvas.close-target-active [data-spline-close-target="true"]:hover,.canvas.close-target-active [data-spline-close-target="true"]:focus-visible { fill:#14b8a6; filter:drop-shadow(0 0 0 #ffffff) drop-shadow(0 0 5px #0f766e); }
