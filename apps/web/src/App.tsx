@@ -355,7 +355,9 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
        fontFamily: textFontFamily, fontSize: draft.fontSize ?? 24, fontWeight: textFontWeight, fontStyle: textFontStyle, textAlign: "left", lineHeight: 1.2, rotation: 0,
       style: { stroke: "#000000", fill: "#000000", strokeWidth: 0.1 },
     };
-    const next = draft.elementId ? dispatch(current, updateElement(draft.elementId, { text: text.text, size: text.size, fontFamily: text.fontFamily, fontSize: text.fontSize })) : dispatch(current, createElement(text));
+    // Inline editing changes only the text content and its measured bounds. The
+    // existing element keeps its position and all typography/style properties.
+    const next = draft.elementId ? dispatch(current, updateElement(draft.elementId, { text: text.text, size: text.size })) : dispatch(current, createElement(text));
     setEditorState(select(next, [text.id]));
     setTextDraft(undefined);
     setTool("select");

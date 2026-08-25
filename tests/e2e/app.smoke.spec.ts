@@ -300,6 +300,57 @@ test("creates, transforms, and undoes a rectangle", async ({ page }) => {
   await expect(width).toHaveValue(String(originalWidth));
 });
 
+test("moves text with Selection and edits it inline on double-click", async ({ page }) => {
+  await page.goto("/");
+  const pageBounds = await page.locator(".page").boundingBox();
+  expect(pageBounds).not.toBeNull();
+
+  await page.getByRole("button", { name: "Texto" }).click();
+  await page.mouse.click(pageBounds!.x + 120, pageBounds!.y + 120);
+  const editor = page.getByRole("textbox", { name: "Texto editable" });
+  await editor.fill("Texto original");
+  await editor.press("Control+Enter");
+  await expect(editor).toBeHidden();
+
+  const text = page.locator('.page-svg svg text[data-element-id]');
+  await expect(text).toHaveCount(1);
+  const before = await text.boundingBox();
+  expect(before).not.toBeNull();
+
+  await page.getByRole("button", { name: "Seleccion" }).click();
+  await page.mouse.click(before!.x + before!.width / 2, before!.y + before!.height / 2);
+  await page.getByRole("tab", { name: "Texto" }).click();
+  await page.locator(".inspector").getByLabel("Tipografía").selectOption({ label: "Times New Roman" });
+  await page.getByRole("button", { name: "Negrita" }).click();
+  await page.getByRole("button", { name: "Cursiva" }).click();
+  const formattingBefore = {
+    family: await text.getAttribute("font-family"),
+    size: await text.getAttribute("font-size"),
+    weight: await text.getAttribute("font-weight"),
+    style: await text.getAttribute("font-style"),
+  };
+
+  await page.mouse.move(before!.x + before!.width / 2, before!.y + before!.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(before!.x + before!.width / 2 + 35, before!.y + before!.height / 2 + 20);
+  await page.mouse.up();
+  const moved = await text.boundingBox();
+  expect(moved).not.toBeNull();
+  expect(moved!.x).toBeGreaterThan(before!.x);
+  expect(moved!.y).toBeGreaterThan(before!.y);
+
+  await page.mouse.dblclick(moved!.x + moved!.width / 2, moved!.y + moved!.height / 2);
+  await expect(editor).toHaveValue("Texto original");
+  await editor.fill("Texto editado");
+  await editor.press("Control+Enter");
+  await expect(editor).toBeHidden();
+  await expect(text).toContainText("Texto editado");
+  await expect(text).toHaveAttribute("font-family", formattingBefore.family!);
+  await expect(text).toHaveAttribute("font-size", formattingBefore.size!);
+  await expect(text).toHaveAttribute("font-weight", formattingBefore.weight!);
+  await expect(text).toHaveAttribute("font-style", formattingBefore.style!);
+});
+
 test("places the color palette in the status bar and duplicates directionally", async ({ page }) => {
   await page.goto("/");
   await drawRectangle(page);

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createDocument, elementId, layerId, type PathElement, type RectangleElement, type SplineElement } from "@nodra/domain";
+import { createDocument, elementId, layerId, type PathElement, type RectangleElement, type SplineElement, type TextElement } from "@nodra/domain";
 import { addToSelection, appendSplineNode, beginGesture, cancelGesture, clearSelection, closePath, closeSplineElement, commitGesture, createEditor, createElement, createPathCubicNode, deleteContourNodes, deleteElement, deleteElementNodes, deletePathNodes, dispatch, duplicateElements, flipElements, insertContourNode, moveElement, moveElements, movePathNode, movePathHandle, openPath, previewGesture, previewGestureFromBase, redo, removeFromSelection, reorderLayer, resizeElement, resizeElements, rotateElementsAroundCenter, select, selectForPointerDown, setLayerVisibility, setPathJoin, shapeOperation, splitPathSegment, toggleSelection, undo, updateContourNode, updateElement, updateElementNode, updateElementStyles, updateSplineHandle, updateSplineNode } from "./index.js";
 import type { Direction } from "@nodra/geometry";
 
@@ -7,6 +7,7 @@ const rectangle: RectangleElement = { type: "rectangle", id: elementId("r1"), la
 const document = createDocument("doc", [{ id: layerId("default"), name: "Default", visible: true, order: 0 }]);
 const path: PathElement = { type: "path", id: elementId("path"), layerId: layerId("default"), nodes: [{ id: "a", anchor: { x: 0, y: 0 }, join: "corner" }, { id: "b", anchor: { x: 10, y: 0 }, join: "corner" }], segments: [{ type: "cubicBezier", startNodeId: "a", endNodeId: "b", control1: { x: 2, y: 4 }, control2: { x: 8, y: 4 } }], closed: false, style: rectangle.style };
 const spline: SplineElement = { type: "spline", id: elementId("spline"), layerId: layerId("default"), nodes: [{ id: "a", anchor: { x: 0, y: 0 }, continuity: "smooth" }, { id: "b", anchor: { x: 10, y: 0 }, continuity: "smooth" }, { id: "c", anchor: { x: 10, y: 10 }, continuity: "smooth" }], closed: false, style: rectangle.style };
+const text: TextElement = { type: "text", id: elementId("text"), layerId: layerId("default"), position: { x: 12, y: 18 }, size: { width: 32, height: 14 }, text: "Keep formatting", fontFamily: "Times New Roman", fontSize: 18, fontWeight: "bold", fontStyle: "italic", textAlign: "left", lineHeight: 1.2, rotation: 0, style: { stroke: "#123456", fill: "#654321", strokeWidth: 0.5 } };
 
 describe("editor core", () => {
   it("creates, edits, closes, styles, deletes, and restores native splines through document history", () => {
@@ -58,6 +59,12 @@ describe("editor core", () => {
       expect(moved.nodes[1]?.anchor).toEqual({ x: 15, y: -2 });
       expect(moved.nodes[1]?.inHandle).toEqual({ dx: -2, dy: -3 });
     }
+    expect(state.undo).toHaveLength(1);
+  });
+
+  it("moves text elements without changing their content or typography", () => {
+    const state = dispatch(createEditor({ ...document, elements: [text] }), moveElements([text.id], { x: 7, y: -3 }));
+    expect(state.document.elements[0]).toEqual({ ...text, position: { x: 19, y: 15 } });
     expect(state.undo).toHaveLength(1);
   });
   it("deletes contour nodes through validation and keeps a ring valid", () => {
