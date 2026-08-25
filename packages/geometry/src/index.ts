@@ -147,7 +147,7 @@ export function elementCenter(element: Element): PointMm {
     : element.type === "contour" ? groupCenter(contourBounds(element))
     : element.type === "path" ? groupCenter(pathBounds(element))
     : element.type === "spline" ? groupCenter(splineBounds(element))
-    : { x: element.position.x + element.size.width / 2, y: element.position.y + element.size.height / 2 };
+    : { x: element.position.x + element.size.width * (element.type === "text" ? element.scaleX ?? 1 : 1) / 2, y: element.position.y + element.size.height * (element.type === "text" ? element.scaleY ?? 1 : 1) / 2 };
 }
 
 const contourBounds = (element: ContourElement): Bounds => {
@@ -458,7 +458,7 @@ export function boundsOf(element: Element): Bounds {
   if (element.type === "contour") return contourBounds(element);
   if (element.type === "path") return pathBounds(element);
   if (element.type === "spline") return splineBounds(element);
-  if (element.type === "text") return { x: element.position.x, y: element.position.y, width: element.size.width, height: element.size.height };
+  if (element.type === "text") return { x: element.position.x, y: element.position.y, width: element.size.width * (element.scaleX ?? 1), height: element.size.height * (element.scaleY ?? 1) };
   const points = corners(element); const xs = points.map((point) => point.x); const ys = points.map((point) => point.y);
   return { x: Math.min(...xs), y: Math.min(...ys), width: Math.max(...xs) - Math.min(...xs), height: Math.max(...ys) - Math.min(...ys) };
 }
@@ -526,7 +526,7 @@ export function resizeGroup(elements: readonly Element[], handle: ResizeHandle, 
      : e.type === "spline"
        ? { ...e, nodes: e.nodes.map((node) => ({ ...node, anchor: { x: x + (node.anchor.x - bounds.x) * sx, y: y + (node.anchor.y - bounds.y) * sy }, ...(node.inHandle ? { inHandle: { dx: node.inHandle.dx * sx, dy: node.inHandle.dy * sy } } : {}), ...(node.outHandle ? { outHandle: { dx: node.outHandle.dx * sx, dy: node.outHandle.dy * sy } } : {}) })) }
      : e.type === "text"
-       ? { ...e, position: { x: x + (elementCenter(e).x - bounds.x) * sx - e.size.width * sx / 2, y: y + (elementCenter(e).y - bounds.y) * sy - e.size.height * sy / 2 }, size: { width: e.size.width * sx, height: e.size.height * sy }, fontSize: Math.max(0.1, e.fontSize * (horizontal && vertical ? Math.sqrt(Math.abs(sx * sy)) : horizontal ? Math.abs(sx) : Math.abs(sy))) }
+       ? { ...e, position: { x: handle.includes("w") ? x : e.position.x, y: handle.includes("n") ? y : e.position.y }, scaleX: (e.scaleX ?? 1) * Math.abs(sx), scaleY: (e.scaleY ?? 1) * Math.abs(sy) }
      : { ...e, position: { x: x + (elementCenter(e).x - bounds.x) * sx - e.size.width * sx / 2, y: y + (elementCenter(e).y - bounds.y) * sy - e.size.height * sy / 2 }, size: { width: e.size.width * sx, height: e.size.height * sy } });
 }
 export function rotateElements(elements: readonly Element[], center: PointMm, delta: number): readonly Element[] {
