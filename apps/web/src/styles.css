@@ -94,6 +94,10 @@
 .canvas.close-target-active [data-spline-close-target="true"] { fill:#ffffff; stroke:#0f766e; filter:drop-shadow(0 0 0 #ffffff) drop-shadow(0 0 4px #14b8a6); }
  .canvas.close-target-active [data-spline-close-target="true"]:hover,.canvas.close-target-active [data-spline-close-target="true"]:focus-visible { fill:#14b8a6; filter:drop-shadow(0 0 0 #ffffff) drop-shadow(0 0 5px #0f766e); }
 
+/* The text font selector must remain visible while the compact page selector stays hidden. */
+.page-selector label:first-child { gap:6px; font-size:10px; }
+.page-selector label:first-child select { display:block; width:150px; }
+
 /* Shared node language: square anchors in Selection, diamond anchors in node-editing modes. */
 .contour-node { border-radius: 0; }
 .contour-node.editing-node { transform: translate(-50%,-50%) rotate(45deg); }
