@@ -1,4 +1,4 @@
-export const CURRENT_SCHEMA_VERSION = 3 as const;
+export const CURRENT_SCHEMA_VERSION = 4 as const;
 
 export type SchemaVersion = typeof CURRENT_SCHEMA_VERSION;
 export type DocumentId = string & { readonly __brand: "DocumentId" };
@@ -72,6 +72,24 @@ export interface LineElement {
   readonly style: VisualStyle;
   readonly operation?: OperationMetadata;
 }
+export type DimensionKind = "aligned" | "horizontal" | "vertical";
+export interface DimensionReference {
+  readonly elementId: ElementId;
+  readonly nodeIndex: number;
+}
+export interface DimensionElement {
+  readonly type: "dimension";
+  readonly id: ElementId;
+  readonly layerId: LayerId;
+  readonly kind: DimensionKind;
+  readonly references: readonly [DimensionReference, DimensionReference];
+  /** Visual offset from the measured midpoint in millimetres. The measured value remains associative. */
+  readonly offset: PointMm;
+  readonly precision: number;
+  readonly units: "mm";
+  readonly rotation: 0;
+  readonly style: VisualStyle;
+}
 export interface Contour {
   readonly points: readonly PointMm[];
 }
@@ -89,7 +107,39 @@ export interface ContourElement {
   readonly style: VisualStyle;
   readonly operation?: OperationMetadata;
 }
-export type Element = RectangleElement | EllipseElement | LineElement | ContourElement;
+export type PathJoinMode = "corner" | "smooth" | "symmetric";
+export interface PathNode {
+  readonly id: string;
+  readonly anchor: PointMm;
+  readonly join: PathJoinMode;
+}
+export interface LinePathSegment {
+  readonly type: "line";
+  readonly startNodeId: string;
+  readonly endNodeId: string;
+}
+export interface CubicBezierPathSegment {
+  readonly type: "cubicBezier";
+  readonly startNodeId: string;
+  readonly endNodeId: string;
+  readonly control1: PointMm;
+  readonly control2: PointMm;
+}
+export type PathSegment = LinePathSegment | CubicBezierPathSegment;
+export interface PathElement {
+  readonly type: "path";
+  readonly id: ElementId;
+  readonly layerId: LayerId;
+  readonly nodes: readonly PathNode[];
+  readonly segments: readonly PathSegment[];
+  readonly closed: boolean;
+  readonly rotation: number;
+  readonly flipX?: boolean;
+  readonly flipY?: boolean;
+  readonly style: VisualStyle;
+  readonly operation?: OperationMetadata;
+}
+export type Element = RectangleElement | EllipseElement | LineElement | DimensionElement | ContourElement | PathElement;
 export interface DocumentSnapshot {
   readonly schemaVersion: SchemaVersion;
   readonly id: DocumentId;

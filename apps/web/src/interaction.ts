@@ -1,5 +1,5 @@
 import type { DocumentSnapshot, Element, ElementId, PointMm } from "@nodra/domain";
-import { boundsOf, hitTest, realGeometryNodes, type Bounds, type RealGeometryNode } from "@nodra/geometry";
+import { boundsOf, dimensionGeometry, elementCenter, hitTest, realGeometryNodes, type Bounds, type RealGeometryNode } from "@nodra/geometry";
 
 export interface DragGeometry { readonly position: PointMm; readonly size: { readonly width: number; readonly height: number } }
 export interface SnapGuide { readonly source: PointMm; readonly target: PointMm }
@@ -92,9 +92,7 @@ export function selectionFrame(element: Element, zoom: number, panMm: PointMm): 
 
 /** Returns the geometric center used by selection feedback, in page millimetres. */
 export function selectionCenter(element: Element): PointMm {
-  return element.type === "line"
-    ? { x: (element.start.x + element.end.x) / 2, y: (element.start.y + element.end.y) / 2 }
-    : { x: element.position.x + element.size.width / 2, y: element.position.y + element.size.height / 2 };
+  return elementCenter(element);
 }
 
 /** Returns the selected object's center only when the pointer picks that object. */
@@ -114,8 +112,8 @@ export function screenPointToMm(point: PointMm, origin: PointMm, zoom: number, p
 }
 
 export const ZOOM_100_PERCENT = 3;
-export const INITIAL_ZOOM = ZOOM_100_PERCENT / 10;
-export const MIN_ZOOM = INITIAL_ZOOM;
+export const INITIAL_ZOOM = ZOOM_100_PERCENT / 4;
+export const MIN_ZOOM = ZOOM_100_PERCENT / 10;
 export const MAX_ZOOM = 8;
 
 export function centerPageInCanvas(canvas: { readonly width: number; readonly height: number }, page: { readonly width: number; readonly height: number }, zoom: number): PointMm {
@@ -150,7 +148,12 @@ export function pickElement(document: DocumentSnapshot, point: PointMm, zoom: nu
   const visible = new Set(document.layers.filter((layer) => layer.visible).map((layer) => layer.id));
   const layerOrder = new Map(document.layers.map((layer) => [layer.id, layer.order]));
   const tolerance = 6 / zoom;
-  return [...document.elements].sort((a, b) => (layerOrder.get(a.layerId) ?? 0) - (layerOrder.get(b.layerId) ?? 0)).reverse().find((element) => visible.has(element.layerId) && hitTest(element, point, tolerance))?.id;
+  return [...document.elements].sort((a, b) => (layerOrder.get(a.layerId) ?? 0) - (layerOrder.get(b.layerId) ?? 0)).reverse().find((element) => {
+    if (!visible.has(element.layerId)) return false;
+    if (element.type !== "dimension") return hitTest(element, point, tolerance);
+    const geometry = dimensionGeometry(element, document.elements);
+    return Boolean(geometry && (Math.hypot(point.x - geometry.text.x, point.y - geometry.text.y) <= Math.max(tolerance, 3) || hitTest({ type: "line", id: element.id, layerId: element.layerId, start: geometry.lineStart, end: geometry.lineEnd, rotation: 0, style: element.style }, point, tolerance)));
+  })?.id;
 }
 
 export function elementsContainedBy(document: DocumentSnapshot, marquee: Bounds): ElementId[] {

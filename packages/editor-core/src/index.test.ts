@@ -1,12 +1,21 @@
 import { describe, expect, it } from "vitest";
 import { createDocument, elementId, layerId, type RectangleElement } from "@nodra/domain";
-import { addToSelection, beginGesture, clearSelection, commitGesture, createEditor, createElement, dispatch, duplicateElements, flipElements, moveElement, moveElements, previewGesture, previewGestureFromBase, redo, removeFromSelection, reorderLayer, resizeElement, resizeElements, rotateElementsAroundCenter, select, selectForPointerDown, setLayerVisibility, shapeOperation, toggleSelection, undo, updateElement, updateElementStyles } from "./index.js";
+import { addToSelection, beginGesture, clearSelection, commitGesture, createEditor, createElement, deleteElement, dispatch, duplicateElements, flipElements, moveElement, moveElements, movePathHandle, previewGesture, previewGestureFromBase, redo, removeFromSelection, reorderLayer, resizeElement, resizeElements, rotateElementsAroundCenter, select, selectForPointerDown, setLayerVisibility, shapeOperation, splitPathSegment, toggleSelection, undo, updateElement, updateElementStyles } from "./index.js";
 import type { Direction } from "@nodra/geometry";
 
 const rectangle: RectangleElement = { type: "rectangle", id: elementId("r1"), layerId: layerId("default"), position: { x: 1, y: 2 }, size: { width: 10, height: 5 }, cornerRadius: 0, rotation: 0, style: { stroke: "#000", strokeWidth: 1 } };
 const document = createDocument("doc", [{ id: layerId("default"), name: "Default", visible: true, order: 0 }]);
 
 describe("editor core", () => {
+  it("moves path handles through a validated undoable command and preserves cubic split shape", () => {
+    const path = { type: "path" as const, id: elementId("path"), layerId: layerId("default"), nodes: [{ id: "a", anchor: { x: 0, y: 0 }, join: "corner" as const }, { id: "b", anchor: { x: 10, y: 0 }, join: "corner" as const }], segments: [{ type: "cubicBezier" as const, startNodeId: "a", endNodeId: "b", control1: { x: 3, y: 4 }, control2: { x: 7, y: -4 } }], closed: false, rotation: 0, style: rectangle.style };
+    let state = dispatch(createEditor({ ...document, elements: [path] }), movePathHandle(path.id, "a", "outHandle", { x: 4, y: 5 }));
+    expect(state.document.elements[0]?.type).toBe("path");
+    expect(state.document.elements[0]?.type === "path" ? state.document.elements[0].segments[0] : undefined).toMatchObject({ control1: { x: 4, y: 5 } });
+    state = dispatch(state, splitPathSegment(path.id, 0));
+    expect(state.document.elements[0]?.type === "path" ? state.document.elements[0].segments : []).toHaveLength(2);
+    expect(undo(state).document.elements).toEqual(expect.arrayContaining([expect.objectContaining({ id: path.id })]));
+  });
   it("applies explicit commands and keeps selection outside document history", () => {
     const created = dispatch(createEditor(document), createElement(rectangle));
     const selected = select(created, [rectangle.id]);
@@ -114,6 +123,15 @@ describe("editor core", () => {
       expect.objectContaining({ id: line.id, start: { x: 2, y: -1 }, end: { x: 5, y: 3 } }),
     ]));
     expect(undo(state).document.elements).toEqual([rectangle, line]);
+  });
+  it("creates annotation dimensions and cascades delete of referenced geometry", () => {
+    const dimension = { type: "dimension" as const, id: elementId("dimension"), layerId: layerId("default"), kind: "aligned" as const, references: [{ elementId: rectangle.id, nodeIndex: 0 }, { elementId: rectangle.id, nodeIndex: 1 }] as const, offset: { x: 0, y: -8 }, precision: 2, units: "mm" as const, rotation: 0 as const, style: { stroke: "#2563eb", strokeWidth: 0.45 } };
+    let state = createEditor({ ...document, elements: [rectangle] });
+    state = dispatch(state, createElement(dimension));
+    expect(state.document.elements).toHaveLength(2);
+    state = dispatch(state, deleteElement(rectangle.id));
+    expect(state.document.elements).toEqual([]);
+    expect(undo(state).document.elements).toEqual([expect.objectContaining({ id: rectangle.id }), expect.objectContaining({ id: dimension.id })]);
   });
   it("commits grouped resize and rotation as one history entry each", () => {
     const second = { ...rectangle, id: elementId("r2"), position: { x: 20, y: 2 } };

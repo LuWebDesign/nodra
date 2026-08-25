@@ -9,13 +9,19 @@ import { aspectGeometryPatch, aspectSize, cornerRadiusPatch, formatMm, geometryV
 import { useDocumentStore, usePersistenceStore, useUiStore, useViewportStore, type Tool } from "./stores.js";
 
 const defaultStyle = { stroke: "#000000", strokeWidth: 0.7 };
-const palette = ["#111827", "#ef4444", "#f59e0b", "#22c55e", "#3b82f6", "#a855f7", "#ffffff"] as const;
+const palette = [
+  { name: "Negro", color: "#111827" }, { name: "Rojo", color: "#ef4444" }, { name: "Naranja", color: "#f59e0b" },
+  { name: "Verde", color: "#22c55e" }, { name: "Azul", color: "#3b82f6" }, { name: "Violeta", color: "#a855f7" },
+  { name: "Blanco", color: "#ffffff" }, { name: "Rosa", color: "#ec4899" }, { name: "Cian", color: "#22d3ee" },
+  { name: "Lima", color: "#a3e635" }, { name: "Gris", color: "#9ca3af" },
+] as const;
 const id = () => elementId(`element-${crypto.randomUUID()}`);
-const newElement = (tool: Exclude<Tool, "select" | "pan">, layer: string, start: PointMm, end: PointMm, nextId = id()): Element => tool === "line"
+const newElement = (tool: Exclude<Tool, "select" | "dimension" | "pan">, layer: string, start: PointMm, end: PointMm, nextId = id()): Element => tool === "line"
   ? { type: "line", id: nextId, layerId: layerId(layer), start, end, rotation: 0, style: defaultStyle }
   : tool === "rectangle"
     ? { type: "rectangle", id: nextId, layerId: layerId(layer), ...normalizeDrag(start, end), cornerRadius: 0, rotation: 0, style: defaultStyle }
     : { type: tool, id: nextId, layerId: layerId(layer), ...normalizeDrag(start, end), rotation: 0, style: defaultStyle };
+const newDimension = (layer: string, first: NodeHit, second: NodeHit, nextId = id()): Element => ({ type: "dimension", id: nextId, layerId: layerId(layer), kind: "aligned", references: [{ elementId: first.elementId, nodeIndex: first.nodeIndex }, { elementId: second.elementId, nodeIndex: second.nodeIndex }], offset: { x: 0, y: -12 }, precision: 2, units: "mm", rotation: 0, style: { stroke: "#2563eb", strokeWidth: 0.45 } });
 
 type ActiveInteraction = {
   pointerId: number;
@@ -27,19 +33,20 @@ type ActiveInteraction = {
   start?: PointMm;
   startClient?: PointMm;
   previewed?: boolean;
-  tool?: Exclude<Tool, "select" | "pan">;
+  tool?: Exclude<Tool, "select" | "dimension" | "pan">;
   handle?: GroupHandle;
   anchor?: NodeHit;
   element?: Element;
   document?: DocumentSnapshot;
   shiftKey?: boolean;
   center?: PointMm;
+  dimensionAnchor?: NodeHit;
 };
 
 type InspectorTab = "properties" | "transform" | "text";
 
-const toolCursorIcons: Record<Tool, string> = { select: "↖", rectangle: "□", ellipse: "○", line: "╱", pan: "✣" };
-const toolCursorLabels: Record<Tool, string> = { select: "Seleccion", rectangle: "Rectángulo", ellipse: "Elipse", line: "Línea", pan: "Desplazar" };
+const toolCursorIcons: Record<Tool, string> = { select: "↖", rectangle: "□", ellipse: "○", line: "╱", dimension: "↔", pan: "✣" };
+const toolCursorLabels: Record<Tool, string> = { select: "Seleccion", rectangle: "Rectángulo", ellipse: "Elipse", line: "Línea", dimension: "Cota", pan: "Desplazar" };
 
 export function App() {
   const { mode, tool, setMode, setTool } = useUiStore();
@@ -122,7 +129,7 @@ export function App() {
   const selectedBounds = selectedElements.length ? boundsOfElements(selectedElements) : undefined;
   const propertyElement = selectedElements.length > 1 && selectedBounds
     ? { type: "rectangle" as const, id: selectedElements[0]!.id, layerId: selectedElements[0]!.layerId, position: { x: selectedBounds.x, y: selectedBounds.y }, size: { width: selectedBounds.width, height: selectedBounds.height }, cornerRadius: 0, rotation: 0, style: selectedElements[0]!.style }
-    : selectedElement?.type !== "line" && selectedElement?.type !== "contour" ? selectedElement : undefined;
+     : selectedElement?.type !== "line" && selectedElement?.type !== "dimension" && selectedElement?.type !== "contour" && selectedElement?.type !== "path" ? selectedElement : undefined;
   const selectionKey = selection.join(":");
   useEffect(() => { setTransformMode("resize"); }, [tool, project.activePageId, selectionKey]);
 
@@ -261,6 +268,13 @@ export function App() {
     }
     const point = pointAt(event);
     const nodeHit = transformMode === "resize" ? pickNode(editorRef.current.document, point, zoom) : undefined;
+    if (tool === "dimension") {
+      if (!nodeHit) return;
+      event.currentTarget.setPointerCapture(event.pointerId);
+      setEditorState(beginGesture(editorRef.current));
+      interaction.current = { pointerId: event.pointerId, lastX: event.clientX, lastY: event.clientY, kind: "draw", dragged: false, start: point, startClient: { x: event.clientX, y: event.clientY }, ids: [id()], dimensionAnchor: nodeHit };
+      return;
+    }
     const hit = nodeHit?.elementId ?? pickElement(editorRef.current.document, point, zoom);
     if (isDrawingTool(tool) && pointerDownIntent(tool, hit) === "draw") {
       event.currentTarget.setPointerCapture(event.pointerId);
@@ -275,6 +289,10 @@ export function App() {
       event.currentTarget.setPointerCapture(event.pointerId);
       setEditorState(beginGesture(next));
       const anchor = selectedNodeAnchor(nodeHit, next.selection);
+      if (isDrawingTool(tool)) {
+        interaction.current = { pointerId: event.pointerId, lastX: event.clientX, lastY: event.clientY, kind: "draw", dragged: false, start: point, startClient: { x: event.clientX, y: event.clientY }, tool, ids: [id()] };
+        return;
+      }
       interaction.current = { pointerId: event.pointerId, lastX: event.clientX, lastY: event.clientY, kind: "move", ids: next.selection, ...(anchor ? { anchor } : {}), startClient: { x: event.clientX, y: event.clientY }, dragged: false, shiftKey: event.shiftKey };
       return;
     }
@@ -304,7 +322,7 @@ export function App() {
     }
     if (active.kind === "resize" && active.ids && active.handle && active.handle !== "center") {
       const element = active.element;
-      const command = active.ids.length === 1 && element && element.type !== "line" && element.type !== "contour" ? (() => { const geometry = resizeHandle(element, active.handle as ResizeHandle, pointAt(event)); return resizeElement(element.id, geometry.position, geometry.size); })() : resizeElements(active.ids, active.handle as ResizeHandle, pointAt(event));
+      const command = active.ids.length === 1 && element && element.type !== "line" && element.type !== "dimension" && element.type !== "contour" && element.type !== "path" ? (() => { const geometry = resizeHandle(element, active.handle as ResizeHandle, pointAt(event)); return resizeElement(element.id, geometry.position, geometry.size); })() : resizeElements(active.ids, active.handle as ResizeHandle, pointAt(event));
       setEditorState(previewGestureFromBase(editorRef.current, command));
       active.dragged = true;
       return;
@@ -336,7 +354,7 @@ export function App() {
     }
     if (!active.start || !active.tool || !active.ids?.[0] || !active.startClient || !movementExceedsThreshold(active.startClient, { x: event.clientX, y: event.clientY })) return;
     const element = newElement(active.tool, document.layers[0]?.id ?? "layer-1", active.start, pointAt(event), active.ids[0]);
-    const command = active.previewed ? updateElement(element.id, element.type === "line" ? { start: element.start, end: element.end } : { position: element.position, size: element.size }) : createElement(element);
+    const command = active.previewed ? updateElement(element.id, element.type === "line" ? { start: element.start, end: element.end } : element.type === "rectangle" || element.type === "ellipse" ? { position: element.position, size: element.size } : {}) : createElement(element);
     setEditorState(previewGesture(editorRef.current, command));
     active.previewed = true;
     active.dragged = true;
@@ -353,7 +371,7 @@ export function App() {
       setMarquee(undefined);
     } else if (active.kind === "resize" && active.ids && active.handle && active.handle !== "center" && !cancelled) {
       const element = active.element;
-      const command = active.ids.length === 1 && element && element.type !== "line" && element.type !== "contour" ? (() => { const geometry = resizeHandle(element, active.handle as ResizeHandle, pointAt(event)); return resizeElement(element.id, geometry.position, geometry.size); })() : resizeElements(active.ids, active.handle as ResizeHandle, pointAt(event));
+      const command = active.ids.length === 1 && element && element.type !== "line" && element.type !== "dimension" && element.type !== "contour" && element.type !== "path" ? (() => { const geometry = resizeHandle(element, active.handle as ResizeHandle, pointAt(event)); return resizeElement(element.id, geometry.position, geometry.size); })() : resizeElements(active.ids, active.handle as ResizeHandle, pointAt(event));
       setEditorState(commitGesture(previewGestureFromBase(editorRef.current, command)));
     } else if (active.kind === "rotate" && active.ids && active.center && active.start && !cancelled) {
       const rotation = rotationFromDrag(active.element?.rotation ?? 0, active.center, active.start, pointAt(event), event.shiftKey ? Math.PI / 12 : 0);
@@ -362,12 +380,18 @@ export function App() {
       setEditorState(cancelled ? cancelGesture(editorRef.current) : commitGesture(editorRef.current));
     } else if (active.kind === "draw") {
       const end = active.start ? pointAt(event) : undefined;
+      if (active.dimensionAnchor && active.ids?.[0]) {
+        const target = end ? pickNode(editorRef.current.gesture?.base ?? editorRef.current.document, end, zoom) : undefined;
+        if (cancelled || !target || target.elementId === active.dimensionAnchor.elementId && target.nodeIndex === active.dimensionAnchor.nodeIndex) setEditorState(cancelGesture(editorRef.current));
+        else setEditorState(commitGesture(previewGesture(editorRef.current, createElement(newDimension(editorRef.current.document.layers[0]?.id ?? "layer-1", active.dimensionAnchor, target, active.ids[0])))));
+      } else {
       const zeroLengthLine = active.tool === "line" && active.start && end && active.start.x === end.x && active.start.y === end.y;
       if (cancelled || !active.dragged || zeroLengthLine) setEditorState(cancelGesture(editorRef.current));
       else if (active.start && active.tool && active.ids?.[0] && end) {
         const element = newElement(active.tool, editorRef.current.document.layers[0]?.id ?? "layer-1", active.start, end, active.ids[0]);
-        const command = active.previewed ? updateElement(element.id, element.type === "line" ? { start: element.start, end: element.end } : { position: element.position, size: element.size }) : createElement(element);
+        const command = active.previewed ? updateElement(element.id, element.type === "line" ? { start: element.start, end: element.end } : element.type === "rectangle" || element.type === "ellipse" ? { position: element.position, size: element.size } : {}) : createElement(element);
         setEditorState(commitGesture(previewGesture(editorRef.current, command)));
+      }
       }
     }
     interaction.current = undefined;
@@ -409,7 +433,7 @@ export function App() {
   }, [selectionKey]);
 
   const groupPoints = selectedBounds ? groupHandlePoints(selectedBounds) : undefined;
-  const handlePoints = selectedElement?.type === "line" ? undefined : selectedElement?.type === "contour" && selectedBounds ? [groupHandlePoints(selectedBounds).nw, groupHandlePoints(selectedBounds).n, groupHandlePoints(selectedBounds).ne, groupHandlePoints(selectedBounds).e, groupHandlePoints(selectedBounds).se, groupHandlePoints(selectedBounds).s, groupHandlePoints(selectedBounds).sw, groupHandlePoints(selectedBounds).w] as const : selectedElement && selectedElement.type !== "contour" ? rotatedResizeHandles(selectedElement) : undefined;
+  const handlePoints = selectedElement?.type === "line" || selectedElement?.type === "dimension" || selectedElement?.type === "path" ? undefined : selectedElement?.type === "contour" && selectedBounds ? [groupHandlePoints(selectedBounds).nw, groupHandlePoints(selectedBounds).n, groupHandlePoints(selectedBounds).ne, groupHandlePoints(selectedBounds).e, groupHandlePoints(selectedBounds).se, groupHandlePoints(selectedBounds).s, groupHandlePoints(selectedBounds).sw, groupHandlePoints(selectedBounds).w] as const : selectedElement && selectedElement.type !== "contour" ? rotatedResizeHandles(selectedElement) : undefined;
   const handleNames: readonly ResizeHandle[] = ["nw", "n", "ne", "e", "se", "s", "sw", "w"];
   const handleStyle = (handle: GroupHandle) => {
      const point = selectedElements.length > 1 ? groupPoints?.[handle] : handle === "center" ? undefined : handlePoints?.[handleNames.indexOf(handle)];
@@ -531,7 +555,7 @@ export function App() {
     if (next === current) return;
     setEditorState(next);
   };
-  const paletteControls = () => <section className="inspector-card inspector-appearance-card"><div className="panel-title">APARIENCIA</div><div className="muted">Paleta: clic izquierdo para relleno · clic derecho para contorno</div><div className="palette"><button className="swatch no-fill" aria-label="Sin relleno" title="Sin relleno" onClick={() => applyPalette(null, "fill")} onContextMenu={(event) => event.preventDefault()}>×</button>{palette.map((color) => <button key={color} className="swatch" aria-label={`Color ${color}`} title={`Clic izquierdo: relleno · clic derecho: contorno (${color})`} style={{ background: color }} onClick={() => applyPalette(color, "fill")} onContextMenu={(event) => { event.preventDefault(); applyPalette(color, "stroke"); }} />)}</div></section>;
+  const paletteControls = () => <div className="palette" role="group" aria-label="Paleta de colores"><button type="button" className="swatch no-fill" aria-label="Sin relleno" title="Sin relleno · clic izquierdo: quitar relleno" onClick={() => applyPalette(null, "fill")} onContextMenu={(event) => event.preventDefault()}>×</button>{palette.map(({ name, color }) => <button type="button" key={color} className="swatch" aria-label={name} title={`${name} · clic izquierdo: relleno · clic derecho: contorno`} style={{ background: color }} onClick={() => applyPalette(color, "fill")} onContextMenu={(event) => { event.preventDefault(); applyPalette(color, "stroke"); }} />)}</div>;
   const transformDirections: readonly { direction: Direction; label: string; marker: string }[] = [
     { direction: "north-west", label: "Noroeste", marker: "↖" }, { direction: "north", label: "Norte", marker: "↑" }, { direction: "north-east", label: "Noreste", marker: "↗" },
     { direction: "west", label: "Oeste", marker: "←" }, { direction: "center", label: "Centro: superponer", marker: "•" }, { direction: "east", label: "Este", marker: "→" },
@@ -546,12 +570,12 @@ export function App() {
       if (!selectedElements.length || !Number.isFinite(distance) || distance < 0 || !Number.isInteger(count) || count < 1) return;
       setEditorState(dispatch(editorRef.current, duplicateElements(selection, transformDirection, distance, count)));
     };
-    return <section className="inspector-card transform-card"><div className="panel-title">REPRODUCCIÓN DIRECCIONAL</div><p className="muted">Crea copias separadas por el espacio indicado. El centro superpone la copia.</p><div className="direction-grid" role="group" aria-label="Dirección de reproducción">{transformDirections.map(({ direction, label, marker }) => <button key={direction} type="button" className={transformDirection === direction ? "direction-button active" : "direction-button"} aria-label={label} aria-pressed={transformDirection === direction} onClick={() => setTransformDirection(direction)}><span aria-hidden="true">{marker}</span></button>)}</div><div className="transform-fields"><label className="field"><span>Distancia</span><input inputMode="decimal" aria-label="Distancia entre copias en milímetros" value={drafts[distanceKey] ?? "10"} onChange={(event) => setDrafts((current) => ({ ...current, [distanceKey]: event.target.value }))} /></label><label className="field"><span>Copias</span><input inputMode="numeric" aria-label="Cantidad de copias" value={drafts[countKey] ?? "1"} onChange={(event) => setDrafts((current) => ({ ...current, [countKey]: event.target.value }))} /></label></div><button type="button" className="transform-action" disabled={!selectedElements.length} onClick={duplicate}>Reproducir copias</button></section>;
+     return <section className="inspector-card transform-card"><div className="panel-title">REPRODUCCIÓN DIRECCIONAL</div><p className="muted">Crea copias separadas por el espacio indicado. El centro superpone la copia.</p><div className="transform-layout"><div className="direction-grid" role="group" aria-label="Dirección de reproducción">{transformDirections.map(({ direction, label, marker }) => <button key={direction} type="button" className={transformDirection === direction ? "direction-button active" : "direction-button"} aria-label={label} aria-pressed={transformDirection === direction} onClick={() => setTransformDirection(direction)}><span aria-hidden="true">{marker}</span></button>)}</div><div className="transform-fields"><label className="field"><span>Distancia</span><input inputMode="decimal" aria-label="Distancia entre copias en milímetros" value={drafts[distanceKey] ?? "10"} onChange={(event) => setDrafts((current) => ({ ...current, [distanceKey]: event.target.value }))} /></label><label className="field"><span>Copias</span><input inputMode="numeric" aria-label="Cantidad de copias" value={drafts[countKey] ?? "1"} onChange={(event) => setDrafts((current) => ({ ...current, [countKey]: event.target.value }))} /></label><button type="button" className="transform-action" disabled={!selectedElements.length} onClick={duplicate}>Reproducir copias</button></div></div></section>;
   };
   const mirrorButton = (axis: FlipAxis) => {
     const label = axis === "horizontal" ? "Espejo horizontal" : "Espejo vertical";
     const description = axis === "horizontal" ? "Voltear la selección horizontalmente." : "Voltear la selección verticalmente.";
-    const isActive = selectedElements.some((element) => Boolean(axis === "horizontal" ? element.flipX : element.flipY));
+    const isActive = selectedElements.some((element) => element.type !== "dimension" && Boolean(axis === "horizontal" ? element.flipX : element.flipY));
     return <button type="button" className={isActive ? "property-transform-button active" : "property-transform-button"} aria-label={label} aria-pressed={isActive} title={description} aria-description={description} onClick={() => {
       const current = editorRef.current;
       if (current.selection.length) setEditorState(dispatch(current, flipElements(current.selection, axis)));
@@ -566,9 +590,9 @@ export function App() {
   const shapeOperations = () => <div className="shape-operation-group" role="group" aria-label="Operaciones de forma">
     <div className="shape-operation-copy"><div className="panel-title">OPERACIONES DE FORMA</div></div>
     <div className="shape-operation-buttons">
-      <button type="button" className="shape-operation-button" aria-label="Soldar" title="Combinar los objetos cerrados seleccionados en una sola forma." aria-description="Combinar los objetos cerrados seleccionados en una sola forma." disabled={!selectedElements.length || selectedElements.some((element) => element.type === "line")} onClick={() => applyShapeOperation("weld")}>Soldar<span className="shape-operation-description" role="tooltip">Combinar los objetos cerrados seleccionados en una sola forma.</span></button>
-      <button type="button" className="shape-operation-button" aria-label="Recortar" title="Usar el primer objeto seleccionado como cortador y cortar el segundo objeto seleccionado." aria-description="Usar el primer objeto seleccionado como cortador y cortar el segundo objeto seleccionado." disabled={selectedElements.length !== 2 || selectedElements.some((element) => element.type === "line")} onClick={() => applyShapeOperation("subtract")}>Recortar<span className="shape-operation-description" role="tooltip">Usar el primer objeto seleccionado como cortador y cortar el segundo objeto seleccionado.</span></button>
-      <button type="button" className="shape-operation-button" aria-label="Crear límites" title="Crear un contorno real alrededor de los objetos cerrados seleccionados." aria-description="Crear un contorno real alrededor de los objetos cerrados seleccionados." disabled={!selectedElements.length || selectedElements.some((element) => element.type === "line")} onClick={() => applyShapeOperation("outline")}>Crear límites<span className="shape-operation-description" role="tooltip">Crear un contorno real alrededor de los objetos cerrados seleccionados.</span></button>
+      <button type="button" className="shape-operation-button" aria-label="Soldar" title="Combinar los objetos cerrados seleccionados en una sola forma." aria-description="Combinar los objetos cerrados seleccionados en una sola forma." disabled={!selectedElements.length || selectedElements.some((element) => element.type === "line" || element.type === "dimension")} onClick={() => applyShapeOperation("weld")}>Soldar<span className="shape-operation-description" role="tooltip">Combinar los objetos cerrados seleccionados en una sola forma.</span></button>
+      <button type="button" className="shape-operation-button" aria-label="Recortar" title="Usar el primer objeto seleccionado como cortador y cortar el segundo objeto seleccionado." aria-description="Usar el primer objeto seleccionado como cortador y cortar el segundo objeto seleccionado." disabled={selectedElements.length !== 2 || selectedElements.some((element) => element.type === "line" || element.type === "dimension")} onClick={() => applyShapeOperation("subtract")}>Recortar<span className="shape-operation-description" role="tooltip">Usar el primer objeto seleccionado como cortador y cortar el segundo objeto seleccionado.</span></button>
+      <button type="button" className="shape-operation-button" aria-label="Crear límites" title="Crear un contorno real alrededor de los objetos cerrados seleccionados." aria-description="Crear un contorno real alrededor de los objetos cerrados seleccionados." disabled={!selectedElements.length || selectedElements.some((element) => element.type === "line" || element.type === "dimension")} onClick={() => applyShapeOperation("outline")}>Crear límites<span className="shape-operation-description" role="tooltip">Crear un contorno real alrededor de los objetos cerrados seleccionados.</span></button>
     </div>
   </div>;
 
@@ -599,24 +623,24 @@ export function App() {
 
   return <main className="app-shell">
     <header className="topbar">
-      <div className="brand">NODRA <span>EDITOR</span></div>
+      <div className="brand">Kond Design <span>EDITOR</span></div>
       <nav aria-label="Modo de espacio de trabajo"><button className={mode === "design" ? "active" : ""} onClick={() => setMode("design")}>Diseño</button><button className={mode === "prepare" ? "active" : ""} onClick={() => setMode("prepare")}>Preparar <small>Vista previa</small></button></nav>
       <div className="top-actions"><button aria-label="Deshacer" onClick={() => setEditorState(undo(editorRef.current))}>↶</button><button aria-label="Rehacer" onClick={() => setEditorState(redo(editorRef.current))}>↷</button><span className="project-name">Diseño sin título</span></div>
     </header>
-    {mode === "prepare" ? <section className="prepare"><div><div className="prepare-icon">◇</div><h1>Preparar aún no está disponible</h1><p>Nodra ofrece actualmente solo un espacio de trabajo de Diseño sin conexión. No hay hardware conectado, controlado ni listo.</p><button onClick={() => setMode("design")}>Volver a Diseño</button></div></section> : <div className="workspace">
+    {mode === "prepare" ? <section className="prepare"><div><div className="prepare-icon">◇</div><h1>Preparar aún no está disponible</h1><p>Kond Design ofrece actualmente solo un espacio de trabajo de Diseño sin conexión. No hay hardware conectado, controlado ni listo.</p><button onClick={() => setMode("design")}>Volver a Diseño</button></div></section> : <div className="workspace">
       <section className="properties-bar" aria-label="Barra de propiedades">
         <div className="page-selector"><label>Página<select aria-label="Página activa" value={project.activePageId} onChange={(event) => switchPage(event.target.value)}>{project.pages.map((page, index) => <option key={page.id} value={page.id}>{index + 1} · {page.page.width} × {page.page.height} mm</option>)}</select></label><button type="button" onClick={createPageAndSelect}>+ Nueva página</button></div>
            {selectedElements.length > 0 ? <div className="property-fields">
                 {objectPropertySections()}{mirrorButton("horizontal")}{mirrorButton("vertical")}{shapeOperations()}
          </div> : <p className="muted">Seleccione un objeto para editar sus propiedades.</p>}
       </section>
-      <aside className="workspace-tools"><div className="tool-column" role="toolbar" aria-label="Herramientas de diseño">{(["select", "rectangle", "ellipse", "line", "pan"] as const).map((item) => <ToolButton key={item} label={toolCursorLabels[item]} icon={item} active={tool === item} onClick={() => { setTransformMode("resize"); setTool(item); }} />)}</div></aside>
+      <aside className="workspace-tools"><div className="tool-column" role="toolbar" aria-label="Herramientas de diseño">{(["select", "rectangle", "ellipse", "line", "dimension", "pan"] as const).map((item) => <ToolButton key={item} label={toolCursorLabels[item]} icon={item} active={tool === item} onClick={() => { setTransformMode("resize"); setTool(item); }} />)}</div></aside>
       <section className="canvas-area">
         <header className="canvas-header"><span>DISEÑO / SIN TÍTULO</span><span>{document.elements.length} objetos · {document.page.width} × {document.page.height} mm</span><div className="zoom-controls"><button aria-label="Alejar" onClick={() => setZoom(zoom - 0.5)}>−</button><span className="zoom-label">{Math.round(zoom * 100 / 3)}%</span><button aria-label="Acercar" onClick={() => setZoom(zoom + 0.5)}>+</button></div></header>
         <div ref={canvas} className={grid ? "canvas" : "canvas no-grid"} onPointerDown={onCanvasPointerDown} onPointerMove={onCanvasPointerMove} onPointerUp={(event) => finishPointer(event, false)} onPointerCancel={(event) => finishPointer(event, true)} onPointerLeave={() => setCursorPoint(undefined)} onDoubleClick={onCanvasDoubleClick} onWheel={onWheel}>
           <div className="page" style={pageStyle}><div className="page-svg" dangerouslySetInnerHTML={{ __html: rendered.success ? rendered.svg : "" }} /></div>
           {centerHoverStyle && <div className="selection-center-feedback" style={centerHoverStyle} aria-hidden="true"><span className="selection-center-mark">×</span><span className="selection-center-label">centro</span></div>}
-           {transformMode === "resize" && (handlePoints || groupPoints) && <div className="resize-handles">{handleNames.map((handle) => <button key={handle} type="button" className={`resize-handle resize-handle-${handle}`} data-resize-handle={handle} aria-label={`Redimensionar ${handle}`} style={handleStyle(handle)} onPointerDown={(event) => resizePointerDown(event, handle)} onPointerUp={(event) => finishPointer(event, false)} onPointerCancel={(event) => finishPointer(event, true)} />)}{groupPoints && <button type="button" className="resize-handle resize-handle-center" data-resize-handle="center" aria-label="Centro del grupo" style={handleStyle("center")} onPointerDown={(event) => event.stopPropagation()} />}</div>}
+            {transformMode === "resize" && (handlePoints || groupPoints) && <div className="resize-handles">{handleNames.map((handle) => <button key={handle} type="button" className={`resize-handle resize-handle-${handle}`} data-resize-handle={handle} aria-label={`Redimensionar ${handle}`} style={handleStyle(handle)} onPointerDown={(event) => resizePointerDown(event, handle)} onPointerUp={(event) => finishPointer(event, false)} onPointerCancel={(event) => finishPointer(event, true)} />)}{groupPoints && !isDrawingTool(tool) && <button type="button" className="resize-handle resize-handle-center" data-resize-handle="center" aria-label="Centro del grupo" style={handleStyle("center")} onPointerDown={(event) => event.stopPropagation()} />}</div>}
            {transformMode === "rotate" && selectedElements.length > 0 && <div className="rotation-controls" aria-label="Controles de rotación"><span className="rotation-center" style={selectedElements.length > 1 && selectedBounds ? { left: pagePointToCanvas(groupCenter(selectedBounds), zoom, panMm).x, top: pagePointToCanvas(groupCenter(selectedBounds), zoom, panMm).y } : centerStyle} aria-hidden="true" />{rotationPoints.map((point, index) => { const screen = pagePointToCanvas(point, zoom, panMm); return <button key={index} type="button" className="rotation-handle" aria-label={`Rotar objeto, control ${index + 1}`} style={{ left: screen.x, top: screen.y }} onPointerDown={rotationPointerDown} onPointerUp={(event) => finishPointer(event, false)} onPointerCancel={(event) => finishPointer(event, true)}><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M15.5 8A6 6 0 1 0 16 12" /><path d="m12.5 4 3 4-5 .5" /></svg></button>; })}</div>}
           {marqueeStyle && <div className="marquee" style={marqueeStyle} />}
           {cursorPoint && <span className="tool-cursor" style={{ left: cursorPoint.x, top: cursorPoint.y }} aria-label={`Herramienta activa: ${toolCursorLabels[tool]}`}>{toolCursorIcons[tool]}</span>}
@@ -630,7 +654,7 @@ export function App() {
            <button type="button" role="tab" aria-selected={inspectorTab === "text"} className={inspectorTab === "text" ? "active" : ""} onClick={() => setInspectorTab("text")}>Texto</button>
          </div>
          <div className="inspector-tab-content" role="tabpanel">
-              {inspectorTab === "properties" && <>{selectedElements.length === 0 ? <section className="inspector-card"><div className="panel-title">PÁGINA</div><div className="preset-row"><button onClick={() => setPage(1200, 900)}>Horizontal</button><button onClick={() => setPage(900, 1200)}>Vertical</button></div><div className="fields"><Field label="W" value={document.page.width} onChange={(value) => setPage(value, document.page.height)} /><Field label="H" value={document.page.height} onChange={(value) => setPage(document.page.width, value)} /></div><label className="grid-toggle"><input type="checkbox" checked={grid} onChange={(event) => setGrid(event.target.checked)} /> Mostrar cuadrícula del espacio de trabajo</label></section> : <section className="inspector-card inspector-object-card"><div className="panel-title">OBJETO</div>{propertyElement ? <div className="inspector-object-properties">{objectPropertySections(true)}</div> : <><div className="selected-type">{selectedElement?.type === "contour" ? "CONTORNO" : "LÍNEA"}</div><p className="muted">{selectedElement?.type === "contour" ? "Los contornos conservan su geometría real; las dimensiones no están disponibles." : "Las líneas no tienen dimensiones rectangulares."}</p>{selectedElement && rotationField(selectedElement)}</>}</section>}{paletteControls()}</>}
+               {inspectorTab === "properties" && <>{selectedElements.length === 0 ? <section className="inspector-card"><div className="panel-title">PÁGINA</div><div className="preset-row"><button onClick={() => setPage(1200, 900)}>Horizontal</button><button onClick={() => setPage(900, 1200)}>Vertical</button></div><div className="fields"><Field label="W" value={document.page.width} onChange={(value) => setPage(value, document.page.height)} /><Field label="H" value={document.page.height} onChange={(value) => setPage(document.page.width, value)} /></div><label className="grid-toggle"><input type="checkbox" checked={grid} onChange={(event) => setGrid(event.target.checked)} /> Mostrar cuadrícula del espacio de trabajo</label></section> : <section className="inspector-card inspector-object-card"><div className="panel-title">OBJETO</div>{propertyElement ? <div className="inspector-object-properties">{objectPropertySections(true)}</div> : <><div className="selected-type">{selectedElement?.type === "contour" ? "CONTORNO" : selectedElement?.type === "dimension" ? "COTA" : "LÍNEA"}</div><p className="muted">{selectedElement?.type === "contour" ? "Los contornos conservan su geometría real; las dimensiones no están disponibles." : selectedElement?.type === "dimension" ? "La cota mide nodos reales y se actualiza con la geometría referenciada." : "Las líneas no tienen dimensiones rectangulares."}</p>{selectedElement && selectedElement.type !== "dimension" && rotationField(selectedElement)}</>}</section>}</>}
               {inspectorTab === "transform" && transformControls()}
            {inspectorTab === "text" && <section className="inspector-card"><div className="panel-title">TEXTO</div><p className="muted">Las propiedades de texto estarán disponibles en una próxima iteración.</p></section>}
          </div>
@@ -640,13 +664,13 @@ export function App() {
          <section className="inspector-lower-card"><div className="panel-title">VALIDACIÓN DEL DISEÑO</div><p className="muted">La validación del diseño estará disponible próximamente.</p></section>
        </aside>
     </div>}
-    <footer className="statusbar"><span className={`status-dot ${persist.state === "saving" ? "saving" : ""}`} />{persist.message}</footer>
+     <footer className="statusbar"><span className={`status-dot ${persist.state === "saving" ? "saving" : ""}`} />{persist.message}<div className="status-palette"><span className="status-palette-label">APARIENCIA</span>{paletteControls()}</div></footer>
   </main>;
 }
 
-const toolDescriptions: Record<string, string> = { Seleccion: "Seleccione, coloque o transforme objetos.", Rectángulo: "Dibuje formas rectangulares.", Elipse: "Dibuje formas elípticas.", Línea: "Dibuje líneas rectas.", Desplazar: "Desplace el espacio de trabajo." };
+const toolDescriptions: Record<string, string> = { Seleccion: "Seleccione, coloque o transforme objetos.", Rectángulo: "Dibuje formas rectangulares.", Elipse: "Dibuje formas elípticas.", Línea: "Dibuje líneas rectas.", Cota: "Cree una cota entre dos nodos reales.", Desplazar: "Desplace el espacio de trabajo." };
 function ToolIcon({ icon }: { icon: Tool }) {
-  const shape = icon === "select" ? <path d="m5 3 13 8-6 2-3 6z" /> : icon === "rectangle" ? <rect x="5" y="5" width="14" height="14" rx="1" /> : icon === "ellipse" ? <circle cx="12" cy="12" r="7" /> : icon === "line" ? <path d="M5 19 19 5" /> : <><path d="M12 4v16M4 12h16" /><path d="m9 7 3-3 3 3M9 17l3 3 3-3M7 9l-3 3 3 3M17 9l3 3-3 3" /></>;
+  const shape = icon === "select" ? <path d="m5 3 13 8-6 2-3 6z" /> : icon === "rectangle" ? <rect x="5" y="5" width="14" height="14" rx="1" /> : icon === "ellipse" ? <circle cx="12" cy="12" r="7" /> : icon === "line" ? <path d="M5 19 19 5" /> : icon === "dimension" ? <><path d="M5 12h14M7 9l-3 3 3 3M17 9l3 3-3 3" /><path d="M4 6v12M20 6v12" /></> : <><path d="M12 4v16M4 12h16" /><path d="m9 7 3-3 3 3M9 17l3 3 3-3M7 9l-3 3 3 3M17 9l3 3-3 3" /></>;
   return <svg className="tool-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{shape}</svg>;
 }
 function ToolButton({ label, icon, active, onClick }: { label: string; icon: Tool; active: boolean; onClick: () => void }) {

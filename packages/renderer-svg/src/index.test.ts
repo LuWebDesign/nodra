@@ -10,6 +10,14 @@ const document = (): DocumentSnapshot => withElements(createDocument("doc-1", [l
   { type: "line", id: elementId("line"), layerId: layer.id, start: { x: 0, y: 0 }, end: { x: 10, y: 5 }, rotation: 0, style },
 ]);
 
+it("renders a canonical cubic path without mutating its source", () => {
+  const path = { type: "path" as const, id: elementId("bezier"), layerId: layer.id, nodes: [{ id: "a", anchor: { x: 0, y: 0 }, join: "corner" as const }, { id: "b", anchor: { x: 10, y: 0 }, join: "corner" as const }], segments: [{ type: "cubicBezier" as const, startNodeId: "a", endNodeId: "b", control1: { x: 2, y: 5 }, control2: { x: 8, y: -5 } }], closed: false, rotation: 0, style };
+  const source = withElements(createDocument("doc-1", [layer]), [path]);
+  const result = renderSvg(source, { zoom: 1, panMm: { x: 0, y: 0 } });
+  expect(result.success && result.svg).toContain("C2 5 8 -5 10 0");
+  expect(source.elements[0]).toEqual(path);
+});
+
 describe("SVG renderer boundary", () => {
   it("renders supported primitives using mm geometry converted through the viewport", () => {
     const result = renderSvg(document(), { zoom: 2, panMm: { x: 5, y: 10 } });
@@ -23,6 +31,17 @@ describe("SVG renderer boundary", () => {
     }
   });
 
+  it("renders associative annotation dimensions as non-destructive SVG", () => {
+    const line = { type: "line" as const, id: elementId("measured-line"), layerId: layer.id, start: { x: 0, y: 0 }, end: { x: 10, y: 0 }, rotation: 0, style };
+    const dimension = { type: "dimension" as const, id: elementId("dimension"), layerId: layer.id, kind: "aligned" as const, references: [{ elementId: line.id, nodeIndex: 0 }, { elementId: line.id, nodeIndex: 2 }] as const, offset: { x: 0, y: -6 }, precision: 1, units: "mm" as const, rotation: 0 as const, style: { stroke: "#2563eb", strokeWidth: 0.45 } };
+    const result = renderSvg(withElements(createDocument("dimensions", [layer]), [line, dimension]), { zoom: 1, panMm: { x: 0, y: 0 } });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.svg).toContain('data-dimension="aligned"');
+      expect(result.svg).toContain('10.0 mm');
+      expect(result.renderedElementIds).toEqual(["measured-line", "dimension"]);
+    }
+  });
   it("renders rectangle corner radii in screen millimetres and clamps to half dimensions", () => {
     const source = withElements(createDocument("rounded", [layer]), [{ type: "rectangle", id: elementId("rounded-rect"), layerId: layer.id, position: { x: 0, y: 0 }, size: { width: 20, height: 10 }, cornerRadius: 8, rotation: 0, style }]);
     const result = renderSvg(source, { zoom: 2, panMm: { x: 0, y: 0 } });

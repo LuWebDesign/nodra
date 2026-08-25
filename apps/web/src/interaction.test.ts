@@ -5,7 +5,7 @@ import { geometryPatch, geometryValue } from "./propertyBar.js";
 
 describe("canvas coordinates", () => {
   it("centers the default 1200x900 page in a measured canvas", () => {
-    expect(centerPageInCanvas({ width: 360, height: 270 }, { width: 1200, height: 900 }, INITIAL_ZOOM)).toEqual({ x: expect.closeTo(0), y: expect.closeTo(0) });
+    expect(centerPageInCanvas({ width: 360, height: 270 }, { width: 1200, height: 900 }, INITIAL_ZOOM)).toEqual({ x: expect.closeTo(360), y: expect.closeTo(270) });
   });
 
   it("centers a recovered custom page without assuming default dimensions", () => {
@@ -25,6 +25,13 @@ describe("canvas coordinates", () => {
     const line = { type: "line" as const, id: elementId("center-line"), layerId: layerId("center"), start: { x: 4, y: 8 }, end: { x: 20, y: 18 }, rotation: 0, style: { stroke: "#000", strokeWidth: 1 } };
     expect(selectionCenter(rectangle)).toEqual({ x: 25, y: 40 });
     expect(selectionCenter(line)).toEqual({ x: 12, y: 13 });
+  });
+
+  it("picks rendered annotation dimensions from resolved references", () => {
+    const layer = { id: layerId("dimension-layer"), name: "Dimension layer", visible: true, order: 0 };
+    const line = { type: "line" as const, id: elementId("dimension-line"), layerId: layer.id, start: { x: 0, y: 0 }, end: { x: 10, y: 0 }, rotation: 0, style: { stroke: "#000", strokeWidth: 1 } };
+    const dimension = { type: "dimension" as const, id: elementId("dimension-hit"), layerId: layer.id, kind: "aligned" as const, references: [{ elementId: line.id, nodeIndex: 0 }, { elementId: line.id, nodeIndex: 2 }] as const, offset: { x: 0, y: -8 }, precision: 2, units: "mm" as const, rotation: 0 as const, style: { stroke: "#2563eb", strokeWidth: 0.45 } };
+    expect(pickElement({ ...createDocument("dimension-doc", [layer]), elements: [line, dimension] }, { x: 5, y: -8 }, 3)).toBe(dimension.id);
   });
 
   it("shows center feedback only when the selected object is the picked object", () => {
@@ -66,6 +73,7 @@ describe("drawing tool routing", () => {
   it("recognizes drawing tools without consulting object hit testing", () => {
     expect(["rectangle", "ellipse", "line"].every(isDrawingTool)).toBe(true);
     expect(isDrawingTool("select")).toBe(false);
+    expect(isDrawingTool("dimension")).toBe(false);
     expect(isDrawingTool("pan")).toBe(false);
   });
 
@@ -106,7 +114,7 @@ describe("zoomAtPoint", () => {
     expect(screenPointToMm({ x: 100, y: 60 }, { x: 0, y: 0 }, result.zoom, result.panMm)).toEqual({ x: 60, y: 50 });
   });
   it("clamps to the documented zoom range", () => {
-    expect(INITIAL_ZOOM).toBe(0.3);
+    expect(INITIAL_ZOOM).toBe(0.75);
     expect(zoomAtPoint(2, { x: 0, y: 0 }, { x: 0, y: 0 }, 0).zoom).toBe(MIN_ZOOM);
     expect(zoomAtPoint(2, { x: 0, y: 0 }, { x: 0, y: 0 }, 99).zoom).toBe(MAX_ZOOM);
   });

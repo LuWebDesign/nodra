@@ -1,11 +1,19 @@
 import { describe, expect, it } from "vitest";
-import { boundsOf, boundsOfElements, closedElementToPolygon, degreesToRadians, elementCenter, ELLIPSE_APPROXIMATION_SEGMENTS, groupCenter, groupHandlePoints, hitTest, mmToScreen, radiansToDegrees, realGeometryNodes, resizeGroup, resizeHandle, rotatedLineEndpoints, rotateElements, rotationFromDrag, rotationHandlePoints, screenToMm, shapeResultContours, validateSize } from "./index.js";
+import { boundsOf, boundsOfElements, closedElementToPolygon, cubicBezierBounds, cubicBezierPoint, degreesToRadians, dimensionGeometry, dimensionValue, elementCenter, ELLIPSE_APPROXIMATION_SEGMENTS, groupCenter, groupHandlePoints, hitTest, mmToScreen, radiansToDegrees, realGeometryNodes, resolveDimensionReference, resizeGroup, resizeHandle, rotatedLineEndpoints, rotateElements, rotationFromDrag, rotationHandlePoints, screenToMm, shapeResultContours, splitCubicBezier, validateSize } from "./index.js";
 import { elementId, layerId } from "@nodra/domain";
 
 const style = { stroke: "#000", strokeWidth: 0.2 };
 const rectangle = { type: "rectangle" as const, id: elementId("r"), layerId: layerId("l"), position: { x: 10, y: 20 }, size: { width: 20, height: 10 }, cornerRadius: 0, rotation: 0, style };
 
 describe("canonical millimetre geometry", () => {
+  it("finds cubic extrema and preserves a split curve", () => {
+    const curve = { p0: { x: 0, y: 0 }, p1: { x: 10, y: 30 }, p2: { x: 20, y: -30 }, p3: { x: 30, y: 0 } };
+    expect(cubicBezierBounds(curve).height).toBeGreaterThan(17);
+    const [left, right] = splitCubicBezier(curve, 0.4);
+    expect(cubicBezierPoint(left, 1)).toEqual(cubicBezierPoint(right, 0));
+    expect(cubicBezierPoint(left, 0.5).x).toBeCloseTo(cubicBezierPoint(curve, 0.2).x);
+    expect(cubicBezierPoint(left, 0.5).y).toBeCloseTo(cubicBezierPoint(curve, 0.2).y);
+  });
   it("round-trips viewport conversion", () => {
     const viewport = { zoom: 2, panMm: { x: 5, y: 7 } };
     const point = { x: 12, y: 18 };
@@ -61,6 +69,13 @@ describe("canonical millimetre geometry", () => {
     expect(realGeometryNodes(line).map(({ point }) => point)).toEqual([line.start, { x: 4, y: 5 }, line.end]);
     const ellipse = { type: "ellipse" as const, id: elementId("ellipse-nodes"), layerId: layerId("l"), position: { x: 10, y: 20 }, size: { width: 20, height: 10 }, rotation: Math.PI / 2, style };
     expect(realGeometryNodes(ellipse).map(({ point }) => point)).toEqual([{ x: 20, y: 25 }, { x: 25, y: 25 }, { x: 20, y: 35 }, { x: 15, y: 25 }, { x: 20, y: 15 }]);
+  });
+  it("resolves associative annotation dimensions from real geometry nodes", () => {
+    const dimension = { type: "dimension" as const, id: elementId("d"), layerId: layerId("l"), kind: "aligned" as const, references: [{ elementId: rectangle.id, nodeIndex: 0 }, { elementId: rectangle.id, nodeIndex: 1 }] as const, offset: { x: 0, y: -8 }, precision: 2, units: "mm" as const, rotation: 0 as const, style };
+    expect(resolveDimensionReference([rectangle, dimension], dimension.references[0])).toEqual({ x: 10, y: 20 });
+    expect(dimensionValue("horizontal", { x: 10, y: 20 }, { x: 30, y: 35 })).toBe(20);
+    expect(dimensionValue("vertical", { x: 10, y: 20 }, { x: 30, y: 35 })).toBe(15);
+    expect(dimensionGeometry(dimension, [rectangle, dimension])).toMatchObject({ lineStart: { x: 10, y: 12 }, lineEnd: { x: 30, y: 12 }, text: { x: 20, y: 12 }, value: 20 });
   });
   it("normalizes angle conversion and crosses the angle branch without jumping", () => {
     expect(radiansToDegrees(degreesToRadians(-90))).toBeCloseTo(270);

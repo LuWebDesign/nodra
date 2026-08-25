@@ -3,6 +3,12 @@ import { createDocument, layerId } from "@nodra/domain";
 import { migrateDocument, parseDocument, serializeDocument, validateDocument, validateProject } from "./index.js";
 
 describe("native document validation", () => {
+  it("validates ordered open cubic path topology", () => {
+    const document = createDocument("doc-1", [{ id: layerId("layer-1"), name: "Design", visible: true, order: 0 }]);
+    const path = { type: "path", id: "bezier", layerId: "layer-1", nodes: [{ id: "a", anchor: { x: 0, y: 0 }, join: "corner" }, { id: "b", anchor: { x: 10, y: 0 }, join: "corner" }], segments: [{ type: "cubicBezier", startNodeId: "a", endNodeId: "b", control1: { x: 2, y: 5 }, control2: { x: 8, y: -5 } }], closed: false, rotation: 0, style: { stroke: "#000", strokeWidth: 1 } };
+    expect(validateDocument({ ...document, elements: [path] }).success).toBe(true);
+    expect(validateDocument({ ...document, elements: [{ ...path, segments: [] }] }).success).toBe(false);
+  });
   it("round-trips valid records", () => {
     const document = createDocument("doc-1", [{ id: layerId("layer-1"), name: "Design", visible: true, order: 0 }]);
     const result = parseDocument(serializeDocument(document));
@@ -20,12 +26,19 @@ describe("native document validation", () => {
     const result = validateDocument(oldDocument);
     expect(result.success).toBe(true);
     if (result.success) expect(result.data.page).toEqual({ width: 1200, height: 900 });
-    expect(migrateDocument(oldDocument)).toMatchObject({ schemaVersion: 3, page: { width: 1200, height: 900 } });
+    expect(migrateDocument(oldDocument)).toMatchObject({ schemaVersion: 4, page: { width: 1200, height: 900 } });
   });
   it("validates a project with stable page ids, including duplicate sizes", () => {
     const document = createDocument("doc-1", []);
-    const project = { ...({ schemaVersion: 3, id: document.id, revision: document.revision, origin: document.origin, units: document.units } as const), pages: [{ id: "page-a", page: document.page, layers: [], elements: [] }, { id: "page-b", page: document.page, layers: [], elements: [] }], activePageId: "page-b" };
+    const project = { ...({ schemaVersion: 4, id: document.id, revision: document.revision, origin: document.origin, units: document.units } as const), pages: [{ id: "page-a", page: document.page, layers: [], elements: [] }, { id: "page-b", page: document.page, layers: [], elements: [] }], activePageId: "page-b" };
     expect(validateProject(project).success).toBe(true);
+  });
+  it("validates annotation dimensions and rejects broken references", () => {
+    const base = createDocument("doc-1", [{ id: layerId("layer-1"), name: "Design", visible: true, order: 0 }]);
+    const line = { type: "line", id: "line", layerId: "layer-1", start: { x: 0, y: 0 }, end: { x: 10, y: 0 }, rotation: 0, style: { stroke: "#000", strokeWidth: 1 } };
+    const dimension = { type: "dimension", id: "dimension", layerId: "layer-1", kind: "aligned", references: [{ elementId: "line", nodeIndex: 0 }, { elementId: "line", nodeIndex: 2 }], offset: { x: 0, y: -8 }, precision: 2, units: "mm", rotation: 0, style: { stroke: "#2563eb", strokeWidth: 0.45 } };
+    expect(validateDocument({ ...base, elements: [line, dimension] }).success).toBe(true);
+    expect(validateDocument({ ...base, elements: [dimension] }).success).toBe(false);
   });
   it("rejects non-finite and non-positive page dimensions", () => {
     const result = validateDocument({ ...createDocument("doc-1"), page: { width: 0, height: Number.NaN } });
