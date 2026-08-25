@@ -44,7 +44,22 @@ export const splineElementSchema = z.object({ id: nonEmptyId, layerId: nonEmptyI
   if (new Set(nodeIds).size !== nodeIds.length) ctx.addIssue({ code: "custom", message: "Spline node IDs must be unique", path: ["nodes"] });
 });
 const textElement = z.object({ ...common, type: z.literal("text"), position: point, size, text: z.string().min(1), fontFamily: z.string().min(1), fontSize: finite.gt(0), fontWeight: z.enum(["normal", "bold"]), fontStyle: z.enum(["normal", "italic"]), textAlign: z.enum(["left", "center", "right"]), lineHeight: finite.gt(0), scaleX: finite.gt(0).optional(), scaleY: finite.gt(0).optional() }).strict();
-export const elementSchema = z.discriminatedUnion("type", [rectangle, ellipse, line, contour, path, splineElementSchema, textElement]);
+const glyphContour = z.object({ nodes: z.array(pathNode).min(2), segments: z.array(pathSegment).min(2) }).strict().superRefine((value, ctx) => {
+  const nodeIds = value.nodes.map((node) => node.id);
+  if (new Set(nodeIds).size !== nodeIds.length) ctx.addIssue({ code: "custom", message: "Glyph node IDs must be unique", path: ["nodes"] });
+  if (value.segments.length !== value.nodes.length) ctx.addIssue({ code: "custom", message: "Glyph contour segment count must match node count", path: ["segments"] });
+  const known = new Set(nodeIds);
+  value.segments.forEach((segment, index) => {
+    if (!known.has(segment.startNodeId) || !known.has(segment.endNodeId)) ctx.addIssue({ code: "custom", message: "Glyph segment references an unknown node", path: ["segments", index] });
+    const start = value.nodes[index]; const end = value.nodes[(index + 1) % value.nodes.length];
+    if (start && end && (segment.startNodeId !== start.id || segment.endNodeId !== end.id)) ctx.addIssue({ code: "custom", message: "Glyph segments must follow node order", path: ["segments", index] });
+  });
+});
+const glyph = z.object({ ...common, type: z.literal("glyph"), position: point, size, glyph: z.string().min(1), contours: z.array(glyphContour).min(1), fillRule: z.literal("evenodd") }).strict().superRefine((value, ctx) => {
+  const ids = value.contours.flatMap((contour) => contour.nodes.map((node) => node.id));
+  if (new Set(ids).size !== ids.length) ctx.addIssue({ code: "custom", message: "Glyph node IDs must be unique across contours", path: ["contours"] });
+});
+export const elementSchema = z.discriminatedUnion("type", [rectangle, ellipse, line, contour, path, splineElementSchema, textElement, glyph]);
 export const layerSchema = z.object({ id: nonEmptyId, name: z.string().min(1), visible: z.boolean(), order: finite.int().nonnegative() }).strict();
 const documentFields = { id: nonEmptyId, revision: finite.int().nonnegative(), origin: z.literal("top-left"), units: z.literal("mm"), page: size, layers: z.array(layerSchema), elements: z.array(elementSchema) };
 export const documentSchema = z.object({ schemaVersion: z.literal(CURRENT_SCHEMA_VERSION), ...documentFields, capabilities: z.object({ spline: z.literal(1).optional() }).strict().optional() }).strict().superRefine((value, ctx) => {
