@@ -1,14 +1,16 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent, type PointerEvent, type ReactNode, type WheelEvent } from "react";
 import { createProject, elementId, layerId, pageId, revision, type DocumentSnapshot, type Element, type ElementId, type PointMm, type ProjectSnapshot, type SplineElement, type TextElement } from "@nodra/domain";
-import { addToSelection, appendSplineNode, beginGesture, cancelGesture, clearSelection, closePath, closeSplineElement, commitGesture, createElement, createPathCubicNode, createPathNode, deleteContourNodes, deleteElement, deleteElementNodes, deletePathNodes, dispatch, duplicateElements, flipElements, insertFormaNode, moveElements, movePathHandle, movePathNode, openPath, updateSplineNode, previewGesture, previewGestureFromBase, redo, resizeElement, resizeElements, rotateElement, rotateElementsAroundCenter, select, selectForPointerDown, setPathJoin, shapeOperation, splitPathSegment, undo, updateContourNode, updateElement, updateElementNode, updateElementStyles, updatePage, updateSplineHandle, type FlipAxis, type ShapeOperation } from "@nodra/editor-core";
-import { boundsOfElements, contourVertexNodes, elementCenter, groupCenter, groupHandlePoints, pathGeometryNodes, realGeometryNodes, resizeHandle, rotatedResizeHandles, rotationFromDrag, rotationHandlePoints, type Direction, type GroupHandle, type ResizeHandle } from "@nodra/geometry";
+import { addToSelection, appendSplineNode, beginGesture, cancelGesture, clearSelection, closePath, closeSplineElement, commitGesture, convertTextToGlyphs, createElement, createPathCubicNode, createPathNode, deleteContourNodes, deleteElement, deleteElementNodes, deletePathNodes, dispatch, duplicateElements, flipElements, insertFormaNode, moveElements, movePathHandle, movePathNode, openPath, updateSplineNode, previewGesture, previewGestureFromBase, redo, resizeElement, resizeElements, rotateElement, rotateElementsAroundCenter, select, selectForPointerDown, setPathJoin, shapeOperation, splitPathSegment, undo, updateContourNode, updateElement, updateElementNode, updateElementStyles, updatePage, updateSplineHandle, type FlipAxis, type ShapeOperation } from "@nodra/editor-core";
+import { boundsOfElements, contourVertexNodes, elementCenter, glyphGeometryNodes, groupCenter, groupHandlePoints, pathGeometryNodes, realGeometryNodes, resizeHandle, rotatedResizeHandles, rotationFromDrag, rotationHandlePoints, type Direction, type GroupHandle, type ResizeHandle } from "@nodra/geometry";
 import { DebouncedAutosave, DexieProjectRepository, requestStoragePersistence } from "@nodra/persistence";
+import { validateDesign } from "@nodra/validation";
 import { renderSvg } from "@nodra/renderer-svg";
 import { canActivateRotation, centerPageInCanvas, clientPointToCanvas, cubicPlacementControls, formaNodeKey, hoveredSelectionCenter, isDrawingTool, marqueeSelection, movementExceedsThreshold, normalizeBounds, normalizeDrag, pagePointToCanvas, pathGuides, pickElement, pickFormaNode, pickFormaSegment, pickNode, pickPathNode, pickPathSegment, pointerDownIntent, screenDeltaToMm, screenPointToMm, selectedNodeAnchor, selectedPathAnchorIds, alignmentGuides, snapMoveDelta, zoomAtPoint, type AlignmentGuide, type ContourNodeHit, type FormaNodeHit, type NodeHit, type PathNodeHit, type SnapGuide, type TransformMode } from "./interaction.js";
 import { aspectGeometryPatch, aspectSize, formatMm, geometryValue, rotationDegreesValue, rotationPatch, type GeometryField, type PropertyElement, type RotatableElement } from "./propertyBar.js";
 import { useDocumentStore, usePersistenceStore, useUiStore, useViewportStore, type Tool } from "./stores.js";
 import { pathJoinGuidance, pathJoinOptions } from "./pathJoins.js";
 import { textSizeFor } from "./textMetrics.js";
+import { extractTextGlyphOutlines, fontFamilyFromFileName, FontOutlineError } from "./fontOutline.js";
 
 const defaultStyle = { stroke: "#000000", strokeWidth: 1 };
 const defaultClosedFill = "rgba(101,217,255,0.22)";
@@ -104,6 +106,7 @@ export function App() {
   const [selectedSplineNodeKey, setSelectedSplineNodeKey] = useState<string>();
   const [selectedPathSegment, setSelectedPathSegment] = useState<{ readonly elementId: ElementId; readonly segmentIndex: number }>();
   const [inspectorTab, setInspectorTab] = useState<InspectorTab>("properties");
+  const designValidation = useMemo(() => validateDesign(document.elements, document.page), [document.elements, document.page]);
   const [transformDirection, setTransformDirection] = useState<Direction>("center");
   const [directionTooltipVisible, setDirectionTooltipVisible] = useState(false);
   const [penDraftPoint, setPenDraftPoint] = useState<PointMm>();
@@ -113,6 +116,8 @@ export function App() {
   const [textFontWeight, setTextFontWeight] = useState<"normal" | "bold">("normal");
   const [textFontStyle, setTextFontStyle] = useState<"normal" | "italic">("normal");
   const [availableFonts, setAvailableFonts] = useState(["Arial", "Helvetica", "Times New Roman", "Courier New", "Inter"]);
+  const [fontSources, setFontSources] = useState<Record<string, ArrayBuffer>>({});
+  const [fontLoadError, setFontLoadError] = useState<string>();
   const [textDraft, setTextDraft] = useState<{ readonly position: PointMm; readonly value: string; readonly elementId?: ElementId; readonly fontSize?: number; readonly element?: TextElement }>();
   const textDraftRef = useRef(textDraft);
   textDraftRef.current = textDraft;
@@ -333,15 +338,18 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
     return () => cancelAnimationFrame(frame);
   }, [textDraft]);
 
-  const loadFontFile = async (file: File) => {
-    const family = file.name.replace(/\\.(ttf|otf)$/i, "").trim() || "Fuente cargada";
+  const loadFontFile = async (file: File, familyOverride?: string) => {
+    const family = familyOverride?.trim() || fontFamilyFromFileName(file.name);
     try {
-      const face = new FontFace(family, await file.arrayBuffer());
+      const bytes = await file.arrayBuffer();
+      const face = new FontFace(family, bytes);
       await face.load();
       globalThis.document.fonts.add(face);
       setAvailableFonts((current) => current.includes(family) ? current : [...current, family]);
       setTextFontFamily(family);
-    } catch { /* The browser rejects invalid or unsupported font files. */ }
+      setFontSources((current) => ({ ...current, [family]: bytes }));
+      setFontLoadError(undefined);
+    } catch { setFontLoadError("No se pudo cargar la fuente. Seleccione un archivo TTF, OTF, WOFF o WOFF2 válido."); }
   };
 
   const commitTextDraft = (expectedDraft = textDraftRef.current) => {
@@ -356,12 +364,12 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
     const fontFamily = source?.fontFamily ?? textFontFamily;
     const fontWeight = source?.fontWeight ?? textFontWeight;
     const fontStyle = source?.fontStyle ?? textFontStyle;
-    const fontSize = source?.fontSize ?? draft.fontSize ?? 12;
+    const fontSize = source?.fontSize ?? draft.fontSize ?? 24;
     const text: TextElement = {
       type: "text", id: draft.elementId ?? id(), layerId: layerId(current.document.layers[0]?.id ?? "layer-1"),
       position: draft.position, size: textSizeFor(draft.value, fontSize, fontFamily, fontWeight, fontStyle, source?.lineHeight ?? 1.2), text: draft.value,
-      fontFamily, fontSize, fontWeight, fontStyle, textAlign: source?.textAlign ?? "left", lineHeight: source?.lineHeight ?? 1.2, rotation: source?.rotation ?? 0,
-      style: source?.style ?? { stroke: "#000000", fill: "#000000", strokeWidth: 0.1 },
+       fontFamily, fontSize, fontWeight, fontStyle, textAlign: source?.textAlign ?? "left", lineHeight: source?.lineHeight ?? 1.2, rotation: source?.rotation ?? 0,
+       style: { stroke: "#000000", fill: "#000000", strokeWidth: 0.1 },
     };
     // Inline editing changes only the text content and its measured bounds. The
     // existing element keeps its position and all typography/style properties.
@@ -483,6 +491,18 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
     event.currentTarget.setPointerCapture(event.pointerId);
     setEditorState(beginGesture(editorRef.current));
     interaction.current = { pointerId: event.pointerId, lastX: event.clientX, lastY: event.clientY, kind: "rotate", ids: selection, ...(selectedElement ? { element: selectedElement } : {}), center, start, dragged: false };
+  };
+
+  const convertSelectedText = () => {
+    if (selectedElement?.type !== "text") return;
+    try {
+      const outlines = extractTextGlyphOutlines(selectedElement, (family) => fontSources[family]);
+      const next = dispatch(editorRef.current, convertTextToGlyphs(selectedElement.id, outlines));
+      if (next === editorRef.current) return;
+      setEditorState(next);
+    } catch (error) {
+      persist.set("failed", error instanceof FontOutlineError ? error.message : "No se pudo convertir el texto a curvas");
+    }
   };
 
   const beginTextEdit = (element: TextElement) => {
@@ -707,7 +727,7 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
       const point = pointAt(event);
       const command = pathNode.kind === "anchor"
         ? movePathNode(active.pathNode.elementId, pathNode.nodeId, point)
-        : movePathHandle(active.pathNode.elementId, pathNode.segmentIndex ?? -1, pathNode.handle ?? "control1", point);
+         : movePathHandle(active.pathNode.elementId, pathNode.segmentIndex ?? -1, pathNode.handle ?? "control1", point, pathNode.ringIndex);
       active.dragged = true;
       setEditorState(previewGestureFromBase(editorRef.current, command));
       return;
@@ -856,8 +876,9 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
 
      const formaNodes: readonly FormaNodeOverlay[] = (tool === "forma" || tool === "pen") ? selectedElements.filter((element) => element.type !== "spline" && element.type !== "text").flatMap((element): readonly FormaNodeOverlay[] => element.type === "contour"
       ? contourVertexNodes(element).map((node) => ({ kind: "contour" as const, key: `${node.elementId}:c:${node.ringIndex}:${node.pointIndex}`, elementId: node.elementId, point: node.point, contour: node }))
-        : element.type === "path" ? pathGeometryNodes(element).map((node, nodeIndex) => ({ kind: "path" as const, key: `${element.id}:p:${nodeIndex}`, elementId: element.id, point: node.point, nodeIndex, pathNode: { elementId: element.id, node } }))
-        : realGeometryNodes(element).map((node, nodeIndex) => ({ kind: "path" as const, key: `${element.id}:p:${nodeIndex}`, elementId: element.id, point: node.point, nodeIndex }))) : [];
+       : element.type === "path" ? pathGeometryNodes(element).map((node, nodeIndex) => ({ kind: "path" as const, key: `${element.id}:p:${nodeIndex}`, elementId: element.id, point: node.point, nodeIndex, pathNode: { elementId: element.id, node } }))
+         : element.type === "glyph" ? glyphGeometryNodes(element).map((node, nodeIndex) => ({ kind: "path" as const, key: `${element.id}:p:${nodeIndex}`, elementId: element.id, point: node.point, nodeIndex, pathNode: { elementId: element.id, node } }))
+         : realGeometryNodes(element).map((node, nodeIndex) => ({ kind: "path" as const, key: `${element.id}:p:${nodeIndex}`, elementId: element.id, point: node.point, nodeIndex }))) : [];
       const selectedPathAnchor = selectedElement?.type === "path"
        ? (() => { const selectedPathOverlay = formaNodes.find((node): node is Extract<FormaNodeOverlay, { readonly kind: "path" }> => node.kind === "path" && "pathNode" in node && node.pathNode?.node.kind === "anchor" && selectedFormaNodeKeys.includes(node.key)); const anchor = selectedPathOverlay?.pathNode?.node; return anchor?.kind === "anchor" ? selectedElement.nodes.find((node) => node.id === anchor.nodeId) : undefined; })()
         : undefined;
@@ -1166,7 +1187,7 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
     </header>
     {mode === "prepare" ? <section className="prepare"><div><div className="prepare-icon">◇</div><h1>Preparar aún no está disponible</h1><p>Nodra ofrece actualmente solo un espacio de trabajo de Diseño sin conexión. No hay hardware conectado, controlado ni listo.</p><button onClick={() => setMode("design")}>Volver a Diseño</button></div></section> : <div className="workspace">
       <section className="properties-bar" aria-label="Barra de propiedades">
-        <div className="page-selector"><label>Fuente de texto<select aria-label="Tipografía del texto" value={textFontFamily} onChange={(event) => { const family = event.target.value; setTextFontFamily(family); const selectedTextIds = selectedElements.filter((element): element is TextElement => element.type === "text").map((element) => element.id); const next = selectedTextIds.reduce((state, selectedId) => dispatch(state, updateElement(selectedId, { fontFamily: family })), editorRef.current); if (selectedTextIds.length) setEditorState(next); }}>{availableFonts.map((font) => <option key={font} style={{ fontFamily: font }}>{font}</option>)}</select><label className="font-upload-button">+ Fuente<input type="file" accept=".ttf,.otf,font/ttf,font/otf" onChange={(event) => { const file = event.target.files?.[0]; if (file) void loadFontFile(file); event.currentTarget.value = ""; }} /></label></label><label>Página<select aria-label="Página activa" value={project.activePageId} onChange={(event) => switchPage(event.target.value)}>{project.pages.map((page, index) => <option key={page.id} value={page.id}>{index + 1} · {page.page.width} × {page.page.height} mm</option>)}</select></label><button type="button" onClick={createPageAndSelect}>+ Nueva página</button></div>
+         <div className="page-selector"><label>Fuente de texto<select aria-label="Tipografía del texto" value={textFontFamily} onChange={(event) => { const family = event.target.value; setTextFontFamily(family); const selectedTextIds = selectedElements.filter((element): element is TextElement => element.type === "text").map((element) => element.id); const next = selectedTextIds.reduce((state, selectedId) => dispatch(state, updateElement(selectedId, { fontFamily: family })), editorRef.current); if (selectedTextIds.length) setEditorState(next); }}>{availableFonts.map((font) => <option key={font} style={{ fontFamily: font }}>{font}</option>)}</select><label className="font-upload-button">+ Fuente<input type="file" accept=".ttf,.otf,.woff,.woff2,font/ttf,font/otf,font/woff,font/woff2" onChange={(event) => { const file = event.target.files?.[0]; if (file) void loadFontFile(file); event.currentTarget.value = ""; }} /></label></label><label>Página<select aria-label="Página activa" value={project.activePageId} onChange={(event) => switchPage(event.target.value)}>{project.pages.map((page, index) => <option key={page.id} value={page.id}>{index + 1} · {page.page.width} × {page.page.height} mm</option>)}</select></label><button type="button" onClick={createPageAndSelect}>+ Nueva página</button></div>
            {selectedElements.length > 0 ? <div className="property-fields">
                 {objectPropertySections()}{mirrorButton("horizontal")}{mirrorButton("vertical")}{shapeOperations()}
          </div> : <p className="muted">Seleccione un objeto para editar sus propiedades.</p>}
@@ -1180,9 +1201,9 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
               {textDraft && (() => {
                 const existing = textDraft.element;
                 const lines = textDraft.value.split("\n");
-                const inputWidth = existing ? existing.size.width * zoom : Math.max(70, Math.max(...lines.map((line) => line.length), 1) * ((textDraft.fontSize ?? 12) * 0.98));
-                const inputHeight = existing ? existing.size.height * zoom : Math.max(30, lines.length * (textDraft.fontSize ?? 12) * 1.2);
-                const inputFontSize = (existing?.fontSize ?? textDraft.fontSize ?? 12) * zoom;
+                const inputWidth = existing ? existing.size.width * zoom : Math.max(70, Math.max(...lines.map((line) => line.length), 1) * ((textDraft.fontSize ?? 24) * 0.98));
+                const inputHeight = existing ? existing.size.height * zoom : Math.max(30, lines.length * (textDraft.fontSize ?? 24) * 1.2);
+                const inputFontSize = (existing?.fontSize ?? textDraft.fontSize ?? 24) * zoom;
                 return <textarea ref={textInput} autoFocus value={textDraft.value} onPointerDown={(event) => event.stopPropagation()} onDoubleClick={(event) => { event.preventDefault(); event.stopPropagation(); }} aria-label="Texto editable" rows={Math.max(1, lines.length)} wrap={existing ? "off" : undefined} onChange={(event) => setTextDraft((current) => current ? { ...current, value: event.target.value } : current)} onKeyDown={(event) => { if (event.key === "Escape") { event.preventDefault(); textDraftRef.current = undefined; setTextDraft(undefined); } else if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); commitTextDraft(); } }} onBlur={() => { const blurredDraft = textDraftRef.current; window.setTimeout(() => { if (globalThis.document.activeElement !== textInput.current) commitTextDraft(blurredDraft); }, 0); }} placeholder="Escriba aquí…" style={{ caretColor: "#111827", position: "absolute", left: pagePointToCanvas(textDraft.position, zoom, panMm).x, top: pagePointToCanvas(textDraft.position, zoom, panMm).y, zIndex: 8, width: `${inputWidth}px`, height: `${inputHeight}px`, padding: 0, fontFamily: existing?.fontFamily ?? textFontFamily, fontSize: `${inputFontSize}px`, fontWeight: existing?.fontWeight ?? textFontWeight, fontStyle: existing?.fontStyle ?? textFontStyle, textAlign: existing?.textAlign ?? "left", lineHeight: existing?.lineHeight ?? 1.2, color: "#111827", background: "transparent", border: "none", outline: "none", resize: "none", overflow: "hidden", transform: existing ? `rotate(${existing.rotation}rad) scale(${existing.scaleX ?? 1}, ${existing.scaleY ?? 1})` : undefined, transformOrigin: existing ? "top left" : undefined }} />;
               })()}
             {formaNodes.length > 0 && <div className="contour-node-overlay" role="group" aria-label={tool === "pen" ? "Nodos y controles del trazado" : "Nodos de forma"}>{formaNodes.map((node) => { const screen = pagePointToCanvas(node.point, zoom, panMm); const selected = selectedFormaNodeKeys.includes(node.key); const pathNode = node.kind === "path" ? node.pathNode : undefined; return <button key={node.key} type="button" className={`contour-node${(tool === "forma" || tool === "pen") && !(node.kind === "path" && pathNode?.node.kind === "control") ? " editing-node" : ""}${selected ? " active selected" : ""}`} data-contour-node={node.key} aria-label={node.kind === "contour" ? `Nodo del contorno, anillo ${node.contour.ringIndex + 1}, punto ${node.contour.pointIndex + 1}` : pathNode?.node.kind === "control" ? `Control Bézier ${pathNode.node.handle === "control1" ? "saliente" : "entrante"}` : `Nodo editable ${node.nodeIndex + 1}`} style={{ left: screen.x, top: screen.y }} onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); setSelectedFormaNodeKeys((current) => event.shiftKey ? current.includes(node.key) ? current.filter((value) => value !== node.key) : [...current, node.key] : [node.key]); if (tool === "pen" && pathNode?.node.kind === "anchor") { const currentPath = editorRef.current.document.elements.find((element) => element.id === node.elementId && element.type === "path"); if (currentPath?.type === "path" && !currentPath.closed && currentPath.nodes[0]?.id === pathNode.node.nodeId) { setPenDraftPoint(undefined); setEditorState(dispatch(select(editorRef.current, [node.elementId]), closePath(node.elementId))); return; } } canvas.current?.setPointerCapture(event.pointerId); if (pathNode) { setEditorState(beginGesture(select(editorRef.current, [node.elementId]))); interaction.current = { pointerId: event.pointerId, lastX: event.clientX, lastY: event.clientY, kind: "path-node", pathNode, startClient: { x: event.clientX, y: event.clientY }, dragged: false }; } else { setEditorState(beginGesture(editorRef.current)); interaction.current = { pointerId: event.pointerId, lastX: event.clientX, lastY: event.clientY, kind: "contour-node", ...(node.kind === "contour" ? { contourNode: node.contour } : {}), formaNode: node.kind === "contour" ? { elementId: node.contour.elementId, contourNode: node.contour, point: node.point } : { elementId: node.elementId, nodeIndex: node.nodeIndex, point: node.point }, startClient: { x: event.clientX, y: event.clientY }, dragged: false }; } }} />; })}</div>}
@@ -1203,12 +1224,12 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
          <div className="inspector-tab-content" role="tabpanel">
                 {inspectorTab === "properties" && <>{selectedElements.length === 0 ? <section className="inspector-card"><div className="panel-title">PÁGINA</div><div className="preset-row"><button onClick={() => setPage(1200, 900)}>Horizontal</button><button onClick={() => setPage(900, 1200)}>Vertical</button></div><div className="fields"><Field label="W" value={document.page.width} onChange={(value) => setPage(value, document.page.height)} /><Field label="H" value={document.page.height} onChange={(value) => setPage(document.page.width, value)} /></div><label className="grid-toggle"><input type="checkbox" checked={grid} onChange={(event) => setGrid(event.target.checked)} /> Mostrar cuadrícula del espacio de trabajo</label></section> : <section className="inspector-card inspector-object-card"><div className="panel-title">OBJETO</div>{propertyElement ? <div className="inspector-object-properties">{objectPropertySections(true)}</div> : <><div className="selected-type">{selectedElement?.type === "contour" ? "CONTORNO" : selectedElement?.type === "path" ? "TRAZADO" : selectedElement?.type === "spline" ? "SPLINE" : "LÍNEA"}</div><p className="muted">{selectedElement?.type === "contour" ? "Los contornos conservan su geometría real; las dimensiones no están disponibles." : selectedElement?.type === "path" ? "Los trazados conservan sus nodos y segmentos." : selectedElement?.type === "spline" ? "Las splines conservan sus nodos y handles relativos." : "Las líneas no tienen dimensiones rectangulares."}</p>{selectedElement && isRotatableElement(selectedElement) && rotationField(selectedElement)}</>}</section>}{pathClosureControls}{splineClosureControls}{pathJoinControls}{pathSegmentControls}</>}
               {inspectorTab === "transform" && transformControls()}
-           {inspectorTab === "text" && <section className="inspector-card"><div className="panel-title">TEXTO</div>{selectedElement?.type === "text" ? <div className="text-properties"><label className="field"><span>Tamaño (mm)</span><input type="number" min="1" value={selectedElement.fontSize} onChange={(event) => { const value = Number(event.target.value); if (Number.isFinite(value) && value > 0) setEditorState(dispatch(editorRef.current, updateElement(selectedElement.id, { fontSize: value }))); }} /></label><label className="field"><span>Tipografía</span><select value={selectedElement.fontFamily} onChange={(event) => setEditorState(dispatch(editorRef.current, updateElement(selectedElement.id, { fontFamily: event.target.value })))}>{availableFonts.map((font) => <option key={font} style={{ fontFamily: font }}>{font}</option>)}</select></label><div className="text-style-buttons"><button type="button" aria-pressed={selectedElement.fontWeight === "bold"} onClick={() => setEditorState(dispatch(editorRef.current, updateElement(selectedElement.id, { fontWeight: selectedElement.fontWeight === "bold" ? "normal" : "bold" })))}>Negrita</button><button type="button" aria-pressed={selectedElement.fontStyle === "italic"} onClick={() => setEditorState(dispatch(editorRef.current, updateElement(selectedElement.id, { fontStyle: selectedElement.fontStyle === "italic" ? "normal" : "italic" })))}>Cursiva</button></div></div> : <p className="muted">Seleccione un texto para editar sus propiedades.</p>}</section>}
+            {inspectorTab === "text" && <section className="inspector-card"><div className="panel-title">TEXTO</div>{selectedElement?.type === "text" ? <div className="text-properties"><label className="field"><span>Tamaño (mm)</span><input type="number" min="1" value={selectedElement.fontSize} onChange={(event) => { const value = Number(event.target.value); if (Number.isFinite(value) && value > 0) setEditorState(dispatch(editorRef.current, updateElement(selectedElement.id, { fontSize: value }))); }} /></label><label className="field"><span>Tipografía</span><select value={selectedElement.fontFamily} onChange={(event) => setEditorState(dispatch(editorRef.current, updateElement(selectedElement.id, { fontFamily: event.target.value })))}>{availableFonts.map((font) => <option key={font} style={{ fontFamily: font }}>{font}</option>)}</select></label><label className="font-upload-button">Cargar fuente para esta familia<input type="file" accept=".ttf,.otf,.woff,.woff2,font/ttf,font/otf,font/woff,font/woff2" onChange={(event) => { const file = event.target.files?.[0]; if (file) void loadFontFile(file, selectedElement.fontFamily); event.currentTarget.value = ""; }} /></label><div className="text-style-buttons"><button type="button" aria-pressed={selectedElement.fontWeight === "bold"} onClick={() => setEditorState(dispatch(editorRef.current, updateElement(selectedElement.id, { fontWeight: selectedElement.fontWeight === "bold" ? "normal" : "bold" })))}>Negrita</button><button type="button" aria-pressed={selectedElement.fontStyle === "italic"} onClick={() => setEditorState(dispatch(editorRef.current, updateElement(selectedElement.id, { fontStyle: selectedElement.fontStyle === "italic" ? "normal" : "italic" })))}>Cursiva</button></div><p className="muted">La fuente cargada debe corresponder al peso y estilo seleccionados.</p><button type="button" aria-label="Convertir texto a curvas" title="Requiere una fuente cargada para esta familia" disabled={!fontSources[selectedElement.fontFamily]} onClick={convertSelectedText}>Convertir a curvas</button>{!fontSources[selectedElement.fontFamily] && <p className="muted">Cargue una fuente TTF, OTF, WOFF o WOFF2 para habilitar la conversión.</p>}{fontLoadError && <p className="muted">{fontLoadError}</p>}</div> : <p className="muted">Seleccione un texto para editar sus propiedades.</p>}</section>}
          </div>
          <section className="inspector-lower-card"><div className="panel-title">CAPAS</div>{document.layers.map((layer) => <div className="layer" key={layer.id}><span>{layer.name}</span><span>{layer.visible ? "Visible" : "Oculta"}</span></div>)}</section>
          <section className="inspector-lower-card"><div className="panel-title">OBJETOS</div><p className="muted">Estructura de objetos próximamente.</p></section>
          <section className="inspector-lower-card"><div className="panel-title">SÍMBOLOS</div><p className="muted">No hay símbolos configurados.</p></section>
-         <section className="inspector-lower-card"><div className="panel-title">VALIDACIÓN DEL DISEÑO</div><p className="muted">La validación del diseño estará disponible próximamente.</p></section>
+         <section className="inspector-lower-card design-validation-card"><div className="panel-title">VALIDACIÓN DEL DISEÑO</div><div className={designValidation.ready ? "validation-status ok" : "validation-status warning"}><span aria-hidden="true">{designValidation.ready ? "●" : "▲"}</span><span>{designValidation.ready ? "Todo listo para procesar" : "Revisar antes de procesar"}</span></div><div className={`validation-check ${designValidation.openCurveCount ? "warning" : "ok"}`}><span aria-hidden="true">{designValidation.openCurveCount ? "▲" : "●"}</span><span>{designValidation.openCurveCount ? `${designValidation.openCurveCount} ${designValidation.openCurveCount === 1 ? "curva abierta" : "curvas abiertas"}` : "No hay curvas abiertas"}</span></div><div className={`validation-check ${designValidation.duplicateLineCount ? "warning" : "ok"}`}><span aria-hidden="true">{designValidation.duplicateLineCount ? "▲" : "●"}</span><span>{designValidation.duplicateLineCount ? `${designValidation.duplicateLineCount} ${designValidation.duplicateLineCount === 1 ? "línea duplicada" : "líneas duplicadas"}` : "No hay líneas duplicadas"}</span></div><div className={`validation-check ${designValidation.outsideElementCount ? "warning" : "ok"}`}><span aria-hidden="true">{designValidation.outsideElementCount ? "▲" : "●"}</span><span>{designValidation.outsideElementCount ? `${designValidation.outsideElementCount} objetos fuera del área` : "Todos los objetos dentro del área"}</span></div></section>
        </aside>
     </div>}
      <footer className="statusbar"><div className="status-message"><span className={`status-dot ${persist.state === "saving" ? "saving" : ""}`} />{persist.message}</div>{paletteControls()}</footer>
@@ -1222,7 +1243,7 @@ function ToolIcon({ icon }: { icon: Tool }) {
 }
 function ToolButton({ label, icon, active, onClick }: { label: string; icon: Tool; active: boolean; onClick: () => void }) {
   const description = `${label} — ${toolDescriptions[label]}`;
-  return <button className={active ? "tool active" : "tool"} aria-label={label} aria-pressed={active} title={description} aria-description={description} onClick={onClick}><ToolIcon icon={icon} /><small>{label}</small><span className="tool-description" role="tooltip">{description}</span></button>;
+  return <button className={active ? "tool active" : "tool"} aria-label={label} aria-pressed={active} aria-description={description} onClick={onClick}><ToolIcon icon={icon} /><small>{label}</small><span className="tool-description" role="tooltip">{description}</span></button>;
 }
 function Field({ label, value, onChange }: { label: string; value: number; onChange: (value: number) => void }) {
   return <label className="field"><span>{label}</span><input type="number" min="1" step="0.1" value={value} onChange={(event) => onChange(Number(event.target.value))} /></label>;

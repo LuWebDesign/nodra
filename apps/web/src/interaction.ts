@@ -16,7 +16,7 @@ export interface AlignmentGuide {
   readonly target: PointMm;
 }
 export interface NodeHit { readonly elementId: ElementId; readonly nodeIndex: number; readonly node: RealGeometryNode }
-export interface PathNodeHit { readonly elementId: ElementId; readonly node: PathGeometryNode }
+export interface PathNodeHit { readonly elementId: ElementId; readonly node: PathGeometryNode & { readonly ringIndex?: number } }
 export type PathGuideDirection = "incoming" | "outgoing";
 export interface PathGuide {
   readonly elementId: ElementId;

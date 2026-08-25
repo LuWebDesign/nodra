@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { CURRENT_SCHEMA_VERSION, type DocumentSnapshot, type ProjectSnapshot } from "@nodra/domain";
+import { CURRENT_SCHEMA_VERSION, type DocumentSnapshot, type Element, type PointMm, type ProjectSnapshot, type SizeMm } from "@nodra/domain";
 
 const finite = z.number().finite();
 const nonEmptyId = z.string().min(1);
@@ -116,4 +116,37 @@ export function serializeDocument(document: DocumentSnapshot): string {
 export function parseDocument(input: string): ValidationResult {
   try { return validateDocument(JSON.parse(input) as unknown); }
   catch { return { success: false, issues: [{ path: [], message: "Malformed JSON" }], error: "document: Malformed JSON" }; }
+}
+
+export type DesignValidation = {
+  readonly ready: boolean;
+  readonly openCurveCount: number;
+  readonly duplicateLineCount: number;
+  readonly outsideElementCount: number;
+};
+
+const elementPoints = (element: Element): readonly PointMm[] => {
+  switch (element.type) {
+    case "line": return [element.start, element.end];
+    case "path": return element.nodes.map((node) => node.anchor);
+    case "spline": return element.nodes.map((node) => node.anchor);
+    case "contour": return element.contours.flatMap((contour) => contour.points);
+    default: return [element.position, { x: element.position.x + element.size.width, y: element.position.y + element.size.height }];
+  }
+};
+
+const isOutsidePage = (points: readonly PointMm[], page: SizeMm): boolean => points.some((point) => point.x < 0 || point.y < 0 || point.x > page.width || point.y > page.height);
+
+export function validateDesign(elements: readonly Element[], page: SizeMm): DesignValidation {
+  const openCurveCount = elements.filter((element) => (element.type === "path" || element.type === "spline") && !element.closed).length;
+  const lineKeys = new Set<string>();
+  let duplicateLineCount = 0;
+  for (const element of elements) {
+    if (element.type !== "line") continue;
+    const endpoints = [`${element.start.x},${element.start.y}`, `${element.end.x},${element.end.y}`].sort().join("|");
+    if (lineKeys.has(endpoints)) duplicateLineCount += 1;
+    lineKeys.add(endpoints);
+  }
+  const outsideElementCount = elements.filter((element) => isOutsidePage(elementPoints(element), page)).length;
+  return { ready: openCurveCount === 0 && duplicateLineCount === 0 && outsideElementCount === 0, openCurveCount, duplicateLineCount, outsideElementCount };
 }
