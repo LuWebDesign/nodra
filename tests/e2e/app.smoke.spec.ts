@@ -379,6 +379,43 @@ test("edits an existing text with Texto without replacing the element", async ({
   await expect(text).toHaveAttribute("data-element-id", elementId!);
 });
 
+test("opens an existing text with its rendered bounds and typography", async ({ page }) => {
+  await page.goto("/");
+  const pageBounds = await page.locator(".page").boundingBox();
+  expect(pageBounds).not.toBeNull();
+
+  await page.getByRole("button", { name: "Texto" }).click();
+  await page.mouse.click(pageBounds!.x + 180, pageBounds!.y + 160);
+  const editor = page.getByRole("textbox", { name: "Texto editable" });
+  await editor.fill("Texto escalado");
+  await editor.press("Control+Enter");
+
+  const text = page.locator('.page-svg svg text[data-element-id]');
+  await expect(text).toHaveCount(1);
+  await page.getByRole("button", { name: "Seleccion" }).click();
+  const resizeHandle = page.locator('[data-resize-handle="se"]');
+  const handleBounds = await resizeHandle.boundingBox();
+  expect(handleBounds).not.toBeNull();
+  await page.mouse.move(handleBounds!.x + handleBounds!.width / 2, handleBounds!.y + handleBounds!.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(handleBounds!.x + handleBounds!.width / 2 + 30, handleBounds!.y + handleBounds!.height / 2 + 15);
+  await page.mouse.up();
+  const rendered = await text.boundingBox();
+  expect(rendered).not.toBeNull();
+  await page.mouse.dblclick(rendered!.x + rendered!.width / 2, rendered!.y + rendered!.height / 2);
+
+  await expect(editor).toHaveValue("Texto escalado");
+  const inline = await editor.boundingBox();
+  expect(inline).not.toBeNull();
+  expect(inline!.width).toBeGreaterThan(0);
+  expect(inline!.height).toBeGreaterThan(0);
+  expect(inline!.width).toBeCloseTo(rendered!.width, 0);
+  const renderedFontSize = Number(await text.getAttribute("font-size"));
+  const pageScale = await page.locator(".page").evaluate((element) => element.getBoundingClientRect().width / Number(element.querySelector("svg")?.getAttribute("width")));
+  const inlineFontSize = await editor.evaluate((element) => Number.parseFloat(getComputedStyle(element).fontSize));
+  expect(inlineFontSize).toBeCloseTo(renderedFontSize * pageScale, 1);
+});
+
 test("commits a new text when clicking elsewhere without waiting for Enter", async ({ page }) => {
   await page.goto("/");
   const pageBounds = await page.locator(".page").boundingBox();
