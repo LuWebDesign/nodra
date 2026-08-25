@@ -380,7 +380,7 @@ test("exposes real contour vertices in Forma and edits one vertex", async ({ pag
   const secondRectangle = await rectangles.nth(1).boundingBox();
   expect(firstRectangle).not.toBeNull();
   expect(secondRectangle).not.toBeNull();
-  await page.mouse.click(firstRectangle!.x + firstRectangle!.width / 2, firstRectangle!.y + firstRectangle!.height / 2);
+  await page.mouse.click(firstRectangle!.x + 4, firstRectangle!.y + 4);
   await page.keyboard.down("Shift");
   await page.mouse.click(secondRectangle!.x + secondRectangle!.width / 2, secondRectangle!.y + secondRectangle!.height / 2);
   await page.keyboard.up("Shift");
