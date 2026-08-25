@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { boundsOf, boundsOfElements, closedElementToPolygon, cubicBezierBounds, cubicBezierDerivative, degreesToRadians, elementCenter, elementSegmentAt, elementToContour, evaluateCubicBezier, ELLIPSE_APPROXIMATION_SEGMENTS, groupCenter, groupHandlePoints, hitTest, mmToScreen, radiansToDegrees, realGeometryNodes, resizeGroup, resizeHandle, rotatedLineEndpoints, rotateElements, rotationFromDrag, rotationHandlePoints, screenToMm, shapeResultContours, splitCubicBezier, validateSize } from "./index.js";
+import { boundsOf, boundsOfElements, boundsOutsidePage, closedElementToPolygon, cubicBezierBounds, cubicBezierDerivative, degreesToRadians, elementCenter, elementSegmentAt, elementToContour, evaluateCubicBezier, ELLIPSE_APPROXIMATION_SEGMENTS, groupCenter, groupHandlePoints, hitTest, mmToScreen, radiansToDegrees, realGeometryNodes, resizeGroup, resizeHandle, rotatedLineEndpoints, rotateElements, rotationFromDrag, rotationHandlePoints, screenToMm, shapeResultContours, splitCubicBezier, validateSize } from "./index.js";
 import { elementId, layerId } from "@nodra/domain";
 
 const style = { stroke: "#000", strokeWidth: 0.2 };
@@ -68,6 +68,11 @@ describe("canonical millimetre geometry", () => {
     expect(boundsOf(rectangle)).toEqual({ x: 10, y: 20, width: 20, height: 10 });
     expect(hitTest(rectangle, { x: 10, y: 20 })).toBe(true);
     expect(hitTest(rectangle, { x: 31, y: 20 })).toBe(false);
+  });
+  it("detects objects that cross the page export boundary, including negative coordinates", () => {
+    expect(boundsOutsidePage({ ...rectangle, position: { x: -1, y: 20 } }, { width: 1200, height: 900 })).toBe(true);
+    expect(boundsOutsidePage(rectangle, { width: 1200, height: 900 })).toBe(false);
+    expect(boundsOutsidePage({ ...rectangle, position: { x: 1190, y: 20 } }, { width: 1200, height: 900 })).toBe(true);
   });
   it("rejects degenerate geometry and viewports", () => {
     expect(() => validateSize({ width: 0, height: 2 })).toThrow();
