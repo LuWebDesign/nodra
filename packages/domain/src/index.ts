@@ -132,6 +132,10 @@ export interface PathElement {
   readonly nodes: readonly PathNode[];
   readonly segments: readonly PathSegment[];
   readonly closed: boolean;
+  /** Legacy transform fields retained for annotation-dimensions records. */
+  readonly rotation?: number;
+  readonly flipX?: boolean;
+  readonly flipY?: boolean;
   readonly style: VisualStyle;
   readonly operation?: OperationMetadata;
 }

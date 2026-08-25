@@ -29,7 +29,7 @@ const pathNode = z.object({ id: nonEmptyId, anchor: point, join: z.enum(["corner
 const pathLineSegment = z.object({ type: z.literal("line"), startNodeId: nonEmptyId, endNodeId: nonEmptyId }).strict();
 const pathCubicSegment = z.object({ type: z.literal("cubicBezier"), startNodeId: nonEmptyId, endNodeId: nonEmptyId, control1: point, control2: point }).strict();
 const pathSegment = z.discriminatedUnion("type", [pathLineSegment, pathCubicSegment]);
-const path = z.object({ id: nonEmptyId, layerId: nonEmptyId, type: z.literal("path"), nodes: z.array(pathNode).min(2), segments: z.array(pathSegment).min(1), closed: z.boolean(), style, operation: operation.optional() }).strict().superRefine((value, ctx) => {
+const path = z.object({ id: nonEmptyId, layerId: nonEmptyId, type: z.literal("path"), nodes: z.array(pathNode).min(2), segments: z.array(pathSegment).min(1), closed: z.boolean(), rotation: finite.optional(), flipX: z.boolean().optional(), flipY: z.boolean().optional(), style, operation: operation.optional() }).strict().superRefine((value, ctx) => {
   const nodeIds = value.nodes.map((node) => node.id);
   if (new Set(nodeIds).size !== nodeIds.length) ctx.addIssue({ code: "custom", message: "Path node IDs must be unique", path: ["nodes"] });
   const expectedCount = value.closed ? value.nodes.length : value.nodes.length - 1;
@@ -139,6 +139,7 @@ const elementPoints = (element: Element): readonly PointMm[] => {
     case "path": return element.nodes.map((node) => node.anchor);
     case "spline": return element.nodes.map((node) => node.anchor);
     case "contour": return element.contours.flatMap((contour) => contour.points);
+    case "dimension": return [];
     default: return [element.position, { x: element.position.x + element.size.width, y: element.position.y + element.size.height }];
   }
 };

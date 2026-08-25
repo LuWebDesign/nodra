@@ -37,6 +37,22 @@ export interface ProjectRepository {
   deleteProject(projectId: string): Promise<void>;
 }
 
+export interface FontRecord {
+  readonly id: string;
+  readonly projectId: string;
+  readonly family: string;
+  readonly name?: string;
+  readonly format?: string;
+  readonly blob: Blob;
+  readonly savedAt: number;
+}
+
+export interface FontRepository {
+  listFonts(projectId: string): Promise<readonly FontRecord[]>;
+  saveFont(font: FontRecord): Promise<void>;
+  deleteFont(projectId: string, fontId: string): Promise<void>;
+}
+
 export interface SaveResult {
   readonly ok: boolean;
   readonly status: "saved" | "failed";
@@ -98,14 +114,21 @@ function validateRecord(input: unknown, projectId: string): NativeDocumentRecord
 class PersistenceDatabase extends Dexie {
   projects!: Table<ProjectRow, string>;
   revisions!: Table<RevisionRow, string>;
+  fonts!: Table<FontRecord, string>;
 
   constructor(name: string) {
     super(name);
     this.version(1).stores({ projects: "id, updatedAt", revisions: "key, projectId, revision, savedAt" });
+    this.version(2).stores({ projects: "id, updatedAt", revisions: "key, projectId, revision, savedAt", fonts: "id, projectId, family, savedAt" });
   }
 }
 
-export class DexieProjectRepository implements ProjectRepository {
+function validFontRecord(value: unknown, projectId?: string): value is FontRecord {
+  if (!isRecord(value) || typeof value.id !== "string" || typeof value.projectId !== "string" || (projectId !== undefined && value.projectId !== projectId) || typeof value.family !== "string" || !value.family.trim() || !(value.blob instanceof Blob) || typeof value.savedAt !== "number" || !Number.isFinite(value.savedAt)) return false;
+  return (value.name === undefined || typeof value.name === "string") && (value.format === undefined || typeof value.format === "string");
+}
+
+export class DexieProjectRepository implements ProjectRepository, FontRepository {
   private readonly db: PersistenceDatabase;
 
   constructor(databaseName = "nodra-persistence") {
@@ -156,10 +179,26 @@ export class DexieProjectRepository implements ProjectRepository {
   }
 
   async deleteProject(projectId: string): Promise<void> {
-    await this.db.transaction("rw", this.db.projects, this.db.revisions, async () => {
+    await this.db.transaction("rw", this.db.projects, this.db.revisions, this.db.fonts, async () => {
       await this.db.projects.delete(projectId);
       await this.db.revisions.where("projectId").equals(projectId).delete();
+      await this.db.fonts.where("projectId").equals(projectId).delete();
     });
+  }
+
+  async listFonts(projectId: string): Promise<readonly FontRecord[]> {
+    const rows = await this.db.fonts.where("projectId").equals(projectId).toArray();
+    return rows.filter((row): row is FontRecord => validFontRecord(row, projectId)).sort((a, b) => b.savedAt - a.savedAt);
+  }
+
+  async saveFont(font: FontRecord): Promise<void> {
+    if (!validFontRecord(font)) throw new Error("Invalid font record");
+    await this.db.fonts.put({ ...font, family: font.family.trim() });
+  }
+
+  async deleteFont(projectId: string, fontId: string): Promise<void> {
+    const font = await this.db.fonts.get(fontId);
+    if (font?.projectId === projectId) await this.db.fonts.delete(fontId);
   }
 
   async close(): Promise<void> { this.db.close(); }

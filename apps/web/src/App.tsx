@@ -15,7 +15,7 @@ import { extractTextGlyphOutlines, fontFamilyFromFileName, FontOutlineError } fr
 const defaultStyle = { stroke: "#000000", strokeWidth: 1 };
 const defaultClosedFill = "rgba(101,217,255,0.22)";
 const isPropertyElement = (element: Element): element is PropertyElement => element.type === "rectangle" || element.type === "ellipse";
-const isRotatableElement = (element: Element): element is RotatableElement => element.type !== "path" && element.type !== "spline";
+const isRotatableElement = (element: Element): element is RotatableElement => element.type !== "dimension" && element.type !== "path" && element.type !== "spline";
 const palette = [
   { name: "Negro", color: "#111827" }, { name: "Rojo", color: "#ef4444" }, { name: "Naranja", color: "#f59e0b" },
   { name: "Verde", color: "#22c55e" }, { name: "Azul", color: "#3b82f6" }, { name: "Violeta", color: "#a855f7" },
@@ -1169,7 +1169,7 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
   const mirrorButton = (axis: FlipAxis) => {
     const label = axis === "horizontal" ? "Espejo horizontal" : "Espejo vertical";
     const description = axis === "horizontal" ? "Voltear la selección horizontalmente." : "Voltear la selección verticalmente.";
-    const isActive = selectedElements.some((element) => isRotatableElement(element) && Boolean(axis === "horizontal" ? element.flipX : element.flipY));
+    const isActive = selectedElements.some((element) => "flipX" in element && Boolean(axis === "horizontal" ? element.flipX : element.flipY));
     return <button type="button" className={isActive ? "property-transform-button active" : "property-transform-button"} aria-label={label} aria-pressed={isActive} title={description} aria-description={description} onClick={() => {
       const current = editorRef.current;
       if (current.selection.length) setEditorState(dispatch(current, flipElements(current.selection, axis)));

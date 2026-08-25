@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createDocument, elementId, layerId } from "@nodra/domain";
-import { canActivateRotation, centerPageInCanvas, clientPointToCanvas, hoveredSelectionCenter, INITIAL_ZOOM, isDrawingTool, marqueeSelection, MAX_ZOOM, MIN_ZOOM, movementExceedsThreshold, normalizeBounds, normalizeDrag, pagePointToCanvas, pagePointToScreen, screenDeltaToMm, screenPointToMm, containsBounds, elementsContainedBy, pickElement, pickNode, pointerDownIntent, selectedNodeAnchor, selectionCenter, selectionFrame, snapMoveDelta, zoomAtPoint } from "./interaction.js";
+import { canActivateRotation, centerPageInCanvas, clientPointToCanvas, hoveredSelectionCenter, INITIAL_ZOOM, isDrawingTool, marqueeSelection, MAX_ZOOM, MIN_ZOOM, movementExceedsThreshold, normalizeBounds, normalizeDrag, pagePointToCanvas, pagePointToScreen, screenDeltaToMm, screenPointToMm, containsBounds, elementsContainedBy, pickElement, pickFormaNode, pickFormaSegment, pickNode, pointerDownIntent, selectedNodeAnchor, selectionCenter, selectionFrame, snapMoveDelta, zoomAtPoint } from "./interaction.js";
 import { geometryPatch, geometryValue } from "./propertyBar.js";
 
 describe("canvas coordinates", () => {
@@ -41,6 +41,18 @@ describe("canvas coordinates", () => {
     const checked = { ...document, elements: [rectangle] };
     expect(hoveredSelectionCenter(checked, rectangle, { x: 15, y: 15 }, 3)).toEqual({ x: 20, y: 15 });
     expect(hoveredSelectionCenter(checked, rectangle, { x: 100, y: 100 }, 3)).toBeUndefined();
+  });
+});
+
+describe("Forma hit testing", () => {
+  it("ignores text without breaking editable closed geometry", () => {
+    const layer = { id: layerId("forma-text"), name: "Forma", visible: true, order: 0 };
+    const text = { type: "text" as const, id: elementId("forma-text"), layerId: layer.id, position: { x: 10, y: 10 }, size: { width: 30, height: 10 }, text: "A", fontFamily: "Arial", fontSize: 24, fontWeight: "normal" as const, fontStyle: "normal" as const, textAlign: "left" as const, lineHeight: 1.2, rotation: 0, style: { stroke: "#000", fill: "#000", strokeWidth: 1 } };
+    const rectangle = { type: "rectangle" as const, id: elementId("forma-rectangle"), layerId: layer.id, position: { x: 50, y: 10 }, size: { width: 20, height: 10 }, cornerRadius: 0, rotation: 0, style: { stroke: "#000", strokeWidth: 1 } };
+    const checked = { ...createDocument("forma-text-document", [layer]), elements: [text, rectangle] };
+    expect(() => pickFormaSegment(checked, { x: 60, y: 10 }, 1)).not.toThrow();
+    expect(pickFormaSegment(checked, { x: 60, y: 10 }, 1)).toMatchObject({ elementId: rectangle.id });
+    expect(pickFormaNode(checked, { x: 20, y: 10 }, 1)).toBeUndefined();
   });
 });
 

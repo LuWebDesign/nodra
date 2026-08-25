@@ -207,7 +207,7 @@ export function elementToContour(element: Element): ContourElement {
     : contoursFromMultiPolygon(closedElementToPolygon(element));
   const points = contours.flatMap((ring) => ring.points);
   const xs = points.map((point) => point.x); const ys = points.map((point) => point.y);
-  return { type: "contour", id: element.id, layerId: element.layerId, position: { x: Math.min(...xs), y: Math.min(...ys) }, size: { width: Math.max(0.001, Math.max(...xs) - Math.min(...xs)), height: Math.max(0.001, Math.max(...ys) - Math.min(...ys)) }, contours, fillRule: "evenodd", rotation: 0, style: element.style, ...(element.operation ? { operation: element.operation } : {}) };
+  return { type: "contour", id: element.id, layerId: element.layerId, position: { x: Math.min(...xs), y: Math.min(...ys) }, size: { width: Math.max(0.001, Math.max(...xs) - Math.min(...xs)), height: Math.max(0.001, Math.max(...ys) - Math.min(...ys)) }, contours, fillRule: "evenodd", rotation: 0, style: element.style, ...( "operation" in element && element.operation ? { operation: element.operation } : {}) };
 }
 
 export function elementSegmentAt(element: Element, point: PointMm, toleranceMm = 0): ContourSegmentHit | undefined {
@@ -288,7 +288,6 @@ export function closedElementToPolygon(element: Element): MultiPolygon {
   if (element.type === "path") { if (!element.closed) throw new Error("Shape operations require closed objects"); return [[flattenPath(element).map((point) => [point.x, point.y] as [number, number])]]; }
   if (element.type === "spline") { if (!element.closed) throw new Error("Shape operations require closed objects"); return [[splinePoints(element).map((point) => [point.x, point.y] as [number, number])]]; }
   if (element.type === "glyph") return [element.contours.map((contour) => flattenPath(glyphPath(element, contour)).map((point) => [point.x, point.y] as [number, number]))];
-  if (element.type === "text") throw new Error("Shape operations require closed objects");
   if (element.type === "contour") return [element.contours.map((contour) => contour.points.map((point) => [point.x, point.y] as [number, number]))];
   return [[primitivePolygon(element)]];
 }
@@ -299,7 +298,7 @@ export function contoursFromMultiPolygon(polygons: MultiPolygon): ContourElement
 
 export type ShapeOperation = "union" | "difference";
 export function shapeResultContours(operation: ShapeOperation, elements: readonly Element[]): ContourElement["contours"] {
-  if (!elements.length || elements.some((element) => element.type === "line" || element.type === "dimension")) throw new Error("Shape operations require closed objects");
+  if (!elements.length || elements.some((element) => element.type === "line" || element.type === "dimension" || element.type === "text")) throw new Error("Shape operations require closed objects");
   const polygons = elements.map(closedElementToPolygon);
   const result = operation === "difference" ? polygonClipping.difference(polygons[0]!, ...polygons.slice(1)) : polygonClipping.union(polygons[0]!, ...polygons.slice(1));
   return contoursFromMultiPolygon(result);
@@ -531,7 +530,7 @@ export function resizeGroup(elements: readonly Element[], handle: ResizeHandle, 
   const y = handle.includes("n") ? anchorY - height : handle.includes("s") ? anchorY : bounds.y;
   const sx = bounds.width ? width / bounds.width : 1;
   const sy = bounds.height ? height / bounds.height : 1;
-  return elements.map((e) => e.type === "line"
+  return elements.map((e) => e.type === "dimension" ? e : e.type === "line"
     ? { ...e, start: { x: x + (e.start.x - bounds.x) * sx, y: y + (e.start.y - bounds.y) * sy }, end: { x: x + (e.end.x - bounds.x) * sx, y: y + (e.end.y - bounds.y) * sy } }
     : e.type === "contour"
       ? contourWithPoints(e, e.contours.map((contour) => contour.points.map((point) => ({ x: x + (point.x - bounds.x) * sx, y: y + (point.y - bounds.y) * sy }))))
@@ -557,7 +556,7 @@ export function rotateElements(elements: readonly Element[], center: PointMm, de
     ...(node.inHandle ? { inHandle: rotateOffset(node.inHandle) } : {}),
     ...(node.outHandle ? { outHandle: rotateOffset(node.outHandle) } : {}),
   });
-  return elements.map((element) => element.type === "line"
+  return elements.map((element) => element.type === "dimension" ? element : element.type === "line"
     ? { ...element, start: rotatePoint(element.start), end: rotatePoint(element.end) }
     : element.type === "contour"
       ? contourWithPoints(element, element.contours.map((contour) => contour.points.map(rotatePoint)))
