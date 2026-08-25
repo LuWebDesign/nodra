@@ -366,9 +366,11 @@ test("exposes real contour vertices in Forma and edits one vertex", async ({ pag
   const first = await page.locator(".page-svg svg rect").first().boundingBox();
   expect(first).not.toBeNull();
   await page.getByRole("button", { name: "Rectángulo" }).click();
-  await page.mouse.move(first!.x + 40, first!.y + 40);
+  const secondStart = { x: first!.x + first!.width + 24, y: first!.y + 24 };
+  const secondEnd = { x: secondStart.x + Math.min(80, first!.width), y: secondStart.y + Math.min(50, first!.height) };
+  await page.mouse.move(secondStart.x, secondStart.y);
   await page.mouse.down();
-  await page.mouse.move(first!.x + first!.width + 40, first!.y + first!.height + 40);
+  await page.mouse.move(secondEnd.x, secondEnd.y);
   await page.mouse.up();
 
   await page.getByRole("button", { name: "Seleccion" }).click();
