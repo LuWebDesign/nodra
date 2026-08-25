@@ -11,6 +11,7 @@ import { pathJoinGuidance, pathJoinOptions } from "./pathJoins.js";
 
 const defaultStyle = { stroke: "#000000", strokeWidth: 1 };
 const defaultClosedFill = "rgba(101,217,255,0.22)";
+const textSizeFor = (value: string, fontSize: number) => { const lines = value.split("\n"); return { width: Math.max(fontSize * 2, Math.max(...lines.map((line) => line.length), 1) * fontSize * 0.72), height: Math.max(fontSize * 1.25, lines.length * fontSize * 1.2) }; };
 const isPropertyElement = (element: Element): element is PropertyElement => element.type === "rectangle" || element.type === "ellipse";
 const isRotatableElement = (element: Element): element is RotatableElement => element.type !== "path" && element.type !== "spline";
 const palette = [
@@ -343,14 +344,13 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
     const draft = textDraft;
     if (!draft?.value.trim()) { setTextDraft(undefined); return; }
     const current = editorRef.current;
-    const lines = draft.value.split("\\n");
     const text: TextElement = {
       type: "text", id: draft.elementId ?? id(), layerId: layerId(current.document.layers[0]?.id ?? "layer-1"),
-      position: draft.position, size: { width: 120, height: Math.max(20, lines.length * 16) }, text: draft.value,
+      position: draft.position, size: textSizeFor(draft.value, 12), text: draft.value,
       fontFamily: textFontFamily, fontSize: 12, fontWeight: "normal", fontStyle: "normal", textAlign: "left", lineHeight: 1.2, rotation: 0,
       style: { stroke: "#000000", fill: "#000000", strokeWidth: 0.1 },
     };
-    const next = draft.elementId ? dispatch(current, updateElement(draft.elementId, { text: text.text, fontFamily: text.fontFamily })) : dispatch(current, createElement(text));
+    const next = draft.elementId ? dispatch(current, updateElement(draft.elementId, { text: text.text, size: text.size, fontFamily: text.fontFamily })) : dispatch(current, createElement(text));
     setEditorState(select(next, [text.id]));
     setTextDraft(undefined);
     setTool("select");
