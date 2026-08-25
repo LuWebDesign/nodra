@@ -351,6 +351,52 @@ test("moves text with Selection and edits it inline on double-click", async ({ p
   await expect(text).toHaveAttribute("font-style", formattingBefore.style!);
 });
 
+test("edits an existing text with Texto without replacing the element", async ({ page }) => {
+  await page.goto("/");
+  const pageBounds = await page.locator(".page").boundingBox();
+  expect(pageBounds).not.toBeNull();
+
+  await page.getByRole("button", { name: "Texto" }).click();
+  await page.mouse.click(pageBounds!.x + 140, pageBounds!.y + 140);
+  const editor = page.getByRole("textbox", { name: "Texto editable" });
+  await editor.fill("Texto persistente");
+  await editor.press("Enter");
+  const text = page.locator('.page-svg svg text[data-element-id]');
+  await expect(text).toHaveCount(1);
+  const elementId = await text.getAttribute("data-element-id");
+  const before = await text.boundingBox();
+  expect(before).not.toBeNull();
+
+  await page.getByRole("button", { name: "Texto" }).click();
+  await page.mouse.click(before!.x + before!.width / 2, before!.y + before!.height / 2);
+  await expect(editor).toHaveValue("Texto persistente");
+  await expect(text).toHaveCount(1);
+  await expect(text).toHaveAttribute("data-element-id", elementId!);
+  await editor.fill("Texto actualizado");
+  await page.mouse.click(pageBounds!.x + 400, pageBounds!.y + 300);
+  await expect(editor).toBeHidden();
+  await expect(text).toContainText("Texto actualizado");
+  await expect(text).toHaveAttribute("data-element-id", elementId!);
+});
+
+test("commits a new text when clicking elsewhere without waiting for Enter", async ({ page }) => {
+  await page.goto("/");
+  const pageBounds = await page.locator(".page").boundingBox();
+  expect(pageBounds).not.toBeNull();
+
+  await page.getByRole("button", { name: "Texto" }).click();
+  await page.mouse.click(pageBounds!.x + 120, pageBounds!.y + 120);
+  const editor = page.getByRole("textbox", { name: "Texto editable" });
+  await editor.fill("Commit inmediato");
+  await page.mouse.click(pageBounds!.x + 420, pageBounds!.y + 280);
+
+  await expect(editor).toBeHidden();
+  await expect(page.locator('.page-svg svg text[data-element-id]')).toHaveCount(1);
+  await expect(page.locator('.page-svg svg text[data-element-id]')).toContainText("Commit inmediato");
+  await page.getByRole("button", { name: "Deshacer" }).click();
+  await expect(page.locator('.page-svg svg text[data-element-id]')).toHaveCount(0);
+});
+
 test("places the color palette in the status bar and duplicates directionally", async ({ page }) => {
   await page.goto("/");
   await drawRectangle(page);
