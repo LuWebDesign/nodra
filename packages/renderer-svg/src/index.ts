@@ -47,6 +47,13 @@ function renderElement(element: Element, viewport: Viewport): string {
     const width = element.size.width * viewport.zoom;
     const height = element.size.height * viewport.zoom;
     const center = { x: position.x + width / 2, y: position.y + height / 2 };
+    if (element.cornerRadii) {
+      const limit = Math.min(width, height) / 2;
+      const radii = { tl: Math.min(element.cornerRadii.topLeft * viewport.zoom, limit), tr: Math.min(element.cornerRadii.topRight * viewport.zoom, limit), br: Math.min(element.cornerRadii.bottomRight * viewport.zoom, limit), bl: Math.min(element.cornerRadii.bottomLeft * viewport.zoom, limit) };
+      const x = position.x; const y = position.y; const right = x + width; const bottom = y + height;
+      const d = `M${number(x + radii.tl)} ${number(y)} H${number(right - radii.tr)} Q${number(right)} ${number(y)} ${number(right)} ${number(y + radii.tr)} V${number(bottom - radii.br)} Q${number(right)} ${number(bottom)} ${number(right - radii.br)} ${number(bottom)} H${number(x + radii.bl)} Q${number(x)} ${number(bottom)} ${number(x)} ${number(bottom - radii.bl)} V${number(y + radii.tl)} Q${number(x)} ${number(y)} ${number(x + radii.tl)} ${number(y)} Z`;
+      return `<path data-element-id="${escapeAttribute(element.id)}" d="${d}" transform="${transform(element, center.x, center.y)}" ${visualAttributes(element)} />`;
+    }
     const radius = Math.min(element.cornerRadius * viewport.zoom, width / 2, height / 2);
     return `<rect data-element-id="${escapeAttribute(element.id)}" x="${number(position.x)}" y="${number(position.y)}" width="${number(width)}" height="${number(height)}" rx="${number(radius)}" ry="${number(radius)}" transform="${transform(element, center.x, center.y)}" ${visualAttributes(element)} />`;
   }

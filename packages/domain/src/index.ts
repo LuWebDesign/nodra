@@ -34,14 +34,17 @@ export interface Layer {
   readonly visible: boolean;
   readonly order: number;
 }
+export interface CornerRadii { readonly topLeft: number; readonly topRight: number; readonly bottomRight: number; readonly bottomLeft: number }
 export interface RectangleElement {
   readonly type: "rectangle";
   readonly id: ElementId;
   readonly layerId: LayerId;
   readonly position: PointMm;
   readonly size: SizeMm;
-  /** Corner radius in millimetres. Values are non-negative; SVG clamps oversized radii. */
+  /** Legacy uniform radius in millimetres. */
   readonly cornerRadius: number;
+  /** Optional independent radii, in clockwise order from the top-left corner. */
+  readonly cornerRadii?: CornerRadii;
   readonly rotation: number;
   readonly flipX?: boolean;
   readonly flipY?: boolean;

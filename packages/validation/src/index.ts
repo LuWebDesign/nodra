@@ -8,7 +8,8 @@ const size = z.object({ width: finite.gt(0), height: finite.gt(0) }).strict();
 const style = z.object({ stroke: z.string().min(1), fill: z.string().min(1).optional(), strokeWidth: finite.gt(0) }).strict();
 const operation = z.object({ operation: z.enum(["cut", "engrave", "score"]), order: finite.int().nonnegative(), power: finite.min(0).max(100).optional(), speed: finite.gt(0).optional() }).strict();
 const common = { id: nonEmptyId, layerId: nonEmptyId, rotation: finite, flipX: z.boolean().default(false), flipY: z.boolean().default(false), style, operation: operation.optional() };
-const rectangle = z.object({ ...common, type: z.literal("rectangle"), position: point, size, cornerRadius: finite.min(0).default(0) }).strict();
+const cornerRadii = z.object({ topLeft: finite.min(0), topRight: finite.min(0), bottomRight: finite.min(0), bottomLeft: finite.min(0) }).strict();
+const rectangle = z.object({ ...common, type: z.literal("rectangle"), position: point, size, cornerRadius: finite.min(0).default(0), cornerRadii: cornerRadii.optional() }).strict();
 const ellipse = z.object({ ...common, type: z.literal("ellipse"), position: point, size }).strict();
 const line = z.object({ ...common, type: z.literal("line"), start: point, end: point }).strict().superRefine((value, ctx) => {
   if (value.start.x === value.end.x && value.start.y === value.end.y) ctx.addIssue({ code: "custom", message: "Line endpoints must differ", path: ["end"] });

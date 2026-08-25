@@ -44,7 +44,7 @@
 .inspector-dimensions-card { display:flex; align-items:stretch; gap:10px; }
 .inspector-dimensions-fields { display:grid; flex:1 1 auto; gap:8px; min-width:0; }
 .inspector-dimensions-card .property-aspect-lock { align-self:center; }
-.inspector-radius-card { display:block; }
+.inspector-radius-card { display:block; }.corner-radius-fields { display:grid; grid-template-columns:1fr 1fr; gap:6px; }.corner-radius-fields .field { display:grid; gap:3px; font-size:9px; }.corner-radius-fields .field input { min-width:0; padding:3px 4px; }
 .inspector-radius-card .field { justify-content:space-between; }
 .inspector-radius-card .field input { max-width:130px; }
 .shape-operation-buttons { display:grid; grid-template-columns:repeat(3,1fr); gap:6px; }
