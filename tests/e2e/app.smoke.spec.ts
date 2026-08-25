@@ -287,6 +287,7 @@ test("creates, transforms, and undoes a rectangle", async ({ page }) => {
 
   const rectangle = page.locator(".page-svg svg rect").first();
   await expect(rectangle).toBeVisible();
+  await expect.poll(() => rectangle.boundingBox()).not.toBeNull();
   const rectangleBounds = await rectangle.boundingBox();
   expect(rectangleBounds).not.toBeNull();
   await page.getByRole("button", { name: "Seleccion" }).click();
@@ -332,12 +333,17 @@ test("moves text with Selection and edits it inline on double-click", async ({ p
   };
 
   await expect(text).toBeVisible();
+  await expect.poll(() => text.boundingBox()).not.toBeNull();
   const beforeDrag = await text.boundingBox();
   expect(beforeDrag).not.toBeNull();
   await page.mouse.move(beforeDrag!.x + beforeDrag!.width / 2, beforeDrag!.y + beforeDrag!.height / 2);
   await page.mouse.down();
   await page.mouse.move(beforeDrag!.x + beforeDrag!.width / 2 + 35, beforeDrag!.y + beforeDrag!.height / 2 + 20);
   await page.mouse.up();
+  await expect.poll(async () => {
+    const bounds = await text.boundingBox();
+    return bounds !== null && bounds.x > beforeDrag!.x && bounds.y > beforeDrag!.y;
+  }).toBe(true);
   await expect(text).toBeVisible();
   const moved = await text.boundingBox();
   expect(moved).not.toBeNull();
@@ -397,14 +403,17 @@ test("opens an existing text with its rendered bounds and typography", async ({ 
 
   const text = page.locator('.page-svg svg text[data-element-id]');
   await expect(text).toHaveCount(1);
+  await expect(text).toBeVisible();
   await page.getByRole("button", { name: "Seleccion" }).click();
   const resizeHandle = page.locator('[data-resize-handle="se"]');
+  await expect.poll(() => resizeHandle.boundingBox()).not.toBeNull();
   const handleBounds = await resizeHandle.boundingBox();
   expect(handleBounds).not.toBeNull();
   await page.mouse.move(handleBounds!.x + handleBounds!.width / 2, handleBounds!.y + handleBounds!.height / 2);
   await page.mouse.down();
   await page.mouse.move(handleBounds!.x + handleBounds!.width / 2 + 30, handleBounds!.y + handleBounds!.height / 2 + 15);
   await page.mouse.up();
+  await expect.poll(() => text.boundingBox()).not.toBeNull();
   const rendered = await text.boundingBox();
   expect(rendered).not.toBeNull();
   await page.mouse.dblclick(rendered!.x + rendered!.width / 2, rendered!.y + rendered!.height / 2);
