@@ -4,7 +4,7 @@ import { addToSelection, appendSplineNode, beginGesture, cancelGesture, clearSel
 import { boundsOfElements, contourVertexNodes, elementCenter, groupCenter, groupHandlePoints, pathGeometryNodes, realGeometryNodes, resizeHandle, rotatedResizeHandles, rotationFromDrag, rotationHandlePoints, type Direction, type GroupHandle, type ResizeHandle } from "@nodra/geometry";
 import { DebouncedAutosave, DexieProjectRepository, requestStoragePersistence } from "@nodra/persistence";
 import { renderSvg } from "@nodra/renderer-svg";
-import { canActivateRotation, centerPageInCanvas, clientPointToCanvas, cubicPlacementControls, formaNodeKey, hoveredSelectionCenter, isDrawingTool, marqueeSelection, movementExceedsThreshold, normalizeBounds, normalizeDrag, pagePointToCanvas, pathGuides, pickElement, pickFormaNode, pickFormaSegment, pickNode, pickPathNode, pickPathSegment, pointerDownIntent, screenDeltaToMm, screenPointToMm, selectedNodeAnchor, selectedPathAnchorIds, snapMoveDelta, zoomAtPoint, type ContourNodeHit, type FormaNodeHit, type NodeHit, type PathNodeHit, type SnapGuide, type TransformMode } from "./interaction.js";
+import { canActivateRotation, centerPageInCanvas, clientPointToCanvas, cubicPlacementControls, formaNodeKey, hoveredSelectionCenter, isDrawingTool, marqueeSelection, movementExceedsThreshold, normalizeBounds, normalizeDrag, pagePointToCanvas, pathGuides, pickElement, pickFormaNode, pickFormaSegment, pickNode, pickPathNode, pickPathSegment, pointerDownIntent, screenDeltaToMm, screenPointToMm, selectedNodeAnchor, selectedPathAnchorIds, alignmentGuides, snapMoveDelta, zoomAtPoint, type AlignmentGuide, type ContourNodeHit, type FormaNodeHit, type NodeHit, type PathNodeHit, type SnapGuide, type TransformMode } from "./interaction.js";
 import { aspectGeometryPatch, aspectSize, cornerRadiusPatch, formatMm, geometryValue, rotationDegreesValue, rotationPatch, type GeometryField, type PropertyElement, type RotatableElement } from "./propertyBar.js";
 import { useDocumentStore, usePersistenceStore, useUiStore, useViewportStore, type Tool } from "./stores.js";
 import { pathJoinGuidance, pathJoinOptions } from "./pathJoins.js";
@@ -92,6 +92,7 @@ export function App() {
   const [grid, setGrid] = useState(false);
   const [marquee, setMarquee] = useState<{ start: PointMm; end: PointMm }>();
   const [snapGuide, setSnapGuide] = useState<SnapGuide>();
+  const [alignmentGuideState, setAlignmentGuideState] = useState<readonly AlignmentGuide[]>([]);
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [cursorPoint, setCursorPoint] = useState<PointMm>();
   const [aspectLock, setAspectLock] = useState(false);
@@ -297,7 +298,12 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
     return () => overlay.remove();
   }, [cursorPoint, document, panMm, selectedElements, snapGuide, tool, transformMode, zoom]);
 
-  useEffect(() => { if (!interaction.current) setSnapGuide(undefined); }, [editor]);
+  useEffect(() => {
+    if (!interaction.current) {
+      setSnapGuide(undefined);
+      setAlignmentGuideState([]);
+    }
+  }, [editor]);
   useEffect(() => {
     const preserveRecoveryNotice = recoveredNotice.current;
     recoveredNotice.current = false;
@@ -430,6 +436,7 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
      setCenterHover(undefined);
      setCursorPoint(canvasPointAt(event));
      setSnapGuide(undefined);
+     setAlignmentGuideState([]);
      setSelectedSplineNodeKey(undefined);
      const resizeTarget = tool === "forma" ? null : (event.target as HTMLElement).closest<HTMLElement>("[data-resize-handle]");
     if (resizeTarget) { resizePointerDown(event, resizeTarget.dataset.resizeHandle as ResizeHandle); return; }
@@ -547,6 +554,7 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
     interaction.current = undefined;
     setMarquee(undefined);
     setSnapGuide(undefined);
+    setAlignmentGuideState([]);
     setPenDraftPoint(undefined);
   };
 
@@ -563,6 +571,9 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
     if (active.kind === "resize" && active.ids && active.handle && active.handle !== "center") {
       const element = active.element;
       const command = active.ids.length === 1 && element && isPropertyElement(element) ? (() => { const geometry = resizeHandle(element, active.handle as ResizeHandle, pointAt(event)); return resizeElement(element.id, geometry.position, geometry.size); })() : resizeElements(active.ids, active.handle as ResizeHandle, pointAt(event));
+      const base = editorRef.current.gesture?.base ?? editorRef.current.document;
+      const preview = command.apply(base);
+      setAlignmentGuideState(preview.success ? alignmentGuides(preview.document, active.ids, { x: 0, y: 0 }, zoom, 8) : []);
       setEditorState(previewGestureFromBase(editorRef.current, command));
       active.dragged = true;
       return;
@@ -587,6 +598,7 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
       const rawDelta = screenDeltaToMm({ x: event.clientX - active.startClient.x, y: event.clientY - active.startClient.y }, zoom);
       const snapped = snapMoveDelta(editorRef.current.gesture?.base ?? editorRef.current.document, active.ids, rawDelta, zoom, 8, active.anchor);
       setSnapGuide(snapped.guide);
+      setAlignmentGuideState(alignmentGuides(editorRef.current.gesture?.base ?? editorRef.current.document, active.ids, rawDelta, zoom, 8));
       if (rawDelta.x === 0 && rawDelta.y === 0) return;
       active.dragged = true;
       setEditorState(previewGestureFromBase(editorRef.current, moveElements(active.ids, snapped.delta)));
@@ -686,6 +698,7 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
     interaction.current = undefined;
     if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
     setSnapGuide(undefined);
+    setAlignmentGuideState([]);
   };
 
   const onWheel = (event: WheelEvent<HTMLDivElement>) => {
@@ -704,6 +717,7 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
           interaction.current = undefined;
           setMarquee(undefined);
           setSnapGuide(undefined);
+          setAlignmentGuideState([]);
         }
         setTransformMode("resize");
         return;
@@ -818,6 +832,16 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
     return { left: topLeft.x, top: topLeft.y, width: bounds.width * zoom, height: bounds.height * zoom };
   })() : undefined;
   const pageStyle = { width: document.page.width * zoom, height: document.page.height * zoom, left: -panMm.x * zoom, top: -panMm.y * zoom };
+  const rulerMajorStep = [1, 5, 10, 25, 50, 100, 250, 500].find((step) => step * zoom >= 50) ?? 1000;
+  const rulerValues = (limit: number) => Array.from({ length: Math.floor(limit / rulerMajorStep) + 1 }, (_, index) => index * rulerMajorStep);
+  const rulerXValues = rulerValues(document.page.width);
+  const rulerYValues = rulerValues(document.page.height);
+  const rulerHorizontal = <div className="ruler-horizontal" data-ruler-horizontal="true" aria-hidden="true">
+    {rulerXValues.map((value) => <span className="ruler-tick ruler-tick-horizontal" key={`ruler-x-${value}`} style={{ left: (value - panMm.x) * zoom }}><i /><b>{value}</b></span>)}
+  </div>;
+  const rulerVertical = <div className="ruler-vertical" data-ruler-vertical="true" aria-hidden="true">
+    {rulerYValues.map((value) => <span className="ruler-tick ruler-tick-vertical" key={`ruler-y-${value}`} style={{ top: (value - panMm.y) * zoom }}><i /><b>{value}</b></span>)}
+  </div>;
        const selectedEditOverlay = tool === "forma" ? selectedElements.filter((element) => element.type !== "spline" && element.type !== "line").map((element) => {
          if (element.type === "rectangle") return <rect key={`edit-${element.id}`} x={element.position.x} y={element.position.y} width={element.size.width} height={element.size.height} rx={element.cornerRadius} fill="none" stroke="#1683ff" strokeWidth={1 / zoom} transform={`rotate(${element.rotation * 180 / Math.PI} ${element.position.x + element.size.width / 2} ${element.position.y + element.size.height / 2})`} pointerEvents="none" />;
          if (element.type === "ellipse") return <ellipse key={`edit-${element.id}`} cx={element.position.x + element.size.width / 2} cy={element.position.y + element.size.height / 2} rx={element.size.width / 2} ry={element.size.height / 2} fill="none" stroke="#1683ff" strokeWidth={1 / zoom} transform={`rotate(${element.rotation * 180 / Math.PI} ${element.position.x + element.size.width / 2} ${element.position.y + element.size.height / 2})`} pointerEvents="none" />;
@@ -835,6 +859,9 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
          }
          return null;
        }) : [];
+       const alignmentGuideOverlay = alignmentGuideState.map((guide, index) => guide.orientation === "vertical"
+         ? <line key={`alignment-guide-v-${index}`} data-alignment-guide="vertical" x1={guide.coordinate} y1={guide.start} x2={guide.coordinate} y2={guide.end} stroke="#f97316" strokeWidth={1 / zoom} strokeDasharray={`${4 / zoom} ${3 / zoom}`} vectorEffect="non-scaling-stroke" pointerEvents="none" />
+         : <line key={`alignment-guide-h-${index}`} data-alignment-guide="horizontal" x1={guide.start} y1={guide.coordinate} x2={guide.end} y2={guide.coordinate} stroke="#f97316" strokeWidth={1 / zoom} strokeDasharray={`${4 / zoom} ${3 / zoom}`} vectorEffect="non-scaling-stroke" pointerEvents="none" />);
        const pathGuideOverlay = selectedElements.filter((element): element is Extract<Element, { type: "path" }> => element.type === "path").flatMap((path) => path.segments.flatMap((segment) => segment.type === "cubicBezier" ? (() => {
          const start = path.nodes.find((node) => node.id === segment.startNodeId)?.anchor;
          const end = path.nodes.find((node) => node.id === segment.endNodeId)?.anchor;
@@ -1060,7 +1087,8 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
       <section className="canvas-area">
         <header className="canvas-header"><span>DISEÑO / SIN TÍTULO</span><span>{document.elements.length} objetos · {document.page.width} × {document.page.height} mm</span><div className="zoom-controls"><button aria-label="Alejar" onClick={() => setZoom(zoom - 0.5)}>−</button><span className="zoom-label">{Math.round(zoom * 100 / 3)}%</span><button aria-label="Acercar" onClick={() => setZoom(zoom + 0.5)}>+</button></div></header>
             <div ref={canvas} className={`${grid ? "canvas" : "canvas no-grid"}${isDrawingTool(tool) ? " drawing-tool" : ""}${closeTargetActive ? " close-target-active" : ""}`} onPointerDown={onCanvasPointerDown} onPointerMove={onCanvasPointerMove} onPointerUp={(event) => finishPointer(event, false)} onPointerCancel={(event) => finishPointer(event, true)} onLostPointerCapture={cancelPointerInteraction} onPointerLeave={() => setCursorPoint(undefined)} onDoubleClick={onCanvasDoubleClick} onWheel={onWheel}>
-           <div className="page" style={pageStyle}>{/* SAFETY: renderSvg emits allowlisted SVG from validated document data. */}<div className="page-svg" dangerouslySetInnerHTML={{ __html: rendered.success ? rendered.svg : "" }} />{(splineOverlay.length > 0 || selectedEditOverlay.length > 0 || pathGuideOverlay.length > 0) && <svg data-spline-overlay-layer="true" viewBox={`0 0 ${document.page.width} ${document.page.height}`} style={{ position: "absolute", inset: 0, width: "100%", height: "100%", pointerEvents: "none", overflow: "visible", zIndex: 5 }}>{selectedEditOverlay}{pathGuideOverlay}{splineOverlay}</svg>}</div>
+           {rulerHorizontal}{rulerVertical}<span className="ruler-corner" aria-hidden="true" />
+           <div className="page" style={pageStyle}>{/* SAFETY: renderSvg emits allowlisted SVG from validated document data. */}<div className="page-svg" dangerouslySetInnerHTML={{ __html: rendered.success ? rendered.svg : "" }} />{(alignmentGuideOverlay.length > 0 || splineOverlay.length > 0 || selectedEditOverlay.length > 0 || pathGuideOverlay.length > 0) && <svg data-spline-overlay-layer="true" viewBox={`0 0 ${document.page.width} ${document.page.height}`} style={{ position: "absolute", inset: 0, width: "100%", height: "100%", pointerEvents: "none", overflow: "visible", zIndex: 5 }}>{alignmentGuideOverlay}{selectedEditOverlay}{pathGuideOverlay}{splineOverlay}</svg>}</div>
             {formaNodes.length > 0 && <div className="contour-node-overlay" role="group" aria-label={tool === "pen" ? "Nodos y controles del trazado" : "Nodos de forma"}>{formaNodes.map((node) => { const screen = pagePointToCanvas(node.point, zoom, panMm); const selected = selectedFormaNodeKeys.includes(node.key); const pathNode = node.kind === "path" ? node.pathNode : undefined; return <button key={node.key} type="button" className={`contour-node${(tool === "forma" || tool === "pen") && !(node.kind === "path" && pathNode?.node.kind === "control") ? " editing-node" : ""}${selected ? " active selected" : ""}`} data-contour-node={node.key} aria-label={node.kind === "contour" ? `Nodo del contorno, anillo ${node.contour.ringIndex + 1}, punto ${node.contour.pointIndex + 1}` : pathNode?.node.kind === "control" ? `Control Bézier ${pathNode.node.handle === "control1" ? "saliente" : "entrante"}` : `Nodo editable ${node.nodeIndex + 1}`} style={{ left: screen.x, top: screen.y }} onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); setSelectedFormaNodeKeys((current) => event.shiftKey ? current.includes(node.key) ? current.filter((value) => value !== node.key) : [...current, node.key] : [node.key]); if (tool === "pen" && pathNode?.node.kind === "anchor") { const currentPath = editorRef.current.document.elements.find((element) => element.id === node.elementId && element.type === "path"); if (currentPath?.type === "path" && !currentPath.closed && currentPath.nodes[0]?.id === pathNode.node.nodeId) { setPenDraftPoint(undefined); setEditorState(dispatch(select(editorRef.current, [node.elementId]), closePath(node.elementId))); return; } } canvas.current?.setPointerCapture(event.pointerId); if (pathNode) { setEditorState(beginGesture(select(editorRef.current, [node.elementId]))); interaction.current = { pointerId: event.pointerId, lastX: event.clientX, lastY: event.clientY, kind: "path-node", pathNode, startClient: { x: event.clientX, y: event.clientY }, dragged: false }; } else { setEditorState(beginGesture(editorRef.current)); interaction.current = { pointerId: event.pointerId, lastX: event.clientX, lastY: event.clientY, kind: "contour-node", ...(node.kind === "contour" ? { contourNode: node.contour } : {}), formaNode: node.kind === "contour" ? { elementId: node.contour.elementId, contourNode: node.contour, point: node.point } : { elementId: node.elementId, nodeIndex: node.nodeIndex, point: node.point }, startClient: { x: event.clientX, y: event.clientY }, dragged: false }; } }} />; })}</div>}
           {centerHoverStyle && <div className="selection-center-feedback" style={centerHoverStyle} aria-hidden="true"><span className="selection-center-mark">×</span><span className="selection-center-label">centro</span></div>}
             {tool !== "forma" && transformMode === "resize" && (handlePoints || groupPoints) && <div className="resize-handles">{handleNames.map((handle) => <button key={handle} type="button" className={`resize-handle resize-handle-${handle}`} data-resize-handle={handle} aria-label={`Redimensionar ${handle}`} style={handleStyle(handle)} onPointerDown={(event) => resizePointerDown(event, handle)} onPointerUp={(event) => finishPointer(event, false)} onPointerCancel={(event) => finishPointer(event, true)} />)}{groupPoints && !isDrawingTool(tool) && <button type="button" className="resize-handle resize-handle-center" data-resize-handle="center" aria-label="Centro del grupo" style={handleStyle("center")} onPointerDown={(event) => event.stopPropagation()} />}</div>}

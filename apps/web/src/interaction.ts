@@ -1,9 +1,20 @@
 import type { DocumentSnapshot, Element, ElementId, PathElement, PointMm } from "@nodra/domain";
-import { boundsOf, contourSegmentAt, contourVertexNodes, elementCenter, elementSegmentAt, hitTest, pathGeometryNodes, pathSegmentAt, realGeometryNodes, type Bounds, type ContourSegmentHit, type ContourVertexNode, type PathGeometryNode, type RealGeometryNode, type PathSegmentHit } from "@nodra/geometry";
+import { boundsOf, boundsOfElements, contourSegmentAt, contourVertexNodes, elementCenter, elementSegmentAt, hitTest, pathGeometryNodes, pathSegmentAt, realGeometryNodes, type Bounds, type ContourSegmentHit, type ContourVertexNode, type PathGeometryNode, type RealGeometryNode, type PathSegmentHit } from "@nodra/geometry";
 
 export interface DragGeometry { readonly position: PointMm; readonly size: { readonly width: number; readonly height: number } }
 export interface SnapGuide { readonly source: PointMm; readonly target: PointMm }
 export interface SnapMoveResult { readonly delta: PointMm; readonly guide: SnapGuide | undefined }
+export type AlignmentGuideOrientation = "vertical" | "horizontal";
+export type AlignmentGuideKind = "edge" | "center" | "node";
+export interface AlignmentGuide {
+  readonly orientation: AlignmentGuideOrientation;
+  readonly coordinate: number;
+  readonly start: number;
+  readonly end: number;
+  readonly kind: AlignmentGuideKind;
+  readonly source: PointMm;
+  readonly target: PointMm;
+}
 export interface NodeHit { readonly elementId: ElementId; readonly nodeIndex: number; readonly node: RealGeometryNode }
 export interface PathNodeHit { readonly elementId: ElementId; readonly node: PathGeometryNode }
 export type PathGuideDirection = "incoming" | "outgoing";
@@ -116,6 +127,70 @@ export function snapMoveDelta(document: DocumentSnapshot, selectedIds: readonly 
   if (!best) return { delta: rawDelta, guide: undefined };
   const correction = { x: best.target.x - best.source.x, y: best.target.y - best.source.y };
   return { delta: { x: rawDelta.x + correction.x, y: rawDelta.y + correction.y }, guide: { source: { x: best.source.x + correction.x, y: best.source.y + correction.y }, target: best.target } };
+}
+
+type AlignmentCandidate = { readonly coordinate: number; readonly kind: AlignmentGuideKind; readonly point: PointMm; readonly start: number; readonly end: number; readonly order: string };
+const translatedBounds = (bounds: Bounds, delta: PointMm): Bounds => ({ x: bounds.x + delta.x, y: bounds.y + delta.y, width: bounds.width, height: bounds.height });
+const boundsCandidates = (bounds: Bounds, delta: PointMm, prefix: string): { readonly vertical: readonly AlignmentCandidate[]; readonly horizontal: readonly AlignmentCandidate[] } => {
+  const moved = translatedBounds(bounds, delta);
+  return {
+    vertical: [
+      { coordinate: moved.x, kind: "edge", point: { x: moved.x, y: moved.y }, start: moved.y, end: moved.y + moved.height, order: `${prefix}:left` },
+      { coordinate: moved.x + moved.width / 2, kind: "center", point: { x: moved.x + moved.width / 2, y: moved.y + moved.height / 2 }, start: moved.y, end: moved.y + moved.height, order: `${prefix}:center-x` },
+      { coordinate: moved.x + moved.width, kind: "edge", point: { x: moved.x + moved.width, y: moved.y + moved.height }, start: moved.y, end: moved.y + moved.height, order: `${prefix}:right` },
+    ],
+    horizontal: [
+      { coordinate: moved.y, kind: "edge", point: { x: moved.x, y: moved.y }, start: moved.x, end: moved.x + moved.width, order: `${prefix}:top` },
+      { coordinate: moved.y + moved.height / 2, kind: "center", point: { x: moved.x + moved.width / 2, y: moved.y + moved.height / 2 }, start: moved.x, end: moved.x + moved.width, order: `${prefix}:center-y` },
+      { coordinate: moved.y + moved.height, kind: "edge", point: { x: moved.x + moved.width, y: moved.y + moved.height }, start: moved.x, end: moved.x + moved.width, order: `${prefix}:bottom` },
+    ],
+  };
+};
+const nodeCandidates = (elements: readonly Element[], delta: PointMm, bounds: Bounds, prefix: string): { readonly vertical: readonly AlignmentCandidate[]; readonly horizontal: readonly AlignmentCandidate[] } => {
+  const vertical: AlignmentCandidate[] = []; const horizontal: AlignmentCandidate[] = [];
+  for (const element of elements) for (const [index, node] of realGeometryNodes(element).entries()) {
+    const point = { x: node.point.x + delta.x, y: node.point.y + delta.y };
+    vertical.push({ coordinate: point.x, kind: "node", point, start: bounds.y, end: bounds.y + bounds.height, order: `${prefix}:node-x:${index}` });
+    horizontal.push({ coordinate: point.y, kind: "node", point, start: bounds.x, end: bounds.x + bounds.width, order: `${prefix}:node-y:${index}` });
+  }
+  return { vertical, horizontal };
+};
+
+/** Returns visual alignment guides without changing the requested movement or resize. */
+export function alignmentGuides(document: DocumentSnapshot, selectedIds: readonly ElementId[], delta: PointMm = { x: 0, y: 0 }, zoom: number, tolerancePx = 8): readonly AlignmentGuide[] {
+  if (![delta.x, delta.y, zoom, tolerancePx].every(Number.isFinite) || zoom <= 0 || tolerancePx < 0) throw new Error("alignment coordinates, zoom, and tolerance must be valid");
+  const selected = new Set(selectedIds);
+  const visible = new Set(document.layers.filter((layer) => layer.visible).map((layer) => layer.id));
+  const movingElements = document.elements.filter((element) => selected.has(element.id) && visible.has(element.layerId));
+  if (!movingElements.length) return [];
+  const movingBounds = translatedBounds(boundsOfElements(movingElements), delta);
+  const movingBoundsCandidates = boundsCandidates(movingBounds, { x: 0, y: 0 }, "moving");
+  const movingNodes = nodeCandidates(movingElements, delta, movingBounds, "moving");
+  const targets = document.elements.filter((element) => !selected.has(element.id) && visible.has(element.layerId));
+  const targetCandidates = targets.flatMap((element) => {
+    const bounds = boundsOf(element);
+    const box = boundsCandidates(bounds, { x: 0, y: 0 }, element.id);
+    const nodes = nodeCandidates([element], { x: 0, y: 0 }, bounds, element.id);
+    return { vertical: [...box.vertical, ...nodes.vertical], horizontal: [...box.horizontal, ...nodes.horizontal], bounds };
+  });
+  const find = (orientation: AlignmentGuideOrientation): AlignmentGuide | undefined => {
+    const source = [...(orientation === "vertical" ? movingBoundsCandidates.vertical : movingBoundsCandidates.horizontal), ...(orientation === "vertical" ? movingNodes.vertical : movingNodes.horizontal)];
+    let best: { distance: number; source: AlignmentCandidate; target: AlignmentCandidate } | undefined;
+    for (const sourceCandidate of source) for (const target of targetCandidates) {
+      const targetCandidate = orientation === "vertical" ? target.vertical : target.horizontal;
+      for (const candidate of targetCandidate) {
+        const distance = Math.abs(sourceCandidate.coordinate - candidate.coordinate) * zoom;
+        if (distance > tolerancePx) continue;
+        const next = { distance, source: sourceCandidate, target: candidate };
+        if (!best || distance < best.distance || distance === best.distance && `${sourceCandidate.order}:${candidate.order}` < `${best.source.order}:${best.target.order}`) best = next;
+      }
+    }
+    if (!best) return undefined;
+    const start = Math.min(best.source.start, best.target.start) - 4 / zoom;
+    const end = Math.max(best.source.end, best.target.end) + 4 / zoom;
+    return { orientation, coordinate: (best.source.coordinate + best.target.coordinate) / 2, start, end, kind: best.source.kind === "node" || best.target.kind === "node" ? "node" : best.source.kind === "center" || best.target.kind === "center" ? "center" : "edge", source: best.source.point, target: best.target.point };
+  };
+  return [find("vertical"), find("horizontal")].filter((guide): guide is AlignmentGuide => guide !== undefined);
 }
 
 /** Finds a visible real node before falling back to shape hit-testing. Tolerance is screen-pixel based. */
