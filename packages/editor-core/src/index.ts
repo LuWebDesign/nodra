@@ -10,6 +10,7 @@ import {
   type OperationMetadata,
   type PathElement,
   type PathJoin,
+  type GlyphElement,
   type SplineElement,
   elementId,
   nextRevision,
@@ -17,7 +18,7 @@ import {
   withElements,
 } from "@nodra/domain";
 import { validateDocument } from "@nodra/validation";
-import { boundsOfElements, contourWithPoints, directionVector, elementCenter, elementToContour, groupCenter, realGeometryNodes, resizeGroup, rotateElements, shapeResultContours, transformPoint, type Direction } from "@nodra/geometry";
+import { boundsOfElements, contourWithPoints, directionVector, elementCenter, elementToContour, glyphGeometryNodes, groupCenter, realGeometryNodes, resizeGroup, rotateElements, shapeResultContours, transformPoint, type Direction } from "@nodra/geometry";
 import { insertSplineNode, moveSplineHandle as moveSplineHandleData, moveSplineNode as moveSplineNodeData } from "./spline.js";
 
 export * from "./spline.js";
@@ -26,6 +27,7 @@ export type ElementPatch = { readonly position?: PointMm; readonly size?: SizeMm
 export interface ContourNodeAddress { readonly ringIndex: number; readonly pointIndex: number }
 export interface ContourSegmentAddress { readonly ringIndex: number; readonly segmentIndex: number }
 export type StylePatch = { readonly stroke?: string; readonly fill?: string | null; readonly strokeWidth?: number };
+export type GlyphOutlineData = Pick<GlyphElement, "glyph" | "position" | "size" | "contours">;
 export type EditorCommand = { readonly name: string; readonly apply: (document: DocumentSnapshot) => CommandResult };
 export type CommandResult = { readonly success: true; readonly document: DocumentSnapshot } | { readonly success: false; readonly error: string };
 export interface Transaction { readonly command: string; readonly before: DocumentSnapshot; readonly after: DocumentSnapshot; readonly selectionBefore: readonly ElementId[]; readonly selectionAfter: readonly ElementId[] }
@@ -49,6 +51,29 @@ export const createElement = (element: Element): EditorCommand => ({
   apply: (document) => document.elements.some((current) => current.id === element.id)
     ? { success: false, error: `Element already exists: ${element.id}` }
     : replaceElements(document, [...document.elements, { ...element }]),
+});
+
+/** Replaces one text object atomically. Outline coordinates must already be in document space. */
+export const convertTextToGlyphs = (textId: ElementId, outlines: readonly GlyphOutlineData[]): EditorCommand => ({
+  name: `text-to-glyphs:${textId}`,
+  apply: (document) => {
+    const text = document.elements.find((element) => element.id === textId && element.type === "text");
+    if (!text) return { success: false, error: "Text element not found" };
+    if (!Array.isArray(outlines) || !outlines.length) return { success: false, error: "The text outline contains no visible glyphs" };
+    const existing = new Set(document.elements.map((element) => element.id));
+    let glyphs: GlyphElement[];
+    try {
+      glyphs = outlines.map((outline, index) => ({
+        type: "glyph", id: elementId(`${text.id}:glyph:${index}`), layerId: text.layerId, position: outline.position, size: outline.size,
+        glyph: outline.glyph, contours: outline.contours, fillRule: "evenodd", rotation: 0, style: text.style,
+        ...(text.operation ? { operation: text.operation } : {}),
+      }));
+    } catch { return { success: false, error: "Invalid text outline data" }; }
+    if (glyphs.some((glyph) => existing.has(glyph.id)) || new Set(glyphs.map((glyph) => glyph.id)).size !== glyphs.length) return { success: false, error: "Generated glyph IDs collide with the document" };
+    const index = document.elements.findIndex((element) => element.id === text.id);
+    const elements = [...document.elements]; elements.splice(index, 1, ...glyphs);
+    return replaceElements(document, elements);
+  },
 });
 
 export const deleteElement = (id: ElementId): EditorCommand => ({
@@ -77,6 +102,7 @@ export const moveElement = (id: ElementId, delta: PointMm): EditorCommand => ({
     if (element.type === "line") return replaceElements(document, document.elements.map((current) => current.id === id && current.type === "line" ? { ...current, start: { x: current.start.x + delta.x, y: current.start.y + delta.y }, end: { x: current.end.x + delta.x, y: current.end.y + delta.y } } : current));
     if (element.type === "contour") return replaceElements(document, document.elements.map((current) => current.id === id && current.type === "contour" ? contourWithPoints(current, current.contours.map((contour) => contour.points.map((point) => ({ x: point.x + delta.x, y: point.y + delta.y })))) : current));
     if (element.type === "path") return replaceElements(document, document.elements.map((current) => current.id === id && current.type === "path" ? translatePath(current, delta) : current));
+    if (element.type === "glyph") return replaceElements(document, document.elements.map((current) => current.id === id && current.type === "glyph" ? translateGlyph(current, delta) : current));
     if (element.type === "text") return replaceElements(document, document.elements.map((current) => current.id === id && current.type === "text" ? { ...current, position: { x: current.position.x + delta.x, y: current.position.y + delta.y } } : current));
     if (element.type === "spline") return replaceElements(document, document.elements.map((current) => current.id === id && current.type === "spline" ? { ...current, nodes: current.nodes.map((node) => ({ ...node, anchor: { x: node.anchor.x + delta.x, y: node.anchor.y + delta.y } })) } : current));
     return replaceElements(document, document.elements.map((current) => current.id === id && (current.type === "rectangle" || current.type === "ellipse") ? { ...current, position: { x: current.position.x + delta.x, y: current.position.y + delta.y } } : current));
@@ -95,6 +121,7 @@ export const moveElements = (ids: readonly ElementId[], delta: PointMm): EditorC
       if (element.type === "line") return { ...element, start: { x: element.start.x + delta.x, y: element.start.y + delta.y }, end: { x: element.end.x + delta.x, y: element.end.y + delta.y } };
       if (element.type === "contour") return contourWithPoints(element, element.contours.map((contour) => contour.points.map((point) => ({ x: point.x + delta.x, y: point.y + delta.y }))));
       if (element.type === "path") return translatePath(element, delta);
+      if (element.type === "glyph") return translateGlyph(element, delta);
       if (element.type === "text") return { ...element, position: { x: element.position.x + delta.x, y: element.position.y + delta.y } };
       if (element.type === "spline") return { ...element, nodes: element.nodes.map((node) => ({ ...node, anchor: { x: node.anchor.x + delta.x, y: node.anchor.y + delta.y } })) };
       if (element.type === "rectangle" || element.type === "ellipse") return { ...element, position: { x: element.position.x + delta.x, y: element.position.y + delta.y } };
@@ -109,7 +136,8 @@ export const resizeElement = (id: ElementId, position: PointMm, size: SizeMm): E
 export const rotateElement = (id: ElementId, rotation: number): EditorCommand => ({ name: `rotate:${id}`, apply: (document) => {
   const current = document.elements.find((element) => element.id === id);
   if (!current) return { success: false, error: `Element not found: ${id}` };
-  if (current.type !== "contour") return updateElement(id, { rotation }).apply(document);
+   if (current.type === "glyph") return replaceElements(document, document.elements.map((element) => element.id === id && element.type === "glyph" ? rotateElements([element], elementCenter(element), rotation - element.rotation)[0]! : element));
+   if (current.type !== "contour") return updateElement(id, { rotation }).apply(document);
   const center = elementCenter(current);
   return replaceElements(document, document.elements.map((element) => element.id === id && element.type === "contour" ? contourWithPoints(element, element.contours.map((contour) => contour.points.map((point) => transformPoint({ x: point.x - center.x, y: point.y - center.y }, center, rotation - current.rotation)))) : element));
 } });
@@ -150,6 +178,7 @@ export const shapeOperation = (ids: readonly ElementId[], operation: ShapeOperat
 export const createPath = (path: PathElement): EditorCommand => createElement(path);
 
 const pathAt = (document: DocumentSnapshot, id: ElementId): PathElement | undefined => document.elements.find((element): element is PathElement => element.id === id && element.type === "path");
+const glyphAt = (document: DocumentSnapshot, id: ElementId): GlyphElement | undefined => document.elements.find((element): element is GlyphElement => element.id === id && element.type === "glyph");
 const splineAt = (document: DocumentSnapshot, id: ElementId): SplineElement | undefined => document.elements.find((element): element is SplineElement => element.id === id && element.type === "spline");
 const updateSpline = (document: DocumentSnapshot, id: ElementId, apply: (spline: SplineElement) => CommandResult): CommandResult => {
   const spline = splineAt(document, id);
@@ -218,11 +247,43 @@ export const closeSplineElement = (splineId: ElementId): EditorCommand => ({
 });
 const updatePath = (document: DocumentSnapshot, path: PathElement): CommandResult => replaceElements(document, document.elements.map((element) => element.id === path.id ? path : element));
 const translatePath = (path: PathElement, delta: PointMm): PathElement => ({ ...path, nodes: path.nodes.map((node) => ({ ...node, anchor: { x: node.anchor.x + delta.x, y: node.anchor.y + delta.y } })), segments: path.segments.map((segment) => segment.type === "cubicBezier" ? { ...segment, control1: { x: segment.control1.x + delta.x, y: segment.control1.y + delta.y }, control2: { x: segment.control2.x + delta.x, y: segment.control2.y + delta.y } } : segment) });
+const translateGlyph = (glyph: GlyphElement, delta: PointMm): GlyphElement => ({ ...glyph, position: { x: glyph.position.x + delta.x, y: glyph.position.y + delta.y }, contours: glyph.contours.map((contour) => ({ ...contour, nodes: contour.nodes.map((node) => ({ ...node, anchor: { x: node.anchor.x + delta.x, y: node.anchor.y + delta.y } })), segments: contour.segments.map((segment) => segment.type === "cubicBezier" ? { ...segment, control1: { x: segment.control1.x + delta.x, y: segment.control1.y + delta.y }, control2: { x: segment.control2.x + delta.x, y: segment.control2.y + delta.y } } : segment) })) });
+const updateGlyphNodeData = (glyph: GlyphElement, nodeIndex: number, point: PointMm): GlyphElement | undefined => {
+  const target = glyphGeometryNodes(glyph)[nodeIndex];
+  if (!target) return undefined;
+  return { ...glyph, contours: glyph.contours.map((contour, ringIndex) => {
+    if (ringIndex !== target.ringIndex) return contour;
+    const nodes = contour.nodes.map((node) => node.id === target.nodeId && target.kind === "anchor" ? { ...node, anchor: point } : node);
+    const segments = contour.segments.map((segment, index) => {
+      if (index !== target.segmentIndex || segment.type !== "cubicBezier") return segment;
+      return target.handle === "control1" ? { ...segment, control1: point } : { ...segment, control2: point };
+    });
+    return { ...contour, nodes, segments };
+  }) };
+};
 
 export const createPathNode = (pathId: ElementId, node: PathElement["nodes"][number], afterNodeId?: string): EditorCommand => ({ name: `path-create-node:${pathId}`, apply: (document) => { const path = pathAt(document, pathId); if (!path || path.closed || path.nodes.some((current) => current.id === node.id)) return { success: false, error: "Invalid path or duplicate node" }; if (afterNodeId !== undefined && afterNodeId !== path.nodes.at(-1)?.id) return { success: false, error: "Only appending path nodes is supported" }; const last = path.nodes.at(-1)!; return updatePath(document, { ...path, nodes: [...path.nodes, node], segments: [...path.segments, { type: "line", startNodeId: last.id, endNodeId: node.id }] }); } });
 export const createPathCubicNode = (pathId: ElementId, node: PathElement["nodes"][number], control1: PointMm, control2: PointMm, afterNodeId?: string): EditorCommand => ({ name: `path-create-cubic-node:${pathId}`, apply: (document) => { const path = pathAt(document, pathId); if (!path || path.closed || path.nodes.some((current) => current.id === node.id)) return { success: false, error: "Invalid path or duplicate node" }; if (afterNodeId !== undefined && afterNodeId !== path.nodes.at(-1)?.id) return { success: false, error: "Only appending path nodes is supported" }; const last = path.nodes.at(-1)!; return updatePath(document, { ...path, nodes: [...path.nodes, node], segments: [...path.segments, { type: "cubicBezier", startNodeId: last.id, endNodeId: node.id, control1, control2 }] }); } });
-export const movePathNode = (pathId: ElementId, nodeId: string, anchor: PointMm): EditorCommand => ({ name: `path-move-node:${pathId}:${nodeId}`, apply: (document) => { const path = pathAt(document, pathId); const node = path?.nodes.find((current) => current.id === nodeId); if (!path || !node) return { success: false, error: "Path node not found" }; const delta = { x: anchor.x - node.anchor.x, y: anchor.y - node.anchor.y }; return updatePath(document, { ...path, nodes: path.nodes.map((current) => current.id === nodeId ? { ...current, anchor } : current), segments: path.segments.map((segment) => segment.type === "cubicBezier" && (segment.startNodeId === nodeId || segment.endNodeId === nodeId) ? { ...segment, ...(segment.startNodeId === nodeId ? { control1: { x: segment.control1.x + delta.x, y: segment.control1.y + delta.y } } : {}), ...(segment.endNodeId === nodeId ? { control2: { x: segment.control2.x + delta.x, y: segment.control2.y + delta.y } } : {}) } : segment) }); } });
- export const movePathHandle = (pathId: ElementId, segmentIndex: number, handle: "control1" | "control2", point: PointMm): EditorCommand => ({ name: `path-move-handle:${pathId}:${segmentIndex}:${handle}`, apply: (document) => { const path = pathAt(document, pathId); const segment = path?.segments[segmentIndex]; if (!path || !segment || segment.type !== "cubicBezier") return { success: false, error: "Cubic segment not found" }; const segments = [...path.segments]; segments[segmentIndex] = handle === "control1" ? { ...segment, control1: point } : { ...segment, control2: point }; return updatePath(document, { ...path, segments }); } });
+export const movePathNode = (pathId: ElementId, nodeId: string, anchor: PointMm): EditorCommand => ({ name: `path-move-node:${pathId}:${nodeId}`, apply: (document) => {
+  const path = pathAt(document, pathId);
+  if (path) { const node = path.nodes.find((current) => current.id === nodeId); if (!node) return { success: false, error: "Path node not found" }; const delta = { x: anchor.x - node.anchor.x, y: anchor.y - node.anchor.y }; return updatePath(document, { ...path, nodes: path.nodes.map((current) => current.id === nodeId ? { ...current, anchor } : current), segments: path.segments.map((segment) => segment.type === "cubicBezier" && (segment.startNodeId === nodeId || segment.endNodeId === nodeId) ? { ...segment, ...(segment.startNodeId === nodeId ? { control1: { x: segment.control1.x + delta.x, y: segment.control1.y + delta.y } } : {}), ...(segment.endNodeId === nodeId ? { control2: { x: segment.control2.x + delta.x, y: segment.control2.y + delta.y } } : {}) } : segment) }); }
+  const glyph = glyphAt(document, pathId); if (!glyph) return { success: false, error: "Path or glyph node not found" };
+  let delta: PointMm | undefined;
+  const contours = glyph.contours.map((contour) => {
+    const node = contour.nodes.find((current) => current.id === nodeId); if (!node) return contour;
+    delta = { x: anchor.x - node.anchor.x, y: anchor.y - node.anchor.y };
+    return { ...contour, nodes: contour.nodes.map((current) => current.id === nodeId ? { ...current, anchor } : current), segments: contour.segments.map((segment) => segment.type === "cubicBezier" && (segment.startNodeId === nodeId || segment.endNodeId === nodeId) ? { ...segment, ...(segment.startNodeId === nodeId ? { control1: { x: segment.control1.x + delta!.x, y: segment.control1.y + delta!.y } } : {}), ...(segment.endNodeId === nodeId ? { control2: { x: segment.control2.x + delta!.x, y: segment.control2.y + delta!.y } } : {}) } : segment) };
+  });
+  return delta ? replaceElements(document, document.elements.map((element) => element.id === glyph.id ? { ...glyph, contours } : element)) : { success: false, error: "Glyph node not found" };
+} });
+export const movePathHandle = (pathId: ElementId, segmentIndex: number, handle: "control1" | "control2", point: PointMm, ringIndex?: number): EditorCommand => ({ name: `path-move-handle:${pathId}:${ringIndex ?? ""}:${segmentIndex}:${handle}`, apply: (document) => {
+  const path = pathAt(document, pathId);
+  if (path) { const segment = path.segments[segmentIndex]; if (!segment || segment.type !== "cubicBezier") return { success: false, error: "Cubic segment not found" }; const segments = [...path.segments]; segments[segmentIndex] = handle === "control1" ? { ...segment, control1: point } : { ...segment, control2: point }; return updatePath(document, { ...path, segments }); }
+  const glyph = glyphAt(document, pathId); if (!glyph) return { success: false, error: "Path or glyph not found" };
+  let found = false;
+  const contours = glyph.contours.map((contour, currentRing) => ({ ...contour, segments: contour.segments.map((segment, index) => { if ((ringIndex !== undefined && currentRing !== ringIndex) || index !== segmentIndex || segment.type !== "cubicBezier" || found) return segment; found = true; return handle === "control1" ? { ...segment, control1: point } : { ...segment, control2: point }; }) }));
+  return found ? replaceElements(document, document.elements.map((element) => element.id === glyph.id ? { ...glyph, contours } : element)) : { success: false, error: "Cubic segment not found" };
+} });
 export const setPathJoin = (pathId: ElementId, nodeId: string, join: PathJoin): EditorCommand => ({ name: `path-join:${pathId}:${nodeId}:${join}`, apply: (document) => { const path = pathAt(document, pathId); const node = path?.nodes.find((current) => current.id === nodeId); if (!path || !node) return { success: false, error: "Path node not found" }; const incoming = path.segments.find((segment) => segment.endNodeId === nodeId); const outgoing = path.segments.find((segment) => segment.startNodeId === nodeId); if (join !== "corner" && incoming?.type === "cubicBezier" && outgoing?.type === "cubicBezier") { const inLength = Math.hypot(incoming.control2.x - node.anchor.x, incoming.control2.y - node.anchor.y); const outLength = Math.hypot(outgoing.control1.x - node.anchor.x, outgoing.control1.y - node.anchor.y); const direction = { x: outgoing.control1.x - node.anchor.x, y: outgoing.control1.y - node.anchor.y }; const magnitude = Math.hypot(direction.x, direction.y) || 1; const length = join === "symmetric" ? (inLength + outLength) / 2 : outLength; const control1 = { x: node.anchor.x + direction.x / magnitude * length, y: node.anchor.y + direction.y / magnitude * length }; const control2 = { x: node.anchor.x - direction.x / magnitude * (join === "symmetric" ? length : inLength), y: node.anchor.y - direction.y / magnitude * (join === "symmetric" ? length : inLength) }; const segments = path.segments.map((segment) => segment === outgoing ? { ...segment, control1 } : segment === incoming ? { ...segment, control2 } : segment); return updatePath(document, { ...path, nodes: path.nodes.map((current) => current.id === nodeId ? { ...current, join } : current), segments }); } return updatePath(document, { ...path, nodes: path.nodes.map((current) => current.id === nodeId ? { ...current, join } : current) }); } });
 export const setPathJoinMode = setPathJoin;
 export const splitPathSegment = (pathId: ElementId, segmentIndex: number, newNodeId = `path-node-${crypto.randomUUID()}`): EditorCommand => ({ name: `path-split:${pathId}:${segmentIndex}`, apply: (document) => {
@@ -374,6 +435,10 @@ export const updateElementNode = (id: ElementId, nodeIndex: number, point: Point
       const next = nodeIndex === 0 ? { ...current, start: point } : nodeIndex === 2 ? { ...current, end: point } : { ...current, start: { x: current.start.x + delta.x, y: current.start.y + delta.y }, end: { x: current.end.x + delta.x, y: current.end.y + delta.y } };
       return replaceElements(document, document.elements.map((element) => element.id === id ? next : element));
     }
+    if (current.type === "glyph") {
+      const next = updateGlyphNodeData(current, nodeIndex, point);
+      return next ? replaceElements(document, document.elements.map((element) => element.id === id ? next : element)) : { success: false, error: "Glyph node not found" };
+    }
     if (node.kind === "center" || ((current.type === "rectangle" || current.type === "ellipse") && node.kind === "corner")) {
       return moveElement(id, { x: point.x - node.point.x, y: point.y - node.point.y }).apply(document);
     }
@@ -434,6 +499,7 @@ const translateElement = (element: Element, delta: PointMm, id: ElementId): Elem
   if (element.type === "line") return { ...element, id, start: { x: element.start.x + delta.x, y: element.start.y + delta.y }, end: { x: element.end.x + delta.x, y: element.end.y + delta.y } };
   if (element.type === "contour") return { ...contourWithPoints(element, element.contours.map((contour) => contour.points.map((point) => ({ x: point.x + delta.x, y: point.y + delta.y })))), id, rotation: element.rotation };
   if (element.type === "path") return { ...translatePath(element, delta), id };
+  if (element.type === "glyph") return { ...translateGlyph(element, delta), id };
   if (element.type === "spline") return { ...element, id, nodes: element.nodes.map((node) => ({ ...node, anchor: { x: node.anchor.x + delta.x, y: node.anchor.y + delta.y } })) };
   return { ...element, id, position: { x: element.position.x + delta.x, y: element.position.y + delta.y } };
 };
@@ -474,6 +540,10 @@ export const flipElements = (ids: readonly ElementId[], axis: FlipAxis): EditorC
       if (element.type === "path") {
         const reflect = (point: PointMm): PointMm => horizontal ? { x: center.x * 2 - point.x, y: point.y } : { x: point.x, y: center.y * 2 - point.y };
         return { ...element, nodes: element.nodes.map((node) => ({ ...node, anchor: reflect(node.anchor) })), segments: element.segments.map((segment) => segment.type === "cubicBezier" ? { ...segment, control1: reflect(segment.control1), control2: reflect(segment.control2) } : segment) };
+      }
+      if (element.type === "glyph") {
+        const reflect = (point: PointMm): PointMm => horizontal ? { x: center.x * 2 - point.x, y: point.y } : { x: point.x, y: center.y * 2 - point.y };
+        return { ...element, position: { x: reflectedCenter.x - element.size.width / 2, y: reflectedCenter.y - element.size.height / 2 }, contours: element.contours.map((contour) => ({ ...contour, nodes: contour.nodes.map((node) => ({ ...node, anchor: reflect(node.anchor) })), segments: contour.segments.map((segment) => segment.type === "cubicBezier" ? { ...segment, control1: reflect(segment.control1), control2: reflect(segment.control2) } : segment) })) };
       }
       if (element.type === "spline") return { ...element, nodes: element.nodes.map((node) => ({ ...node, anchor: horizontal ? { x: center.x * 2 - node.anchor.x, y: node.anchor.y } : { x: node.anchor.x, y: center.y * 2 - node.anchor.y }, ...(node.inHandle ? { inHandle: horizontal ? { dx: -node.inHandle.dx, dy: node.inHandle.dy } : { dx: node.inHandle.dx, dy: -node.inHandle.dy } } : {}), ...(node.outHandle ? { outHandle: horizontal ? { dx: -node.outHandle.dx, dy: node.outHandle.dy } : { dx: node.outHandle.dx, dy: -node.outHandle.dy } } : {}) })) };
       if (element.type === "text") return { ...element, position: horizontal ? { x: center.x * 2 - element.position.x - element.size.width, y: element.position.y } : { x: element.position.x, y: center.y * 2 - element.position.y - element.size.height }, rotation: -element.rotation };
@@ -557,7 +627,7 @@ export function clearSelection(state: EditorState): EditorState { return { ...st
 export function dispatch(state: EditorState, command: EditorCommand): EditorState {
   const applied = command.apply(state.document);
   if (!applied.success || applied.document === state.document) return state;
-  const nextSelection = command.name.startsWith("shape-")
+  const nextSelection = command.name.startsWith("text-to-glyphs:") || command.name.startsWith("shape-")
     ? applied.document.elements.filter((element) => !state.document.elements.some((previous) => previous.id === element.id)).map((element) => element.id)
     : command.name.startsWith("duplicate:")
       ? applied.document.elements.filter((element) => !state.document.elements.some((previous) => previous.id === element.id)).map((element) => element.id)
@@ -568,13 +638,13 @@ export function dispatch(state: EditorState, command: EditorCommand): EditorStat
 export function undo(state: EditorState): EditorState {
   const transaction = state.undo.at(-1);
   if (!transaction) return state;
-  const selection = transaction.command.startsWith("shape-") || transaction.command.startsWith("duplicate:") ? transaction.selectionBefore : knownSelection({ ...state, document: transaction.before }, state.selection);
+   const selection = transaction.command.startsWith("text-to-glyphs:") || transaction.command.startsWith("shape-") || transaction.command.startsWith("duplicate:") ? transaction.selectionBefore : knownSelection({ ...state, document: transaction.before }, state.selection);
   return { ...state, document: transaction.before, selection, undo: state.undo.slice(0, -1), redo: [...state.redo, transaction], gesture: undefined };
 }
 export function redo(state: EditorState): EditorState {
   const transaction = state.redo.at(-1);
   if (!transaction) return state;
-  const selection = transaction.command.startsWith("shape-") || transaction.command.startsWith("duplicate:") ? transaction.selectionAfter : knownSelection({ ...state, document: transaction.after }, state.selection);
+   const selection = transaction.command.startsWith("text-to-glyphs:") || transaction.command.startsWith("shape-") || transaction.command.startsWith("duplicate:") ? transaction.selectionAfter : knownSelection({ ...state, document: transaction.after }, state.selection);
   return { ...state, document: transaction.after, selection, undo: [...state.undo, transaction], redo: state.redo.slice(0, -1), gesture: undefined };
 }
 
