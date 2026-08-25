@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { CURRENT_SCHEMA_VERSION, type DocumentSnapshot, type ProjectSnapshot } from "@nodra/domain";
+import { CURRENT_SCHEMA_VERSION, type DocumentSnapshot, type Element, type PointMm, type ProjectSnapshot, type SizeMm } from "@nodra/domain";
 
 const finite = z.number().finite();
 const nonEmptyId = z.string().min(1);
@@ -43,8 +43,23 @@ export const splineElementSchema = z.object({ id: nonEmptyId, layerId: nonEmptyI
   const nodeIds = value.nodes.map((node) => node.id);
   if (new Set(nodeIds).size !== nodeIds.length) ctx.addIssue({ code: "custom", message: "Spline node IDs must be unique", path: ["nodes"] });
 });
-const textElement = z.object({ ...common, type: z.literal("text"), position: point, size, text: z.string().min(1), fontFamily: z.string().min(1), fontSize: finite.gt(0), fontWeight: z.enum(["normal", "bold"]), fontStyle: z.enum(["normal", "italic"]), textAlign: z.enum(["left", "center", "right"]), lineHeight: finite.gt(0) }).strict();
-export const elementSchema = z.discriminatedUnion("type", [rectangle, ellipse, line, contour, path, splineElementSchema, textElement]);
+const textElement = z.object({ ...common, type: z.literal("text"), position: point, size, text: z.string().min(1), fontFamily: z.string().min(1), fontSize: finite.gt(0), fontWeight: z.enum(["normal", "bold"]), fontStyle: z.enum(["normal", "italic"]), textAlign: z.enum(["left", "center", "right"]), lineHeight: finite.gt(0), scaleX: finite.gt(0).optional(), scaleY: finite.gt(0).optional() }).strict();
+const glyphContour = z.object({ nodes: z.array(pathNode).min(2), segments: z.array(pathSegment).min(2) }).strict().superRefine((value, ctx) => {
+  const nodeIds = value.nodes.map((node) => node.id);
+  if (new Set(nodeIds).size !== nodeIds.length) ctx.addIssue({ code: "custom", message: "Glyph node IDs must be unique", path: ["nodes"] });
+  if (value.segments.length !== value.nodes.length) ctx.addIssue({ code: "custom", message: "Glyph contour segment count must match node count", path: ["segments"] });
+  const known = new Set(nodeIds);
+  value.segments.forEach((segment, index) => {
+    if (!known.has(segment.startNodeId) || !known.has(segment.endNodeId)) ctx.addIssue({ code: "custom", message: "Glyph segment references an unknown node", path: ["segments", index] });
+    const start = value.nodes[index]; const end = value.nodes[(index + 1) % value.nodes.length];
+    if (start && end && (segment.startNodeId !== start.id || segment.endNodeId !== end.id)) ctx.addIssue({ code: "custom", message: "Glyph segments must follow node order", path: ["segments", index] });
+  });
+});
+const glyph = z.object({ ...common, type: z.literal("glyph"), position: point, size, glyph: z.string().min(1), contours: z.array(glyphContour).min(1), fillRule: z.literal("evenodd") }).strict().superRefine((value, ctx) => {
+  const ids = value.contours.flatMap((contour) => contour.nodes.map((node) => node.id));
+  if (new Set(ids).size !== ids.length) ctx.addIssue({ code: "custom", message: "Glyph node IDs must be unique across contours", path: ["contours"] });
+});
+export const elementSchema = z.discriminatedUnion("type", [rectangle, ellipse, line, contour, path, splineElementSchema, textElement, glyph]);
 export const layerSchema = z.object({ id: nonEmptyId, name: z.string().min(1), visible: z.boolean(), order: finite.int().nonnegative() }).strict();
 const documentFields = { id: nonEmptyId, revision: finite.int().nonnegative(), origin: z.literal("top-left"), units: z.literal("mm"), page: size, layers: z.array(layerSchema), elements: z.array(elementSchema) };
 export const documentSchema = z.object({ schemaVersion: z.literal(CURRENT_SCHEMA_VERSION), ...documentFields, capabilities: z.object({ spline: z.literal(1).optional() }).strict().optional() }).strict().superRefine((value, ctx) => {
@@ -101,4 +116,37 @@ export function serializeDocument(document: DocumentSnapshot): string {
 export function parseDocument(input: string): ValidationResult {
   try { return validateDocument(JSON.parse(input) as unknown); }
   catch { return { success: false, issues: [{ path: [], message: "Malformed JSON" }], error: "document: Malformed JSON" }; }
+}
+
+export type DesignValidation = {
+  readonly ready: boolean;
+  readonly openCurveCount: number;
+  readonly duplicateLineCount: number;
+  readonly outsideElementCount: number;
+};
+
+const elementPoints = (element: Element): readonly PointMm[] => {
+  switch (element.type) {
+    case "line": return [element.start, element.end];
+    case "path": return element.nodes.map((node) => node.anchor);
+    case "spline": return element.nodes.map((node) => node.anchor);
+    case "contour": return element.contours.flatMap((contour) => contour.points);
+    default: return [element.position, { x: element.position.x + element.size.width, y: element.position.y + element.size.height }];
+  }
+};
+
+const isOutsidePage = (points: readonly PointMm[], page: SizeMm): boolean => points.some((point) => point.x < 0 || point.y < 0 || point.x > page.width || point.y > page.height);
+
+export function validateDesign(elements: readonly Element[], page: SizeMm): DesignValidation {
+  const openCurveCount = elements.filter((element) => (element.type === "path" || element.type === "spline") && !element.closed).length;
+  const lineKeys = new Set<string>();
+  let duplicateLineCount = 0;
+  for (const element of elements) {
+    if (element.type !== "line") continue;
+    const endpoints = [`${element.start.x},${element.start.y}`, `${element.end.x},${element.end.y}`].sort().join("|");
+    if (lineKeys.has(endpoints)) duplicateLineCount += 1;
+    lineKeys.add(endpoints);
+  }
+  const outsideElementCount = elements.filter((element) => isOutsidePage(elementPoints(element), page)).length;
+  return { ready: openCurveCount === 0 && duplicateLineCount === 0 && outsideElementCount === 0, openCurveCount, duplicateLineCount, outsideElementCount };
 }

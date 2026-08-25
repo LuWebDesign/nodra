@@ -287,6 +287,7 @@ test("creates, transforms, and undoes a rectangle", async ({ page }) => {
 
   const rectangle = page.locator(".page-svg svg rect").first();
   await expect(rectangle).toBeVisible();
+  await expect.poll(() => rectangle.boundingBox()).not.toBeNull();
   const rectangleBounds = await rectangle.boundingBox();
   expect(rectangleBounds).not.toBeNull();
   await page.getByRole("button", { name: "Seleccion" }).click();
@@ -298,6 +299,153 @@ test("creates, transforms, and undoes a rectangle", async ({ page }) => {
   await expect(width).toHaveValue(String(originalWidth + 10));
   await page.getByRole("button", { name: "Deshacer" }).click();
   await expect(width).toHaveValue(String(originalWidth));
+});
+
+test("moves text with Selection and edits it inline on double-click", async ({ page }) => {
+  await page.goto("/");
+  const pageBounds = await page.locator(".page").boundingBox();
+  expect(pageBounds).not.toBeNull();
+
+  await page.getByRole("button", { name: "Texto" }).click();
+  await page.mouse.click(pageBounds!.x + 120, pageBounds!.y + 120);
+  const editor = page.getByRole("textbox", { name: "Texto editable" });
+  await editor.fill("Texto original");
+  await editor.press("Control+Enter");
+  await expect(editor).toBeHidden();
+
+  const text = page.locator('.page-svg svg text[data-element-id]');
+  await expect(text).toHaveCount(1);
+  await expect(text).toBeVisible();
+  const before = await text.boundingBox();
+  expect(before).not.toBeNull();
+
+  await page.getByRole("button", { name: "Seleccion" }).click();
+  await page.mouse.click(before!.x + before!.width / 2, before!.y + before!.height / 2);
+  await page.getByRole("tab", { name: "Texto" }).click();
+  await page.locator(".inspector").getByLabel("Tipografía").selectOption({ label: "Times New Roman" });
+  await page.getByRole("button", { name: "Negrita" }).click();
+  await page.getByRole("button", { name: "Cursiva" }).click();
+  const formattingBefore = {
+    family: await text.getAttribute("font-family"),
+    size: await text.getAttribute("font-size"),
+    weight: await text.getAttribute("font-weight"),
+    style: await text.getAttribute("font-style"),
+  };
+
+  await expect(text).toBeVisible();
+  await expect.poll(() => text.boundingBox()).not.toBeNull();
+  const beforeDrag = await text.boundingBox();
+  expect(beforeDrag).not.toBeNull();
+  await page.mouse.move(beforeDrag!.x + beforeDrag!.width / 2, beforeDrag!.y + beforeDrag!.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(beforeDrag!.x + beforeDrag!.width / 2 + 35, beforeDrag!.y + beforeDrag!.height / 2 + 20);
+  await page.mouse.up();
+  await expect.poll(async () => {
+    const bounds = await text.boundingBox();
+    return bounds !== null && bounds.x > beforeDrag!.x && bounds.y > beforeDrag!.y;
+  }).toBe(true);
+  await expect(text).toBeVisible();
+  const moved = await text.boundingBox();
+  expect(moved).not.toBeNull();
+  expect(moved!.x).toBeGreaterThan(before!.x);
+  expect(moved!.y).toBeGreaterThan(before!.y);
+
+  await page.mouse.dblclick(moved!.x + moved!.width / 2, moved!.y + moved!.height / 2);
+  await expect(editor).toHaveValue("Texto original");
+  await editor.fill("Texto editado");
+  await editor.press("Control+Enter");
+  await expect(editor).toBeHidden();
+  await expect(text).toContainText("Texto editado");
+  await expect(text).toHaveAttribute("font-family", formattingBefore.family!);
+  await expect(text).toHaveAttribute("font-size", formattingBefore.size!);
+  await expect(text).toHaveAttribute("font-weight", formattingBefore.weight!);
+  await expect(text).toHaveAttribute("font-style", formattingBefore.style!);
+});
+
+test("edits an existing text with Texto without replacing the element", async ({ page }) => {
+  await page.goto("/");
+  const pageBounds = await page.locator(".page").boundingBox();
+  expect(pageBounds).not.toBeNull();
+
+  await page.getByRole("button", { name: "Texto" }).click();
+  await page.mouse.click(pageBounds!.x + 140, pageBounds!.y + 140);
+  const editor = page.getByRole("textbox", { name: "Texto editable" });
+  await editor.fill("Texto persistente");
+  await editor.press("Enter");
+  const text = page.locator('.page-svg svg text[data-element-id]');
+  await expect(text).toHaveCount(1);
+  const elementId = await text.getAttribute("data-element-id");
+  const before = await text.boundingBox();
+  expect(before).not.toBeNull();
+
+  await page.getByRole("button", { name: "Texto" }).click();
+  await page.mouse.click(before!.x + before!.width / 2, before!.y + before!.height / 2);
+  await expect(editor).toHaveValue("Texto persistente");
+  await expect(text).toHaveCount(1);
+  await expect(text).toHaveAttribute("data-element-id", elementId!);
+  await editor.fill("Texto actualizado");
+  await page.mouse.click(pageBounds!.x + 400, pageBounds!.y + 300);
+  await expect(editor).toBeHidden();
+  await expect(text).toContainText("Texto actualizado");
+  await expect(text).toHaveAttribute("data-element-id", elementId!);
+});
+
+test("opens an existing text with its rendered bounds and typography", async ({ page }) => {
+  await page.goto("/");
+  const pageBounds = await page.locator(".page").boundingBox();
+  expect(pageBounds).not.toBeNull();
+
+  await page.getByRole("button", { name: "Texto" }).click();
+  await page.mouse.click(pageBounds!.x + 180, pageBounds!.y + 160);
+  const editor = page.getByRole("textbox", { name: "Texto editable" });
+  await editor.fill("Texto escalado");
+  await editor.press("Control+Enter");
+
+  const text = page.locator('.page-svg svg text[data-element-id]');
+  await expect(text).toHaveCount(1);
+  await expect(text).toBeVisible();
+  await page.getByRole("button", { name: "Seleccion" }).click();
+  const resizeHandle = page.locator('[data-resize-handle="se"]');
+  await expect.poll(() => resizeHandle.boundingBox()).not.toBeNull();
+  const handleBounds = await resizeHandle.boundingBox();
+  expect(handleBounds).not.toBeNull();
+  await page.mouse.move(handleBounds!.x + handleBounds!.width / 2, handleBounds!.y + handleBounds!.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(handleBounds!.x + handleBounds!.width / 2 + 30, handleBounds!.y + handleBounds!.height / 2 + 15);
+  await page.mouse.up();
+  await expect.poll(() => text.boundingBox()).not.toBeNull();
+  const rendered = await text.boundingBox();
+  expect(rendered).not.toBeNull();
+  await page.mouse.dblclick(rendered!.x + rendered!.width / 2, rendered!.y + rendered!.height / 2);
+
+  await expect(editor).toHaveValue("Texto escalado");
+  const inline = await editor.boundingBox();
+  expect(inline).not.toBeNull();
+  expect(inline!.width).toBeGreaterThan(0);
+  expect(inline!.height).toBeGreaterThan(0);
+  expect(inline!.width).toBeCloseTo(rendered!.width, 0);
+  const renderedFontSize = Number(await text.getAttribute("font-size"));
+  const pageScale = await page.locator(".page").evaluate((element) => element.getBoundingClientRect().width / Number(element.querySelector("svg")?.getAttribute("width")));
+  const inlineFontSize = await editor.evaluate((element) => Number.parseFloat(getComputedStyle(element).fontSize));
+  expect(inlineFontSize).toBeCloseTo(renderedFontSize * pageScale, 1);
+});
+
+test("commits a new text when clicking elsewhere without waiting for Enter", async ({ page }) => {
+  await page.goto("/");
+  const pageBounds = await page.locator(".page").boundingBox();
+  expect(pageBounds).not.toBeNull();
+
+  await page.getByRole("button", { name: "Texto" }).click();
+  await page.mouse.click(pageBounds!.x + 120, pageBounds!.y + 120);
+  const editor = page.getByRole("textbox", { name: "Texto editable" });
+  await editor.fill("Commit inmediato");
+  await page.mouse.click(pageBounds!.x + 420, pageBounds!.y + 280);
+
+  await expect(editor).toBeHidden();
+  await expect(page.locator('.page-svg svg text[data-element-id]')).toHaveCount(1);
+  await expect(page.locator('.page-svg svg text[data-element-id]')).toContainText("Commit inmediato");
+  await page.getByRole("button", { name: "Deshacer" }).click();
+  await expect(page.locator('.page-svg svg text[data-element-id]')).toHaveCount(0);
 });
 
 test("places the color palette in the status bar and duplicates directionally", async ({ page }) => {

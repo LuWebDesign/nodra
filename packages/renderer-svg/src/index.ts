@@ -21,7 +21,7 @@ export type RenderResult =
 const escapeAttribute = (value: string): string => value.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 const number = (value: number): string => Number(value.toFixed(6)).toString();
 const degrees = (radians: number): string => number((radians * 180) / Math.PI);
-type TransformElement = Extract<Element, { type: "rectangle" | "ellipse" | "line" }>;
+type TransformElement = Extract<Element, { type: "rectangle" | "ellipse" | "line" | "glyph" }>;
 const transform = (element: TransformElement, cx: number, cy: number): string => `translate(${number(cx)} ${number(cy)}) rotate(${degrees(element.rotation)}) scale(${element.flipX ? -1 : 1} ${element.flipY ? -1 : 1}) translate(${number(-cx)} ${number(-cy)})`;
 
 function viewportResult(input: unknown): { success: true; data: Viewport } | { success: false; error: string } {
@@ -37,7 +37,7 @@ const DEFAULT_CLOSED_FILL = "rgba(101,217,255,0.22)";
 function visualAttributes(element: Element): string {
   const closed = element.type === "path" || element.type === "spline" ? element.closed : element.type !== "line";
   const fill = closed ? escapeAttribute(element.style.fill ?? DEFAULT_CLOSED_FILL) : "none";
-  return `stroke="${escapeAttribute(element.style.stroke)}" stroke-width="${number(Math.max(element.style.strokeWidth, 1))}" fill="${fill}"`;
+  return `stroke="${escapeAttribute(element.style.stroke)}" stroke-width="${number(element.style.strokeWidth)}" fill="${fill}"`;
 }
 
 function renderElement(element: Element, viewport: Viewport): string {
@@ -72,18 +72,37 @@ function renderElement(element: Element, viewport: Viewport): string {
   }
   if (element.type === "path") return renderPath(element, viewport);
   if (element.type === "spline") return renderPath(splineToPathElement(element), viewport);
+  if (element.type === "glyph") return renderGlyph(element, viewport);
   if (element.type === "text") {
     const position = screen(element.position);
     const fontSize = element.fontSize * viewport.zoom;
     const anchor = element.textAlign === "center" ? "middle" : element.textAlign === "right" ? "end" : "start";
     const x = element.textAlign === "center" ? position.x + element.size.width * viewport.zoom / 2 : element.textAlign === "right" ? position.x + element.size.width * viewport.zoom : position.x;
-    const lines = element.text.split("\\n").map((line, index) => `<tspan x="${number(x)}" dy="${number(index === 0 ? fontSize : fontSize * element.lineHeight)}">${escapeAttribute(line)}</tspan>`).join("");
-    return `<text data-element-id="${escapeAttribute(element.id)}" x="${number(x)}" y="${number(position.y)}" text-anchor="${anchor}" font-family="${escapeAttribute(element.fontFamily)}" font-size="${number(fontSize)}" font-weight="${element.fontWeight}" font-style="${element.fontStyle}" fill="${escapeAttribute(element.style.fill ?? element.style.stroke)}" stroke="${escapeAttribute(element.style.stroke)}" stroke-width="${number(Math.max(element.style.strokeWidth, 1))}" transform="rotate(${degrees(element.rotation)} ${number(position.x)} ${number(position.y)})">${lines}</text>`;
+    const lines = element.text.split(/\r\n|\r|\n/).map((line, index) => `<tspan x="${number(x)}" dy="${number(index === 0 ? 0 : fontSize * element.lineHeight)}">${escapeAttribute(line)}</tspan>`).join("");
+    return `<text data-element-id="${escapeAttribute(element.id)}" x="${number(x)}" y="${number(position.y + fontSize * 0.8)}" text-anchor="${anchor}" font-family="${escapeAttribute(element.fontFamily)}" font-size="${number(fontSize)}" font-weight="${element.fontWeight}" font-style="${element.fontStyle}" fill="${escapeAttribute(element.style.fill ?? "none")}" stroke="${escapeAttribute(element.style.stroke)}" stroke-width="${number(element.style.strokeWidth)}" transform="translate(${number(position.x)} ${number(position.y)}) rotate(${degrees(element.rotation)}) scale(${number(element.scaleX ?? 1)} ${number(element.scaleY ?? 1)}) translate(${number(-position.x)} ${number(-position.y)})">${lines}</text>`;
   }
   const start = screen(element.start);
   const end = screen(element.end);
   const center = { x: (start.x + end.x) / 2, y: (start.y + end.y) / 2 };
   return `<line data-element-id="${escapeAttribute(element.id)}" x1="${number(start.x)}" y1="${number(start.y)}" x2="${number(end.x)}" y2="${number(end.y)}" transform="${transform(element, center.x, center.y)}" ${visualAttributes(element)} />`;
+}
+
+function renderGlyph(element: Extract<Element, { type: "glyph" }>, viewport: Viewport): string {
+  const screen = (point: { x: number; y: number }) => mmToScreen(point, viewport);
+  const d = element.contours.map((contour) => {
+    const first = contour.nodes[0];
+    if (!first) return "";
+    let path = `M${number(screen(first.anchor).x)} ${number(screen(first.anchor).y)}`;
+    for (const segment of contour.segments) {
+      const end = contour.nodes.find((node) => node.id === segment.endNodeId);
+      if (!end) continue;
+      if (segment.type === "line") path += ` L${number(screen(end.anchor).x)} ${number(screen(end.anchor).y)}`;
+      else path += ` C${number(screen(segment.control1).x)} ${number(screen(segment.control1).y)} ${number(screen(segment.control2).x)} ${number(screen(segment.control2).y)} ${number(screen(end.anchor).x)} ${number(screen(end.anchor).y)}`;
+    }
+    return `${path} Z`;
+  }).join(" ");
+  const center = screen({ x: element.position.x + element.size.width / 2, y: element.position.y + element.size.height / 2 });
+  return `<path data-element-id="${escapeAttribute(element.id)}" d="${escapeAttribute(d)}" fill-rule="evenodd" transform="${transform(element, center.x, center.y)}" ${visualAttributes(element)} />`;
 }
 
 /** Convert the native spline model to the canonical path renderer boundary. */
@@ -129,7 +148,7 @@ export function renderSvg(document: unknown, viewport: unknown): RenderResult {
   const checked = validateDocument(document);
   if (!checked.success) {
     const candidate = typeof document === "object" && document !== null ? document as { schemaVersion?: unknown; elements?: unknown } : undefined;
-    const unsupported = !SUPPORTED_SCHEMA_VERSIONS.has(candidate?.schemaVersion as number) || (Array.isArray(candidate?.elements) && candidate.elements.some((element) => typeof element === "object" && element !== null && !["rectangle", "ellipse", "line", "contour", "path", "spline", "text"].includes((element as { type?: unknown }).type as string)));
+      const unsupported = !SUPPORTED_SCHEMA_VERSIONS.has(candidate?.schemaVersion as number) || (Array.isArray(candidate?.elements) && candidate.elements.some((element) => typeof element === "object" && element !== null && !["rectangle", "ellipse", "line", "contour", "path", "spline", "text", "glyph"].includes((element as { type?: unknown }).type as string)));
     return { success: false, reason: unsupported ? "unsupported" : "invalid", error: checked.error.slice(0, 512), issues: checked.issues.slice(0, MAX_ISSUES).map((issue) => `${issue.path.join(".") || "document"}: ${issue.message}`) };
   }
   const checkedViewport = viewportResult(viewport);

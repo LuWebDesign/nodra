@@ -1,13 +1,16 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent, type PointerEvent, type ReactNode, type WheelEvent } from "react";
 import { createProject, elementId, layerId, pageId, revision, type DocumentSnapshot, type Element, type ElementId, type PointMm, type ProjectSnapshot, type SplineElement, type TextElement } from "@nodra/domain";
-import { addToSelection, appendSplineNode, beginGesture, cancelGesture, clearSelection, closePath, closeSplineElement, commitGesture, createElement, createPathCubicNode, createPathNode, deleteContourNodes, deleteElement, deleteElementNodes, deletePathNodes, dispatch, duplicateElements, flipElements, insertFormaNode, moveElements, movePathHandle, movePathNode, openPath, updateSplineNode, previewGesture, previewGestureFromBase, redo, resizeElement, resizeElements, rotateElement, rotateElementsAroundCenter, select, selectForPointerDown, setPathJoin, shapeOperation, splitPathSegment, undo, updateContourNode, updateElement, updateElementNode, updateElementStyles, updatePage, updateSplineHandle, type FlipAxis, type ShapeOperation } from "@nodra/editor-core";
-import { boundsOfElements, contourVertexNodes, elementCenter, groupCenter, groupHandlePoints, pathGeometryNodes, realGeometryNodes, resizeHandle, rotatedResizeHandles, rotationFromDrag, rotationHandlePoints, type Direction, type GroupHandle, type ResizeHandle } from "@nodra/geometry";
+import { addToSelection, appendSplineNode, beginGesture, cancelGesture, clearSelection, closePath, closeSplineElement, commitGesture, convertTextToGlyphs, createElement, createPathCubicNode, createPathNode, deleteContourNodes, deleteElement, deleteElementNodes, deletePathNodes, dispatch, duplicateElements, flipElements, insertFormaNode, moveElements, movePathHandle, movePathNode, openPath, updateSplineNode, previewGesture, previewGestureFromBase, redo, resizeElement, resizeElements, rotateElement, rotateElementsAroundCenter, select, selectForPointerDown, setPathJoin, shapeOperation, splitPathSegment, undo, updateContourNode, updateElement, updateElementNode, updateElementStyles, updatePage, updateSplineHandle, type FlipAxis, type ShapeOperation } from "@nodra/editor-core";
+import { boundsOfElements, contourVertexNodes, elementCenter, glyphGeometryNodes, groupCenter, groupHandlePoints, pathGeometryNodes, realGeometryNodes, resizeHandle, rotatedResizeHandles, rotationFromDrag, rotationHandlePoints, type Direction, type GroupHandle, type ResizeHandle } from "@nodra/geometry";
 import { DebouncedAutosave, DexieProjectRepository, requestStoragePersistence } from "@nodra/persistence";
+import { validateDesign } from "@nodra/validation";
 import { renderSvg } from "@nodra/renderer-svg";
 import { canActivateRotation, centerPageInCanvas, clientPointToCanvas, cubicPlacementControls, formaNodeKey, hoveredSelectionCenter, isDrawingTool, marqueeSelection, movementExceedsThreshold, normalizeBounds, normalizeDrag, pagePointToCanvas, pathGuides, pickElement, pickFormaNode, pickFormaSegment, pickNode, pickPathNode, pickPathSegment, pointerDownIntent, screenDeltaToMm, screenPointToMm, selectedNodeAnchor, selectedPathAnchorIds, alignmentGuides, snapMoveDelta, zoomAtPoint, type AlignmentGuide, type ContourNodeHit, type FormaNodeHit, type NodeHit, type PathNodeHit, type SnapGuide, type TransformMode } from "./interaction.js";
 import { aspectGeometryPatch, aspectSize, formatMm, geometryValue, rotationDegreesValue, rotationPatch, type GeometryField, type PropertyElement, type RotatableElement } from "./propertyBar.js";
 import { useDocumentStore, usePersistenceStore, useUiStore, useViewportStore, type Tool } from "./stores.js";
 import { pathJoinGuidance, pathJoinOptions } from "./pathJoins.js";
+import { textSizeFor } from "./textMetrics.js";
+import { extractTextGlyphOutlines, fontFamilyFromFileName, FontOutlineError } from "./fontOutline.js";
 
 const defaultStyle = { stroke: "#000000", strokeWidth: 1 };
 const defaultClosedFill = "rgba(101,217,255,0.22)";
@@ -103,14 +106,21 @@ export function App() {
   const [selectedSplineNodeKey, setSelectedSplineNodeKey] = useState<string>();
   const [selectedPathSegment, setSelectedPathSegment] = useState<{ readonly elementId: ElementId; readonly segmentIndex: number }>();
   const [inspectorTab, setInspectorTab] = useState<InspectorTab>("properties");
+  const designValidation = useMemo(() => validateDesign(document.elements, document.page), [document.elements, document.page]);
   const [transformDirection, setTransformDirection] = useState<Direction>("center");
   const [directionTooltipVisible, setDirectionTooltipVisible] = useState(false);
   const [penDraftPoint, setPenDraftPoint] = useState<PointMm>();
   const [splineDraftPoint, setSplineDraftPoint] = useState<PointMm>();
   const [activeSplineId, setActiveSplineId] = useState<ElementId>();
   const [textFontFamily, setTextFontFamily] = useState("Arial");
+  const [textFontWeight, setTextFontWeight] = useState<"normal" | "bold">("normal");
+  const [textFontStyle, setTextFontStyle] = useState<"normal" | "italic">("normal");
   const [availableFonts, setAvailableFonts] = useState(["Arial", "Helvetica", "Times New Roman", "Courier New", "Inter"]);
-  const [textDraft, setTextDraft] = useState<{ readonly position: PointMm; readonly value: string; readonly elementId?: ElementId }>();
+  const [fontSources, setFontSources] = useState<Record<string, ArrayBuffer>>({});
+  const [fontLoadError, setFontLoadError] = useState<string>();
+  const [textDraft, setTextDraft] = useState<{ readonly position: PointMm; readonly value: string; readonly elementId?: ElementId; readonly fontSize?: number; readonly element?: TextElement }>();
+  const textDraftRef = useRef(textDraft);
+  textDraftRef.current = textDraft;
   const textInput = useRef<HTMLTextAreaElement>(null);
   const repository = useMemo(() => new DexieProjectRepository(), []);
   const autosave = useMemo(() => new DebouncedAutosave(repository), [repository]);
@@ -232,7 +242,7 @@ export function App() {
        line.dataset.bezierGuide = direction; line.setAttribute("x1", String(a.x)); line.setAttribute("y1", String(a.y)); line.setAttribute("x2", String(b.x)); line.setAttribute("y2", String(b.y)); line.setAttribute("stroke", color); line.setAttribute("stroke-width", "1"); line.setAttribute("stroke-dasharray", "3 2"); line.style.pointerEvents = "none"; overlay.append(line);
      };
      for (const element of selectedElements) if (element.type === "path") for (const guide of pathGuides(element)) guideLine(guide.anchor, guide.control, guide.direction);
-    if (transformMode === "resize" && tool !== "forma") for (const element of selectedElements.filter((candidate) => candidate.type !== "spline")) for (const [nodeIndex, node] of realGeometryNodes(element).entries()) {
+    if (transformMode === "resize" && tool !== "forma") for (const element of selectedElements.filter((candidate) => candidate.type !== "spline" && candidate.type !== "text")) for (const [nodeIndex, node] of realGeometryNodes(element).entries()) {
       const screen = point(node.point);
       const hitArea = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "circle");
       hitArea.dataset.realNode = element.id;
@@ -328,29 +338,42 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
     return () => cancelAnimationFrame(frame);
   }, [textDraft]);
 
-  const loadFontFile = async (file: File) => {
-    const family = file.name.replace(/\\.(ttf|otf)$/i, "").trim() || "Fuente cargada";
+  const loadFontFile = async (file: File, familyOverride?: string) => {
+    const family = familyOverride?.trim() || fontFamilyFromFileName(file.name);
     try {
-      const face = new FontFace(family, await file.arrayBuffer());
+      const bytes = await file.arrayBuffer();
+      const face = new FontFace(family, bytes);
       await face.load();
       globalThis.document.fonts.add(face);
       setAvailableFonts((current) => current.includes(family) ? current : [...current, family]);
       setTextFontFamily(family);
-    } catch { /* The browser rejects invalid or unsupported font files. */ }
+      setFontSources((current) => ({ ...current, [family]: bytes }));
+      setFontLoadError(undefined);
+    } catch { setFontLoadError("No se pudo cargar la fuente. Seleccione un archivo TTF, OTF, WOFF o WOFF2 válido."); }
   };
 
-  const commitTextDraft = () => {
-    const draft = textDraft;
-    if (!draft?.value.trim()) { setTextDraft(undefined); return; }
+  const commitTextDraft = (expectedDraft = textDraftRef.current) => {
+    const draft = textDraftRef.current;
+    if (!draft || draft !== expectedDraft) return;
+    // Clear the ref synchronously. Blur can run after the canvas pointer-down
+    // handler and must not commit the same draft a second time.
+    textDraftRef.current = undefined;
+    if (!draft.value.trim()) { setTextDraft(undefined); return; }
     const current = editorRef.current;
-    const lines = draft.value.split("\\n");
+    const source = draft.element;
+    const fontFamily = source?.fontFamily ?? textFontFamily;
+    const fontWeight = source?.fontWeight ?? textFontWeight;
+    const fontStyle = source?.fontStyle ?? textFontStyle;
+    const fontSize = source?.fontSize ?? draft.fontSize ?? 24;
     const text: TextElement = {
       type: "text", id: draft.elementId ?? id(), layerId: layerId(current.document.layers[0]?.id ?? "layer-1"),
-      position: draft.position, size: { width: 120, height: Math.max(20, lines.length * 16) }, text: draft.value,
-      fontFamily: textFontFamily, fontSize: 12, fontWeight: "normal", fontStyle: "normal", textAlign: "left", lineHeight: 1.2, rotation: 0,
-      style: { stroke: "#000000", fill: "#000000", strokeWidth: 0.1 },
+      position: draft.position, size: textSizeFor(draft.value, fontSize, fontFamily, fontWeight, fontStyle, source?.lineHeight ?? 1.2), text: draft.value,
+       fontFamily, fontSize, fontWeight, fontStyle, textAlign: source?.textAlign ?? "left", lineHeight: source?.lineHeight ?? 1.2, rotation: source?.rotation ?? 0,
+       style: { stroke: "#000000", fill: "#000000", strokeWidth: 0.1 },
     };
-    const next = draft.elementId ? dispatch(current, updateElement(draft.elementId, { text: text.text, fontFamily: text.fontFamily })) : dispatch(current, createElement(text));
+    // Inline editing changes only the text content and its measured bounds. The
+    // existing element keeps its position and all typography/style properties.
+    const next = draft.elementId ? dispatch(current, updateElement(draft.elementId, { text: text.text, size: text.size })) : dispatch(current, createElement(text));
     setEditorState(select(next, [text.id]));
     setTextDraft(undefined);
     setTool("select");
@@ -470,8 +493,41 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
     interaction.current = { pointerId: event.pointerId, lastX: event.clientX, lastY: event.clientY, kind: "rotate", ids: selection, ...(selectedElement ? { element: selectedElement } : {}), center, start, dragged: false };
   };
 
+  const convertSelectedText = () => {
+    if (selectedElement?.type !== "text") return;
+    try {
+      const outlines = extractTextGlyphOutlines(selectedElement, (family) => fontSources[family]);
+      const next = dispatch(editorRef.current, convertTextToGlyphs(selectedElement.id, outlines));
+      if (next === editorRef.current) return;
+      setEditorState(next);
+    } catch (error) {
+      persist.set("failed", error instanceof FontOutlineError ? error.message : "No se pudo convertir el texto a curvas");
+    }
+  };
+
+  const beginTextEdit = (element: TextElement) => {
+    setEditorState(select(editorRef.current, [element.id]));
+    setTextFontFamily(element.fontFamily);
+    setTextFontWeight(element.fontWeight);
+    setTextFontStyle(element.fontStyle);
+    setTextDraft({ position: element.position, value: element.text, elementId: element.id, fontSize: element.fontSize, element });
+  };
+
   const onCanvasPointerDown = (event: PointerEvent<HTMLDivElement>) => {
-    if (interaction.current) return;
+     // Commit before handling the next canvas target. This makes pointer-down
+     // the authoritative boundary for a draft instead of relying on blur order.
+     const hadTextDraft = Boolean(textDraftRef.current);
+     commitTextDraft();
+     if (hadTextDraft) {
+       if (tool !== "text") return;
+       const point = pointAt(event);
+       const hit = pickElement(editorRef.current.document, point, zoom);
+       const existing = hit ? editorRef.current.document.elements.find((element): element is TextElement => element.id === hit && element.type === "text") : undefined;
+       if (!existing) return;
+       beginTextEdit(existing);
+       return;
+     }
+     if (interaction.current) return;
      setCenterHover(undefined);
      setCursorPoint(canvasPointAt(event));
      setSnapGuide(undefined);
@@ -485,12 +541,18 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
       return;
     }
     const point = pointAt(event);
-    if (tool === "text") {
-      const hit = pickElement(editorRef.current.document, point, zoom);
-      const existing = hit ? editorRef.current.document.elements.find((element): element is TextElement => element.id === hit && element.type === "text") : undefined;
-      if (existing) setEditorState(select(editorRef.current, [existing.id]));
-      setTextDraft({ position: existing?.position ?? point, value: existing?.text ?? "", ...(existing ? { elementId: existing.id } : {}) });
+    const pickedElement = pickElement(editorRef.current.document, point, zoom);
+    const picked = pickedElement ? editorRef.current.document.elements.find((element) => element.id === pickedElement) : undefined;
+    if (tool === "forma" && picked?.type === "text") {
+      setEditorState(clearSelection(editorRef.current));
       return;
+    }
+     if (tool === "text") {
+       const hit = pickElement(editorRef.current.document, point, zoom);
+       const existing = hit ? editorRef.current.document.elements.find((element): element is TextElement => element.id === hit && element.type === "text") : undefined;
+       if (existing) beginTextEdit(existing);
+       else setTextDraft({ position: point, value: "" });
+       return;
     }
     if (tool === "spline") { addSplinePoint(point); return; }
     if (tool === "pen") {
@@ -584,12 +646,12 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
       }
       return;
     }
+    if ((event.target as HTMLElement).closest("textarea")) return;
     const hit = pickElement(editorRef.current.document, point, zoom);
     const hitElement = hit ? editorRef.current.document.elements.find((element) => element.id === hit) : undefined;
-    if (hitElement?.type === "text") {
-      setEditorState(select(editorRef.current, [hitElement.id]));
-      setTextDraft({ position: hitElement.position, value: hitElement.text, elementId: hitElement.id });
-      return;
+      if (hitElement?.type === "text") {
+       beginTextEdit(hitElement);
+       return;
     }
     if (canActivateRotation(tool, editorRef.current.selection, hit) && hitElement && isRotatableElement(hitElement)) {
       event.preventDefault();
@@ -665,7 +727,7 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
       const point = pointAt(event);
       const command = pathNode.kind === "anchor"
         ? movePathNode(active.pathNode.elementId, pathNode.nodeId, point)
-        : movePathHandle(active.pathNode.elementId, pathNode.segmentIndex ?? -1, pathNode.handle ?? "control1", point);
+         : movePathHandle(active.pathNode.elementId, pathNode.segmentIndex ?? -1, pathNode.handle ?? "control1", point, pathNode.ringIndex);
       active.dragged = true;
       setEditorState(previewGestureFromBase(editorRef.current, command));
       return;
@@ -812,10 +874,11 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
     return () => removeEventListener("keydown", onKey);
     }, [activeSplineId, selectionKey, selectedFormaNodeKeys, tool, selectedElements]);
 
-     const formaNodes: readonly FormaNodeOverlay[] = (tool === "forma" || tool === "pen") ? selectedElements.filter((element) => element.type !== "spline").flatMap((element): readonly FormaNodeOverlay[] => element.type === "contour"
+     const formaNodes: readonly FormaNodeOverlay[] = (tool === "forma" || tool === "pen") ? selectedElements.filter((element) => element.type !== "spline" && element.type !== "text").flatMap((element): readonly FormaNodeOverlay[] => element.type === "contour"
       ? contourVertexNodes(element).map((node) => ({ kind: "contour" as const, key: `${node.elementId}:c:${node.ringIndex}:${node.pointIndex}`, elementId: node.elementId, point: node.point, contour: node }))
-        : element.type === "path" ? pathGeometryNodes(element).map((node, nodeIndex) => ({ kind: "path" as const, key: `${element.id}:p:${nodeIndex}`, elementId: element.id, point: node.point, nodeIndex, pathNode: { elementId: element.id, node } }))
-        : realGeometryNodes(element).map((node, nodeIndex) => ({ kind: "path" as const, key: `${element.id}:p:${nodeIndex}`, elementId: element.id, point: node.point, nodeIndex }))) : [];
+       : element.type === "path" ? pathGeometryNodes(element).map((node, nodeIndex) => ({ kind: "path" as const, key: `${element.id}:p:${nodeIndex}`, elementId: element.id, point: node.point, nodeIndex, pathNode: { elementId: element.id, node } }))
+         : element.type === "glyph" ? glyphGeometryNodes(element).map((node, nodeIndex) => ({ kind: "path" as const, key: `${element.id}:p:${nodeIndex}`, elementId: element.id, point: node.point, nodeIndex, pathNode: { elementId: element.id, node } }))
+         : realGeometryNodes(element).map((node, nodeIndex) => ({ kind: "path" as const, key: `${element.id}:p:${nodeIndex}`, elementId: element.id, point: node.point, nodeIndex }))) : [];
       const selectedPathAnchor = selectedElement?.type === "path"
        ? (() => { const selectedPathOverlay = formaNodes.find((node): node is Extract<FormaNodeOverlay, { readonly kind: "path" }> => node.kind === "path" && "pathNode" in node && node.pathNode?.node.kind === "anchor" && selectedFormaNodeKeys.includes(node.key)); const anchor = selectedPathOverlay?.pathNode?.node; return anchor?.kind === "anchor" ? selectedElement.nodes.find((node) => node.id === anchor.nodeId) : undefined; })()
         : undefined;
@@ -893,7 +956,7 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
   const rulerVertical = <div className="ruler-vertical" data-ruler-vertical="true" aria-hidden="true">
     {rulerYValues.map((value) => <span className="ruler-tick ruler-tick-vertical" key={`ruler-y-${value}`} style={{ top: (value - panMm.y) * zoom }}><i /><b>{value}</b></span>)}
   </div>;
-       const selectedEditOverlay = tool === "forma" ? selectedElements.filter((element) => element.type !== "spline" && element.type !== "line").map((element) => {
+       const selectedEditOverlay = tool === "forma" ? selectedElements.filter((element) => element.type !== "spline" && element.type !== "line" && element.type !== "text").map((element) => {
          if (element.type === "rectangle") return <rect key={`edit-${element.id}`} x={element.position.x} y={element.position.y} width={element.size.width} height={element.size.height} rx={element.cornerRadius} fill="none" stroke="#1683ff" strokeWidth={1 / zoom} transform={`rotate(${element.rotation * 180 / Math.PI} ${element.position.x + element.size.width / 2} ${element.position.y + element.size.height / 2})`} pointerEvents="none" />;
          if (element.type === "ellipse") return <ellipse key={`edit-${element.id}`} cx={element.position.x + element.size.width / 2} cy={element.position.y + element.size.height / 2} rx={element.size.width / 2} ry={element.size.height / 2} fill="none" stroke="#1683ff" strokeWidth={1 / zoom} transform={`rotate(${element.rotation * 180 / Math.PI} ${element.position.x + element.size.width / 2} ${element.position.y + element.size.height / 2})`} pointerEvents="none" />;
          if (element.type === "contour") return <path key={`edit-${element.id}`} d={element.contours.map((contour) => `${contour.points.map((point, pointIndex) => `${pointIndex === 0 ? "M" : "L"} ${point.x} ${point.y}`).join(" ")} Z`).join(" ")} fill="none" stroke="#1683ff" strokeWidth={1 / zoom} pointerEvents="none" />;
@@ -1124,18 +1187,25 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
     </header>
     {mode === "prepare" ? <section className="prepare"><div><div className="prepare-icon">◇</div><h1>Preparar aún no está disponible</h1><p>Nodra ofrece actualmente solo un espacio de trabajo de Diseño sin conexión. No hay hardware conectado, controlado ni listo.</p><button onClick={() => setMode("design")}>Volver a Diseño</button></div></section> : <div className="workspace">
       <section className="properties-bar" aria-label="Barra de propiedades">
-        <div className="page-selector"><label>Fuente de texto<select aria-label="Tipografía del texto" value={textFontFamily} onChange={(event) => { const family = event.target.value; setTextFontFamily(family); const selectedTextIds = selectedElements.filter((element): element is TextElement => element.type === "text").map((element) => element.id); const next = selectedTextIds.reduce((state, selectedId) => dispatch(state, updateElement(selectedId, { fontFamily: family })), editorRef.current); if (selectedTextIds.length) setEditorState(next); }}>{availableFonts.map((font) => <option key={font} style={{ fontFamily: font }}>{font}</option>)}</select><label className="font-upload-button">+ Fuente<input type="file" accept=".ttf,.otf,font/ttf,font/otf" onChange={(event) => { const file = event.target.files?.[0]; if (file) void loadFontFile(file); event.currentTarget.value = ""; }} /></label></label><label>Página<select aria-label="Página activa" value={project.activePageId} onChange={(event) => switchPage(event.target.value)}>{project.pages.map((page, index) => <option key={page.id} value={page.id}>{index + 1} · {page.page.width} × {page.page.height} mm</option>)}</select></label><button type="button" onClick={createPageAndSelect}>+ Nueva página</button></div>
+         <div className="page-selector"><label>Fuente de texto<select aria-label="Tipografía del texto" value={textFontFamily} onChange={(event) => { const family = event.target.value; setTextFontFamily(family); const selectedTextIds = selectedElements.filter((element): element is TextElement => element.type === "text").map((element) => element.id); const next = selectedTextIds.reduce((state, selectedId) => dispatch(state, updateElement(selectedId, { fontFamily: family })), editorRef.current); if (selectedTextIds.length) setEditorState(next); }}>{availableFonts.map((font) => <option key={font} style={{ fontFamily: font }}>{font}</option>)}</select><label className="font-upload-button">+ Fuente<input type="file" accept=".ttf,.otf,.woff,.woff2,font/ttf,font/otf,font/woff,font/woff2" onChange={(event) => { const file = event.target.files?.[0]; if (file) void loadFontFile(file); event.currentTarget.value = ""; }} /></label></label><label>Página<select aria-label="Página activa" value={project.activePageId} onChange={(event) => switchPage(event.target.value)}>{project.pages.map((page, index) => <option key={page.id} value={page.id}>{index + 1} · {page.page.width} × {page.page.height} mm</option>)}</select></label><button type="button" onClick={createPageAndSelect}>+ Nueva página</button></div>
            {selectedElements.length > 0 ? <div className="property-fields">
                 {objectPropertySections()}{mirrorButton("horizontal")}{mirrorButton("vertical")}{shapeOperations()}
          </div> : <p className="muted">Seleccione un objeto para editar sus propiedades.</p>}
       </section>
-        <aside className="workspace-tools"><div className="tool-column" role="toolbar" aria-label="Herramientas de diseño">{(["select", "forma", "pen", "spline", "text", "rectangle", "ellipse", "line", "pan"] as const).map((item) => <ToolButton key={item} label={toolCursorLabels[item]} icon={item} active={tool === item} onClick={() => { setTransformMode("resize"); setPenDraftPoint(undefined); setTool(item); }} />)}</div></aside>
+        <aside className="workspace-tools"><div className="tool-column" role="toolbar" aria-label="Herramientas de diseño">{(["select", "forma", "pen", "spline", "text", "rectangle", "ellipse", "line", "pan"] as const).map((item) => <ToolButton key={item} label={toolCursorLabels[item]} icon={item} active={tool === item} onClick={() => { setTransformMode("resize"); setPenDraftPoint(undefined); if (item === "forma" && selectedElements.some((element) => element.type === "text")) setEditorState(clearSelection(editorRef.current)); setTool(item); }} />)}</div></aside>
       <section className="canvas-area">
         <header className="canvas-header"><span>DISEÑO / SIN TÍTULO</span><span>{document.elements.length} objetos · {document.page.width} × {document.page.height} mm</span><div className="zoom-controls"><button aria-label="Alejar" onClick={() => setZoom(zoom - 0.5)}>−</button><span className="zoom-label">{Math.round(zoom * 100 / 3)}%</span><button aria-label="Acercar" onClick={() => setZoom(zoom + 0.5)}>+</button></div></header>
             <div ref={canvas} className={`${grid ? "canvas" : "canvas no-grid"}${isDrawingTool(tool) ? " drawing-tool" : ""}${closeTargetActive ? " close-target-active" : ""}`} onPointerDown={onCanvasPointerDown} onPointerMove={onCanvasPointerMove} onPointerUp={(event) => finishPointer(event, false)} onPointerCancel={(event) => finishPointer(event, true)} onLostPointerCapture={cancelPointerInteraction} onPointerLeave={() => setCursorPoint(undefined)} onDoubleClick={onCanvasDoubleClick} onWheel={onWheel}>
            {rulerHorizontal}{rulerVertical}<span className="ruler-corner" aria-hidden="true" />
            <div className="page" style={pageStyle}>{/* SAFETY: renderSvg emits allowlisted SVG from validated document data. */}<div className={`page-svg${textDraft ? " editing-text" : ""}`} dangerouslySetInnerHTML={{ __html: rendered.success ? rendered.svg : "" }} />{(alignmentGuideOverlay.length > 0 || splineOverlay.length > 0 || selectedEditOverlay.length > 0 || pathGuideOverlay.length > 0) && <svg data-spline-overlay-layer="true" viewBox={`0 0 ${document.page.width} ${document.page.height}`} style={{ position: "absolute", inset: 0, width: "100%", height: "100%", pointerEvents: "none", overflow: "visible", zIndex: 5 }}>{alignmentGuideOverlay}{selectedEditOverlay}{pathGuideOverlay}{splineOverlay}</svg>}</div>
-            {textDraft && <textarea ref={textInput} autoFocus value={textDraft.value} onPointerDown={(event) => event.stopPropagation()} aria-label="Texto editable" rows={Math.max(1, textDraft.value.split("\n").length)} onChange={(event) => setTextDraft((current) => current ? { ...current, value: event.target.value } : current)} onKeyDown={(event) => { if (event.key === "Escape") { event.preventDefault(); setTextDraft(undefined); } else if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); commitTextDraft(); } }} onBlur={() => { window.setTimeout(() => { if (globalThis.document.activeElement !== textInput.current) commitTextDraft(); }, 0); }} placeholder="Escriba aquí…" style={{ caretColor: "#111827", position: "absolute", left: pagePointToCanvas(textDraft.position, zoom, panMm).x, top: pagePointToCanvas(textDraft.position, zoom, panMm).y - 20, zIndex: 8, width: `${Math.max(70, Math.max(...textDraft.value.split("\n").map((line) => line.length), 1) * 12)}px`, height: `${Math.max(30, textDraft.value.split("\n").length * 29)}px`, padding: 0, fontFamily: textFontFamily, fontSize: `${24 * zoom}px`, lineHeight: 1.2, color: "#111827", background: "transparent", border: "none", outline: "none", resize: "none", overflow: "hidden" }} />}
+              {textDraft && (() => {
+                const existing = textDraft.element;
+                const lines = textDraft.value.split("\n");
+                const inputWidth = existing ? existing.size.width * zoom : Math.max(70, Math.max(...lines.map((line) => line.length), 1) * ((textDraft.fontSize ?? 24) * 0.98));
+                const inputHeight = existing ? existing.size.height * zoom : Math.max(30, lines.length * (textDraft.fontSize ?? 24) * 1.2);
+                const inputFontSize = (existing?.fontSize ?? textDraft.fontSize ?? 24) * zoom;
+                return <textarea ref={textInput} autoFocus value={textDraft.value} onPointerDown={(event) => event.stopPropagation()} onDoubleClick={(event) => { event.preventDefault(); event.stopPropagation(); }} aria-label="Texto editable" rows={Math.max(1, lines.length)} wrap={existing ? "off" : undefined} onChange={(event) => setTextDraft((current) => current ? { ...current, value: event.target.value } : current)} onKeyDown={(event) => { if (event.key === "Escape") { event.preventDefault(); textDraftRef.current = undefined; setTextDraft(undefined); } else if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); commitTextDraft(); } }} onBlur={() => { const blurredDraft = textDraftRef.current; window.setTimeout(() => { if (globalThis.document.activeElement !== textInput.current) commitTextDraft(blurredDraft); }, 0); }} placeholder="Escriba aquí…" style={{ caretColor: "#111827", position: "absolute", left: pagePointToCanvas(textDraft.position, zoom, panMm).x, top: pagePointToCanvas(textDraft.position, zoom, panMm).y, zIndex: 8, width: `${inputWidth}px`, height: `${inputHeight}px`, padding: 0, fontFamily: existing?.fontFamily ?? textFontFamily, fontSize: `${inputFontSize}px`, fontWeight: existing?.fontWeight ?? textFontWeight, fontStyle: existing?.fontStyle ?? textFontStyle, textAlign: existing?.textAlign ?? "left", lineHeight: existing?.lineHeight ?? 1.2, color: "#111827", background: "transparent", border: "none", outline: "none", resize: "none", overflow: "hidden", transform: existing ? `rotate(${existing.rotation}rad) scale(${existing.scaleX ?? 1}, ${existing.scaleY ?? 1})` : undefined, transformOrigin: existing ? "top left" : undefined }} />;
+              })()}
             {formaNodes.length > 0 && <div className="contour-node-overlay" role="group" aria-label={tool === "pen" ? "Nodos y controles del trazado" : "Nodos de forma"}>{formaNodes.map((node) => { const screen = pagePointToCanvas(node.point, zoom, panMm); const selected = selectedFormaNodeKeys.includes(node.key); const pathNode = node.kind === "path" ? node.pathNode : undefined; return <button key={node.key} type="button" className={`contour-node${(tool === "forma" || tool === "pen") && !(node.kind === "path" && pathNode?.node.kind === "control") ? " editing-node" : ""}${selected ? " active selected" : ""}`} data-contour-node={node.key} aria-label={node.kind === "contour" ? `Nodo del contorno, anillo ${node.contour.ringIndex + 1}, punto ${node.contour.pointIndex + 1}` : pathNode?.node.kind === "control" ? `Control Bézier ${pathNode.node.handle === "control1" ? "saliente" : "entrante"}` : `Nodo editable ${node.nodeIndex + 1}`} style={{ left: screen.x, top: screen.y }} onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); setSelectedFormaNodeKeys((current) => event.shiftKey ? current.includes(node.key) ? current.filter((value) => value !== node.key) : [...current, node.key] : [node.key]); if (tool === "pen" && pathNode?.node.kind === "anchor") { const currentPath = editorRef.current.document.elements.find((element) => element.id === node.elementId && element.type === "path"); if (currentPath?.type === "path" && !currentPath.closed && currentPath.nodes[0]?.id === pathNode.node.nodeId) { setPenDraftPoint(undefined); setEditorState(dispatch(select(editorRef.current, [node.elementId]), closePath(node.elementId))); return; } } canvas.current?.setPointerCapture(event.pointerId); if (pathNode) { setEditorState(beginGesture(select(editorRef.current, [node.elementId]))); interaction.current = { pointerId: event.pointerId, lastX: event.clientX, lastY: event.clientY, kind: "path-node", pathNode, startClient: { x: event.clientX, y: event.clientY }, dragged: false }; } else { setEditorState(beginGesture(editorRef.current)); interaction.current = { pointerId: event.pointerId, lastX: event.clientX, lastY: event.clientY, kind: "contour-node", ...(node.kind === "contour" ? { contourNode: node.contour } : {}), formaNode: node.kind === "contour" ? { elementId: node.contour.elementId, contourNode: node.contour, point: node.point } : { elementId: node.elementId, nodeIndex: node.nodeIndex, point: node.point }, startClient: { x: event.clientX, y: event.clientY }, dragged: false }; } }} />; })}</div>}
           {centerHoverStyle && <div className="selection-center-feedback" style={centerHoverStyle} aria-hidden="true"><span className="selection-center-mark">×</span><span className="selection-center-label">centro</span></div>}
             {tool === "select" && transformMode === "resize" && (handlePoints || groupPoints) && <div className="resize-handles">{handleNames.map((handle) => <button key={handle} type="button" className={`resize-handle resize-handle-${handle}`} data-resize-handle={handle} aria-label={`Redimensionar ${handle}`} style={handleStyle(handle)} onPointerDown={(event) => resizePointerDown(event, handle)} onPointerUp={(event) => finishPointer(event, false)} onPointerCancel={(event) => finishPointer(event, true)} />)}{groupPoints && !isDrawingTool(tool) && <button type="button" className="resize-handle resize-handle-center" data-resize-handle="center" aria-label="Centro del grupo" style={handleStyle("center")} onPointerDown={(event) => event.stopPropagation()} />}</div>}
@@ -1154,12 +1224,12 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
          <div className="inspector-tab-content" role="tabpanel">
                 {inspectorTab === "properties" && <>{selectedElements.length === 0 ? <section className="inspector-card"><div className="panel-title">PÁGINA</div><div className="preset-row"><button onClick={() => setPage(1200, 900)}>Horizontal</button><button onClick={() => setPage(900, 1200)}>Vertical</button></div><div className="fields"><Field label="W" value={document.page.width} onChange={(value) => setPage(value, document.page.height)} /><Field label="H" value={document.page.height} onChange={(value) => setPage(document.page.width, value)} /></div><label className="grid-toggle"><input type="checkbox" checked={grid} onChange={(event) => setGrid(event.target.checked)} /> Mostrar cuadrícula del espacio de trabajo</label></section> : <section className="inspector-card inspector-object-card"><div className="panel-title">OBJETO</div>{propertyElement ? <div className="inspector-object-properties">{objectPropertySections(true)}</div> : <><div className="selected-type">{selectedElement?.type === "contour" ? "CONTORNO" : selectedElement?.type === "path" ? "TRAZADO" : selectedElement?.type === "spline" ? "SPLINE" : "LÍNEA"}</div><p className="muted">{selectedElement?.type === "contour" ? "Los contornos conservan su geometría real; las dimensiones no están disponibles." : selectedElement?.type === "path" ? "Los trazados conservan sus nodos y segmentos." : selectedElement?.type === "spline" ? "Las splines conservan sus nodos y handles relativos." : "Las líneas no tienen dimensiones rectangulares."}</p>{selectedElement && isRotatableElement(selectedElement) && rotationField(selectedElement)}</>}</section>}{pathClosureControls}{splineClosureControls}{pathJoinControls}{pathSegmentControls}</>}
               {inspectorTab === "transform" && transformControls()}
-           {inspectorTab === "text" && <section className="inspector-card"><div className="panel-title">TEXTO</div>{selectedElement?.type === "text" ? <div className="text-properties"><label className="field"><span>Tamaño (mm)</span><input type="number" min="1" value={selectedElement.fontSize} onChange={(event) => { const value = Number(event.target.value); if (Number.isFinite(value) && value > 0) setEditorState(dispatch(editorRef.current, updateElement(selectedElement.id, { fontSize: value }))); }} /></label><label className="field"><span>Tipografía</span><select value={selectedElement.fontFamily} onChange={(event) => setEditorState(dispatch(editorRef.current, updateElement(selectedElement.id, { fontFamily: event.target.value })))}>{availableFonts.map((font) => <option key={font} style={{ fontFamily: font }}>{font}</option>)}</select></label><div className="text-style-buttons"><button type="button" aria-pressed={selectedElement.fontWeight === "bold"} onClick={() => setEditorState(dispatch(editorRef.current, updateElement(selectedElement.id, { fontWeight: selectedElement.fontWeight === "bold" ? "normal" : "bold" })))}>Negrita</button><button type="button" aria-pressed={selectedElement.fontStyle === "italic"} onClick={() => setEditorState(dispatch(editorRef.current, updateElement(selectedElement.id, { fontStyle: selectedElement.fontStyle === "italic" ? "normal" : "italic" })))}>Cursiva</button></div></div> : <p className="muted">Seleccione un texto para editar sus propiedades.</p>}</section>}
+            {inspectorTab === "text" && <section className="inspector-card"><div className="panel-title">TEXTO</div>{selectedElement?.type === "text" ? <div className="text-properties"><label className="field"><span>Tamaño (mm)</span><input type="number" min="1" value={selectedElement.fontSize} onChange={(event) => { const value = Number(event.target.value); if (Number.isFinite(value) && value > 0) setEditorState(dispatch(editorRef.current, updateElement(selectedElement.id, { fontSize: value }))); }} /></label><label className="field"><span>Tipografía</span><select value={selectedElement.fontFamily} onChange={(event) => setEditorState(dispatch(editorRef.current, updateElement(selectedElement.id, { fontFamily: event.target.value })))}>{availableFonts.map((font) => <option key={font} style={{ fontFamily: font }}>{font}</option>)}</select></label><label className="font-upload-button">Cargar fuente para esta familia<input type="file" accept=".ttf,.otf,.woff,.woff2,font/ttf,font/otf,font/woff,font/woff2" onChange={(event) => { const file = event.target.files?.[0]; if (file) void loadFontFile(file, selectedElement.fontFamily); event.currentTarget.value = ""; }} /></label><div className="text-style-buttons"><button type="button" aria-pressed={selectedElement.fontWeight === "bold"} onClick={() => setEditorState(dispatch(editorRef.current, updateElement(selectedElement.id, { fontWeight: selectedElement.fontWeight === "bold" ? "normal" : "bold" })))}>Negrita</button><button type="button" aria-pressed={selectedElement.fontStyle === "italic"} onClick={() => setEditorState(dispatch(editorRef.current, updateElement(selectedElement.id, { fontStyle: selectedElement.fontStyle === "italic" ? "normal" : "italic" })))}>Cursiva</button></div><p className="muted">La fuente cargada debe corresponder al peso y estilo seleccionados.</p><button type="button" aria-label="Convertir texto a curvas" title="Requiere una fuente cargada para esta familia" disabled={!fontSources[selectedElement.fontFamily]} onClick={convertSelectedText}>Convertir a curvas</button>{!fontSources[selectedElement.fontFamily] && <p className="muted">Cargue una fuente TTF, OTF, WOFF o WOFF2 para habilitar la conversión.</p>}{fontLoadError && <p className="muted">{fontLoadError}</p>}</div> : <p className="muted">Seleccione un texto para editar sus propiedades.</p>}</section>}
          </div>
          <section className="inspector-lower-card"><div className="panel-title">CAPAS</div>{document.layers.map((layer) => <div className="layer" key={layer.id}><span>{layer.name}</span><span>{layer.visible ? "Visible" : "Oculta"}</span></div>)}</section>
          <section className="inspector-lower-card"><div className="panel-title">OBJETOS</div><p className="muted">Estructura de objetos próximamente.</p></section>
          <section className="inspector-lower-card"><div className="panel-title">SÍMBOLOS</div><p className="muted">No hay símbolos configurados.</p></section>
-         <section className="inspector-lower-card"><div className="panel-title">VALIDACIÓN DEL DISEÑO</div><p className="muted">La validación del diseño estará disponible próximamente.</p></section>
+         <section className="inspector-lower-card design-validation-card"><div className="panel-title">VALIDACIÓN DEL DISEÑO</div><div className={designValidation.ready ? "validation-status ok" : "validation-status warning"}><span aria-hidden="true">{designValidation.ready ? "●" : "▲"}</span><span>{designValidation.ready ? "Todo listo para procesar" : "Revisar antes de procesar"}</span></div><div className={`validation-check ${designValidation.openCurveCount ? "warning" : "ok"}`}><span aria-hidden="true">{designValidation.openCurveCount ? "▲" : "●"}</span><span>{designValidation.openCurveCount ? `${designValidation.openCurveCount} ${designValidation.openCurveCount === 1 ? "curva abierta" : "curvas abiertas"}` : "No hay curvas abiertas"}</span></div><div className={`validation-check ${designValidation.duplicateLineCount ? "warning" : "ok"}`}><span aria-hidden="true">{designValidation.duplicateLineCount ? "▲" : "●"}</span><span>{designValidation.duplicateLineCount ? `${designValidation.duplicateLineCount} ${designValidation.duplicateLineCount === 1 ? "línea duplicada" : "líneas duplicadas"}` : "No hay líneas duplicadas"}</span></div><div className={`validation-check ${designValidation.outsideElementCount ? "warning" : "ok"}`}><span aria-hidden="true">{designValidation.outsideElementCount ? "▲" : "●"}</span><span>{designValidation.outsideElementCount ? `${designValidation.outsideElementCount} objetos fuera del área` : "Todos los objetos dentro del área"}</span></div></section>
        </aside>
     </div>}
      <footer className="statusbar"><div className="status-message"><span className={`status-dot ${persist.state === "saving" ? "saving" : ""}`} />{persist.message}</div>{paletteControls()}</footer>
@@ -1173,7 +1243,7 @@ function ToolIcon({ icon }: { icon: Tool }) {
 }
 function ToolButton({ label, icon, active, onClick }: { label: string; icon: Tool; active: boolean; onClick: () => void }) {
   const description = `${label} — ${toolDescriptions[label]}`;
-  return <button className={active ? "tool active" : "tool"} aria-label={label} aria-pressed={active} title={description} aria-description={description} onClick={onClick}><ToolIcon icon={icon} /><small>{label}</small><span className="tool-description" role="tooltip">{description}</span></button>;
+  return <button className={active ? "tool active" : "tool"} aria-label={label} aria-pressed={active} aria-description={description} onClick={onClick}><ToolIcon icon={icon} /><small>{label}</small><span className="tool-description" role="tooltip">{description}</span></button>;
 }
 function Field({ label, value, onChange }: { label: string; value: number; onChange: (value: number) => void }) {
   return <label className="field"><span>{label}</span><input type="number" min="1" step="0.1" value={value} onChange={(event) => onChange(Number(event.target.value))} /></label>;

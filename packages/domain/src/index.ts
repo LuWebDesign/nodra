@@ -125,8 +125,12 @@ export type SplineContinuity = PathJoin;
 export interface HandleOffset { readonly dx: number; readonly dy: number }
 export interface SplineNode { readonly id: string; readonly anchor: PointMm; readonly continuity: SplineContinuity; readonly inHandle?: HandleOffset; readonly outHandle?: HandleOffset }
 export interface SplineElement { readonly type: "spline"; readonly id: ElementId; readonly layerId: LayerId; readonly nodes: readonly SplineNode[]; readonly closed: boolean; readonly style: VisualStyle; readonly operation?: OperationMetadata }
-export interface TextElement { readonly type: "text"; readonly id: ElementId; readonly layerId: LayerId; readonly position: PointMm; readonly size: SizeMm; readonly text: string; readonly fontFamily: string; readonly fontSize: number; readonly fontWeight: "normal" | "bold"; readonly fontStyle: "normal" | "italic"; readonly textAlign: "left" | "center" | "right"; readonly lineHeight: number; readonly rotation: number; readonly style: VisualStyle; readonly operation?: OperationMetadata }
-export type Element = RectangleElement | EllipseElement | LineElement | ContourElement | PathElement | SplineElement | TextElement;
+export interface TextElement { readonly type: "text"; readonly id: ElementId; readonly layerId: LayerId; readonly position: PointMm; readonly size: SizeMm; readonly text: string; readonly fontFamily: string; readonly fontSize: number; readonly fontWeight: "normal" | "bold"; readonly fontStyle: "normal" | "italic"; readonly textAlign: "left" | "center" | "right"; readonly lineHeight: number; readonly scaleX?: number; readonly scaleY?: number; readonly rotation: number; readonly style: VisualStyle; readonly operation?: OperationMetadata }
+/** A single closed outline compound. Coordinates are document-space millimetres. */
+export interface GlyphContour { readonly nodes: readonly PathNode[]; readonly segments: readonly PathSegment[] }
+/** Editable outline for one laid-out font glyph; multiple contours preserve holes. */
+export interface GlyphElement { readonly type: "glyph"; readonly id: ElementId; readonly layerId: LayerId; readonly position: PointMm; readonly size: SizeMm; readonly glyph: string; readonly contours: readonly GlyphContour[]; readonly fillRule: "evenodd"; readonly rotation: number; readonly flipX?: boolean; readonly flipY?: boolean; readonly style: VisualStyle; readonly operation?: OperationMetadata }
+export type Element = RectangleElement | EllipseElement | LineElement | ContourElement | PathElement | SplineElement | TextElement | GlyphElement;
 export interface DocumentCapabilities { readonly spline?: 1 }
 export interface DocumentSnapshot {
   readonly schemaVersion: SchemaVersion;
