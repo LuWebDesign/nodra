@@ -112,6 +112,8 @@ export function App() {
   const [textFontFamily, setTextFontFamily] = useState("Arial");
   const [availableFonts, setAvailableFonts] = useState(["Arial", "Helvetica", "Times New Roman", "Courier New", "Inter"]);
   const [textDraft, setTextDraft] = useState<{ readonly position: PointMm; readonly value: string; readonly elementId?: ElementId; readonly fontSize?: number }>();
+  const textDraftRef = useRef(textDraft);
+  textDraftRef.current = textDraft;
   const textInput = useRef<HTMLTextAreaElement>(null);
   const repository = useMemo(() => new DexieProjectRepository(), []);
   const autosave = useMemo(() => new DebouncedAutosave(repository), [repository]);
@@ -341,7 +343,7 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
   };
 
   const commitTextDraft = () => {
-    const draft = textDraft;
+    const draft = textDraftRef.current;
     if (!draft?.value.trim()) { setTextDraft(undefined); return; }
     const current = editorRef.current;
     const text: TextElement = {
