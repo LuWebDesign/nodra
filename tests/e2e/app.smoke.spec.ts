@@ -351,6 +351,15 @@ test("renders created geometry as SVG", async ({ page }) => {
   await expect(page.locator(".page-svg svg rect")).toHaveCount(1);
 });
 
+test("shows millimetre coordinate rulers around the workspace", async ({ page }) => {
+  await page.goto("/");
+
+  await expect(page.locator("[data-ruler-horizontal]")).toBeVisible();
+  await expect(page.locator("[data-ruler-vertical]")).toBeVisible();
+  await expect(page.locator("[data-ruler-horizontal] .ruler-tick").first()).toBeVisible();
+  await expect(page.locator("[data-ruler-vertical] .ruler-tick").first()).toBeVisible();
+});
+
 test("exposes real contour vertices in Forma and edits one vertex", async ({ page }) => {
   await page.goto("/");
   await drawRectangle(page);
@@ -363,11 +372,20 @@ test("exposes real contour vertices in Forma and edits one vertex", async ({ pag
   await page.mouse.up();
 
   await page.getByRole("button", { name: "Seleccion" }).click();
-  await page.mouse.click(first!.x + 4, first!.y + 4);
+  const rectangles = page.locator(".page-svg svg rect");
+  await expect(rectangles).toHaveCount(2);
+  const firstRectangle = await rectangles.nth(0).boundingBox();
+  const secondRectangle = await rectangles.nth(1).boundingBox();
+  expect(firstRectangle).not.toBeNull();
+  expect(secondRectangle).not.toBeNull();
+  await page.mouse.click(firstRectangle!.x + firstRectangle!.width / 2, firstRectangle!.y + firstRectangle!.height / 2);
   await page.keyboard.down("Shift");
-  await page.mouse.click(first!.x + first!.width / 2 + 40, first!.y + first!.height / 2 + 40);
+  await page.mouse.click(secondRectangle!.x + secondRectangle!.width / 2, secondRectangle!.y + secondRectangle!.height / 2);
   await page.keyboard.up("Shift");
-  await page.getByRole("button", { name: "Soldar" }).click();
+  const weld = page.getByRole("button", { name: "Soldar" });
+  await expect(weld).toBeVisible();
+  await expect(weld).toBeEnabled();
+  await weld.click();
   await page.getByRole("button", { name: "Forma" }).click();
   const nodes = page.locator(".contour-node");
   await expect(nodes.first()).toBeVisible();
