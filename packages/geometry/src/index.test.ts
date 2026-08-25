@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { boundsOf, boundsOfElements, boundsOutsidePage, closedElementToPolygon, cubicBezierBounds, cubicBezierDerivative, degreesToRadians, elementCenter, elementSegmentAt, elementToContour, evaluateCubicBezier, ELLIPSE_APPROXIMATION_SEGMENTS, groupCenter, groupHandlePoints, hitTest, mmToScreen, radiansToDegrees, realGeometryNodes, resizeGroup, resizeHandle, rotatedLineEndpoints, rotateElements, rotationFromDrag, rotationHandlePoints, screenToMm, shapeResultContours, splitCubicBezier, validateSize } from "./index.js";
+import { boundsOf, boundsOfElements, boundsOutsidePage, closedElementToPolygon, cubicBezierBounds, cubicBezierDerivative, degreesToRadians, elementCenter, elementSegmentAt, elementToContour, evaluateCubicBezier, ELLIPSE_APPROXIMATION_SEGMENTS, groupCenter, groupHandlePoints, hitTest, mmToScreen, radiansToDegrees, realGeometryNodes, resizeGroup, resizeHandle, rotatedLineEndpoints, rotateElements, rotationFromDrag, rotationHandlePoints, screenToMm, shapeResultContours, splitCubicBezier, validateDesign, validateSize } from "./index.js";
 import { elementId, layerId } from "@nodra/domain";
 
 const style = { stroke: "#000", strokeWidth: 0.2 };
@@ -235,5 +235,12 @@ describe("canonical millimetre geometry", () => {
       expect(rotated.nodes[0]?.outHandle?.dx).toBeCloseTo(0);
       expect(rotated.nodes[0]?.outHandle?.dy).toBeCloseTo(2);
     }
+  });
+  it("reports open curves, duplicate lines, and objects outside the page", () => {
+    const line = { type: "line" as const, id: elementId("check-line"), layerId: layerId("l"), start: { x: 1, y: 1 }, end: { x: 5, y: 1 }, rotation: 0, style };
+    const duplicate = { ...line, id: elementId("check-duplicate") };
+    const spline = { type: "spline" as const, id: elementId("check-spline"), layerId: layerId("l"), nodes: [{ id: "a", anchor: { x: 2, y: 2 }, continuity: "corner" as const }, { id: "b", anchor: { x: 5, y: 2 }, continuity: "corner" as const }], closed: false, style };
+    const outside = { ...rectangle, id: elementId("check-outside"), position: { x: 95, y: 95 }, size: { width: 10, height: 10 } };
+    expect(validateDesign([line, duplicate, spline, outside], { width: 100, height: 100 })).toMatchObject({ openCurveCount: 1, duplicateLineCount: 1, outsideElementCount: 1, ready: false });
   });
 });

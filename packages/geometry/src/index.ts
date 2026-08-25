@@ -469,6 +469,30 @@ export function boundsOutsidePage(element: Element, page: SizeMm): boolean {
   const bounds = boundsOf(element);
   return bounds.x < 0 || bounds.y < 0 || bounds.x + bounds.width > page.width || bounds.y + bounds.height > page.height;
 }
+
+export interface DesignValidation {
+  readonly openCurveCount: number;
+  readonly duplicateLineCount: number;
+  readonly outsideElementCount: number;
+  readonly ready: boolean;
+}
+
+/** Returns non-destructive manufacturing/design checks for the current page. */
+export function validateDesign(elements: readonly Element[], page: SizeMm): DesignValidation {
+  const openCurveCount = elements.filter((element) => (element.type === "path" || element.type === "spline") && !element.closed).length;
+  const keys = new Set<string>();
+  let duplicateLineCount = 0;
+  for (const element of elements) {
+    if (element.type !== "line") continue;
+    const [start, end] = rotatedLineEndpoints(element);
+    const pointKey = (point: PointMm) => `${point.x.toFixed(6)},${point.y.toFixed(6)}`;
+    const ends = [pointKey(start), pointKey(end)].sort().join("|");
+    if (keys.has(ends)) duplicateLineCount += 1;
+    keys.add(ends);
+  }
+  const outsideElementCount = elements.filter((element) => boundsOutsidePage(element, page)).length;
+  return { openCurveCount, duplicateLineCount, outsideElementCount, ready: openCurveCount === 0 && duplicateLineCount === 0 && outsideElementCount === 0 };
+}
 export function groupCenter(bounds: Bounds): PointMm { return { x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2 }; }
 export function groupHandlePoints(bounds: Bounds): Readonly<Record<GroupHandle, PointMm>> { const r = bounds.x + bounds.width; const b = bounds.y + bounds.height; return { nw: { x: bounds.x, y: bounds.y }, n: { x: bounds.x + bounds.width / 2, y: bounds.y }, ne: { x: r, y: bounds.y }, e: { x: r, y: bounds.y + bounds.height / 2 }, se: { x: r, y: b }, s: { x: bounds.x + bounds.width / 2, y: b }, sw: { x: bounds.x, y: b }, w: { x: bounds.x, y: bounds.y + bounds.height / 2 }, center: groupCenter(bounds) }; }
 export function resizeGroup(elements: readonly Element[], handle: ResizeHandle, pointer: PointMm, minimumSize = 1, aspectLock = false): readonly Element[] {
@@ -501,6 +525,8 @@ export function resizeGroup(elements: readonly Element[], handle: ResizeHandle, 
        ? { ...e, nodes: e.nodes.map((node) => ({ ...node, anchor: { x: x + (node.anchor.x - bounds.x) * sx, y: y + (node.anchor.y - bounds.y) * sy } })), segments: e.segments.map((segment) => segment.type === "cubicBezier" ? { ...segment, control1: { x: x + (segment.control1.x - bounds.x) * sx, y: y + (segment.control1.y - bounds.y) * sy }, control2: { x: x + (segment.control2.x - bounds.x) * sx, y: y + (segment.control2.y - bounds.y) * sy } } : segment) }
      : e.type === "spline"
        ? { ...e, nodes: e.nodes.map((node) => ({ ...node, anchor: { x: x + (node.anchor.x - bounds.x) * sx, y: y + (node.anchor.y - bounds.y) * sy }, ...(node.inHandle ? { inHandle: { dx: node.inHandle.dx * sx, dy: node.inHandle.dy * sy } } : {}), ...(node.outHandle ? { outHandle: { dx: node.outHandle.dx * sx, dy: node.outHandle.dy * sy } } : {}) })) }
+     : e.type === "text"
+       ? { ...e, position: { x: x + (elementCenter(e).x - bounds.x) * sx - e.size.width * sx / 2, y: y + (elementCenter(e).y - bounds.y) * sy - e.size.height * sy / 2 }, size: { width: e.size.width * sx, height: e.size.height * sy }, fontSize: Math.max(0.1, e.fontSize * Math.sqrt(Math.abs(sx * sy))) }
      : { ...e, position: { x: x + (elementCenter(e).x - bounds.x) * sx - e.size.width * sx / 2, y: y + (elementCenter(e).y - bounds.y) * sy - e.size.height * sy / 2 }, size: { width: e.size.width * sx, height: e.size.height * sy } });
 }
 export function rotateElements(elements: readonly Element[], center: PointMm, delta: number): readonly Element[] {
