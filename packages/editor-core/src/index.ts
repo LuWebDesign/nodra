@@ -146,16 +146,39 @@ export const rotateElement = (id: ElementId, rotation: number): EditorCommand =>
 } });
 
 export type ShapeOperation = "weld" | "subtract" | "outline";
+const isClosedShape = (element: Element): boolean => {
+  if (element.type === "line" || element.type === "dimension" || element.type === "text") return false;
+  if (element.type === "path" || element.type === "spline") return element.closed;
+  return true;
+};
+
+const dimensionReferencesElement = (dimension: Extract<Element, { type: "dimension" }>, ids: ReadonlySet<ElementId>): boolean =>
+  dimension.references.some((reference) => ids.has(reference.elementId));
+
+/** Returns dimensions whose references would disappear in a weld or subtract operation. */
+export const invalidDimensionIdsForShapeOperation = (document: DocumentSnapshot, ids: readonly ElementId[], operation: ShapeOperation): readonly ElementId[] => {
+  if (operation === "outline") return [];
+  const affected = new Set(document.elements
+    .filter((element) => ids.includes(element.id) && element.type !== "dimension" && isClosedShape(element))
+    .map((element) => element.id));
+  if (!affected.size) return [];
+  return document.elements
+    .filter((element): element is Extract<Element, { type: "dimension" }> => element.type === "dimension" && dimensionReferencesElement(element, affected))
+    .map((dimension) => dimension.id);
+};
+
 export const shapeOperation = (ids: readonly ElementId[], operation: ShapeOperation): EditorCommand => ({
   name: `shape-${operation}:${ids.join(",")}`,
   apply: (document) => {
     const selected = ids.map((id) => document.elements.find((element) => element.id === id));
     const known = selected.filter((element): element is Element => Boolean(element));
     if (known.length !== selected.length || !known.length) return { success: false, error: "No valid objects selected" };
-      if (known.some((element) => element.type === "line" || element.type === "dimension" || element.type === "text")) return { success: false, error: "Shape operations require closed objects" };
-    if (operation === "subtract" && known.length < 2) return { success: false, error: "Recortar requires at least two objects" };
-    const first = known[0]!;
-    const contours = shapeResultContours(operation === "subtract" ? "difference" : "union", operation === "subtract" ? [known.at(-1)!, ...known.slice(0, -1)] : known);
+    const geometry = operation === "weld" || operation === "subtract" ? known.filter((element) => element.type !== "dimension") : known;
+    if (geometry.some((element) => !isClosedShape(element))) return { success: false, error: "Shape operations require closed objects" };
+    if (geometry.length === 0) return { success: false, error: "No closed objects selected" };
+    if (operation === "subtract" && geometry.length < 2) return { success: false, error: "Recortar requires at least two objects" };
+    const first = geometry[0]!;
+    const contours = shapeResultContours(operation === "subtract" ? "difference" : "union", operation === "subtract" ? [geometry.at(-1)!, ...geometry.slice(0, -1)] : geometry);
     if (!contours.length) return { success: false, error: "The shape operation produced an empty result" };
     const points = contours.flatMap((contour) => contour.points);
     const xs = points.map((point) => point.x); const ys = points.map((point) => point.y);
@@ -171,9 +194,10 @@ export const shapeOperation = (ids: readonly ElementId[], operation: ShapeOperat
       style: first.style,
        ...( "operation" in first && first.operation ? { operation: first.operation } : {}),
     };
-    const removed = new Set(known.map((element) => element.id));
-    const firstIndex = Math.min(...known.map((element) => elementIndex(document, element.id)));
-    const elements = document.elements.filter((element) => !removed.has(element.id));
+    const removed = new Set(geometry.map((element) => element.id));
+    const invalidDimensions = new Set(invalidDimensionIdsForShapeOperation(document, ids, operation));
+    const firstIndex = Math.min(...geometry.map((element) => elementIndex(document, element.id)));
+    const elements = document.elements.filter((element) => !removed.has(element.id) && !invalidDimensions.has(element.id));
     elements.splice(firstIndex, 0, resultElement);
     return replaceElements(document, elements);
   },

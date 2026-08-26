@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent, type PointerEvent, type ReactNode, type WheelEvent } from "react";
 import { createProject, elementId, layerId, pageId, revision, type DocumentSnapshot, type DimensionElement, type Element, type ElementId, type PointMm, type ProjectSnapshot, type SplineElement, type TextElement } from "@nodra/domain";
-import { addToSelection, appendSplineNode, beginGesture, cancelGesture, clearSelection, closePath, closeSplineElement, commitGesture, convertTextToGlyphs, createElement, createPathCubicNode, createPathNode, deleteContourNodes, deleteElement, deleteElementNodes, deletePathNodes, dispatch, duplicateElements, flipElements, insertFormaNode, moveElements, movePathHandle, movePathNode, openPath, updateSplineNode, previewGesture, previewGestureFromBase, redo, resizeElement, resizeElements, rotateElement, rotateElementsAroundCenter, select, selectForPointerDown, setPathJoin, shapeOperation, splitPathSegment, undo, updateContourNode, updateElement, updateElementNode, updateElementStyles, updatePage, updateSplineHandle, type FlipAxis, type ShapeOperation } from "@nodra/editor-core";
+import { addToSelection, appendSplineNode, beginGesture, cancelGesture, clearSelection, closePath, closeSplineElement, commitGesture, convertTextToGlyphs, createElement, createPathCubicNode, createPathNode, deleteContourNodes, deleteElement, deleteElementNodes, deletePathNodes, dispatch, duplicateElements, flipElements, insertFormaNode, invalidDimensionIdsForShapeOperation, moveElements, movePathHandle, movePathNode, openPath, updateSplineNode, previewGesture, previewGestureFromBase, redo, resizeElement, resizeElements, rotateElement, rotateElementsAroundCenter, select, selectForPointerDown, setPathJoin, shapeOperation, splitPathSegment, undo, updateContourNode, updateElement, updateElementNode, updateElementStyles, updatePage, updateSplineHandle, type FlipAxis, type ShapeOperation } from "@nodra/editor-core";
 import { boundsOfElements, contourVertexNodes, dimensionKindForNodes, dimensionOffsetForAlignedPlacement, dimensionOffsetForPlacement, elementCenter, glyphGeometryNodes, groupCenter, groupHandlePoints, pathGeometryNodes, pointMidpoint, realGeometryNodes, resizeHandle, rotatedResizeHandles, rotationFromDrag, rotationHandlePoints, type Direction, type GroupHandle, type ResizeHandle } from "@nodra/geometry";
 import { DebouncedAutosave, DexieProjectRepository, requestStoragePersistence, type FontRecord } from "@nodra/persistence";
 import { validateDesign } from "@nodra/validation";
@@ -14,7 +14,6 @@ import { extractTextGlyphOutlines, fontFamilyFromFileName, FontOutlineError } fr
 
 const defaultStyle = { stroke: "#000000", strokeWidth: 1 };
 const defaultClosedFill = "rgba(101,217,255,0.22)";
-const dimensionShapeOperationDescription = "Las cotas son anotaciones. Quitalas de la selección para operar formas.";
 const isPropertyElement = (element: Element): element is PropertyElement => element.type === "rectangle" || element.type === "ellipse";
 const isRotatableElement = (element: Element): element is RotatableElement => element.type !== "dimension" && element.type !== "path" && element.type !== "spline";
 const palette = [
@@ -125,6 +124,7 @@ export function App() {
   type DimensionDraft = { readonly phase: "first"; readonly first: DimensionTarget } | { readonly phase: "placement"; readonly first: DimensionTarget; readonly second: DimensionTarget };
   const [dimensionDraft, setDimensionDraft] = useState<DimensionDraft>();
   const [dimensionNodeHover, setDimensionNodeHover] = useState<NodeHit>();
+  const [pendingShapeOperation, setPendingShapeOperation] = useState<{ readonly operation: "weld" | "subtract"; readonly ids: readonly ElementId[]; readonly invalidDimensionCount: number }>();
   const textDraftRef = useRef(textDraft);
   textDraftRef.current = textDraft;
   const textInput = useRef<HTMLTextAreaElement>(null);
@@ -1168,9 +1168,26 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
   };
   const applyShapeOperation = (operation: ShapeOperation) => {
     const current = editorRef.current;
+    if (operation !== "weld" && operation !== "subtract") {
+      const next = dispatch(current, shapeOperation(current.selection, operation));
+      if (next !== current) setEditorState(next);
+      return;
+    }
+    const invalidDimensionCount = invalidDimensionIdsForShapeOperation(current.document, current.selection, operation).length;
+    if (invalidDimensionCount > 0) {
+      setPendingShapeOperation({ operation, ids: [...current.selection], invalidDimensionCount });
+      return;
+    }
     const next = dispatch(current, shapeOperation(current.selection, operation));
-    if (next === current) return;
-    setEditorState(next);
+    if (next !== current) setEditorState(next);
+  };
+  const confirmPendingShapeOperation = () => {
+    const pending = pendingShapeOperation;
+    if (!pending) return;
+    const current = editorRef.current;
+    const next = dispatch(current, shapeOperation(pending.ids, pending.operation));
+    setPendingShapeOperation(undefined);
+    if (next !== current) setEditorState(next);
   };
   const paletteControls = () => <div className="status-palette" role="group" aria-label="Paleta de colores"><span className="status-palette-label">COLORES</span><div className="palette"><button className="swatch no-fill" aria-label="Sin relleno" title="Sin relleno" onClick={() => applyPalette(null, "fill")} onContextMenu={(event) => event.preventDefault()}>×</button>{palette.map(({ name, color }) => <button key={color} className="swatch" aria-label={name} title={`Clic izquierdo: relleno · clic derecho: contorno (${name})`} style={{ background: color }} onClick={() => applyPalette(color, "fill")} onContextMenu={(event) => { event.preventDefault(); applyPalette(color, "stroke"); }} />)}</div></div>;
   const transformDirections: readonly { direction: Direction; label: string; marker: string }[] = [
@@ -1215,9 +1232,21 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
   const shapeOperations = () => <div className="shape-operation-group" role="group" aria-label="Operaciones de forma">
     <div className="shape-operation-copy"><div className="panel-title">OPERACIONES DE FORMA</div></div>
     <div className="shape-operation-buttons">
-      <button type="button" className="shape-operation-button" aria-label="Soldar" title={selectedElements.some((element) => element.type === "dimension") ? dimensionShapeOperationDescription : "Combinar los objetos cerrados seleccionados en una sola forma."} aria-description={selectedElements.some((element) => element.type === "dimension") ? dimensionShapeOperationDescription : "Combinar los objetos cerrados seleccionados en una sola forma."} disabled={!selectedElements.length || selectedElements.some((element) => element.type === "line" || element.type === "dimension")} onClick={() => applyShapeOperation("weld")}>Soldar<span className="shape-operation-description" role="tooltip">{selectedElements.some((element) => element.type === "dimension") ? dimensionShapeOperationDescription : "Combinar los objetos cerrados seleccionados en una sola forma."}</span></button>
-      <button type="button" className="shape-operation-button" aria-label="Recortar" title={selectedElements.some((element) => element.type === "dimension") ? dimensionShapeOperationDescription : "Usar el último objeto seleccionado como objetivo y los anteriores como cortadores."} aria-description={selectedElements.some((element) => element.type === "dimension") ? dimensionShapeOperationDescription : "Usar el último objeto seleccionado como objetivo y los anteriores como cortadores."} disabled={selectedElements.length < 2 || selectedElements.some((element) => element.type === "line" || element.type === "dimension")} onClick={() => applyShapeOperation("subtract")}>Recortar<span className="shape-operation-description" role="tooltip">{selectedElements.some((element) => element.type === "dimension") ? dimensionShapeOperationDescription : "Usar el último objeto seleccionado como objetivo y los anteriores como cortadores."}</span></button>
-      <button type="button" className="shape-operation-button" aria-label="Crear límites" title={selectedElements.some((element) => element.type === "dimension") ? dimensionShapeOperationDescription : "Crear un contorno real alrededor de los objetos cerrados seleccionados."} aria-description={selectedElements.some((element) => element.type === "dimension") ? dimensionShapeOperationDescription : "Crear un contorno real alrededor de los objetos cerrados seleccionados."} disabled={!selectedElements.length || selectedElements.some((element) => element.type === "line" || element.type === "dimension")} onClick={() => applyShapeOperation("outline")}>Crear límites<span className="shape-operation-description" role="tooltip">{selectedElements.some((element) => element.type === "dimension") ? dimensionShapeOperationDescription : "Crear un contorno real alrededor de los objetos cerrados seleccionados."}</span></button>
+      {(() => {
+        const hasSelectedDimension = selectedElements.some((element) => element.type === "dimension");
+        const dimensionDescription = "Las cotas son anotaciones: se ignoran como geometría y se conservan si sus referencias siguen existiendo.";
+        const weldDescription = hasSelectedDimension ? dimensionDescription : "Combinar los objetos cerrados seleccionados en una sola forma.";
+        const subtractDescription = hasSelectedDimension ? dimensionDescription : "Usar el último objeto seleccionado como objetivo y los anteriores como cortadores.";
+        const outlineDescription = hasSelectedDimension ? dimensionDescription : "Crear un contorno real alrededor de los objetos cerrados seleccionados.";
+        const isClosedShapeSelection = (element: Element) => element.type !== "line" && element.type !== "text" && element.type !== "dimension" && (element.type !== "path" && element.type !== "spline" || element.closed);
+        const selectedShapes = selectedElements.filter((element) => element.type !== "dimension");
+        const hasNonClosedShape = selectedShapes.some((element) => !isClosedShapeSelection(element));
+        return <>
+          <button type="button" className="shape-operation-button" aria-label="Soldar" title={weldDescription} aria-description={weldDescription} disabled={!selectedShapes.length || hasNonClosedShape} onClick={() => applyShapeOperation("weld")}>Soldar<span className="shape-operation-description" role="tooltip">{weldDescription}</span></button>
+          <button type="button" className="shape-operation-button" aria-label="Recortar" title={subtractDescription} aria-description={subtractDescription} disabled={selectedShapes.length < 2 || hasNonClosedShape} onClick={() => applyShapeOperation("subtract")}>Recortar<span className="shape-operation-description" role="tooltip">{subtractDescription}</span></button>
+          <button type="button" className="shape-operation-button" aria-label="Crear límites" title={outlineDescription} aria-description={outlineDescription} disabled={!selectedElements.length || selectedElements.some((element) => element.type === "line" || element.type === "dimension")} onClick={() => applyShapeOperation("outline")}>Crear límites<span className="shape-operation-description" role="tooltip">{outlineDescription}</span></button>
+        </>;
+      })()}
     </div>
   </div>;
 
@@ -1247,6 +1276,7 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
   </> : null;
 
   return <main className="app-shell">
+    {pendingShapeOperation && <div className="nodra-modal-backdrop" role="presentation"><section className="nodra-modal" role="dialog" aria-modal="true" aria-labelledby="shape-operation-confirmation-title"><h2 id="shape-operation-confirmation-title">Confirmar operación</h2><p>Esta operación eliminará {pendingShapeOperation.invalidDimensionCount} cotas porque sus referencias dejarán de existir. ¿Continuar?</p><div className="nodra-modal-actions"><button type="button" onClick={() => setPendingShapeOperation(undefined)}>Cancelar</button><button type="button" className="nodra-modal-primary" onClick={confirmPendingShapeOperation}>Continuar</button></div></section></div>}
     <header className="topbar">
       <div className="brand">NODRA <span>EDITOR</span></div>
       <nav aria-label="Modo de espacio de trabajo"><button className={mode === "design" ? "active" : ""} onClick={() => setMode("design")}>Diseño</button><button className={mode === "prepare" ? "active" : ""} onClick={() => setMode("prepare")}>Preparar <small>Vista previa</small></button></nav>

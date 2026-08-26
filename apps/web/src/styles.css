@@ -62,6 +62,14 @@
 .path-fill-hint { margin-bottom:0; }
 .shape-operation-description { position:absolute; z-index:7; top:calc(100% + 7px); left:50%; width:220px; padding:7px 9px; color:var(--text); background:var(--panel-raised); border:1px solid var(--line); border-radius:4px; box-shadow:0 6px 18px #0008; font-size:11px; font-weight:400; line-height:1.35; text-align:left; pointer-events:none; opacity:0; transform:translate(-50%, -4px); transition:opacity .12s ease,transform .12s ease; }
 .shape-operation-button:hover .shape-operation-description,.shape-operation-button:focus-visible .shape-operation-description { opacity:1; transform:translate(-50%, 0); }
+.nodra-modal-backdrop { position:fixed; inset:0; z-index:30; display:grid; place-items:center; padding:24px; background:#05070bcc; }
+.nodra-modal { width:min(420px,100%); padding:20px; border:1px solid var(--line); border-radius:8px; color:var(--text); background:var(--panel-raised); box-shadow:0 18px 50px #000b; }
+.nodra-modal h2 { margin:0 0 10px; font-size:16px; }
+.nodra-modal p { margin:0; color:var(--muted); font-size:13px; line-height:1.5; }
+.nodra-modal-actions { display:flex; justify-content:flex-end; gap:8px; margin-top:20px; }
+.nodra-modal-actions button { padding:8px 14px; color:var(--text); background:var(--bg); border:1px solid var(--line); border-radius:4px; font-size:12px; }
+.nodra-modal-actions button:hover,.nodra-modal-actions button:focus-visible { color:var(--accent); border-color:var(--accent); }
+.nodra-modal-actions .nodra-modal-primary { color:#071117; background:var(--accent); border-color:var(--accent); font-weight:700; }
 .shape-operation-buttons button:disabled { cursor:not-allowed; opacity:.45; }
 .shape-operation-group { display:flex; align-items:center; gap:9px; min-width:0; margin-left:8px; padding-left:14px; border-left:1px solid var(--line); }
 .shape-operation-copy { flex:0 0 auto; min-width:0; }
