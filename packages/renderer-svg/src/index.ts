@@ -47,6 +47,7 @@ function renderElement(element: Element, viewport: Viewport): string {
     const geometry = dimensionGeometry(element, []);
     if (!geometry) return "";
     const start = screen(geometry.start); const end = screen(geometry.end); const lineStart = screen(geometry.lineStart); const lineEnd = screen(geometry.lineEnd); const text = screen(geometry.text);
+    if (geometry.kind === "angular") return renderAngularDimension(element, geometry, viewport);
     const value = `${geometry.value.toFixed(element.precision)} ${element.units}`;
     return `<g data-element-id="${escapeAttribute(element.id)}" data-dimension="${element.kind}" ${visualAttributes(element)}><line x1="${number(start.x)}" y1="${number(start.y)}" x2="${number(lineStart.x)}" y2="${number(lineStart.y)}" /><line x1="${number(end.x)}" y1="${number(end.y)}" x2="${number(lineEnd.x)}" y2="${number(lineEnd.y)}" /><line x1="${number(lineStart.x)}" y1="${number(lineStart.y)}" x2="${number(lineEnd.x)}" y2="${number(lineEnd.y)}" /><text x="${number(text.x)}" y="${number(text.y - 4)}" text-anchor="middle" fill="${escapeAttribute(element.style.stroke)}" stroke="none" font-size="12">${escapeAttribute(value)}</text></g>`;
   }
@@ -175,10 +176,19 @@ function renderDimension(element: Extract<Element, { type: "dimension" }>, viewp
   if (!geometry) return "";
   const screen = (point: { x: number; y: number }) => mmToScreen(point, viewport);
   const start = screen(geometry.start); const end = screen(geometry.end); const lineStart = screen(geometry.lineStart); const lineEnd = screen(geometry.lineEnd); const text = screen(geometry.text);
+  if (geometry.kind === "angular") return renderAngularDimension(element, geometry, viewport);
   const value = `${geometry.value.toFixed(element.precision)} ${element.units}`;
   const stroke = escapeAttribute(element.style.stroke);
   const markerId = `dimension-arrow-${escapeAttribute(element.id)}`;
   return `<g data-element-id="${escapeAttribute(element.id)}" data-dimension="${element.kind}" stroke="${stroke}" stroke-width="${number(element.style.strokeWidth)}" fill="none" vector-effect="non-scaling-stroke"><defs><marker id="${markerId}" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 10 5 0 10 2.5 5Z" fill="${stroke}" stroke="none" /></marker></defs><line x1="${number(start.x)}" y1="${number(start.y)}" x2="${number(lineStart.x)}" y2="${number(lineStart.y)}" stroke-dasharray="4 3" opacity="0.7" /><line x1="${number(end.x)}" y1="${number(end.y)}" x2="${number(lineEnd.x)}" y2="${number(lineEnd.y)}" stroke-dasharray="4 3" opacity="0.7" /><line x1="${number(lineStart.x)}" y1="${number(lineStart.y)}" x2="${number(lineEnd.x)}" y2="${number(lineEnd.y)}" marker-start="url(#${markerId})" marker-end="url(#${markerId})" /><text x="${number(text.x)}" y="${number(text.y - 8)}" text-anchor="middle" dominant-baseline="middle" fill="${stroke}" stroke="#ffffff" stroke-width="3" paint-order="stroke" font-size="18" font-weight="600">${escapeAttribute(value)}</text></g>`;
+}
+
+function renderAngularDimension(element: Extract<Element, { type: "dimension" }>, geometry: Extract<ReturnType<typeof dimensionGeometry>, { kind: "angular" }>, viewport: Viewport): string {
+  const screen = (point: { x: number; y: number }) => mmToScreen(point, viewport);
+  const vertex = screen(geometry.vertex); const start = screen(geometry.start); const end = screen(geometry.end); const text = screen(geometry.text);
+  const radius = geometry.radius * viewport.zoom; const stroke = escapeAttribute(element.style.stroke); const markerId = `dimension-arrow-${escapeAttribute(element.id)}`;
+  const value = `${Number.isInteger(geometry.value) ? geometry.value.toFixed(0) : geometry.value.toFixed(element.precision)}°`; const path = `M ${number(start.x)} ${number(start.y)} A ${number(radius)} ${number(radius)} 0 0 ${geometry.sweep} ${number(end.x)} ${number(end.y)}`;
+  return `<g data-element-id="${escapeAttribute(element.id)}" data-dimension="angular" stroke="${stroke}" stroke-width="${number(element.style.strokeWidth)}" fill="none" vector-effect="non-scaling-stroke"><defs><marker id="${markerId}" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 10 5 0 10 2.5 5Z" fill="${stroke}" stroke="none" /></marker></defs><line x1="${number(vertex.x)}" y1="${number(vertex.y)}" x2="${number(start.x)}" y2="${number(start.y)}" stroke-dasharray="4 3" opacity="0.7" /><line x1="${number(vertex.x)}" y1="${number(vertex.y)}" x2="${number(end.x)}" y2="${number(end.y)}" stroke-dasharray="4 3" opacity="0.7" /><path d="${path}" marker-start="url(#${markerId})" marker-end="url(#${markerId})" /><text x="${number(text.x)}" y="${number(text.y - 8)}" text-anchor="middle" dominant-baseline="middle" fill="${stroke}" stroke="#ffffff" stroke-width="3" paint-order="stroke" font-size="18" font-weight="600">${escapeAttribute(value)}</text></g>`;
 }
 
 export function renderSplineSvg(element: SplineElement, viewport: Viewport): string { return renderPath(splineToPathElement(element), viewport); }

@@ -30,6 +30,14 @@ async function drawRectangle(page: Page) {
   await expect(page.locator(".page-svg svg")).toBeVisible();
 }
 
+async function drawLine(page: Page, start: { x: number; y: number }, end: { x: number; y: number }) {
+  await page.getByRole("button", { name: "Línea" }).click();
+  await page.mouse.move(start.x, start.y);
+  await page.mouse.down();
+  await page.mouse.move(end.x, end.y);
+  await page.mouse.up();
+}
+
 test("loads the editor workspace", async ({ page }) => {
   await page.goto("/");
 
@@ -512,6 +520,34 @@ test("creates a Cota with two nodes and a third placement click", async ({ page 
   await expect(page.locator("[data-dimension-node-target]")).toHaveCount(0);
   await page.mouse.click((first!.x + secondNode.x) / 2, first!.y + first!.height + 45);
   await expect(page.locator('[data-dimension="horizontal"]')).toHaveCount(1);
+});
+
+test("creates an aligned Cota for a diagonal line", async ({ page }) => {
+  await page.goto("/");
+  const bounds = await page.locator(".page").boundingBox();
+  expect(bounds).not.toBeNull();
+  const start = { x: bounds!.x + 100, y: bounds!.y + 100 };
+  const end = { x: bounds!.x + 220, y: bounds!.y + 160 };
+  await drawLine(page, start, end);
+  await page.getByRole("button", { name: "Cota" }).click();
+  await page.mouse.click(start.x, start.y);
+  await page.mouse.click(end.x, end.y);
+  await page.mouse.click((start.x + end.x) / 2, (start.y + end.y) / 2 + 35);
+  await expect(page.locator('[data-dimension="aligned"]')).toHaveCount(1);
+});
+
+test("creates a 90 degree angular Cota from connected line bodies", async ({ page }) => {
+  await page.goto("/");
+  const bounds = await page.locator(".page").boundingBox();
+  expect(bounds).not.toBeNull();
+  const vertex = { x: bounds!.x + 140, y: bounds!.y + 140 };
+  await drawLine(page, vertex, { x: vertex.x + 120, y: vertex.y });
+  await drawLine(page, vertex, { x: vertex.x, y: vertex.y + 120 });
+  await page.getByRole("button", { name: "Cota" }).click();
+  await page.mouse.click(vertex.x + 60, vertex.y);
+  await page.mouse.click(vertex.x, vertex.y + 60);
+  await page.mouse.click(vertex.x + 50, vertex.y + 50);
+  await expect(page.locator('[data-dimension="angular"]')).toContainText("90°");
 });
 
 test("renders created geometry as SVG", async ({ page }) => {

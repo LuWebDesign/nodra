@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { boundsOf, boundsOfElements, boundsOutsidePage, closedElementToPolygon, cubicBezierBounds, cubicBezierDerivative, degreesToRadians, dimensionKindForNodes, dimensionOffsetForPlacement, elementCenter, elementSegmentAt, elementToContour, evaluateCubicBezier, ELLIPSE_APPROXIMATION_SEGMENTS, groupCenter, groupHandlePoints, hitTest, mmToScreen, pointMidpoint, radiansToDegrees, realGeometryNodes, resizeGroup, resizeHandle, rotatedLineEndpoints, rotateElements, rotationFromDrag, rotationHandlePoints, screenToMm, shapeResultContours, splitCubicBezier, validateSize } from "./index.js";
+import { angularDimensionGeometry, boundsOf, boundsOfElements, boundsOutsidePage, closedElementToPolygon, cubicBezierBounds, cubicBezierDerivative, degreesToRadians, dimensionGeometry, dimensionKindForNodes, dimensionOffsetForAlignedPlacement, dimensionOffsetForPlacement, elementCenter, elementSegmentAt, elementToContour, evaluateCubicBezier, ELLIPSE_APPROXIMATION_SEGMENTS, groupCenter, groupHandlePoints, hitTest, mmToScreen, pointMidpoint, radiansToDegrees, realGeometryNodes, resizeGroup, resizeHandle, rotatedLineEndpoints, rotateElements, rotationFromDrag, rotationHandlePoints, screenToMm, shapeResultContours, splitCubicBezier, validateSize } from "./index.js";
 import { elementId, layerId } from "@nodra/domain";
 
 const style = { stroke: "#000", strokeWidth: 0.2 };
@@ -12,6 +12,22 @@ describe("canonical millimetre geometry", () => {
     expect(dimensionKindForNodes(first, second)).toBe("horizontal");
     expect(dimensionOffsetForPlacement("horizontal", pointMidpoint(first, second), { x: 999, y: 5 })).toEqual({ x: 0, y: -17 });
     expect(dimensionOffsetForPlacement("vertical", { x: 4, y: 8 }, { x: 20, y: 999 })).toEqual({ x: 16, y: 0 });
+  });
+  it("uses aligned Euclidean geometry and only the perpendicular placement offset for diagonals", () => {
+    const start = { x: 10, y: 10 }; const end = { x: 40, y: 40 };
+    expect(dimensionKindForNodes(start, end)).toBe("aligned");
+    const offset = dimensionOffsetForAlignedPlacement(start, end, { x: 20, y: 35 });
+    const dimension = { type: "dimension" as const, id: elementId("aligned"), layerId: layerId("l"), kind: "aligned" as const, references: [{ kind: "node" as const, elementId: elementId("line"), nodeIndex: 0 }, { kind: "node" as const, elementId: elementId("line"), nodeIndex: 2 }] as const, offset, precision: 2, units: "mm" as const, rotation: 0 as const, style };
+    const line = { type: "line" as const, id: elementId("line"), layerId: layerId("l"), start, end, rotation: 0, style };
+    const geometry = dimensionGeometry(dimension, [line]);
+    expect(geometry?.value).toBeCloseTo(Math.hypot(30, 30));
+    expect(geometry && geometry.lineEnd.x - geometry.lineStart.x).toBeCloseTo(geometry ? geometry.lineEnd.y - geometry.lineStart.y : 0);
+  });
+  it("calculates a stable 90 degree angle from connected lines", () => {
+    const first = { type: "line" as const, id: elementId("first"), layerId: layerId("l"), start: { x: 20, y: 20 }, end: { x: 60, y: 20 }, rotation: 0, style };
+    const second = { type: "line" as const, id: elementId("second"), layerId: layerId("l"), start: { x: 20, y: 20 }, end: { x: 20, y: 60 }, rotation: 0, style };
+    const dimension = { type: "dimension" as const, id: elementId("angular"), layerId: layerId("l"), kind: "angular" as const, references: [{ kind: "line" as const, elementId: first.id }, { kind: "line" as const, elementId: second.id }] as const, offset: { x: 10, y: 10 }, precision: 2, units: "mm" as const, rotation: 0 as const, style };
+    expect(angularDimensionGeometry(dimension, [first, second])?.value).toBeCloseTo(90);
   });
   it("projects primitives to editable nodes and segments without changing the primitive", () => {
     expect(realGeometryNodes(rectangle)).toHaveLength(9);

@@ -1,11 +1,11 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent, type PointerEvent, type ReactNode, type WheelEvent } from "react";
 import { createProject, elementId, layerId, pageId, revision, type DocumentSnapshot, type DimensionElement, type Element, type ElementId, type PointMm, type ProjectSnapshot, type SplineElement, type TextElement } from "@nodra/domain";
 import { addToSelection, appendSplineNode, beginGesture, cancelGesture, clearSelection, closePath, closeSplineElement, commitGesture, convertTextToGlyphs, createElement, createPathCubicNode, createPathNode, deleteContourNodes, deleteElement, deleteElementNodes, deletePathNodes, dispatch, duplicateElements, flipElements, insertFormaNode, moveElements, movePathHandle, movePathNode, openPath, updateSplineNode, previewGesture, previewGestureFromBase, redo, resizeElement, resizeElements, rotateElement, rotateElementsAroundCenter, select, selectForPointerDown, setPathJoin, shapeOperation, splitPathSegment, undo, updateContourNode, updateElement, updateElementNode, updateElementStyles, updatePage, updateSplineHandle, type FlipAxis, type ShapeOperation } from "@nodra/editor-core";
-import { boundsOfElements, contourVertexNodes, dimensionKindForNodes, dimensionOffsetForPlacement, elementCenter, glyphGeometryNodes, groupCenter, groupHandlePoints, pathGeometryNodes, pointMidpoint, realGeometryNodes, resizeHandle, rotatedResizeHandles, rotationFromDrag, rotationHandlePoints, type Direction, type GroupHandle, type ResizeHandle } from "@nodra/geometry";
+import { boundsOfElements, contourVertexNodes, dimensionKindForNodes, dimensionOffsetForAlignedPlacement, dimensionOffsetForPlacement, elementCenter, glyphGeometryNodes, groupCenter, groupHandlePoints, pathGeometryNodes, pointMidpoint, realGeometryNodes, resizeHandle, rotatedResizeHandles, rotationFromDrag, rotationHandlePoints, type Direction, type GroupHandle, type ResizeHandle } from "@nodra/geometry";
 import { DebouncedAutosave, DexieProjectRepository, requestStoragePersistence, type FontRecord } from "@nodra/persistence";
 import { validateDesign } from "@nodra/validation";
 import { renderSvg } from "@nodra/renderer-svg";
-import { canActivateRotation, centerPageInCanvas, clientPointToCanvas, cubicPlacementControls, formaNodeKey, hoveredSelectionCenter, isDrawingTool, marqueeSelection, movementExceedsThreshold, normalizeBounds, normalizeDrag, pagePointToCanvas, pathGuides, pickElement, pickFormaNode, pickFormaSegment, pickNode, pickPathNode, pickPathSegment, pointerDownIntent, screenDeltaToMm, screenPointToMm, selectedNodeAnchor, selectedPathAnchorIds, alignmentGuides, snapMoveDelta, zoomAtPoint, type AlignmentGuide, type ContourNodeHit, type FormaNodeHit, type NodeHit, type PathNodeHit, type SnapGuide, type TransformMode } from "./interaction.js";
+import { canActivateRotation, centerPageInCanvas, clientPointToCanvas, cubicPlacementControls, formaNodeKey, hoveredSelectionCenter, isDrawingTool, marqueeSelection, movementExceedsThreshold, normalizeBounds, normalizeDrag, pagePointToCanvas, pathGuides, pickDimensionTarget, pickElement, pickFormaNode, pickFormaSegment, pickNode, pickPathNode, pickPathSegment, pointerDownIntent, screenDeltaToMm, screenPointToMm, selectedNodeAnchor, selectedPathAnchorIds, alignmentGuides, snapMoveDelta, zoomAtPoint, type AlignmentGuide, type ContourNodeHit, type DimensionTarget, type FormaNodeHit, type NodeHit, type PathNodeHit, type SnapGuide, type TransformMode } from "./interaction.js";
 import { aspectGeometryPatch, aspectSize, formatMm, geometryValue, rotationDegreesValue, rotationPatch, type GeometryField, type PropertyElement, type RotatableElement } from "./propertyBar.js";
 import { useDocumentStore, usePersistenceStore, useUiStore, useViewportStore, type Tool } from "./stores.js";
 import { pathJoinGuidance, pathJoinOptions } from "./pathJoins.js";
@@ -23,7 +23,8 @@ const palette = [
   { name: "Lima", color: "#a3e635" }, { name: "Gris", color: "#9ca3af" },
 ] as const;
 const id = () => elementId(`element-${crypto.randomUUID()}`);
-const newDimension = (layer: string, first: NodeHit, second: NodeHit, placement: PointMm): DimensionElement => { const midpoint = pointMidpoint(first.node.point, second.node.point); const kind = dimensionKindForNodes(first.node.point, second.node.point); return { type: "dimension", id: id(), layerId: layerId(layer), kind, references: [{ elementId: first.elementId, nodeIndex: first.nodeIndex }, { elementId: second.elementId, nodeIndex: second.nodeIndex }], offset: dimensionOffsetForPlacement(kind, midpoint, placement), precision: 2, units: "mm", rotation: 0, style: { stroke: "#2563eb", strokeWidth: 0.45 } }; };
+const newDimension = (layer: string, first: NodeHit, second: NodeHit, placement: PointMm): DimensionElement => { const midpoint = pointMidpoint(first.node.point, second.node.point); const kind = dimensionKindForNodes(first.node.point, second.node.point); return { type: "dimension", id: id(), layerId: layerId(layer), kind, references: [{ kind: "node", elementId: first.elementId, nodeIndex: first.nodeIndex }, { kind: "node", elementId: second.elementId, nodeIndex: second.nodeIndex }], offset: kind === "aligned" ? dimensionOffsetForAlignedPlacement(first.node.point, second.node.point, placement) : dimensionOffsetForPlacement(kind, midpoint, placement), precision: 2, units: "mm", rotation: 0, style: { stroke: "#2563eb", strokeWidth: 0.45 } }; };
+const newAngularDimension = (layer: string, first: Extract<DimensionTarget, { kind: "line" }>, second: Extract<DimensionTarget, { kind: "line" }>, placement: PointMm): DimensionElement => ({ type: "dimension", id: id(), layerId: layerId(layer), kind: "angular", references: [{ kind: "line", elementId: first.hit.elementId }, { kind: "line", elementId: second.hit.elementId }], offset: { x: placement.x - first.hit.line.start.x, y: placement.y - first.hit.line.start.y }, precision: 2, units: "mm", rotation: 0, style: { stroke: "#2563eb", strokeWidth: 0.45 } });
 const newElement = (tool: Exclude<Tool, "select" | "dimension" | "pan" | "forma" | "pen" | "spline" | "text">, layer: string, start: PointMm, end: PointMm, nextId = id()): Element => tool === "line"
   ? { type: "line", id: nextId, layerId: layerId(layer), start, end, rotation: 0, style: defaultStyle }
   : tool === "rectangle"
@@ -120,7 +121,7 @@ export function App() {
   const [fontSources, setFontSources] = useState<Record<string, ArrayBuffer>>({});
   const [fontLoadError, setFontLoadError] = useState<string>();
   const [textDraft, setTextDraft] = useState<{ readonly position: PointMm; readonly value: string; readonly elementId?: ElementId; readonly fontSize?: number; readonly element?: TextElement }>();
-  type DimensionDraft = { readonly phase: "first"; readonly first: NodeHit } | { readonly phase: "placement"; readonly first: NodeHit; readonly second: NodeHit };
+  type DimensionDraft = { readonly phase: "first"; readonly first: DimensionTarget } | { readonly phase: "placement"; readonly first: DimensionTarget; readonly second: DimensionTarget };
   const [dimensionDraft, setDimensionDraft] = useState<DimensionDraft>();
   const [dimensionNodeHover, setDimensionNodeHover] = useState<NodeHit>();
   const textDraftRef = useRef(textDraft);
@@ -355,7 +356,7 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
     void autosave.flush().then((result) => { if (result?.ok && !preserveRecoveryNotice) persist.set("saved", "Guardado localmente"); });
   }, [project, online]);
 
-  const dimensionPreview = dimensionDraft?.phase === "placement" && cursorPoint ? newDimension("layer-1", dimensionDraft.first, dimensionDraft.second, screenPointToMm(cursorPoint, { x: 0, y: 0 }, zoom, panMm)) : undefined;
+  const dimensionPreview = dimensionDraft?.phase === "placement" && cursorPoint ? dimensionDraft.first.kind === "node" && dimensionDraft.second.kind === "node" ? newDimension("layer-1", dimensionDraft.first.hit, dimensionDraft.second.hit, screenPointToMm(cursorPoint, { x: 0, y: 0 }, zoom, panMm)) : dimensionDraft.first.kind === "line" && dimensionDraft.second.kind === "line" ? newAngularDimension("layer-1", dimensionDraft.first, dimensionDraft.second, screenPointToMm(cursorPoint, { x: 0, y: 0 }, zoom, panMm)) : undefined : undefined;
   const rendered = renderSvg({ ...document, elements: dimensionPreview ? [...document.elements, dimensionPreview] : document.elements }, { zoom: 1, panMm: { x: 0, y: 0 } });
   const setEditorState = (next: typeof editor) => { editorRef.current = next; setEditor(next); };
   const canvasPointAt = (event: PointerEvent<HTMLElement> | WheelEvent<HTMLElement>) => clientPointToCanvas({ x: event.clientX, y: event.clientY }, canvas.current!.getBoundingClientRect());
@@ -623,17 +624,23 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
       const nodeHit = tool !== "forma" && transformMode === "resize" ? pickNode(editorRef.current.document, point, zoom) : undefined;
       const pathSegmentHit = tool === "forma" && !formaNodeHit ? pickPathSegment(editorRef.current.document, point, zoom) : undefined;
        if (tool === "dimension") {
-         if (dimensionDraft?.phase === "placement") {
-           setEditorState(dispatch(editorRef.current, createElement(newDimension("layer-1", dimensionDraft.first, dimensionDraft.second, pointAt(event)))));
+          if (dimensionDraft?.phase === "placement") {
+            const placement = pointAt(event);
+            const dimension = dimensionDraft.first.kind === "node" && dimensionDraft.second.kind === "node" ? newDimension("layer-1", dimensionDraft.first.hit, dimensionDraft.second.hit, placement) : dimensionDraft.first.kind === "line" && dimensionDraft.second.kind === "line" ? newAngularDimension("layer-1", dimensionDraft.first, dimensionDraft.second, placement) : undefined;
+            if (!dimension) return;
+            setEditorState(dispatch(editorRef.current, createElement(dimension)));
            setDimensionDraft(undefined);
            setDimensionNodeHover(undefined);
            return;
          }
-         if (!nodeHit) return;
-         if (!dimensionDraft) { setDimensionDraft({ phase: "first", first: nodeHit }); return; }
-         if (dimensionDraft.phase === "first") {
-           if (dimensionDraft.first.elementId === nodeHit.elementId && dimensionDraft.first.nodeIndex === nodeHit.nodeIndex) return;
-           setDimensionDraft({ phase: "placement", first: dimensionDraft.first, second: nodeHit });
+          const dimensionTarget = pickDimensionTarget(editorRef.current.document, point, zoom);
+          if (!dimensionTarget) return;
+          if (!dimensionDraft) { setDimensionDraft({ phase: "first", first: dimensionTarget }); return; }
+          if (dimensionDraft.phase === "first") {
+            if (dimensionDraft.first.kind === "node" && dimensionTarget.kind === "node" && dimensionDraft.first.hit.elementId === dimensionTarget.hit.elementId && dimensionDraft.first.hit.nodeIndex === dimensionTarget.hit.nodeIndex) return;
+            if (dimensionDraft.first.kind === "line" && dimensionTarget.kind === "line" && dimensionDraft.first.hit.elementId === dimensionTarget.hit.elementId) return;
+            if (dimensionDraft.first.kind !== dimensionTarget.kind) return;
+            setDimensionDraft({ phase: "placement", first: dimensionDraft.first, second: dimensionTarget });
            setDimensionNodeHover(undefined);
            return;
          }
@@ -998,9 +1005,11 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
   })() : undefined;
   const pageStyle = { width: document.page.width * zoom, height: document.page.height * zoom, left: -panMm.x * zoom, top: -panMm.y * zoom };
    const pendingDimensionOverlay = tool === "dimension" && dimensionDraft && cursorPoint ? (() => {
-    const start = pagePointToCanvas(dimensionDraft.first.node.point, zoom, panMm);
-    const end = dimensionDraft.phase === "placement" ? pagePointToCanvas(dimensionDraft.second.node.point, zoom, panMm) : cursorPoint;
-    const label = dimensionDraft.phase === "placement" ? "Coloque la cota" : "Seleccione el segundo nodo";
+    const firstPoint = dimensionDraft.first.kind === "node" ? dimensionDraft.first.hit.node.point : dimensionDraft.first.hit.line.start;
+    const start = pagePointToCanvas(firstPoint, zoom, panMm);
+    const secondPoint = dimensionDraft.phase === "placement" ? dimensionDraft.second.kind === "node" ? dimensionDraft.second.hit.node.point : dimensionDraft.second.hit.line.start : undefined;
+    const end = secondPoint ? pagePointToCanvas(secondPoint, zoom, panMm) : cursorPoint;
+    const label = dimensionDraft.phase === "placement" ? dimensionDraft.first.kind === "line" ? "Coloque el ángulo" : "Coloque la cota" : "Seleccione el segundo nodo o línea";
     return <svg className="dimension-pending-overlay" aria-hidden="true"><line x1={start.x} y1={start.y} x2={end.x} y2={end.y} /><circle cx={start.x} cy={start.y} r="7" /><circle cx={end.x} cy={end.y} r="7" /><text x={start.x + 10} y={start.y - 10}>Primer nodo</text><text x={end.x + 12} y={end.y - 12}>{label}</text></svg>;
   })() : undefined;
    const dimensionHoverStyle = dimensionNodeHover && tool === "dimension" ? (() => { const point = pagePointToCanvas(dimensionNodeHover.node.point, zoom, panMm); return { left: point.x, top: point.y }; })() : undefined;

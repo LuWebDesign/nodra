@@ -40,6 +40,18 @@ describe("native document validation", () => {
     expect(validateDocument({ ...base, elements: [line, dimension] }).success).toBe(true);
     expect(validateDocument({ ...base, elements: [dimension] }).success).toBe(false);
   });
+  it("normalizes legacy node references and validates connected angular lines", () => {
+    const base = createDocument("angular-doc", [{ id: layerId("layer-1"), name: "Design", visible: true, order: 0 }]);
+    const first = { type: "line" as const, id: "first", layerId: "layer-1", start: { x: 20, y: 20 }, end: { x: 60, y: 20 }, rotation: 0, style: { stroke: "#000", strokeWidth: 1 } };
+    const second = { type: "line" as const, id: "second", layerId: "layer-1", start: { x: 20, y: 20 }, end: { x: 20, y: 60 }, rotation: 0, style: { stroke: "#000", strokeWidth: 1 } };
+    const angular = { type: "dimension", id: "angular", layerId: "layer-1", kind: "angular", references: [{ kind: "line", elementId: "first" }, { kind: "line", elementId: "second" }], offset: { x: 10, y: 10 }, precision: 2, units: "mm", rotation: 0, style: { stroke: "#2563eb", strokeWidth: 0.45 } };
+    const checked = validateDocument({ ...base, elements: [first, second, angular] });
+    expect(checked.success).toBe(true);
+    const legacy = validateDocument({ ...base, elements: [first, { type: "dimension", id: "legacy", layerId: "layer-1", kind: "horizontal", references: [{ elementId: "first", nodeIndex: 0 }, { elementId: "first", nodeIndex: 2 }], offset: { x: 0, y: -8 }, precision: 2, units: "mm", rotation: 0, style: { stroke: "#2563eb", strokeWidth: 0.45 } }] });
+    expect(legacy.success).toBe(true);
+    if (legacy.success) expect(legacy.data.elements[1]).toMatchObject({ references: [{ kind: "node" }, { kind: "node" }] });
+    expect(validateDocument({ ...base, elements: [first, { ...angular, references: [{ kind: "line", elementId: "first" }, { kind: "line", elementId: "missing" }] } as typeof angular] }).success).toBe(false);
+  });
   it("rejects non-finite and non-positive page dimensions", () => {
     const result = validateDocument({ ...createDocument("doc-1"), page: { width: 0, height: Number.NaN } });
     expect(result.success).toBe(false);
