@@ -1,6 +1,6 @@
 import "fake-indexeddb/auto";
 import { afterEach, describe, expect, it } from "vitest";
-import { createDocument, createProject, layerId, revision } from "@nodra/domain";
+import { createDocument, createProject, elementId, layerId, revision } from "@nodra/domain";
 import { DebouncedAutosave, DexieProjectRepository, MigrationRegistry, type ProjectRepository } from "./index.js";
 
 const metadata = { id: "project-1", name: "Offline project", updatedAt: 0 };
@@ -88,6 +88,14 @@ describe("DexieProjectRepository", () => {
     expect((await db.saveProject(metadata, project)).ok).toBe(true);
     const recovered = await db.getProject(metadata.id);
     expect(recovered.ok && recovered.revision.document).toMatchObject({ pages: [{ id: "page-1" }, { id: "page-2" }] });
+  });
+
+  it("round-trips native spline elements through project persistence", async () => {
+    db = await repository();
+    const source = { ...document(), elements: [{ type: "spline" as const, id: elementId("spline-1"), layerId: layerId("layer-1"), nodes: [{ id: "a", anchor: { x: 0, y: 0 }, continuity: "smooth" as const }, { id: "b", anchor: { x: 10, y: 0 }, continuity: "smooth" as const }], closed: true, style: { stroke: "#000", fill: "#fff", strokeWidth: 1 } }] };
+    expect((await db.saveProject(metadata, source)).ok).toBe(true);
+    const recovered = await db.getProject(metadata.id);
+    expect(recovered.ok && recovered.revision.document).toMatchObject({ elements: [{ type: "spline", closed: true }] });
   });
 });
 

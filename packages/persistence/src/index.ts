@@ -1,6 +1,7 @@
 import { Dexie, type Table } from "dexie";
 import type { DocumentSnapshot, ProjectSnapshot } from "@nodra/domain";
 import { validateDocument, validateProject } from "@nodra/validation";
+export * from "./spline.js";
 
 export const CURRENT_RECORD_VERSION = 1 as const;
 
@@ -67,7 +68,8 @@ export interface MigrationContext {
   readonly projectId: string;
   readonly revision: number;
 }
-export type RecordMigration = (record: Record<string, unknown>, context: MigrationContext) => unknown;
+export type PersistenceRecord = Record<string, unknown>;
+export type RecordMigration = (record: PersistenceRecord, context: MigrationContext) => PersistenceRecord;
 
 export class MigrationRegistry {
   private readonly migrations = new Map<number, RecordMigration>();
@@ -81,14 +83,14 @@ export class MigrationRegistry {
     return this;
   }
 
-  migrate(input: unknown, context: MigrationContext): unknown {
+  migrate(input: unknown, context: MigrationContext): PersistenceRecord {
     if (!isRecord(input) || !Number.isInteger(input.recordVersion)) throw new Error("Corrupt persistence record");
     let version = input.recordVersion as number;
-    let current: unknown = input;
+    let current: PersistenceRecord = input;
     while (version < this.targetVersion) {
       const migration = this.migrations.get(version);
       if (!migration) throw new Error(`Unsupported persistence record version ${version}`);
-      current = migration(isRecord(current) ? current : (() => { throw new Error("Corrupt persistence record"); })(), context);
+      current = migration(current, context);
       version += 1;
     }
     if (version !== this.targetVersion) throw new Error(`Unsupported persistence record version ${version}`);
