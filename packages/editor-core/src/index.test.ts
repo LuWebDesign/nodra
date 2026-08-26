@@ -421,6 +421,21 @@ describe("editor core", () => {
     expect(dispatch(select(createEditor({ ...document, elements: [rectangle, line] }), [line.id, rectangle.id]), shapeOperation([line.id, rectangle.id], "subtract")).document.elements).toEqual([rectangle, line]);
   });
 
+  it("rejects selected dimensions without changing the document or history", () => {
+    const dimension = { type: "dimension" as const, id: elementId("shape-dimension"), layerId: rectangle.layerId, kind: "horizontal" as const, references: [{ elementId: rectangle.id, nodeIndex: 0 }, { elementId: rectangle.id, nodeIndex: 1 }] as const, offset: { x: 0, y: -8 }, precision: 2, units: "mm" as const, rotation: 0 as const, style: rectangle.style };
+    const initial = select(createEditor({ ...document, elements: [rectangle, dimension] }), [rectangle.id, dimension.id]);
+    for (const operation of ["weld", "subtract", "outline"] as const) expect(dispatch(initial, shapeOperation(initial.selection, operation))).toBe(initial);
+  });
+
+  it("operates selected shapes when an unrelated dimension is present", () => {
+    const second = { ...rectangle, id: elementId("shape-second"), position: { x: 6, y: 2 } };
+    const referenced = { ...rectangle, id: elementId("shape-referenced"), position: { x: 30, y: 2 } };
+    const dimension = { type: "dimension" as const, id: elementId("unselected-dimension"), layerId: rectangle.layerId, kind: "horizontal" as const, references: [{ kind: "node" as const, elementId: referenced.id, nodeIndex: 0 }, { kind: "node" as const, elementId: referenced.id, nodeIndex: 1 }] as const, offset: { x: 0, y: -8 }, precision: 2, units: "mm" as const, rotation: 0 as const, style: rectangle.style };
+    const state = dispatch(select(createEditor({ ...document, elements: [rectangle, second, referenced, dimension] }), [rectangle.id, second.id]), shapeOperation([rectangle.id, second.id], "weld"));
+    expect(state.document.elements).toEqual(expect.arrayContaining([expect.objectContaining({ id: referenced.id, type: "rectangle" }), expect.objectContaining({ id: dimension.id, type: "dimension" })]));
+    expect(state.document.elements).toHaveLength(3);
+  });
+
   it("flips contour geometry, restores shape-operation selection on undo, and preserves stacking order", () => {
     const contour = { type: "contour" as const, id: elementId("contour-flip"), layerId: layerId("default"), position: { x: 10, y: 2 }, size: { width: 10, height: 5 }, contours: [{ points: [{ x: 10, y: 2 }, { x: 20, y: 2 }, { x: 20, y: 7 }, { x: 10, y: 7 }, { x: 10, y: 2 }] }], fillRule: "evenodd" as const, rotation: 0, style: rectangle.style };
     const unrelated = { ...rectangle, id: elementId("unrelated"), position: { x: 50, y: 2 } };

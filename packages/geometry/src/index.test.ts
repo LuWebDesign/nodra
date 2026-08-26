@@ -112,6 +112,11 @@ describe("canonical millimetre geometry", () => {
     expect(() => mmToScreen({ x: 1, y: 1 }, { zoom: 0, panMm: { x: 0, y: 0 } })).toThrow();
     expect(() => hitTest({ type: "line", id: elementId("line"), layerId: layerId("l"), start: { x: 0, y: 0 }, end: { x: 0, y: 0 }, rotation: 0, style }, { x: 0, y: 0 })).toThrow();
   });
+  it("keeps dimensions out of boolean polygon conversion", () => {
+    const dimension = { type: "dimension" as const, id: elementId("boolean-dimension"), layerId: rectangle.layerId, kind: "horizontal" as const, references: [{ elementId: rectangle.id, nodeIndex: 0 }, { elementId: rectangle.id, nodeIndex: 1 }] as const, offset: { x: 0, y: -8 }, precision: 2, units: "mm" as const, rotation: 0 as const, style };
+    expect(() => closedElementToPolygon(dimension)).toThrow("Shape operations require closed objects");
+    expect(() => shapeResultContours("union", [rectangle, dimension])).toThrow("Shape operations require closed objects");
+  });
   it("resizes proportional corners, including reverse drags", () => {
     expect(resizeHandle(rectangle, "se", { x: 30, y: 30 })).toEqual({ position: { x: 10, y: 20 }, size: { width: 20, height: 10 } });
     expect(resizeHandle(rectangle, "se", { x: 0, y: 10 }, 2)).toEqual({ position: { x: -10, y: 10 }, size: { width: 20, height: 10 } });
