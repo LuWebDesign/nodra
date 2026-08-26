@@ -1,9 +1,9 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent, type PointerEvent, type ReactNode, type WheelEvent } from "react";
-import { createProject, elementId, layerId, pageId, revision, type DocumentSnapshot, type DimensionElement, type Element, type ElementId, type PointMm, type ProjectSnapshot, type SplineElement, type TextElement } from "@nodra/domain";
+import { createProject, elementId, layerId, pageId, projectFromDocument, revision, type DocumentSnapshot, type DimensionElement, type Element, type ElementId, type PointMm, type ProjectSnapshot, type SplineElement, type TextElement } from "@nodra/domain";
 import { addToSelection, appendSplineNode, beginGesture, cancelGesture, clearSelection, closePath, closeSplineElement, commitGesture, convertTextToGlyphs, createElement, createPathCubicNode, createPathNode, deleteContourNodes, deleteElement, deleteElementNodes, deletePathNodes, dispatch, duplicateElements, flipElements, insertFormaNode, invalidDimensionIdsForShapeOperation, moveElements, movePathHandle, movePathNode, openPath, updateSplineNode, previewGesture, previewGestureFromBase, redo, resizeElement, resizeElements, rotateElement, rotateElementsAroundCenter, select, selectForPointerDown, setPathJoin, shapeOperation, splitPathSegment, undo, updateContourNode, updateElement, updateElementNode, updateElementStyles, updatePage, updateSplineHandle, type FlipAxis, type ShapeOperation } from "@nodra/editor-core";
 import { boundsOfElements, contourVertexNodes, dimensionKindForPlacement, dimensionOffsetForAlignedPlacement, dimensionOffsetForPlacement, elementCenter, glyphGeometryNodes, groupCenter, groupHandlePoints, pathGeometryNodes, pointMidpoint, realGeometryNodes, resizeHandle, rotatedResizeHandles, rotationFromDrag, rotationHandlePoints, type Direction, type GroupHandle, type ResizeHandle } from "@nodra/geometry";
 import { DebouncedAutosave, DexieProjectRepository, requestStoragePersistence, type FontRecord } from "@nodra/persistence";
-import { validateDesign } from "@nodra/validation";
+import { validateDesign, validateProject } from "@nodra/validation";
 import { renderSvg } from "@nodra/renderer-svg";
 import { canActivateRotation, centerPageInCanvas, clientPointToCanvas, cubicPlacementControls, formaNodeKey, hoveredSelectionCenter, isDrawingTool, marqueeSelection, movementExceedsThreshold, normalizeBounds, normalizeDrag, pagePointToCanvas, pathGuides, pickDimensionTarget, pickElement, pickFormaNode, pickFormaSegment, pickNode, pickPathNode, pickPathSegment, pointerDownIntent, screenDeltaToMm, screenPointToMm, selectedNodeAnchor, selectedPathAnchorIds, alignmentGuides, snapMoveDelta, zoomAtPoint, type AlignmentGuide, type ContourNodeHit, type DimensionTarget, type FormaNodeHit, type NodeHit, type PathNodeHit, type SnapGuide, type TransformMode } from "./interaction.js";
 import { aspectGeometryPatch, aspectSize, formatMm, geometryValue, rotationDegreesValue, rotationPatch, type GeometryField, type PropertyElement, type RotatableElement } from "./propertyBar.js";
@@ -13,6 +13,18 @@ import { textSizeFor } from "./textMetrics.js";
 import { extractTextGlyphOutlines, fontFamilyFromFileName, FontOutlineError } from "./fontOutline.js";
 
 const defaultFonts = ["Arial", "Helvetica", "Times New Roman", "Courier New", "Inter"] as const;
+const projectMirrorKey = (projectId: string) => `nodra:project-mirror:${projectId}`;
+const loadProjectMirror = (projectId: string): ProjectSnapshot | undefined => {
+  try {
+    const raw = localStorage.getItem(projectMirrorKey(projectId));
+    if (!raw) return undefined;
+    const checked = validateProject(JSON.parse(raw));
+    return checked.success && checked.data.id === projectId ? checked.data : undefined;
+  } catch { return undefined; }
+};
+const saveProjectMirror = (project: ProjectSnapshot): void => {
+  try { localStorage.setItem(projectMirrorKey(project.id), JSON.stringify(project)); } catch { /* best-effort reload mirror */ }
+};
 const defaultStyle = { stroke: "#000000", strokeWidth: 1 };
 const defaultClosedFill = "rgba(101,217,255,0.22)";
 const isPropertyElement = (element: Element): element is PropertyElement => element.type === "rectangle" || element.type === "ellipse";
@@ -122,6 +134,7 @@ export function App() {
   const [localFonts, setLocalFonts] = useState<readonly FontRecord[]>([]);
   const [fontSources, setFontSources] = useState<Record<string, ArrayBuffer>>({});
   const [fontLoadError, setFontLoadError] = useState<string>();
+  const [persistenceReady, setPersistenceReady] = useState(false);
   const [textDraft, setTextDraft] = useState<{ readonly position: PointMm; readonly value: string; readonly elementId?: ElementId; readonly fontSize?: number; readonly element?: TextElement }>();
   type DimensionDraft = { readonly phase: "first"; readonly first: DimensionTarget } | { readonly phase: "placement"; readonly first: DimensionTarget; readonly second: DimensionTarget };
   const [dimensionDraft, setDimensionDraft] = useState<DimensionDraft>();
@@ -152,13 +165,20 @@ export function App() {
     addEventListener("online", on);
     addEventListener("offline", off);
     void requestStoragePersistence();
+    const mirrored = loadProjectMirror(document.id);
+    if (mirrored) {
+      setProject(mirrored);
+      recoveredNotice.current = true;
+      persist.set("recovered", "Revisión local recuperada");
+    }
     void repository.getProject(document.id).then((result) => {
       if (!result.ok) return;
       const recovered = "pages" in result.revision.document ? result.revision.document : createProject(result.revision.document);
+      if (mirrored && mirrored.revision > recovered.revision) return;
       setProject(recovered);
       recoveredNotice.current = true;
       persist.set("recovered", "Revisión local recuperada");
-    });
+    }).finally(() => setPersistenceReady(true));
     return () => {
       removeEventListener("online", on);
       removeEventListener("offline", off);
@@ -355,14 +375,20 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
   useEffect(() => {
     const preserveRecoveryNotice = recoveredNotice.current;
     recoveredNotice.current = false;
+    if (!persistenceReady) return;
     if (!preserveRecoveryNotice) persist.set(online ? "saving" : "offline", online ? "Guardando localmente" : "Sin conexión — la edición permanece local");
+    saveProjectMirror(project);
     autosave.schedule({ id: project.id, name: "Diseño sin título", updatedAt: Date.now() }, project);
     void autosave.flush().then((result) => { if (result?.ok && !preserveRecoveryNotice) persist.set("saved", "Guardado localmente"); });
-  }, [project, online]);
+  }, [persistenceReady, project, online]);
 
   const dimensionPreview = dimensionDraft?.phase === "placement" && cursorPoint ? dimensionDraft.first.kind === "node" && dimensionDraft.second.kind === "node" ? newDimension("layer-1", dimensionDraft.first.hit, dimensionDraft.second.hit, screenPointToMm(cursorPoint, { x: 0, y: 0 }, zoom, panMm)) : dimensionDraft.first.kind === "line" && dimensionDraft.second.kind === "line" ? newAngularDimension("layer-1", dimensionDraft.first, dimensionDraft.second, screenPointToMm(cursorPoint, { x: 0, y: 0 }, zoom, panMm)) : undefined : undefined;
   const rendered = renderSvg({ ...document, elements: dimensionPreview ? [...document.elements, dimensionPreview] : document.elements }, { zoom: 1, panMm: { x: 0, y: 0 } });
-  const setEditorState = (next: typeof editor) => { editorRef.current = next; setEditor(next); };
+  const setEditorState = (next: typeof editor) => {
+    editorRef.current = next;
+    if (!next.gesture && (persistenceReady || next.document.revision > document.revision)) saveProjectMirror(projectFromDocument(project, next.document));
+    setEditor(next);
+  };
   const canvasPointAt = (event: PointerEvent<HTMLElement> | WheelEvent<HTMLElement>) => clientPointToCanvas({ x: event.clientX, y: event.clientY }, canvas.current!.getBoundingClientRect());
   const pointAt = (event: PointerEvent<HTMLElement> | WheelEvent<HTMLElement>) => screenPointToMm(canvasPointAt(event), { x: 0, y: 0 }, zoom, panMm);
 
