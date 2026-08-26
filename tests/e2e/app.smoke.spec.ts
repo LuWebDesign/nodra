@@ -491,6 +491,29 @@ test("draws a nested object from an existing object with a drawing tool", async 
   expect(nestedBounds!.y).toBeGreaterThan(originalBounds!.y);
 });
 
+test("creates a Cota with two nodes and a third placement click", async ({ page }) => {
+  await page.goto("/");
+  await drawRectangle(page);
+  const rectangles = page.locator(".page-svg svg rect");
+  await expect(rectangles).toHaveCount(1);
+  const first = await rectangles.first().boundingBox();
+  expect(first).not.toBeNull();
+  await page.getByRole("button", { name: "Cota" }).click();
+  const firstNode = { x: first!.x, y: first!.y };
+  const secondNode = { x: first!.x + first!.width, y: first!.y };
+  await page.mouse.move(firstNode.x, firstNode.y);
+  await expect(page.locator("[data-dimension-node-target]")).toBeVisible();
+  await expect(page.locator(".tool-cursor")).toHaveAttribute("title", "Nodo de dimensión");
+  await page.mouse.click(firstNode.x, firstNode.y);
+  await page.mouse.move(secondNode.x, secondNode.y);
+  await expect(page.locator("[data-dimension-node-target]")).toBeVisible();
+  await page.mouse.click(secondNode.x, secondNode.y);
+  await expect(page.locator(".dimension-pending-overlay")).toBeVisible();
+  await expect(page.locator("[data-dimension-node-target]")).toHaveCount(0);
+  await page.mouse.click((first!.x + secondNode.x) / 2, first!.y + first!.height + 45);
+  await expect(page.locator('[data-dimension="horizontal"]')).toHaveCount(1);
+});
+
 test("renders created geometry as SVG", async ({ page }) => {
   await page.goto("/");
   await drawRectangle(page);

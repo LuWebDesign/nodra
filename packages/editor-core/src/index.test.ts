@@ -67,6 +67,13 @@ describe("editor core", () => {
     expect(state.document.elements[0]).toMatchObject({ ...text, position: { x: 19, y: 15 } });
     expect(state.undo).toHaveLength(1);
   });
+  it("moves a dimension by changing only its placement offset and supports undo", () => {
+    const dimension = { type: "dimension" as const, id: elementId("dimension-move"), layerId: rectangle.layerId, kind: "horizontal" as const, references: [{ elementId: rectangle.id, nodeIndex: 0 }, { elementId: rectangle.id, nodeIndex: 1 }] as const, offset: { x: 0, y: -8 }, precision: 2, units: "mm" as const, rotation: 0 as const, style: rectangle.style };
+    const state = dispatch(createEditor({ ...document, elements: [rectangle, dimension] }), moveElements([dimension.id], { x: 3, y: 5 }));
+    expect(state.document.elements[1]).toMatchObject({ type: "dimension", offset: { x: 3, y: -3 } });
+    expect(undo(state).document.elements[1]).toEqual(dimension);
+    expect(redo(undo(state)).document.elements[1]).toMatchObject({ offset: { x: 3, y: -3 } });
+  });
   it("deletes contour nodes through validation and keeps a ring valid", () => {
     const contour = { type: "contour" as const, id: elementId("delete-contour-node"), layerId: rectangle.layerId, position: { x: 1, y: 2 }, size: { width: 10, height: 5 }, contours: [{ points: [{ x: 1, y: 2 }, { x: 11, y: 2 }, { x: 11, y: 7 }, { x: 1, y: 7 }, { x: 1, y: 2 }] }], fillRule: "evenodd" as const, rotation: 0, style: rectangle.style };
     const state = dispatch(createEditor({ ...document, elements: [contour] }), deleteContourNodes(contour.id, [{ ringIndex: 0, pointIndex: 1 }]));

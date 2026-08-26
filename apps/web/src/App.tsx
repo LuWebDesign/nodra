@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent, type PointerEvent, type ReactNode, type WheelEvent } from "react";
-import { createProject, elementId, layerId, pageId, revision, type DocumentSnapshot, type Element, type ElementId, type PointMm, type ProjectSnapshot, type SplineElement, type TextElement } from "@nodra/domain";
+import { createProject, elementId, layerId, pageId, revision, type DocumentSnapshot, type DimensionElement, type Element, type ElementId, type PointMm, type ProjectSnapshot, type SplineElement, type TextElement } from "@nodra/domain";
 import { addToSelection, appendSplineNode, beginGesture, cancelGesture, clearSelection, closePath, closeSplineElement, commitGesture, convertTextToGlyphs, createElement, createPathCubicNode, createPathNode, deleteContourNodes, deleteElement, deleteElementNodes, deletePathNodes, dispatch, duplicateElements, flipElements, insertFormaNode, moveElements, movePathHandle, movePathNode, openPath, updateSplineNode, previewGesture, previewGestureFromBase, redo, resizeElement, resizeElements, rotateElement, rotateElementsAroundCenter, select, selectForPointerDown, setPathJoin, shapeOperation, splitPathSegment, undo, updateContourNode, updateElement, updateElementNode, updateElementStyles, updatePage, updateSplineHandle, type FlipAxis, type ShapeOperation } from "@nodra/editor-core";
-import { boundsOfElements, contourVertexNodes, elementCenter, glyphGeometryNodes, groupCenter, groupHandlePoints, pathGeometryNodes, realGeometryNodes, resizeHandle, rotatedResizeHandles, rotationFromDrag, rotationHandlePoints, type Direction, type GroupHandle, type ResizeHandle } from "@nodra/geometry";
+import { boundsOfElements, contourVertexNodes, dimensionKindForNodes, dimensionOffsetForPlacement, elementCenter, glyphGeometryNodes, groupCenter, groupHandlePoints, pathGeometryNodes, pointMidpoint, realGeometryNodes, resizeHandle, rotatedResizeHandles, rotationFromDrag, rotationHandlePoints, type Direction, type GroupHandle, type ResizeHandle } from "@nodra/geometry";
 import { DebouncedAutosave, DexieProjectRepository, requestStoragePersistence, type FontRecord } from "@nodra/persistence";
 import { validateDesign } from "@nodra/validation";
 import { renderSvg } from "@nodra/renderer-svg";
@@ -23,7 +23,7 @@ const palette = [
   { name: "Lima", color: "#a3e635" }, { name: "Gris", color: "#9ca3af" },
 ] as const;
 const id = () => elementId(`element-${crypto.randomUUID()}`);
-const newDimension = (layer: string, first: NodeHit, second: NodeHit): Element => ({ type: "dimension", id: id(), layerId: layerId(layer), kind: "aligned", references: [{ elementId: first.elementId, nodeIndex: first.nodeIndex }, { elementId: second.elementId, nodeIndex: second.nodeIndex }], offset: { x: 0, y: -12 }, precision: 2, units: "mm", rotation: 0, style: { stroke: "#2563eb", strokeWidth: 0.45 } });
+const newDimension = (layer: string, first: NodeHit, second: NodeHit, placement: PointMm): DimensionElement => { const midpoint = pointMidpoint(first.node.point, second.node.point); const kind = dimensionKindForNodes(first.node.point, second.node.point); return { type: "dimension", id: id(), layerId: layerId(layer), kind, references: [{ elementId: first.elementId, nodeIndex: first.nodeIndex }, { elementId: second.elementId, nodeIndex: second.nodeIndex }], offset: dimensionOffsetForPlacement(kind, midpoint, placement), precision: 2, units: "mm", rotation: 0, style: { stroke: "#2563eb", strokeWidth: 0.45 } }; };
 const newElement = (tool: Exclude<Tool, "select" | "dimension" | "pan" | "forma" | "pen" | "spline" | "text">, layer: string, start: PointMm, end: PointMm, nextId = id()): Element => tool === "line"
   ? { type: "line", id: nextId, layerId: layerId(layer), start, end, rotation: 0, style: defaultStyle }
   : tool === "rectangle"
@@ -120,6 +120,9 @@ export function App() {
   const [fontSources, setFontSources] = useState<Record<string, ArrayBuffer>>({});
   const [fontLoadError, setFontLoadError] = useState<string>();
   const [textDraft, setTextDraft] = useState<{ readonly position: PointMm; readonly value: string; readonly elementId?: ElementId; readonly fontSize?: number; readonly element?: TextElement }>();
+  type DimensionDraft = { readonly phase: "first"; readonly first: NodeHit } | { readonly phase: "placement"; readonly first: NodeHit; readonly second: NodeHit };
+  const [dimensionDraft, setDimensionDraft] = useState<DimensionDraft>();
+  const [dimensionNodeHover, setDimensionNodeHover] = useState<NodeHit>();
   const textDraftRef = useRef(textDraft);
   textDraftRef.current = textDraft;
   const textInput = useRef<HTMLTextAreaElement>(null);
@@ -133,7 +136,6 @@ export function App() {
   const recoveredNotice = useRef(false);
   const restoredFontIds = useRef(new Set<string>());
   const directionTooltipTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-  const pendingDimensionAnchor = useRef<NodeHit | undefined>(undefined);
   editorRef.current = editor;
 
   useEffect(() => () => {
@@ -218,7 +220,7 @@ export function App() {
     ? { type: "rectangle" as const, id: selectedElements[0]!.id, layerId: selectedElements[0]!.layerId, position: { x: selectedBounds.x, y: selectedBounds.y }, size: { width: selectedBounds.width, height: selectedBounds.height }, cornerRadius: 0, rotation: 0, style: selectedElements[0]!.style }
     : selectedElement && isPropertyElement(selectedElement) ? selectedElement : undefined;
   const selectionKey = selection.join(":");
-  useEffect(() => { setTransformMode("resize"); }, [tool, project.activePageId, selectionKey]);
+  useEffect(() => { setDimensionDraft(undefined); setDimensionNodeHover(undefined); setTransformMode("resize"); }, [tool, project.activePageId, selectionKey]);
   useEffect(() => {
     setActiveSplineId(undefined);
     setSplineDraftPoint(undefined);
@@ -353,7 +355,8 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
     void autosave.flush().then((result) => { if (result?.ok && !preserveRecoveryNotice) persist.set("saved", "Guardado localmente"); });
   }, [project, online]);
 
-  const rendered = renderSvg(document, { zoom: 1, panMm: { x: 0, y: 0 } });
+  const dimensionPreview = dimensionDraft?.phase === "placement" && cursorPoint ? newDimension("layer-1", dimensionDraft.first, dimensionDraft.second, screenPointToMm(cursorPoint, { x: 0, y: 0 }, zoom, panMm)) : undefined;
+  const rendered = renderSvg({ ...document, elements: dimensionPreview ? [...document.elements, dimensionPreview] : document.elements }, { zoom: 1, panMm: { x: 0, y: 0 } });
   const setEditorState = (next: typeof editor) => { editorRef.current = next; setEditor(next); };
   const canvasPointAt = (event: PointerEvent<HTMLElement> | WheelEvent<HTMLElement>) => clientPointToCanvas({ x: event.clientX, y: event.clientY }, canvas.current!.getBoundingClientRect());
   const pointAt = (event: PointerEvent<HTMLElement> | WheelEvent<HTMLElement>) => screenPointToMm(canvasPointAt(event), { x: 0, y: 0 }, zoom, panMm);
@@ -619,15 +622,22 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
       const contourNodeHit = formaNodeHit?.contourNode;
       const nodeHit = tool !== "forma" && transformMode === "resize" ? pickNode(editorRef.current.document, point, zoom) : undefined;
       const pathSegmentHit = tool === "forma" && !formaNodeHit ? pickPathSegment(editorRef.current.document, point, zoom) : undefined;
-      if (tool === "dimension") {
-        if (!nodeHit) return;
-        const first = pendingDimensionAnchor.current;
-        if (!first) { pendingDimensionAnchor.current = nodeHit; return; }
-        if (first.elementId === nodeHit.elementId && first.nodeIndex === nodeHit.nodeIndex) return;
-        setEditorState(dispatch(editorRef.current, createElement(newDimension("layer-1", first, nodeHit))));
-        pendingDimensionAnchor.current = undefined;
-        return;
-      }
+       if (tool === "dimension") {
+         if (dimensionDraft?.phase === "placement") {
+           setEditorState(dispatch(editorRef.current, createElement(newDimension("layer-1", dimensionDraft.first, dimensionDraft.second, pointAt(event)))));
+           setDimensionDraft(undefined);
+           setDimensionNodeHover(undefined);
+           return;
+         }
+         if (!nodeHit) return;
+         if (!dimensionDraft) { setDimensionDraft({ phase: "first", first: nodeHit }); return; }
+         if (dimensionDraft.phase === "first") {
+           if (dimensionDraft.first.elementId === nodeHit.elementId && dimensionDraft.first.nodeIndex === nodeHit.nodeIndex) return;
+           setDimensionDraft({ phase: "placement", first: dimensionDraft.first, second: nodeHit });
+           setDimensionNodeHover(undefined);
+           return;
+         }
+       }
       const hit = formaNodeHit?.elementId ?? pathSegmentHit?.elementId ?? nodeHit?.elementId ?? pickElement(editorRef.current.document, point, zoom);
     if (isDrawingTool(tool) && pointerDownIntent(tool, hit) === "draw") {
       event.currentTarget.setPointerCapture(event.pointerId);
@@ -710,6 +720,8 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
 
   const onCanvasPointerMove = (event: PointerEvent<HTMLDivElement>) => {
     setCursorPoint(canvasPointAt(event));
+    if (tool === "dimension" && dimensionDraft?.phase !== "placement" && !interaction.current) setDimensionNodeHover(pickNode(editorRef.current.document, pointAt(event), zoom));
+    else if (tool !== "dimension") setDimensionNodeHover(undefined);
     const active = interaction.current;
     if (!active || active.pointerId !== event.pointerId) return;
     if (active.kind === "marquee" && active.start && active.startClient) {
@@ -869,6 +881,8 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
           setSnapGuide(undefined);
           setAlignmentGuideState([]);
         }
+        setDimensionDraft(undefined);
+        setDimensionNodeHover(undefined);
         setTransformMode("resize");
         return;
       }
@@ -983,6 +997,13 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
     return { left: topLeft.x, top: topLeft.y, width: bounds.width * zoom, height: bounds.height * zoom };
   })() : undefined;
   const pageStyle = { width: document.page.width * zoom, height: document.page.height * zoom, left: -panMm.x * zoom, top: -panMm.y * zoom };
+   const pendingDimensionOverlay = tool === "dimension" && dimensionDraft && cursorPoint ? (() => {
+    const start = pagePointToCanvas(dimensionDraft.first.node.point, zoom, panMm);
+    const end = dimensionDraft.phase === "placement" ? pagePointToCanvas(dimensionDraft.second.node.point, zoom, panMm) : cursorPoint;
+    const label = dimensionDraft.phase === "placement" ? "Coloque la cota" : "Seleccione el segundo nodo";
+    return <svg className="dimension-pending-overlay" aria-hidden="true"><line x1={start.x} y1={start.y} x2={end.x} y2={end.y} /><circle cx={start.x} cy={start.y} r="7" /><circle cx={end.x} cy={end.y} r="7" /><text x={start.x + 10} y={start.y - 10}>Primer nodo</text><text x={end.x + 12} y={end.y - 12}>{label}</text></svg>;
+  })() : undefined;
+   const dimensionHoverStyle = dimensionNodeHover && tool === "dimension" ? (() => { const point = pagePointToCanvas(dimensionNodeHover.node.point, zoom, panMm); return { left: point.x, top: point.y }; })() : undefined;
   const rulerMajorStep = [1, 5, 10, 25, 50, 100, 250, 500].find((step) => step * zoom >= 50) ?? 1000;
   const rulerValues = (limit: number) => Array.from({ length: Math.floor(limit / rulerMajorStep) + 1 }, (_, index) => index * rulerMajorStep);
   const rulerXValues = rulerValues(document.page.width);
@@ -1247,8 +1268,10 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
             {tool === "select" && transformMode === "resize" && (handlePoints || groupPoints) && <div className="resize-handles">{handleNames.map((handle) => <button key={handle} type="button" className={`resize-handle resize-handle-${handle}`} data-resize-handle={handle} aria-label={`Redimensionar ${handle}`} style={handleStyle(handle)} onPointerDown={(event) => resizePointerDown(event, handle)} onPointerUp={(event) => finishPointer(event, false)} onPointerCancel={(event) => finishPointer(event, true)} />)}{groupPoints && !isDrawingTool(tool) && <button type="button" className="resize-handle resize-handle-center" data-resize-handle="center" aria-label="Centro del grupo" style={handleStyle("center")} onPointerDown={(event) => event.stopPropagation()} />}</div>}
            {transformMode === "rotate" && selectedElements.length > 0 && <div className="rotation-controls" aria-label="Controles de rotación"><span className="rotation-center" style={selectedElements.length > 1 && selectedBounds ? { left: pagePointToCanvas(groupCenter(selectedBounds), zoom, panMm).x, top: pagePointToCanvas(groupCenter(selectedBounds), zoom, panMm).y } : centerStyle} aria-hidden="true" />{rotationPoints.map((point, index) => { const screen = pagePointToCanvas(point, zoom, panMm); return <button key={index} type="button" className="rotation-handle" aria-label={`Rotar objeto, control ${index + 1}`} style={{ left: screen.x, top: screen.y }} onPointerDown={rotationPointerDown} onPointerUp={(event) => finishPointer(event, false)} onPointerCancel={(event) => finishPointer(event, true)}><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M15.5 8A6 6 0 1 0 16 12" /><path d="m12.5 4 3 4-5 .5" /></svg></button>; })}</div>}
           {marqueeStyle && <div className="marquee" style={marqueeStyle} />}
-           {cursorPoint && <span className={`tool-cursor${closeCursorActive ? " close-cursor" : ""}`} style={{ left: cursorPoint.x, top: cursorPoint.y }} aria-label={`Herramienta activa: ${toolCursorLabels[tool]}`} title={closeCursorActive ? "Cerrar trazado" : tool === "forma" && pickFormaSegment(document, screenPointToMm(cursorPoint, { x: 0, y: 0 }, zoom, panMm), zoom) ? "Doble clic para insertar un nodo" : undefined}>{toolCursorIcons[tool]}</span>}
-          <span className="canvas-hint">Clic: relleno · clic derecho: contorno · {toolCursorLabels[tool]}</span>
+          {pendingDimensionOverlay}
+            {cursorPoint && <span className={`tool-cursor${closeCursorActive ? " close-cursor" : ""}${dimensionNodeHover && tool === "dimension" ? " dimension-node-cursor" : ""}`} style={{ left: cursorPoint.x, top: cursorPoint.y }} aria-label={`Herramienta activa: ${toolCursorLabels[tool]}`} title={closeCursorActive ? "Cerrar trazado" : dimensionNodeHover && tool === "dimension" ? "Nodo de dimensión" : tool === "forma" && pickFormaSegment(document, screenPointToMm(cursorPoint, { x: 0, y: 0 }, zoom, panMm), zoom) ? "Doble clic para insertar un nodo" : undefined}>{toolCursorIcons[tool]}</span>}
+          {dimensionHoverStyle && <span className="dimension-node-target" data-dimension-node-target={`${dimensionNodeHover!.elementId}:${dimensionNodeHover!.nodeIndex}`} style={dimensionHoverStyle} aria-label="Nodo de dimensión bajo el puntero" title="Nodo de dimensión" />}
+          <span className="canvas-hint">{tool === "dimension" ? !dimensionDraft ? "Cota: seleccione el primer nodo" : dimensionDraft.phase === "first" ? "Cota: seleccione el segundo nodo" : "Cota: coloque la cota" : `Clic: relleno · clic derecho: contorno · ${toolCursorLabels[tool]}`}</span>
         </div>
       </section>
        <aside className="inspector">

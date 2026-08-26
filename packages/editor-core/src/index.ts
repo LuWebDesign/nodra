@@ -118,8 +118,9 @@ export const moveElements = (ids: readonly ElementId[], delta: PointMm): EditorC
     if (known.length !== selected.size) return { success: false, error: "One or more elements were not found" };
     if (known.length === 0) return { success: false, error: "No elements selected" };
     return replaceElements(document, document.elements.map((element) => {
-      if (!selected.has(element.id)) return element;
-      if (element.type === "line") return { ...element, start: { x: element.start.x + delta.x, y: element.start.y + delta.y }, end: { x: element.end.x + delta.x, y: element.end.y + delta.y } };
+       if (!selected.has(element.id)) return element;
+       if (element.type === "dimension") return { ...element, offset: { x: element.offset.x + delta.x, y: element.offset.y + delta.y } };
+       if (element.type === "line") return { ...element, start: { x: element.start.x + delta.x, y: element.start.y + delta.y }, end: { x: element.end.x + delta.x, y: element.end.y + delta.y } };
       if (element.type === "contour") return contourWithPoints(element, element.contours.map((contour) => contour.points.map((point) => ({ x: point.x + delta.x, y: point.y + delta.y }))));
       if (element.type === "path") return translatePath(element, delta);
       if (element.type === "glyph") return translateGlyph(element, delta);

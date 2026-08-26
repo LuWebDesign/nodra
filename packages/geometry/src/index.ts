@@ -18,6 +18,10 @@ export const ROUNDED_RECTANGLE_APPROXIMATION_SEGMENTS = 8;
 
 export interface CubicBezier { readonly p0: PointMm; readonly p1: PointMm; readonly p2: PointMm; readonly p3: PointMm }
 export interface DimensionGeometry { readonly start: PointMm; readonly end: PointMm; readonly lineStart: PointMm; readonly lineEnd: PointMm; readonly text: PointMm; readonly value: number }
+export type DimensionPlacementKind = Extract<DimensionElement["kind"], "aligned" | "horizontal" | "vertical">;
+export const pointMidpoint = (first: PointMm, second: PointMm): PointMm => ({ x: (first.x + second.x) / 2, y: (first.y + second.y) / 2 });
+export const dimensionKindForNodes = (first: PointMm, second: PointMm): DimensionPlacementKind => Math.abs(second.x - first.x) >= Math.abs(second.y - first.y) ? "horizontal" : "vertical";
+export const dimensionOffsetForPlacement = (kind: DimensionPlacementKind, midpoint: PointMm, placement: PointMm): PointMm => kind === "horizontal" ? { x: 0, y: placement.y - midpoint.y } : kind === "vertical" ? { x: placement.x - midpoint.x, y: 0 } : { x: placement.x - midpoint.x, y: placement.y - midpoint.y };
 export function dimensionGeometry(element: DimensionElement, elements: readonly Element[]): DimensionGeometry | undefined {
   const startElement = elements.find((candidate) => candidate.id === element.references[0].elementId);
   const endElement = elements.find((candidate) => candidate.id === element.references[1].elementId);
@@ -25,7 +29,7 @@ export function dimensionGeometry(element: DimensionElement, elements: readonly 
   const start = realGeometryNodes(startElement)[element.references[0].nodeIndex]?.point;
   const end = realGeometryNodes(endElement)[element.references[1].nodeIndex]?.point;
   if (!start || !end) return undefined;
-  const midpoint = { x: (start.x + end.x) / 2, y: (start.y + end.y) / 2 };
+  const midpoint = pointMidpoint(start, end);
   const text = { x: midpoint.x + element.offset.x, y: midpoint.y + element.offset.y };
   const lineStart = element.kind === "horizontal" ? { x: start.x, y: text.y } : element.kind === "vertical" ? { x: text.x, y: start.y } : { x: start.x + element.offset.x, y: start.y + element.offset.y };
   const lineEnd = element.kind === "horizontal" ? { x: end.x, y: text.y } : element.kind === "vertical" ? { x: text.x, y: end.y } : { x: end.x + element.offset.x, y: end.y + element.offset.y };

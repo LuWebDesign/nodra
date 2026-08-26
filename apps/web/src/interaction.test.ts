@@ -2,8 +2,14 @@ import { describe, expect, it } from "vitest";
 import { createDocument, elementId, layerId } from "@nodra/domain";
 import { canActivateRotation, centerPageInCanvas, clientPointToCanvas, hoveredSelectionCenter, INITIAL_ZOOM, isDrawingTool, marqueeSelection, MAX_ZOOM, MIN_ZOOM, movementExceedsThreshold, normalizeBounds, normalizeDrag, pagePointToCanvas, pagePointToScreen, screenDeltaToMm, screenPointToMm, containsBounds, elementsContainedBy, pickElement, pickFormaNode, pickFormaSegment, pickNode, pointerDownIntent, selectedNodeAnchor, selectionCenter, selectionFrame, snapMoveDelta, zoomAtPoint } from "./interaction.js";
 import { geometryPatch, geometryValue } from "./propertyBar.js";
+import { dimensionKindForNodes, dimensionOffsetForPlacement, pointMidpoint } from "@nodra/geometry";
 
 describe("canvas coordinates", () => {
+  it("keeps node picking separate from element picking for dimension placement", () => {
+    const first = { x: 10, y: 10 }; const second = { x: 50, y: 12 }; const midpoint = pointMidpoint(first, second);
+    expect(dimensionKindForNodes(first, second)).toBe("horizontal");
+    expect(dimensionOffsetForPlacement("horizontal", midpoint, { x: midpoint.x, y: 0 })).toEqual({ x: 0, y: -11 });
+  });
   it("centers the default 1200x900 page in a measured canvas", () => {
     expect(centerPageInCanvas({ width: 360, height: 270 }, { width: 1200, height: 900 }, INITIAL_ZOOM)).toEqual({ x: expect.closeTo(360), y: expect.closeTo(270) });
   });

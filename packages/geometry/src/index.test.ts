@@ -1,11 +1,18 @@
 import { describe, expect, it } from "vitest";
-import { boundsOf, boundsOfElements, boundsOutsidePage, closedElementToPolygon, cubicBezierBounds, cubicBezierDerivative, degreesToRadians, elementCenter, elementSegmentAt, elementToContour, evaluateCubicBezier, ELLIPSE_APPROXIMATION_SEGMENTS, groupCenter, groupHandlePoints, hitTest, mmToScreen, radiansToDegrees, realGeometryNodes, resizeGroup, resizeHandle, rotatedLineEndpoints, rotateElements, rotationFromDrag, rotationHandlePoints, screenToMm, shapeResultContours, splitCubicBezier, validateSize } from "./index.js";
+import { boundsOf, boundsOfElements, boundsOutsidePage, closedElementToPolygon, cubicBezierBounds, cubicBezierDerivative, degreesToRadians, dimensionKindForNodes, dimensionOffsetForPlacement, elementCenter, elementSegmentAt, elementToContour, evaluateCubicBezier, ELLIPSE_APPROXIMATION_SEGMENTS, groupCenter, groupHandlePoints, hitTest, mmToScreen, pointMidpoint, radiansToDegrees, realGeometryNodes, resizeGroup, resizeHandle, rotatedLineEndpoints, rotateElements, rotationFromDrag, rotationHandlePoints, screenToMm, shapeResultContours, splitCubicBezier, validateSize } from "./index.js";
 import { elementId, layerId } from "@nodra/domain";
 
 const style = { stroke: "#000", strokeWidth: 0.2 };
 const rectangle = { type: "rectangle" as const, id: elementId("r"), layerId: layerId("l"), position: { x: 10, y: 20 }, size: { width: 20, height: 10 }, cornerRadius: 0, rotation: 0, style };
 
 describe("canonical millimetre geometry", () => {
+  it("calculates dimension midpoint, axis, and natural placement offset", () => {
+    const first = { x: 10, y: 20 }; const second = { x: 50, y: 24 };
+    expect(pointMidpoint(first, second)).toEqual({ x: 30, y: 22 });
+    expect(dimensionKindForNodes(first, second)).toBe("horizontal");
+    expect(dimensionOffsetForPlacement("horizontal", pointMidpoint(first, second), { x: 999, y: 5 })).toEqual({ x: 0, y: -17 });
+    expect(dimensionOffsetForPlacement("vertical", { x: 4, y: 8 }, { x: 20, y: 999 })).toEqual({ x: 16, y: 0 });
+  });
   it("projects primitives to editable nodes and segments without changing the primitive", () => {
     expect(realGeometryNodes(rectangle)).toHaveLength(9);
     expect(elementToContour(rectangle).contours[0]?.points).toHaveLength(5);
