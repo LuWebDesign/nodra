@@ -1,11 +1,34 @@
 import { describe, expect, it } from "vitest";
-import { boundsOf, boundsOfElements, boundsOutsidePage, closedElementToPolygon, cubicBezierBounds, cubicBezierDerivative, degreesToRadians, elementCenter, elementSegmentAt, elementToContour, evaluateCubicBezier, ELLIPSE_APPROXIMATION_SEGMENTS, groupCenter, groupHandlePoints, hitTest, mmToScreen, radiansToDegrees, realGeometryNodes, resizeGroup, resizeHandle, rotatedLineEndpoints, rotateElements, rotationFromDrag, rotationHandlePoints, screenToMm, shapeResultContours, splitCubicBezier, validateSize } from "./index.js";
+import { angularDimensionGeometry, boundsOf, boundsOfElements, boundsOutsidePage, closedElementToPolygon, cubicBezierBounds, cubicBezierDerivative, degreesToRadians, dimensionGeometry, dimensionKindForNodes, dimensionOffsetForAlignedPlacement, dimensionOffsetForPlacement, elementCenter, elementSegmentAt, elementToContour, evaluateCubicBezier, ELLIPSE_APPROXIMATION_SEGMENTS, groupCenter, groupHandlePoints, hitTest, mmToScreen, pointMidpoint, radiansToDegrees, realGeometryNodes, resizeGroup, resizeHandle, rotatedLineEndpoints, rotateElements, rotationFromDrag, rotationHandlePoints, screenToMm, shapeResultContours, splitCubicBezier, validateSize } from "./index.js";
 import { elementId, layerId } from "@nodra/domain";
 
 const style = { stroke: "#000", strokeWidth: 0.2 };
 const rectangle = { type: "rectangle" as const, id: elementId("r"), layerId: layerId("l"), position: { x: 10, y: 20 }, size: { width: 20, height: 10 }, cornerRadius: 0, rotation: 0, style };
 
 describe("canonical millimetre geometry", () => {
+  it("calculates dimension midpoint, axis, and natural placement offset", () => {
+    const first = { x: 10, y: 20 }; const second = { x: 50, y: 24 };
+    expect(pointMidpoint(first, second)).toEqual({ x: 30, y: 22 });
+    expect(dimensionKindForNodes(first, second)).toBe("horizontal");
+    expect(dimensionOffsetForPlacement("horizontal", pointMidpoint(first, second), { x: 999, y: 5 })).toEqual({ x: 0, y: -17 });
+    expect(dimensionOffsetForPlacement("vertical", { x: 4, y: 8 }, { x: 20, y: 999 })).toEqual({ x: 16, y: 0 });
+  });
+  it("uses aligned Euclidean geometry and only the perpendicular placement offset for diagonals", () => {
+    const start = { x: 10, y: 10 }; const end = { x: 40, y: 40 };
+    expect(dimensionKindForNodes(start, end)).toBe("aligned");
+    const offset = dimensionOffsetForAlignedPlacement(start, end, { x: 20, y: 35 });
+    const dimension = { type: "dimension" as const, id: elementId("aligned"), layerId: layerId("l"), kind: "aligned" as const, references: [{ kind: "node" as const, elementId: elementId("line"), nodeIndex: 0 }, { kind: "node" as const, elementId: elementId("line"), nodeIndex: 2 }] as const, offset, precision: 2, units: "mm" as const, rotation: 0 as const, style };
+    const line = { type: "line" as const, id: elementId("line"), layerId: layerId("l"), start, end, rotation: 0, style };
+    const geometry = dimensionGeometry(dimension, [line]);
+    expect(geometry?.value).toBeCloseTo(Math.hypot(30, 30));
+    expect(geometry && geometry.lineEnd.x - geometry.lineStart.x).toBeCloseTo(geometry ? geometry.lineEnd.y - geometry.lineStart.y : 0);
+  });
+  it("calculates a stable 90 degree angle from connected lines", () => {
+    const first = { type: "line" as const, id: elementId("first"), layerId: layerId("l"), start: { x: 20, y: 20 }, end: { x: 60, y: 20 }, rotation: 0, style };
+    const second = { type: "line" as const, id: elementId("second"), layerId: layerId("l"), start: { x: 20, y: 20 }, end: { x: 20, y: 60 }, rotation: 0, style };
+    const dimension = { type: "dimension" as const, id: elementId("angular"), layerId: layerId("l"), kind: "angular" as const, references: [{ kind: "line" as const, elementId: first.id }, { kind: "line" as const, elementId: second.id }] as const, offset: { x: 10, y: 10 }, precision: 2, units: "mm" as const, rotation: 0 as const, style };
+    expect(angularDimensionGeometry(dimension, [first, second])?.value).toBeCloseTo(90);
+  });
   it("projects primitives to editable nodes and segments without changing the primitive", () => {
     expect(realGeometryNodes(rectangle)).toHaveLength(9);
     expect(elementToContour(rectangle).contours[0]?.points).toHaveLength(5);
@@ -88,6 +111,11 @@ describe("canonical millimetre geometry", () => {
     expect(() => validateSize({ width: 0, height: 2 })).toThrow();
     expect(() => mmToScreen({ x: 1, y: 1 }, { zoom: 0, panMm: { x: 0, y: 0 } })).toThrow();
     expect(() => hitTest({ type: "line", id: elementId("line"), layerId: layerId("l"), start: { x: 0, y: 0 }, end: { x: 0, y: 0 }, rotation: 0, style }, { x: 0, y: 0 })).toThrow();
+  });
+  it("keeps dimensions out of boolean polygon conversion", () => {
+    const dimension = { type: "dimension" as const, id: elementId("boolean-dimension"), layerId: rectangle.layerId, kind: "horizontal" as const, references: [{ elementId: rectangle.id, nodeIndex: 0 }, { elementId: rectangle.id, nodeIndex: 1 }] as const, offset: { x: 0, y: -8 }, precision: 2, units: "mm" as const, rotation: 0 as const, style };
+    expect(() => closedElementToPolygon(dimension)).toThrow("Shape operations require closed objects");
+    expect(() => shapeResultContours("union", [rectangle, dimension])).toThrow("Shape operations require closed objects");
   });
   it("resizes proportional corners, including reverse drags", () => {
     expect(resizeHandle(rectangle, "se", { x: 30, y: 30 })).toEqual({ position: { x: 10, y: 20 }, size: { width: 20, height: 10 } });

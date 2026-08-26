@@ -7,12 +7,31 @@ const point = z.object({ x: finite, y: finite }).strict();
 const size = z.object({ width: finite.gt(0), height: finite.gt(0) }).strict();
 const style = z.object({ stroke: z.string().min(1), fill: z.string().min(1).optional(), strokeWidth: finite.gt(0) }).strict();
 const operation = z.object({ operation: z.enum(["cut", "engrave", "score"]), order: finite.int().nonnegative(), power: finite.min(0).max(100).optional(), speed: finite.gt(0).optional() }).strict();
+const visualLineEndpoints = (line: { readonly start: PointMm; readonly end: PointMm; readonly rotation: number }): readonly [PointMm, PointMm] => {
+  const center = { x: (line.start.x + line.end.x) / 2, y: (line.start.y + line.end.y) / 2 };
+  const rotate = (point: PointMm): PointMm => ({ x: center.x + (point.x - center.x) * Math.cos(line.rotation) - (point.y - center.y) * Math.sin(line.rotation), y: center.y + (point.x - center.x) * Math.sin(line.rotation) + (point.y - center.y) * Math.cos(line.rotation) });
+  return [rotate(line.start), rotate(line.end)];
+};
 const common = { id: nonEmptyId, layerId: nonEmptyId, rotation: finite, flipX: z.boolean().default(false), flipY: z.boolean().default(false), style, operation: operation.optional() };
 const cornerRadii = z.object({ topLeft: finite.min(0), topRight: finite.min(0), bottomRight: finite.min(0), bottomLeft: finite.min(0) }).strict();
 const rectangle = z.object({ ...common, type: z.literal("rectangle"), position: point, size, cornerRadius: finite.min(0).default(0), cornerRadii: cornerRadii.optional() }).strict();
 const ellipse = z.object({ ...common, type: z.literal("ellipse"), position: point, size }).strict();
 const line = z.object({ ...common, type: z.literal("line"), start: point, end: point }).strict().superRefine((value, ctx) => {
   if (value.start.x === value.end.x && value.start.y === value.end.y) ctx.addIssue({ code: "custom", message: "Line endpoints must differ", path: ["end"] });
+});
+const nodeReference = z.object({ kind: z.literal("node"), elementId: nonEmptyId, nodeIndex: finite.int().nonnegative() }).strict();
+const lineReference = z.object({ kind: z.literal("line"), elementId: nonEmptyId }).strict();
+const legacyNodeReference = z.object({ elementId: nonEmptyId, nodeIndex: finite.int().nonnegative() }).strict().transform((reference) => ({ kind: "node" as const, ...reference }));
+const dimensionReference = z.union([z.discriminatedUnion("kind", [nodeReference, lineReference]), legacyNodeReference]);
+const dimension = z.object({ id: nonEmptyId, layerId: nonEmptyId, type: z.literal("dimension"), kind: z.enum(["aligned", "horizontal", "vertical", "angular"]), references: z.tuple([dimensionReference, dimensionReference]), offset: point, precision: finite.int().min(0).max(6), units: z.literal("mm"), rotation: z.literal(0), style }).strict().superRefine((value, ctx) => {
+  const [first, second] = value.references;
+  if (value.kind === "angular") {
+    if (first.kind !== "line" || second.kind !== "line") ctx.addIssue({ code: "custom", message: "Angular dimensions require line references", path: ["references"] });
+    if (first.elementId === second.elementId) ctx.addIssue({ code: "custom", message: "Angular dimension lines must differ", path: ["references"] });
+  } else {
+    if (first.kind !== "node" || second.kind !== "node") ctx.addIssue({ code: "custom", message: "Linear dimensions require node references", path: ["references"] });
+    if (first.kind === "node" && second.kind === "node" && first.elementId === second.elementId && first.nodeIndex === second.nodeIndex) ctx.addIssue({ code: "custom", message: "Dimension references must differ", path: ["references"] });
+  }
 });
 const contour = z.object({ ...common, type: z.literal("contour"), position: point, size, contours: z.array(z.object({ points: z.array(point).min(3) }).strict()).min(1), fillRule: z.literal("evenodd") }).strict().superRefine((value, ctx) => {
   value.contours.forEach((ring, index) => {
@@ -25,7 +44,7 @@ const pathNode = z.object({ id: nonEmptyId, anchor: point, join: z.enum(["corner
 const pathLineSegment = z.object({ type: z.literal("line"), startNodeId: nonEmptyId, endNodeId: nonEmptyId }).strict();
 const pathCubicSegment = z.object({ type: z.literal("cubicBezier"), startNodeId: nonEmptyId, endNodeId: nonEmptyId, control1: point, control2: point }).strict();
 const pathSegment = z.discriminatedUnion("type", [pathLineSegment, pathCubicSegment]);
-const path = z.object({ id: nonEmptyId, layerId: nonEmptyId, type: z.literal("path"), nodes: z.array(pathNode).min(2), segments: z.array(pathSegment).min(1), closed: z.boolean(), style, operation: operation.optional() }).strict().superRefine((value, ctx) => {
+const path = z.object({ id: nonEmptyId, layerId: nonEmptyId, type: z.literal("path"), nodes: z.array(pathNode).min(2), segments: z.array(pathSegment).min(1), closed: z.boolean(), rotation: finite.optional(), flipX: z.boolean().optional(), flipY: z.boolean().optional(), style, operation: operation.optional() }).strict().superRefine((value, ctx) => {
   const nodeIds = value.nodes.map((node) => node.id);
   if (new Set(nodeIds).size !== nodeIds.length) ctx.addIssue({ code: "custom", message: "Path node IDs must be unique", path: ["nodes"] });
   const expectedCount = value.closed ? value.nodes.length : value.nodes.length - 1;
@@ -59,12 +78,35 @@ const glyph = z.object({ ...common, type: z.literal("glyph"), position: point, s
   const ids = value.contours.flatMap((contour) => contour.nodes.map((node) => node.id));
   if (new Set(ids).size !== ids.length) ctx.addIssue({ code: "custom", message: "Glyph node IDs must be unique across contours", path: ["contours"] });
 });
-export const elementSchema = z.discriminatedUnion("type", [rectangle, ellipse, line, contour, path, splineElementSchema, textElement, glyph]);
+export const elementSchema = z.discriminatedUnion("type", [rectangle, ellipse, line, dimension, contour, path, splineElementSchema, textElement, glyph]);
 export const layerSchema = z.object({ id: nonEmptyId, name: z.string().min(1), visible: z.boolean(), order: finite.int().nonnegative() }).strict();
 const documentFields = { id: nonEmptyId, revision: finite.int().nonnegative(), origin: z.literal("top-left"), units: z.literal("mm"), page: size, layers: z.array(layerSchema), elements: z.array(elementSchema) };
 export const documentSchema = z.object({ schemaVersion: z.literal(CURRENT_SCHEMA_VERSION), ...documentFields, capabilities: z.object({ spline: z.literal(1).optional() }).strict().optional() }).strict().superRefine((value, ctx) => {
   const layerIds = new Set(value.layers.map((layer) => layer.id));
-  for (const [index, element] of value.elements.entries()) if (!layerIds.has(element.layerId)) ctx.addIssue({ code: "custom", message: "Element references an unknown layer", path: ["elements", index, "layerId"] });
+  const elementIds = new Set(value.elements.map((element) => element.id));
+  for (const [index, element] of value.elements.entries()) {
+    if (!layerIds.has(element.layerId)) ctx.addIssue({ code: "custom", message: "Element references an unknown layer", path: ["elements", index, "layerId"] });
+    if (element.type === "dimension") for (const [referenceIndex, reference] of element.references.entries()) {
+      const target = value.elements.find((candidate) => candidate.id === reference.elementId);
+      if (!elementIds.has(reference.elementId)) ctx.addIssue({ code: "custom", message: "Dimension references an unknown element", path: ["elements", index, "references", referenceIndex, "elementId"] });
+      else if (reference.kind === "line") {
+        if (target?.type !== "line") ctx.addIssue({ code: "custom", message: "Line dimension references require line elements", path: ["elements", index, "references", referenceIndex] });
+        else if (target.start.x === target.end.x && target.start.y === target.end.y) ctx.addIssue({ code: "custom", message: "Dimension line references must not be degenerate", path: ["elements", index, "references", referenceIndex] });
+      } else {
+        const nodeCount = target?.type === "line" ? 3 : target?.type === "rectangle" ? 9 : target?.type === "ellipse" || target?.type === "text" ? 5 : target?.type === "contour" ? target.contours.reduce((count, contour) => count + Math.max(0, contour.points.length - 1) * 2, 0) : target?.type === "path" ? target.nodes.length + target.segments.filter((segment) => segment.type === "cubicBezier").length * 2 : target?.type === "spline" ? target.nodes.length + target.nodes.filter((node) => node.inHandle || node.outHandle).length : target?.type === "glyph" ? target.contours.reduce((count, contour) => count + contour.nodes.length + contour.segments.filter((segment) => segment.type === "cubicBezier").length * 2, 0) : undefined;
+        if (nodeCount === undefined || reference.nodeIndex >= nodeCount) ctx.addIssue({ code: "custom", message: "Dimension node reference is out of range", path: ["elements", index, "references", referenceIndex, "nodeIndex"] });
+      }
+    }
+    if (element.type === "dimension" && element.kind === "angular" && element.references.every((reference) => reference.kind === "line")) {
+      const first = value.elements.find((candidate) => candidate.id === element.references[0].elementId);
+      const second = value.elements.find((candidate) => candidate.id === element.references[1].elementId);
+      if (first?.type === "line" && second?.type === "line") {
+        const points = visualLineEndpoints(first); const otherPoints = visualLineEndpoints(second);
+        const connected = points.some((point) => otherPoints.some((other) => Math.hypot(point.x - other.x, point.y - other.y) <= 1e-6));
+        if (!connected) ctx.addIssue({ code: "custom", message: "Angular dimension lines must share a visual endpoint", path: ["elements", index, "references"] });
+      }
+    }
+  }
 });
 const pageSchema = z.object({ id: nonEmptyId, page: size, layers: z.array(layerSchema), elements: z.array(elementSchema) }).strict();
 export const projectSchema = z.object({ schemaVersion: z.literal(CURRENT_SCHEMA_VERSION), id: nonEmptyId, revision: finite.int().nonnegative(), origin: z.literal("top-left"), units: z.literal("mm"), pages: z.array(pageSchema).min(1), activePageId: nonEmptyId }).strict().superRefine((value, ctx) => {
@@ -80,7 +122,7 @@ export function migrateDocument(input: JsonValue): JsonValue {
   if (typeof input !== "object" || input === null || Array.isArray(input)) return input;
   const candidate = input as Record<string, unknown>;
   if (candidate.schemaVersion === 1) return { ...candidate, schemaVersion: CURRENT_SCHEMA_VERSION, page: { width: 1200, height: 900 } };
-  if (candidate.schemaVersion === 2) {
+  if (candidate.schemaVersion === 2 || candidate.schemaVersion === 3) {
     return { ...candidate, schemaVersion: CURRENT_SCHEMA_VERSION, page: candidate.page ?? { width: 1200, height: 900 } };
   }
   return input;
@@ -131,6 +173,7 @@ const elementPoints = (element: Element): readonly PointMm[] => {
     case "path": return element.nodes.map((node) => node.anchor);
     case "spline": return element.nodes.map((node) => node.anchor);
     case "contour": return element.contours.flatMap((contour) => contour.points);
+    case "dimension": return [];
     default: return [element.position, { x: element.position.x + element.size.width, y: element.position.y + element.size.height }];
   }
 };

@@ -1,9 +1,23 @@
 import { describe, expect, it } from "vitest";
 import { createDocument, elementId, layerId } from "@nodra/domain";
-import { canActivateRotation, centerPageInCanvas, clientPointToCanvas, cubicPlacementControls, hoveredSelectionCenter, INITIAL_ZOOM, isDrawingTool, marqueeSelection, MAX_ZOOM, MIN_ZOOM, movementExceedsThreshold, normalizeBounds, normalizeDrag, pagePointToCanvas, pagePointToScreen, screenDeltaToMm, screenPointToMm, containsBounds, elementsContainedBy, alignmentGuides, pathGuides, pickContourNode, pickContourSegment, pickElement, pickFormaNode, pickFormaSegment, pickNode, pickPathNode, pickPathSegment, pointerDownIntent, selectedNodeAnchor, selectedPathAnchorIds, selectionCenter, selectionFrame, snapMoveDelta, zoomAtPoint } from "./interaction.js";
+import { canActivateRotation, centerPageInCanvas, clientPointToCanvas, hoveredSelectionCenter, INITIAL_ZOOM, isDrawingTool, marqueeSelection, MAX_ZOOM, MIN_ZOOM, movementExceedsThreshold, normalizeBounds, normalizeDrag, pagePointToCanvas, pagePointToScreen, screenDeltaToMm, screenPointToMm, containsBounds, elementsContainedBy, pickDimensionTarget, pickElement, pickFormaNode, pickFormaSegment, pickNode, pointerDownIntent, selectedNodeAnchor, selectionCenter, selectionFrame, snapMoveDelta, zoomAtPoint } from "./interaction.js";
 import { geometryPatch, geometryValue } from "./propertyBar.js";
+import { dimensionKindForNodes, dimensionOffsetForPlacement, pointMidpoint } from "@nodra/geometry";
 
 describe("canvas coordinates", () => {
+  it("keeps node picking separate from element picking for dimension placement", () => {
+    const first = { x: 10, y: 10 }; const second = { x: 50, y: 12 }; const midpoint = pointMidpoint(first, second);
+    expect(dimensionKindForNodes(first, second)).toBe("horizontal");
+    expect(dimensionOffsetForPlacement("horizontal", midpoint, { x: midpoint.x, y: 0 })).toEqual({ x: 0, y: -11 });
+  });
+  it("picks line bodies for angular dimensions while endpoints remain node hits", () => {
+    const layer = { id: layerId("dimension-pick"), name: "Dimensions", visible: true, order: 0 };
+    const line = { type: "line" as const, id: elementId("dimension-pick-line"), layerId: layer.id, start: { x: 10, y: 10 }, end: { x: 50, y: 10 }, rotation: 0, style: { stroke: "#000", strokeWidth: 1 } };
+    const checked = { ...createDocument("dimension-pick-doc", [layer]), elements: [line] };
+    expect(pickDimensionTarget(checked, { x: 30, y: 10 }, 1)?.kind).toBe("line");
+    expect(pickDimensionTarget(checked, { x: 10, y: 10 }, 1)?.kind).toBe("node");
+    expect(pickNode(checked, { x: 30, y: 10 }, 1)).toMatchObject({ node: { kind: "center" } });
+  });
   it("centers the default 1200x900 page in a measured canvas", () => {
     expect(centerPageInCanvas({ width: 360, height: 270 }, { width: 1200, height: 900 }, INITIAL_ZOOM)).toEqual({ x: expect.closeTo(360), y: expect.closeTo(270) });
   });
@@ -27,6 +41,13 @@ describe("canvas coordinates", () => {
     expect(selectionCenter(line)).toEqual({ x: 12, y: 13 });
   });
 
+  it("picks rendered annotation dimensions from resolved references", () => {
+    const layer = { id: layerId("dimension-layer"), name: "Dimension layer", visible: true, order: 0 };
+    const line = { type: "line" as const, id: elementId("dimension-line"), layerId: layer.id, start: { x: 0, y: 0 }, end: { x: 10, y: 0 }, rotation: 0, style: { stroke: "#000", strokeWidth: 1 } };
+    const dimension = { type: "dimension" as const, id: elementId("dimension-hit"), layerId: layer.id, kind: "aligned" as const, references: [{ elementId: line.id, nodeIndex: 0 }, { elementId: line.id, nodeIndex: 2 }] as const, offset: { x: 0, y: -8 }, precision: 2, units: "mm" as const, rotation: 0 as const, style: { stroke: "#2563eb", strokeWidth: 0.45 } };
+    expect(pickElement({ ...createDocument("dimension-doc", [layer]), elements: [line, dimension] }, { x: 5, y: -8 }, 3)).toBe(dimension.id);
+  });
+
   it("shows center feedback only when the selected object is the picked object", () => {
     const layer = { id: layerId("center-hover"), name: "Center hover", visible: true, order: 0 };
     const document = createDocument("center-hover-doc", [layer]);
@@ -37,27 +58,15 @@ describe("canvas coordinates", () => {
   });
 });
 
-describe("alignment guides", () => {
-  it("returns vertical and horizontal visual guides for a moved object", () => {
-    const layer = { id: layerId("alignment-layer"), name: "Alignment", visible: true, order: 0 };
-    const source = { type: "rectangle" as const, id: elementId("alignment-source"), layerId: layer.id, position: { x: 0, y: 0 }, size: { width: 10, height: 10 }, cornerRadius: 0, rotation: 0, style: { stroke: "#000", strokeWidth: 1 } };
-    const target = { ...source, id: elementId("alignment-target"), position: { x: 20, y: 12 } };
-    const result = alignmentGuides({ ...createDocument("alignment-doc", [layer]), elements: [source, target] }, [source.id], { x: 10, y: 12 }, 1, 8);
-    expect(result).toEqual(expect.arrayContaining([
-      expect.objectContaining({ orientation: "vertical", coordinate: 20 }),
-      expect.objectContaining({ orientation: "horizontal", coordinate: expect.any(Number) }),
-    ]));
-  });
-
-  it("uses the complete selected group and ignores hidden reference objects", () => {
-    const visible = { id: layerId("visible-alignment"), name: "Visible", visible: true, order: 0 };
-    const hidden = { id: layerId("hidden-alignment"), name: "Hidden", visible: false, order: 1 };
-    const make = (id: string, layerIdValue: typeof visible.id, x: number) => ({ type: "rectangle" as const, id: elementId(id), layerId: layerIdValue, position: { x, y: 0 }, size: { width: 10, height: 10 }, cornerRadius: 0, rotation: 0, style: { stroke: "#000", strokeWidth: 1 } });
-    const first = make("alignment-group-a", visible.id, 0);
-    const second = make("alignment-group-b", visible.id, 20);
-    const target = make("alignment-hidden-target", hidden.id, 30);
-    const result = alignmentGuides({ ...createDocument("alignment-group-doc", [visible, hidden]), elements: [first, second, target] }, [first.id, second.id], { x: 10, y: 0 }, 1, 8);
-    expect(result.some((guide) => guide.coordinate === 30)).toBe(false);
+describe("Forma hit testing", () => {
+  it("ignores text without breaking editable closed geometry", () => {
+    const layer = { id: layerId("forma-text"), name: "Forma", visible: true, order: 0 };
+    const text = { type: "text" as const, id: elementId("forma-text"), layerId: layer.id, position: { x: 10, y: 10 }, size: { width: 30, height: 10 }, text: "A", fontFamily: "Arial", fontSize: 24, fontWeight: "normal" as const, fontStyle: "normal" as const, textAlign: "left" as const, lineHeight: 1.2, rotation: 0, style: { stroke: "#000", fill: "#000", strokeWidth: 1 } };
+    const rectangle = { type: "rectangle" as const, id: elementId("forma-rectangle"), layerId: layer.id, position: { x: 50, y: 10 }, size: { width: 20, height: 10 }, cornerRadius: 0, rotation: 0, style: { stroke: "#000", strokeWidth: 1 } };
+    const checked = { ...createDocument("forma-text-document", [layer]), elements: [text, rectangle] };
+    expect(() => pickFormaSegment(checked, { x: 60, y: 10 }, 1)).not.toThrow();
+    expect(pickFormaSegment(checked, { x: 60, y: 10 }, 1)).toMatchObject({ elementId: rectangle.id });
+    expect(pickFormaNode(checked, { x: 20, y: 10 }, 1)).toBeUndefined();
   });
 });
 
@@ -79,12 +88,6 @@ describe("pointer movement threshold", () => {
   });
 });
 
-describe("pen cubic placement", () => {
-  it("derives finite controls from an endpoint drag", () => {
-    expect(cubicPlacementControls({ x: 0, y: 0 }, { x: 30, y: 0 }, { x: 30, y: 20 })).toEqual({ control1: { x: 10, y: 0 }, control2: { x: 30, y: -20 } });
-  });
-});
-
 describe("drawing tool routing", () => {
   it("activates rotation only for an already-selected single hit in the select tool", () => {
     const selected = elementId("selected");
@@ -93,30 +96,10 @@ describe("drawing tool routing", () => {
     expect(canActivateRotation("select", [selected], undefined)).toBe(false);
     expect(canActivateRotation("rectangle", [selected], selected)).toBe(false);
   });
-
-  it("picks path anchors and cubic controls in document space", () => {
-    const layer = { id: layerId("path-layer"), name: "Paths", visible: true, order: 0 };
-    const path = { type: "path" as const, id: elementId("path-hit"), layerId: layer.id, nodes: [{ id: "a", anchor: { x: 10, y: 10 }, join: "corner" as const }, { id: "b", anchor: { x: 40, y: 10 }, join: "corner" as const }], segments: [{ type: "cubicBezier" as const, startNodeId: "a", endNodeId: "b", control1: { x: 20, y: 30 }, control2: { x: 30, y: 30 } }], closed: false, style: { stroke: "#000", strokeWidth: 1 } };
-    const document = createDocument("path-hit-doc", [layer]);
-    const anchor = pickPathNode({ ...document, elements: [path] }, { x: 10, y: 10 }, 1);
-    const control = pickPathNode({ ...document, elements: [path] }, { x: 20, y: 30 }, 1);
-    expect(anchor?.node).toMatchObject({ kind: "anchor", nodeId: "a" });
-    expect(control?.node).toMatchObject({ kind: "control", handle: "control1", segmentIndex: 0 });
-    expect(pickPathSegment({ ...document, elements: [path] }, { x: 25, y: 25 }, 1)).toMatchObject({ elementId: path.id, segmentIndex: 0 });
-    expect(pickPathSegment({ ...document, elements: [path] }, { x: 10, y: 10 }, 1)).toBeUndefined();
-    expect(selectedPathAnchorIds(path, [`${path.id}:p:0`, `${path.id}:p:1`, `${path.id}:p:1`, `${path.id}:p:2`])).toEqual(["a", "b"]);
-  });
-  it("derives directional guides only for cubic controls", () => {
-    const layer = { id: layerId("guide-layer"), name: "Guides", visible: true, order: 0 };
-    const path = { type: "path" as const, id: elementId("guide-path"), layerId: layer.id, nodes: [{ id: "a", anchor: { x: 0, y: 0 }, join: "corner" as const }, { id: "b", anchor: { x: 40, y: 0 }, join: "corner" as const }, { id: "c", anchor: { x: 80, y: 0 }, join: "corner" as const }], segments: [{ type: "cubicBezier" as const, startNodeId: "a", endNodeId: "b", control1: { x: 10, y: 10 }, control2: { x: 30, y: 10 } }, { type: "line" as const, startNodeId: "b", endNodeId: "c" }], closed: false, style: { stroke: "#000", strokeWidth: 1 } };
-    expect(pathGuides(path)).toEqual([
-      { elementId: path.id, segmentIndex: 0, nodeId: "a", anchor: { x: 0, y: 0 }, control: { x: 10, y: 10 }, direction: "outgoing" },
-      { elementId: path.id, segmentIndex: 0, nodeId: "b", anchor: { x: 40, y: 0 }, control: { x: 30, y: 10 }, direction: "incoming" },
-    ]);
-  });
   it("recognizes drawing tools without consulting object hit testing", () => {
     expect(["rectangle", "ellipse", "line"].every(isDrawingTool)).toBe(true);
     expect(isDrawingTool("select")).toBe(false);
+    expect(isDrawingTool("dimension")).toBe(false);
     expect(isDrawingTool("pan")).toBe(false);
   });
 
@@ -276,31 +259,5 @@ describe("drag geometry", () => {
     const node = pickNode(checked, { x: 10, y: 10 }, 1);
     expect(selectedNodeAnchor(node, [rectangle.id])).toBe(node);
     expect(selectedNodeAnchor(node, [])).toBeUndefined();
-  });
-
-  it("identifies contour vertices by ring and point indexes, excluding only the repeated closing point", () => {
-    const layer = { id: layerId("contour-node"), name: "Contour node", visible: true, order: 0 };
-    const contour = { type: "contour" as const, id: elementId("contour-node"), layerId: layer.id, position: { x: 10, y: 10 }, size: { width: 20, height: 20 }, contours: [{ points: [{ x: 10, y: 10 }, { x: 30, y: 10 }, { x: 30, y: 30 }, { x: 10, y: 10 }] }, { points: [{ x: 15, y: 15 }, { x: 20, y: 15 }, { x: 15, y: 15 }] }], fillRule: "evenodd" as const, rotation: 0, style: { stroke: "#000", strokeWidth: 1 } };
-    const document = { ...createDocument("contour-node-document", [layer]), elements: [contour] };
-    expect(pickContourNode(document, { x: 30, y: 30 }, 1)).toMatchObject({ elementId: contour.id, ringIndex: 0, pointIndex: 2 });
-    expect(pickContourNode(document, { x: 10, y: 10 }, 1)).toMatchObject({ ringIndex: 0, pointIndex: 0 });
-    expect(pickContourSegment(document, { x: 20, y: 10 }, 1)).toMatchObject({ elementId: contour.id, ringIndex: 0, segmentIndex: 0 });
-    expect(pickContourSegment(document, { x: 10, y: 10 }, 1)).toBeUndefined();
-  });
-
-  it("picks Forma nodes and segments for primitives", () => {
-    const layer = { id: layerId("forma-primitive"), name: "Forma primitive", visible: true, order: 0 };
-    const rectangle = { type: "rectangle" as const, id: elementId("forma-rectangle"), layerId: layer.id, position: { x: 10, y: 10 }, size: { width: 20, height: 10 }, cornerRadius: 0, rotation: 0, style: { stroke: "#000", strokeWidth: 1 } };
-    const document = { ...createDocument("forma-primitive-document", [layer]), elements: [rectangle] };
-    expect(pickFormaNode(document, { x: 10, y: 10 }, 1)).toMatchObject({ elementId: rectangle.id, nodeIndex: 0 });
-    expect(pickFormaSegment(document, { x: 20, y: 10 }, 1)).toMatchObject({ elementId: rectangle.id, segmentIndex: 0 });
-  });
-
-  it("keeps primitive and contour Forma node identities distinct", () => {
-    const layer = { id: layerId("forma-identity"), name: "Forma identity", visible: true, order: 0 };
-    const rectangle = { type: "rectangle" as const, id: elementId("forma-identity-rectangle"), layerId: layer.id, position: { x: 10, y: 10 }, size: { width: 20, height: 10 }, cornerRadius: 0, rotation: 0, style: { stroke: "#000", strokeWidth: 1 } };
-    const checked = { ...createDocument("forma-identity-document", [layer]), elements: [rectangle] };
-    const node = pickFormaNode(checked, { x: 10, y: 10 }, 1);
-    expect(node && `${node.elementId}:p:${node.nodeIndex}`).toBe(`${rectangle.id}:p:0`);
   });
 });

@@ -57,7 +57,7 @@ export const createElement = (element: Element): EditorCommand => ({
 export const convertTextToGlyphs = (textId: ElementId, outlines: readonly GlyphOutlineData[]): EditorCommand => ({
   name: `text-to-glyphs:${textId}`,
   apply: (document) => {
-    const text = document.elements.find((element) => element.id === textId && element.type === "text");
+    const text = document.elements.find((element): element is Extract<Element, { type: "text" }> => element.id === textId && element.type === "text");
     if (!text) return { success: false, error: "Text element not found" };
     if (!Array.isArray(outlines) || !outlines.length) return { success: false, error: "The text outline contains no visible glyphs" };
     const existing = new Set(document.elements.map((element) => element.id));
@@ -99,6 +99,7 @@ export const moveElement = (id: ElementId, delta: PointMm): EditorCommand => ({
   apply: (document) => {
     const element = document.elements.find((current) => current.id === id);
     if (!element) return { success: false, error: `Element not found: ${id}` };
+    if (element.type === "dimension") return replaceElements(document, document.elements.map((current) => current.id === id && current.type === "dimension" ? { ...current, offset: { x: current.offset.x + delta.x, y: current.offset.y + delta.y } } : current));
     if (element.type === "line") return replaceElements(document, document.elements.map((current) => current.id === id && current.type === "line" ? { ...current, start: { x: current.start.x + delta.x, y: current.start.y + delta.y }, end: { x: current.end.x + delta.x, y: current.end.y + delta.y } } : current));
     if (element.type === "contour") return replaceElements(document, document.elements.map((current) => current.id === id && current.type === "contour" ? contourWithPoints(current, current.contours.map((contour) => contour.points.map((point) => ({ x: point.x + delta.x, y: point.y + delta.y })))) : current));
     if (element.type === "path") return replaceElements(document, document.elements.map((current) => current.id === id && current.type === "path" ? translatePath(current, delta) : current));
@@ -117,8 +118,9 @@ export const moveElements = (ids: readonly ElementId[], delta: PointMm): EditorC
     if (known.length !== selected.size) return { success: false, error: "One or more elements were not found" };
     if (known.length === 0) return { success: false, error: "No elements selected" };
     return replaceElements(document, document.elements.map((element) => {
-      if (!selected.has(element.id)) return element;
-      if (element.type === "line") return { ...element, start: { x: element.start.x + delta.x, y: element.start.y + delta.y }, end: { x: element.end.x + delta.x, y: element.end.y + delta.y } };
+       if (!selected.has(element.id)) return element;
+       if (element.type === "dimension") return { ...element, offset: { x: element.offset.x + delta.x, y: element.offset.y + delta.y } };
+       if (element.type === "line") return { ...element, start: { x: element.start.x + delta.x, y: element.start.y + delta.y }, end: { x: element.end.x + delta.x, y: element.end.y + delta.y } };
       if (element.type === "contour") return contourWithPoints(element, element.contours.map((contour) => contour.points.map((point) => ({ x: point.x + delta.x, y: point.y + delta.y }))));
       if (element.type === "path") return translatePath(element, delta);
       if (element.type === "glyph") return translateGlyph(element, delta);
@@ -137,22 +139,46 @@ export const rotateElement = (id: ElementId, rotation: number): EditorCommand =>
   const current = document.elements.find((element) => element.id === id);
   if (!current) return { success: false, error: `Element not found: ${id}` };
    if (current.type === "glyph") return replaceElements(document, document.elements.map((element) => element.id === id && element.type === "glyph" ? rotateElements([element], elementCenter(element), rotation - element.rotation)[0]! : element));
+   if (current.type === "dimension" || current.type === "path" || current.type === "spline") return { success: false, error: "Element rotation is not supported" };
    if (current.type !== "contour") return updateElement(id, { rotation }).apply(document);
   const center = elementCenter(current);
   return replaceElements(document, document.elements.map((element) => element.id === id && element.type === "contour" ? contourWithPoints(element, element.contours.map((contour) => contour.points.map((point) => transformPoint({ x: point.x - center.x, y: point.y - center.y }, center, rotation - current.rotation)))) : element));
 } });
 
 export type ShapeOperation = "weld" | "subtract" | "outline";
+const isClosedShape = (element: Element): boolean => {
+  if (element.type === "line" || element.type === "dimension" || element.type === "text") return false;
+  if (element.type === "path" || element.type === "spline") return element.closed;
+  return true;
+};
+
+const dimensionReferencesElement = (dimension: Extract<Element, { type: "dimension" }>, ids: ReadonlySet<ElementId>): boolean =>
+  dimension.references.some((reference) => ids.has(reference.elementId));
+
+/** Returns dimensions whose references would disappear in a weld or subtract operation. */
+export const invalidDimensionIdsForShapeOperation = (document: DocumentSnapshot, ids: readonly ElementId[], operation: ShapeOperation): readonly ElementId[] => {
+  if (operation === "outline") return [];
+  const affected = new Set(document.elements
+    .filter((element) => ids.includes(element.id) && element.type !== "dimension" && isClosedShape(element))
+    .map((element) => element.id));
+  if (!affected.size) return [];
+  return document.elements
+    .filter((element): element is Extract<Element, { type: "dimension" }> => element.type === "dimension" && dimensionReferencesElement(element, affected))
+    .map((dimension) => dimension.id);
+};
+
 export const shapeOperation = (ids: readonly ElementId[], operation: ShapeOperation): EditorCommand => ({
   name: `shape-${operation}:${ids.join(",")}`,
   apply: (document) => {
     const selected = ids.map((id) => document.elements.find((element) => element.id === id));
     const known = selected.filter((element): element is Element => Boolean(element));
     if (known.length !== selected.length || !known.length) return { success: false, error: "No valid objects selected" };
-    if (known.some((element) => element.type === "line")) return { success: false, error: "Shape operations require closed objects" };
-    if (operation === "subtract" && known.length < 2) return { success: false, error: "Recortar requires at least two objects" };
-    const first = known[0]!;
-    const contours = shapeResultContours(operation === "subtract" ? "difference" : "union", operation === "subtract" ? [known.at(-1)!, ...known.slice(0, -1)] : known);
+    const geometry = operation === "weld" || operation === "subtract" ? known.filter((element) => element.type !== "dimension") : known;
+    if (geometry.some((element) => !isClosedShape(element))) return { success: false, error: "Shape operations require closed objects" };
+    if (geometry.length === 0) return { success: false, error: "No closed objects selected" };
+    if (operation === "subtract" && geometry.length < 2) return { success: false, error: "Recortar requires at least two objects" };
+    const first = geometry[0]!;
+    const contours = shapeResultContours(operation === "subtract" ? "difference" : "union", operation === "subtract" ? [geometry.at(-1)!, ...geometry.slice(0, -1)] : geometry);
     if (!contours.length) return { success: false, error: "The shape operation produced an empty result" };
     const points = contours.flatMap((contour) => contour.points);
     const xs = points.map((point) => point.x); const ys = points.map((point) => point.y);
@@ -166,11 +192,12 @@ export const shapeOperation = (ids: readonly ElementId[], operation: ShapeOperat
       fillRule: "evenodd" as const,
       rotation: 0 as const,
       style: first.style,
-      ...(first.operation ? { operation: first.operation } : {}),
+       ...( "operation" in first && first.operation ? { operation: first.operation } : {}),
     };
-    const removed = new Set(known.map((element) => element.id));
-    const firstIndex = Math.min(...known.map((element) => elementIndex(document, element.id)));
-    const elements = document.elements.filter((element) => !removed.has(element.id));
+    const removed = new Set(geometry.map((element) => element.id));
+    const invalidDimensions = new Set(invalidDimensionIdsForShapeOperation(document, ids, operation));
+    const firstIndex = Math.min(...geometry.map((element) => elementIndex(document, element.id)));
+    const elements = document.elements.filter((element) => !removed.has(element.id) && !invalidDimensions.has(element.id));
     elements.splice(firstIndex, 0, resultElement);
     return replaceElements(document, elements);
   },
@@ -496,6 +523,7 @@ export const deleteContourNodes = (id: ElementId, addresses: readonly ContourNod
 });
 
 const translateElement = (element: Element, delta: PointMm, id: ElementId): Element => {
+  if (element.type === "dimension") return { ...element, id, offset: { x: element.offset.x + delta.x, y: element.offset.y + delta.y } };
   if (element.type === "line") return { ...element, id, start: { x: element.start.x + delta.x, y: element.start.y + delta.y }, end: { x: element.end.x + delta.x, y: element.end.y + delta.y } };
   if (element.type === "contour") return { ...contourWithPoints(element, element.contours.map((contour) => contour.points.map((point) => ({ x: point.x + delta.x, y: point.y + delta.y })))), id, rotation: element.rotation };
   if (element.type === "path") return { ...translatePath(element, delta), id };
@@ -531,7 +559,8 @@ export const flipElements = (ids: readonly ElementId[], axis: FlipAxis): EditorC
     const center = groupCenter(boundsOfElements(known));
     const horizontal = axis === "horizontal";
     return replaceElements(document, document.elements.map((element) => {
-      if (!selected.has(element.id)) return element;
+       if (!selected.has(element.id)) return element;
+       if (element.type === "dimension") return element;
       const currentCenter = elementCenter(element);
       const reflectedCenter = horizontal
         ? { x: center.x * 2 - currentCenter.x, y: currentCenter.y }

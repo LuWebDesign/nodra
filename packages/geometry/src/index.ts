@@ -1,5 +1,5 @@
 import polygonClipping, { type MultiPolygon } from "polygon-clipping";
-import type { ContourElement, Element, ElementId, EllipseElement, GlyphElement, HandleOffset, LineElement, PathCubicSegment, PathElement, PointMm, RectangleElement, SizeMm, SplineElement, SplineNode } from "@nodra/domain";
+import type { ContourElement, DimensionElement, Element, ElementId, EllipseElement, GlyphElement, HandleOffset, LineElement, PathCubicSegment, PathElement, PointMm, RectangleElement, SizeMm, SplineElement, SplineNode } from "@nodra/domain";
 
 export interface Bounds { readonly x: number; readonly y: number; readonly width: number; readonly height: number }
 export interface Viewport { readonly zoom: number; readonly panMm: PointMm }
@@ -17,6 +17,57 @@ export const ELLIPSE_APPROXIMATION_SEGMENTS = 64;
 export const ROUNDED_RECTANGLE_APPROXIMATION_SEGMENTS = 8;
 
 export interface CubicBezier { readonly p0: PointMm; readonly p1: PointMm; readonly p2: PointMm; readonly p3: PointMm }
+export interface LinearDimensionGeometry { readonly kind: "aligned" | "horizontal" | "vertical"; readonly start: PointMm; readonly end: PointMm; readonly lineStart: PointMm; readonly lineEnd: PointMm; readonly text: PointMm; readonly value: number }
+export interface AngularDimensionGeometry { readonly kind: "angular"; readonly vertex: PointMm; readonly start: PointMm; readonly end: PointMm; readonly lineStart: PointMm; readonly lineEnd: PointMm; readonly text: PointMm; readonly value: number; readonly radius: number; readonly sweep: 0 | 1 }
+export type DimensionGeometry = LinearDimensionGeometry | AngularDimensionGeometry;
+export type DimensionPlacementKind = Extract<DimensionElement["kind"], "aligned" | "horizontal" | "vertical">;
+export const pointMidpoint = (first: PointMm, second: PointMm): PointMm => ({ x: (first.x + second.x) / 2, y: (first.y + second.y) / 2 });
+export const dimensionKindForNodes = (first: PointMm, second: PointMm): DimensionPlacementKind => {
+  const dx = Math.abs(second.x - first.x); const dy = Math.abs(second.y - first.y);
+  if (dx === 0) return "vertical";
+  if (dy === 0 || dy <= dx * 0.1) return "horizontal";
+  if (dx <= dy * 0.1) return "vertical";
+  return "aligned";
+};
+export const dimensionOffsetForPlacement = (kind: DimensionPlacementKind, midpoint: PointMm, placement: PointMm): PointMm => kind === "horizontal" ? { x: 0, y: placement.y - midpoint.y } : kind === "vertical" ? { x: placement.x - midpoint.x, y: 0 } : { x: placement.x - midpoint.x, y: placement.y - midpoint.y };
+export const dimensionOffsetForAlignedPlacement = (start: PointMm, end: PointMm, placement: PointMm): PointMm => {
+  const length = Math.hypot(end.x - start.x, end.y - start.y); if (length === 0) return { x: 0, y: 0 };
+  const midpoint = pointMidpoint(start, end); const signed = ((end.x - start.x) * (placement.y - midpoint.y) - (end.y - start.y) * (placement.x - midpoint.x)) / length;
+  return { x: -(end.y - start.y) / length * signed, y: (end.x - start.x) / length * signed };
+};
+const nodeReference = (reference: DimensionElement["references"][number]): reference is Extract<DimensionElement["references"][number], { nodeIndex: number }> => "nodeIndex" in reference;
+const lineAt = (reference: DimensionElement["references"][number], elements: readonly Element[]) => "kind" in reference && reference.kind === "line" ? elements.find((candidate): candidate is LineElement => candidate.id === reference.elementId && candidate.type === "line") : undefined;
+export function angularDimensionGeometry(element: DimensionElement, elements: readonly Element[]): AngularDimensionGeometry | undefined {
+  if (element.kind !== "angular" || !element.references.every((reference) => "kind" in reference && reference.kind === "line")) return undefined;
+  const first = lineAt(element.references[0], elements); const second = lineAt(element.references[1], elements); if (!first || !second) return undefined;
+  const [firstStart, firstEnd] = rotatedLineEndpoints(first); const [secondStart, secondEnd] = rotatedLineEndpoints(second);
+  const candidates: readonly [PointMm, PointMm, PointMm][] = [[firstStart, firstEnd, secondStart], [firstStart, firstEnd, secondEnd], [firstEnd, firstStart, secondStart], [firstEnd, firstStart, secondEnd]];
+  const connected = candidates.find((candidate) => Math.hypot(candidate[0].x - candidate[2].x, candidate[0].y - candidate[2].y) <= 1e-6); if (!connected) return undefined;
+  const vertex = connected[0]; const firstRay = { x: connected[1].x - vertex.x, y: connected[1].y - vertex.y }; const secondEndpoint = Math.hypot(vertex.x - secondStart.x, vertex.y - secondStart.y) <= 1e-6 ? secondEnd : secondStart; const secondRay = { x: secondEndpoint.x - vertex.x, y: secondEndpoint.y - vertex.y };
+  const firstLength = Math.hypot(firstRay.x, firstRay.y); const secondLength = Math.hypot(secondRay.x, secondRay.y); if (firstLength === 0 || secondLength === 0) return undefined;
+  const unitFirst = { x: firstRay.x / firstLength, y: firstRay.y / firstLength }; const unitSecond = { x: secondRay.x / secondLength, y: secondRay.y / secondLength }; const cross = unitFirst.x * unitSecond.y - unitFirst.y * unitSecond.x; const dot = unitFirst.x * unitSecond.x + unitFirst.y * unitSecond.y;
+  const value = Math.atan2(Math.abs(cross), dot) * 180 / Math.PI; const radius = Math.max(Math.hypot(element.offset.x, element.offset.y), 8); const bisector = { x: unitFirst.x + unitSecond.x, y: unitFirst.y + unitSecond.y }; const bisectorLength = Math.hypot(bisector.x, bisector.y); const direction = bisectorLength > 1e-9 ? { x: bisector.x / bisectorLength, y: bisector.y / bisectorLength } : { x: -unitFirst.y, y: unitFirst.x };
+  const lineStart = { x: vertex.x + unitFirst.x * radius, y: vertex.y + unitFirst.y * radius }; const lineEnd = { x: vertex.x + unitSecond.x * radius, y: vertex.y + unitSecond.y * radius };
+  return { kind: "angular", vertex, start: lineStart, end: lineEnd, lineStart, lineEnd, text: { x: vertex.x + direction.x * radius, y: vertex.y + direction.y * radius }, value, radius, sweep: cross >= 0 ? 1 : 0 };
+}
+export function dimensionGeometry(element: DimensionElement, elements: readonly Element[]): DimensionGeometry | undefined {
+  if (element.kind === "angular") return angularDimensionGeometry(element, elements);
+  if (!nodeReference(element.references[0]) || !nodeReference(element.references[1])) return undefined;
+  const startElement = elements.find((candidate) => candidate.id === element.references[0].elementId);
+  const endElement = elements.find((candidate) => candidate.id === element.references[1].elementId);
+  if (!startElement || !endElement || startElement.type === "dimension" || endElement.type === "dimension") return undefined;
+  const startReference = element.references[0]; const endReference = element.references[1];
+  const start = realGeometryNodes(startElement)[startReference.nodeIndex]?.point;
+  const end = realGeometryNodes(endElement)[endReference.nodeIndex]?.point;
+  if (!start || !end) return undefined;
+  const midpoint = pointMidpoint(start, end);
+  const text = { x: midpoint.x + element.offset.x, y: midpoint.y + element.offset.y };
+  const lineStart = element.kind === "horizontal" ? { x: start.x, y: text.y } : element.kind === "vertical" ? { x: text.x, y: start.y } : alignedOffsetPoint(start, start, end, element.offset);
+  const lineEnd = element.kind === "horizontal" ? { x: end.x, y: text.y } : element.kind === "vertical" ? { x: text.x, y: end.y } : alignedOffsetPoint(end, start, end, element.offset);
+  const value = element.kind === "horizontal" ? Math.abs(end.x - start.x) : element.kind === "vertical" ? Math.abs(end.y - start.y) : Math.hypot(end.x - start.x, end.y - start.y);
+  return { kind: element.kind, start, end, lineStart, lineEnd, text: element.kind === "aligned" ? pointMidpoint(lineStart, lineEnd) : text, value };
+}
+const alignedOffsetPoint = (point: PointMm, start: PointMm, end: PointMm, storedOffset: PointMm): PointMm => { const length = Math.hypot(end.x - start.x, end.y - start.y); if (length === 0) return point; const signed = ((end.x - start.x) * storedOffset.y - (end.y - start.y) * storedOffset.x) / length; return { x: point.x - (end.y - start.y) / length * signed, y: point.y + (end.x - start.x) / length * signed }; };
 export const resolveHandle = (anchor: PointMm, offset: HandleOffset): PointMm => ({ x: anchor.x + offset.dx, y: anchor.y + offset.dy });
 export const splineCubicBezier = (start: SplineNode, end: SplineNode): CubicBezier => ({ p0: start.anchor, p1: resolveHandle(start.anchor, start.outHandle ?? { dx: 0, dy: 0 }), p2: resolveHandle(end.anchor, end.inHandle ?? { dx: 0, dy: 0 }), p3: end.anchor });
 export interface PathGeometryNode { readonly kind: "anchor" | "control"; readonly nodeId: string; readonly segmentIndex?: number; readonly handle?: "control1" | "control2"; readonly point: PointMm }
@@ -152,7 +203,7 @@ const assertPositive = (value: number, name: string): void => { assertFinite(val
 const rotate = (point: PointMm, angle: number): PointMm => ({ x: point.x * Math.cos(angle) - point.y * Math.sin(angle), y: point.x * Math.sin(angle) + point.y * Math.cos(angle) });
 
 export function elementCenter(element: Element): PointMm {
-  return element.type === "line"
+  return element.type === "dimension" ? element.offset : element.type === "line"
     ? { x: (element.start.x + element.end.x) / 2, y: (element.start.y + element.end.y) / 2 }
     : element.type === "contour" ? groupCenter(contourBounds(element))
     : element.type === "path" ? groupCenter(pathBounds(element))
@@ -192,10 +243,11 @@ export function elementToContour(element: Element): ContourElement {
     : contoursFromMultiPolygon(closedElementToPolygon(element));
   const points = contours.flatMap((ring) => ring.points);
   const xs = points.map((point) => point.x); const ys = points.map((point) => point.y);
-  return { type: "contour", id: element.id, layerId: element.layerId, position: { x: Math.min(...xs), y: Math.min(...ys) }, size: { width: Math.max(0.001, Math.max(...xs) - Math.min(...xs)), height: Math.max(0.001, Math.max(...ys) - Math.min(...ys)) }, contours, fillRule: "evenodd", rotation: 0, style: element.style, ...(element.operation ? { operation: element.operation } : {}) };
+  return { type: "contour", id: element.id, layerId: element.layerId, position: { x: Math.min(...xs), y: Math.min(...ys) }, size: { width: Math.max(0.001, Math.max(...xs) - Math.min(...xs)), height: Math.max(0.001, Math.max(...ys) - Math.min(...ys)) }, contours, fillRule: "evenodd", rotation: 0, style: element.style, ...( "operation" in element && element.operation ? { operation: element.operation } : {}) };
 }
 
 export function elementSegmentAt(element: Element, point: PointMm, toleranceMm = 0): ContourSegmentHit | undefined {
+  if (element.type === "text") return undefined;
   if (element.type === "contour") return contourSegmentAt(element, point, toleranceMm);
   if (element.type === "line") {
     const [start, end] = rotatedLineEndpoints(element);
@@ -268,11 +320,10 @@ function primitivePolygon(element: RectangleElement | EllipseElement): [number, 
 }
 
 export function closedElementToPolygon(element: Element): MultiPolygon {
-  if (element.type === "line") throw new Error("Shape operations require closed objects");
+  if (element.type === "line" || element.type === "dimension" || element.type === "text") throw new Error("Shape operations require closed objects");
   if (element.type === "path") { if (!element.closed) throw new Error("Shape operations require closed objects"); return [[flattenPath(element).map((point) => [point.x, point.y] as [number, number])]]; }
   if (element.type === "spline") { if (!element.closed) throw new Error("Shape operations require closed objects"); return [[splinePoints(element).map((point) => [point.x, point.y] as [number, number])]]; }
   if (element.type === "glyph") return [element.contours.map((contour) => flattenPath(glyphPath(element, contour)).map((point) => [point.x, point.y] as [number, number]))];
-  if (element.type === "text") throw new Error("Shape operations require closed objects");
   if (element.type === "contour") return [element.contours.map((contour) => contour.points.map((point) => [point.x, point.y] as [number, number]))];
   return [[primitivePolygon(element)]];
 }
@@ -283,7 +334,7 @@ export function contoursFromMultiPolygon(polygons: MultiPolygon): ContourElement
 
 export type ShapeOperation = "union" | "difference";
 export function shapeResultContours(operation: ShapeOperation, elements: readonly Element[]): ContourElement["contours"] {
-  if (!elements.length || elements.some((element) => element.type === "line")) throw new Error("Shape operations require closed objects");
+  if (!elements.length || elements.some((element) => element.type === "line" || element.type === "dimension" || element.type === "text")) throw new Error("Shape operations require closed objects");
   const polygons = elements.map(closedElementToPolygon);
   const result = operation === "difference" ? polygonClipping.difference(polygons[0]!, ...polygons.slice(1)) : polygonClipping.union(polygons[0]!, ...polygons.slice(1));
   return contoursFromMultiPolygon(result);
@@ -300,6 +351,7 @@ export function rotatedLineEndpoints(element: LineElement): readonly [PointMm, P
 export function rotationHandlePoints(element: Element, offsetMm: number): readonly PointMm[] {
   assertFinite(offsetMm, "offsetMm");
   if (offsetMm < 0) throw new Error("offsetMm must not be negative");
+  if (element.type === "dimension") return [];
   const center = elementCenter(element);
   if (element.type === "line") {
     const [start, end] = rotatedLineEndpoints(element);
@@ -362,6 +414,7 @@ export function rotatedCorners(element: RectangleElement | EllipseElement): read
 
 /** Returns connection/alignment points in document space, independent of resize handles. */
 export function realGeometryNodes(element: Element): readonly RealGeometryNode[] {
+  if (element.type === "dimension") return [];
   if (element.type === "line") {
     const [start, end] = rotatedLineEndpoints(element);
     return [{ kind: "endpoint", point: start }, { kind: "center", point: elementCenter(element) }, { kind: "endpoint", point: end }];
@@ -469,6 +522,7 @@ export function resizeHandle(element: RectangleElement | EllipseElement, handle:
 }
 
 export function boundsOf(element: Element): Bounds {
+  if (element.type === "dimension") return { x: element.offset.x - 1, y: element.offset.y - 1, width: 2, height: 2 };
   if (element.type === "line") {
     const [start, end] = rotatedLineEndpoints(element);
     return { x: Math.min(start.x, end.x), y: Math.min(start.y, end.y), width: Math.abs(end.x - start.x), height: Math.abs(end.y - start.y) };
@@ -512,7 +566,7 @@ export function resizeGroup(elements: readonly Element[], handle: ResizeHandle, 
   const y = handle.includes("n") ? anchorY - height : handle.includes("s") ? anchorY : bounds.y;
   const sx = bounds.width ? width / bounds.width : 1;
   const sy = bounds.height ? height / bounds.height : 1;
-  return elements.map((e) => e.type === "line"
+  return elements.map((e) => e.type === "dimension" ? e : e.type === "line"
     ? { ...e, start: { x: x + (e.start.x - bounds.x) * sx, y: y + (e.start.y - bounds.y) * sy }, end: { x: x + (e.end.x - bounds.x) * sx, y: y + (e.end.y - bounds.y) * sy } }
     : e.type === "contour"
       ? contourWithPoints(e, e.contours.map((contour) => contour.points.map((point) => ({ x: x + (point.x - bounds.x) * sx, y: y + (point.y - bounds.y) * sy }))))
@@ -538,7 +592,7 @@ export function rotateElements(elements: readonly Element[], center: PointMm, de
     ...(node.inHandle ? { inHandle: rotateOffset(node.inHandle) } : {}),
     ...(node.outHandle ? { outHandle: rotateOffset(node.outHandle) } : {}),
   });
-  return elements.map((element) => element.type === "line"
+  return elements.map((element) => element.type === "dimension" ? element : element.type === "line"
     ? { ...element, start: rotatePoint(element.start), end: rotatePoint(element.end) }
     : element.type === "contour"
       ? contourWithPoints(element, element.contours.map((contour) => contour.points.map(rotatePoint)))
@@ -563,6 +617,7 @@ const lineDistanceToSegment = (point: PointMm, start: PointMm, end: PointMm): nu
 
 export function hitTest(element: Element, point: PointMm, toleranceMm = 0): boolean {
   assertFinite(toleranceMm, "toleranceMm"); if (toleranceMm < 0) throw new Error("toleranceMm must not be negative");
+  if (element.type === "dimension") { const geometry = dimensionGeometry(element, []); return Boolean(geometry && Math.hypot(point.x - geometry.text.x, point.y - geometry.text.y) <= Math.max(toleranceMm, 2)); }
   if (element.type === "line") {
     const [start, end] = rotatedLineEndpoints(element);
     return lineDistanceToSegment(point, start, end) <= toleranceMm;

@@ -23,6 +23,14 @@ describe("SVG renderer boundary", () => {
       expect(result.renderedElementIds).toEqual(["rect", "ellipse", "line"]);
     }
   });
+  it("renders connected angular dimensions as an arc with degree text", () => {
+    const first = { type: "line" as const, id: elementId("angle-first"), layerId: layer.id, start: { x: 20, y: 20 }, end: { x: 60, y: 20 }, rotation: 0, style };
+    const second = { type: "line" as const, id: elementId("angle-second"), layerId: layer.id, start: { x: 20, y: 20 }, end: { x: 20, y: 60 }, rotation: 0, style };
+    const angle = { type: "dimension" as const, id: elementId("angle"), layerId: layer.id, kind: "angular" as const, references: [{ kind: "line" as const, elementId: first.id }, { kind: "line" as const, elementId: second.id }] as const, offset: { x: 10, y: 10 }, precision: 0, units: "mm" as const, rotation: 0 as const, style };
+    const result = renderSvg(withElements(createDocument("angle", [layer]), [first, second, angle]), { zoom: 1, panMm: { x: 0, y: 0 } });
+    expect(result.success).toBe(true);
+    if (result.success) { expect(result.svg).toContain('data-dimension="angular"'); expect(result.svg).toContain(" A "); expect(result.svg).toContain("90°"); }
+  });
 
   it("renders rectangle corner radii in screen millimetres and clamps to half dimensions", () => {
     const source = withElements(createDocument("rounded", [layer]), [{ type: "rectangle", id: elementId("rounded-rect"), layerId: layer.id, position: { x: 0, y: 0 }, size: { width: 20, height: 10 }, cornerRadius: 8, rotation: 0, style }]);

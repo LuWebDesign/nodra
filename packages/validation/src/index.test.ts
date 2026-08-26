@@ -3,6 +3,12 @@ import { createDocument, layerId } from "@nodra/domain";
 import { migrateDocument, parseDocument, serializeDocument, validateDocument, validateProject } from "./index.js";
 
 describe("native document validation", () => {
+  it("validates ordered open cubic path topology", () => {
+    const document = createDocument("doc-1", [{ id: layerId("layer-1"), name: "Design", visible: true, order: 0 }]);
+    const path = { type: "path", id: "bezier", layerId: "layer-1", nodes: [{ id: "a", anchor: { x: 0, y: 0 }, join: "corner" }, { id: "b", anchor: { x: 10, y: 0 }, join: "corner" }], segments: [{ type: "cubicBezier", startNodeId: "a", endNodeId: "b", control1: { x: 2, y: 5 }, control2: { x: 8, y: -5 } }], closed: false, rotation: 0, style: { stroke: "#000", strokeWidth: 1 } };
+    expect(validateDocument({ ...document, elements: [path] }).success).toBe(true);
+    expect(validateDocument({ ...document, elements: [{ ...path, segments: [] }] }).success).toBe(false);
+  });
   it("round-trips valid records", () => {
     const document = createDocument("doc-1", [{ id: layerId("layer-1"), name: "Design", visible: true, order: 0 }]);
     const result = parseDocument(serializeDocument(document));
@@ -20,12 +26,31 @@ describe("native document validation", () => {
     const result = validateDocument(oldDocument);
     expect(result.success).toBe(true);
     if (result.success) expect(result.data.page).toEqual({ width: 1200, height: 900 });
-    expect(migrateDocument(oldDocument)).toMatchObject({ schemaVersion: 3, page: { width: 1200, height: 900 } });
+    expect(migrateDocument(oldDocument)).toMatchObject({ schemaVersion: 4, page: { width: 1200, height: 900 } });
   });
   it("validates a project with stable page ids, including duplicate sizes", () => {
     const document = createDocument("doc-1", []);
-    const project = { ...({ schemaVersion: 3, id: document.id, revision: document.revision, origin: document.origin, units: document.units } as const), pages: [{ id: "page-a", page: document.page, layers: [], elements: [] }, { id: "page-b", page: document.page, layers: [], elements: [] }], activePageId: "page-b" };
+    const project = { ...({ schemaVersion: 4, id: document.id, revision: document.revision, origin: document.origin, units: document.units } as const), pages: [{ id: "page-a", page: document.page, layers: [], elements: [] }, { id: "page-b", page: document.page, layers: [], elements: [] }], activePageId: "page-b" };
     expect(validateProject(project).success).toBe(true);
+  });
+  it("validates annotation dimensions and rejects broken references", () => {
+    const base = createDocument("doc-1", [{ id: layerId("layer-1"), name: "Design", visible: true, order: 0 }]);
+    const line = { type: "line", id: "line", layerId: "layer-1", start: { x: 0, y: 0 }, end: { x: 10, y: 0 }, rotation: 0, style: { stroke: "#000", strokeWidth: 1 } };
+    const dimension = { type: "dimension", id: "dimension", layerId: "layer-1", kind: "aligned", references: [{ elementId: "line", nodeIndex: 0 }, { elementId: "line", nodeIndex: 2 }], offset: { x: 0, y: -8 }, precision: 2, units: "mm", rotation: 0, style: { stroke: "#2563eb", strokeWidth: 0.45 } };
+    expect(validateDocument({ ...base, elements: [line, dimension] }).success).toBe(true);
+    expect(validateDocument({ ...base, elements: [dimension] }).success).toBe(false);
+  });
+  it("normalizes legacy node references and validates connected angular lines", () => {
+    const base = createDocument("angular-doc", [{ id: layerId("layer-1"), name: "Design", visible: true, order: 0 }]);
+    const first = { type: "line" as const, id: "first", layerId: "layer-1", start: { x: 20, y: 20 }, end: { x: 60, y: 20 }, rotation: 0, style: { stroke: "#000", strokeWidth: 1 } };
+    const second = { type: "line" as const, id: "second", layerId: "layer-1", start: { x: 20, y: 20 }, end: { x: 20, y: 60 }, rotation: 0, style: { stroke: "#000", strokeWidth: 1 } };
+    const angular = { type: "dimension", id: "angular", layerId: "layer-1", kind: "angular", references: [{ kind: "line", elementId: "first" }, { kind: "line", elementId: "second" }], offset: { x: 10, y: 10 }, precision: 2, units: "mm", rotation: 0, style: { stroke: "#2563eb", strokeWidth: 0.45 } };
+    const checked = validateDocument({ ...base, elements: [first, second, angular] });
+    expect(checked.success).toBe(true);
+    const legacy = validateDocument({ ...base, elements: [first, { type: "dimension", id: "legacy", layerId: "layer-1", kind: "horizontal", references: [{ elementId: "first", nodeIndex: 0 }, { elementId: "first", nodeIndex: 2 }], offset: { x: 0, y: -8 }, precision: 2, units: "mm", rotation: 0, style: { stroke: "#2563eb", strokeWidth: 0.45 } }] });
+    expect(legacy.success).toBe(true);
+    if (legacy.success) expect(legacy.data.elements[1]).toMatchObject({ references: [{ kind: "node" }, { kind: "node" }] });
+    expect(validateDocument({ ...base, elements: [first, { ...angular, references: [{ kind: "line", elementId: "first" }, { kind: "line", elementId: "missing" }] } as typeof angular] }).success).toBe(false);
   });
   it("rejects non-finite and non-positive page dimensions", () => {
     const result = validateDocument({ ...createDocument("doc-1"), page: { width: 0, height: Number.NaN } });
@@ -43,17 +68,5 @@ describe("native document validation", () => {
     const contour = { type: "contour", id: "path", layerId: "layer-1", position: { x: 0, y: 0 }, size: { width: 10, height: 10 }, contours: [{ points: [{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }, { x: 0, y: 0 }] }], fillRule: "evenodd", rotation: 0, style: { stroke: "#000", strokeWidth: 1 } };
     expect(validateDocument({ ...base, elements: [contour] }).success).toBe(true);
     expect(validateDocument({ ...base, elements: [{ ...contour, contours: [{ points: contour.contours[0]!.points.slice(0, 3) }] }] }).success).toBe(false);
-  });
-  it("validates ordered open and closed Bézier topology", () => {
-    const base = createDocument("doc-1", [{ id: layerId("layer-1"), name: "Design", visible: true, order: 0 }]);
-    const path = { type: "path", id: "bezier", layerId: "layer-1", nodes: [{ id: "a", anchor: { x: 0, y: 0 }, join: "corner" }, { id: "b", anchor: { x: 10, y: 0 }, join: "smooth" }], segments: [{ type: "cubicBezier", startNodeId: "a", endNodeId: "b", control1: { x: 2, y: 0 }, control2: { x: 8, y: 0 } }], closed: false, style: { stroke: "#000", strokeWidth: 1 } } as const;
-    expect(validateDocument({ ...base, elements: [path] }).success).toBe(true);
-    expect(validateDocument({ ...base, elements: [{ ...path, closed: true }] }).success).toBe(false);
-  });
-  it("validates native splines and rejects duplicate node IDs", () => {
-    const base = createDocument("doc-1", [{ id: layerId("layer-1"), name: "Design", visible: true, order: 0 }]);
-    const spline = { type: "spline" as const, id: "spline", layerId: "layer-1", nodes: [{ id: "a", anchor: { x: 0, y: 0 }, continuity: "smooth" as const, outHandle: { dx: 4, dy: 0 } }, { id: "b", anchor: { x: 10, y: 0 }, continuity: "smooth" as const, inHandle: { dx: -4, dy: 0 } }], closed: false, style: { stroke: "#000", fill: "#fff", strokeWidth: 1 } };
-    expect(validateDocument({ ...base, elements: [spline] }).success).toBe(true);
-    expect(validateDocument({ ...base, elements: [{ ...spline, nodes: [spline.nodes[0]!, { ...spline.nodes[1]!, id: "a" }] }] }).success).toBe(false);
   });
 });

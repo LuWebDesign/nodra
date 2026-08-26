@@ -1,5 +1,5 @@
-import type { DocumentSnapshot, Element, ElementId, PathElement, PointMm } from "@nodra/domain";
-import { boundsOf, boundsOfElements, contourSegmentAt, contourVertexNodes, elementCenter, elementSegmentAt, hitTest, pathGeometryNodes, pathSegmentAt, realGeometryNodes, type Bounds, type ContourSegmentHit, type ContourVertexNode, type PathGeometryNode, type RealGeometryNode, type PathSegmentHit } from "@nodra/geometry";
+import type { DocumentSnapshot, Element, ElementId, LineElement, PathElement, PointMm } from "@nodra/domain";
+import { boundsOf, boundsOfElements, contourSegmentAt, contourVertexNodes, dimensionGeometry, elementCenter, elementSegmentAt, hitTest, pathGeometryNodes, pathSegmentAt, realGeometryNodes, type Bounds, type ContourSegmentHit, type ContourVertexNode, type PathGeometryNode, type RealGeometryNode, type PathSegmentHit } from "@nodra/geometry";
 
 export interface DragGeometry { readonly position: PointMm; readonly size: { readonly width: number; readonly height: number } }
 export interface SnapGuide { readonly source: PointMm; readonly target: PointMm }
@@ -16,6 +16,8 @@ export interface AlignmentGuide {
   readonly target: PointMm;
 }
 export interface NodeHit { readonly elementId: ElementId; readonly nodeIndex: number; readonly node: RealGeometryNode }
+export interface DimensionLineHit { readonly elementId: ElementId; readonly line: LineElement; readonly distance: number }
+export type DimensionTarget = { readonly kind: "node"; readonly hit: NodeHit } | { readonly kind: "line"; readonly hit: DimensionLineHit };
 export interface PathNodeHit { readonly elementId: ElementId; readonly node: PathGeometryNode & { readonly ringIndex?: number } }
 export type PathGuideDirection = "incoming" | "outgoing";
 export interface PathGuide {
@@ -208,6 +210,26 @@ export function pickNode(document: DocumentSnapshot, point: PointMm, zoom: numbe
   return best?.hit;
 }
 
+/** Picks endpoints first, then the body of a visible native line. */
+export function pickDimensionTarget(document: DocumentSnapshot, point: PointMm, zoom: number, tolerancePx = 8): DimensionTarget | undefined {
+  const node = pickNode(document, point, zoom, tolerancePx);
+  const nodeElement = node ? document.elements.find((element) => element.id === node.elementId) : undefined;
+  if (node && !(nodeElement?.type === "line" && node.node.kind === "center")) return { kind: "node", hit: node };
+  const visible = new Set(document.layers.filter((layer) => layer.visible).map((layer) => layer.id));
+  let best: DimensionLineHit | undefined;
+  for (const line of document.elements.filter((element): element is LineElement => element.type === "line" && visible.has(element.layerId))) {
+    const [start, end] = realGeometryNodes(line).filter((node): node is RealGeometryNode => node.kind === "endpoint").map((node) => node.point);
+    if (!start || !end) continue;
+    const dx = end.x - start.x; const dy = end.y - start.y; const lengthSquared = dx * dx + dy * dy;
+    if (lengthSquared === 0) continue;
+    const t = Math.max(0, Math.min(1, ((point.x - start.x) * dx + (point.y - start.y) * dy) / lengthSquared));
+    if (t <= 0 || t >= 1) continue;
+    const distance = Math.hypot(point.x - (start.x + t * dx), point.y - (start.y + t * dy));
+    if (distance * zoom <= tolerancePx && (!best || distance < best.distance || distance === best.distance && line.id < best.elementId)) best = { elementId: line.id, line, distance };
+  }
+  return best ? { kind: "line", hit: best } : undefined;
+}
+
 export function pickContourNode(document: DocumentSnapshot, point: PointMm, zoom: number, tolerancePx = 8): ContourNodeHit | undefined {
   if (![point.x, point.y, zoom, tolerancePx].every(Number.isFinite) || zoom <= 0 || tolerancePx < 0) throw new Error("contour node coordinates, zoom, and tolerance must be valid");
   const visible = new Set(document.layers.filter((layer) => layer.visible).map((layer) => layer.id));
@@ -235,6 +257,7 @@ export function pickFormaNode(document: DocumentSnapshot, point: PointMm, zoom: 
   const visible = new Set(document.layers.filter((layer) => layer.visible).map((layer) => layer.id));
   let best: { hit: FormaNodeHit; distance: number; order: string } | undefined;
   for (const element of document.elements) if (visible.has(element.layerId)) {
+    if (element.type === "text") continue;
     if (element.type === "contour") for (const node of contourVertexNodes(element)) {
       const distance = Math.hypot(node.point.x - point.x, node.point.y - point.y) * zoom;
       const order = `${element.id}:c:${node.ringIndex}:${node.pointIndex}`;
@@ -253,6 +276,7 @@ export function pickFormaSegment(document: DocumentSnapshot, point: PointMm, zoo
   const visible = new Set(document.layers.filter((layer) => layer.visible).map((layer) => layer.id));
   let best: ContourSegmentHitResult | undefined;
   for (const element of document.elements) if (visible.has(element.layerId)) {
+    if (element.type === "text") continue;
     const hit = elementSegmentAt(element, point, tolerancePx / zoom);
     if (hit && (!best || hit.distance < best.distance || hit.distance === best.distance && `${hit.elementId}:${hit.ringIndex}:${hit.segmentIndex}` < `${best.elementId}:${best.ringIndex}:${best.segmentIndex}`)) best = hit;
   }
@@ -341,7 +365,12 @@ export function pickElement(document: DocumentSnapshot, point: PointMm, zoom: nu
   const visible = new Set(document.layers.filter((layer) => layer.visible).map((layer) => layer.id));
   const layerOrder = new Map(document.layers.map((layer) => [layer.id, layer.order]));
   const tolerance = 6 / zoom;
-  return [...document.elements].sort((a, b) => (layerOrder.get(a.layerId) ?? 0) - (layerOrder.get(b.layerId) ?? 0)).reverse().find((element) => visible.has(element.layerId) && hitTest(element, point, tolerance))?.id;
+  return [...document.elements].sort((a, b) => (layerOrder.get(a.layerId) ?? 0) - (layerOrder.get(b.layerId) ?? 0)).reverse().find((element) => {
+    if (!visible.has(element.layerId)) return false;
+    if (element.type !== "dimension") return hitTest(element, point, tolerance);
+    const geometry = dimensionGeometry(element, document.elements);
+    return Boolean(geometry && (Math.hypot(point.x - geometry.text.x, point.y - geometry.text.y) <= Math.max(tolerance, 3) || Math.hypot(point.x - geometry.lineStart.x, point.y - geometry.lineStart.y) <= tolerance || Math.hypot(point.x - geometry.lineEnd.x, point.y - geometry.lineEnd.y) <= tolerance));
+  })?.id;
 }
 
 export function elementsContainedBy(document: DocumentSnapshot, marquee: Bounds): ElementId[] {

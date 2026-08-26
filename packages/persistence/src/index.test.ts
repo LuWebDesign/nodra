@@ -62,6 +62,25 @@ describe("DexieProjectRepository", () => {
     expect((await db.getProject(metadata.id)).ok).toBe(false);
   });
 
+  it("persists, lists, deletes, and ignores corrupt font records", async () => {
+    db = await repository();
+    const font = { id: `${metadata.id}:Demo`, projectId: metadata.id, family: "Demo", name: "demo.woff2", format: "font/woff2", blob: new Blob([new Uint8Array([1, 2, 3])], { type: "font/woff2" }), savedAt: 10 };
+    await db.saveFont(font);
+    expect((await db.listFonts(metadata.id)).map((item) => item.family)).toEqual(["Demo"]);
+    const rawDb = (db as unknown as { db: { fonts: { put: (value: unknown) => Promise<void> } } }).db;
+    await rawDb.fonts.put({ id: "bad", projectId: metadata.id, family: "Broken", blob: "not-a-blob", savedAt: 11 });
+    expect((await db.listFonts(metadata.id)).map((item) => item.family)).toEqual(["Demo"]);
+    await db.deleteFont(metadata.id, font.id);
+    expect(await db.listFonts(metadata.id)).toEqual([]);
+  });
+
+  it("deletes project fonts with the project", async () => {
+    db = await repository();
+    await db.saveFont({ id: `${metadata.id}:Demo`, projectId: metadata.id, family: "Demo", blob: new Blob(["font"]), savedAt: 1 });
+    await db.deleteProject(metadata.id);
+    expect(await db.listFonts(metadata.id)).toEqual([]);
+  });
+
   it("persists and recovers a multi-page project", async () => {
     db = await repository();
     const base = createProject(document());

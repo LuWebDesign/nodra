@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { createDocument, elementId, layerId, type PathElement, type RectangleElement, type SplineElement, type TextElement } from "@nodra/domain";
-import { addToSelection, appendSplineNode, beginGesture, cancelGesture, clearSelection, closePath, closeSplineElement, commitGesture, createEditor, createElement, createPathCubicNode, deleteContourNodes, deleteElement, deleteElementNodes, deletePathNodes, dispatch, duplicateElements, flipElements, insertContourNode, moveElement, moveElements, movePathNode, movePathHandle, openPath, previewGesture, previewGestureFromBase, redo, removeFromSelection, reorderLayer, resizeElement, resizeElements, rotateElementsAroundCenter, select, selectForPointerDown, setLayerVisibility, setPathJoin, shapeOperation, splitPathSegment, toggleSelection, undo, updateContourNode, updateElement, updateElementNode, updateElementStyles, updateSplineHandle, updateSplineNode } from "./index.js";
+import { createDocument, elementId, layerId, type DimensionElement, type PathElement, type RectangleElement, type SplineElement, type TextElement } from "@nodra/domain";
+import { addToSelection, appendSplineNode, beginGesture, cancelGesture, clearSelection, closePath, closeSplineElement, commitGesture, createEditor, createElement, createPathCubicNode, deleteContourNodes, deleteElement, deleteElementNodes, deletePathNodes, dispatch, duplicateElements, flipElements, insertContourNode, invalidDimensionIdsForShapeOperation, moveElement, moveElements, movePathNode, movePathHandle, openPath, previewGesture, previewGestureFromBase, redo, removeFromSelection, reorderLayer, resizeElement, resizeElements, rotateElementsAroundCenter, select, selectForPointerDown, setLayerVisibility, setPathJoin, shapeOperation, splitPathSegment, toggleSelection, undo, updateContourNode, updateElement, updateElementNode, updateElementStyles, updateSplineHandle, updateSplineNode } from "./index.js";
 import type { Direction } from "@nodra/geometry";
 
 const rectangle: RectangleElement = { type: "rectangle", id: elementId("r1"), layerId: layerId("default"), position: { x: 1, y: 2 }, size: { width: 10, height: 5 }, cornerRadius: 0, rotation: 0, style: { stroke: "#000", strokeWidth: 1 } };
@@ -8,6 +8,7 @@ const document = createDocument("doc", [{ id: layerId("default"), name: "Default
 const path: PathElement = { type: "path", id: elementId("path"), layerId: layerId("default"), nodes: [{ id: "a", anchor: { x: 0, y: 0 }, join: "corner" }, { id: "b", anchor: { x: 10, y: 0 }, join: "corner" }], segments: [{ type: "cubicBezier", startNodeId: "a", endNodeId: "b", control1: { x: 2, y: 4 }, control2: { x: 8, y: 4 } }], closed: false, style: rectangle.style };
 const spline: SplineElement = { type: "spline", id: elementId("spline"), layerId: layerId("default"), nodes: [{ id: "a", anchor: { x: 0, y: 0 }, continuity: "smooth" }, { id: "b", anchor: { x: 10, y: 0 }, continuity: "smooth" }, { id: "c", anchor: { x: 10, y: 10 }, continuity: "smooth" }], closed: false, style: rectangle.style };
 const text: TextElement = { type: "text", id: elementId("text"), layerId: layerId("default"), position: { x: 12, y: 18 }, size: { width: 32, height: 14 }, text: "Keep formatting", fontFamily: "Times New Roman", fontSize: 18, fontWeight: "bold", fontStyle: "italic", textAlign: "left", lineHeight: 1.2, rotation: 0, style: { stroke: "#123456", fill: "#654321", strokeWidth: 0.5 } };
+const dimension: DimensionElement = { type: "dimension", id: elementId("dimension"), layerId: layerId("default"), kind: "horizontal", references: [{ kind: "node", elementId: rectangle.id, nodeIndex: 0 }, { kind: "node", elementId: rectangle.id, nodeIndex: 1 }], offset: { x: 0, y: -10 }, precision: 2, units: "mm", rotation: 0, style: rectangle.style };
 
 describe("editor core", () => {
   it("creates, edits, closes, styles, deletes, and restores native splines through document history", () => {
@@ -66,6 +67,13 @@ describe("editor core", () => {
     const state = dispatch(createEditor({ ...document, elements: [text] }), moveElements([text.id], { x: 7, y: -3 }));
     expect(state.document.elements[0]).toMatchObject({ ...text, position: { x: 19, y: 15 } });
     expect(state.undo).toHaveLength(1);
+  });
+  it("moves a dimension by changing only its placement offset and supports undo", () => {
+    const dimension = { type: "dimension" as const, id: elementId("dimension-move"), layerId: rectangle.layerId, kind: "horizontal" as const, references: [{ elementId: rectangle.id, nodeIndex: 0 }, { elementId: rectangle.id, nodeIndex: 1 }] as const, offset: { x: 0, y: -8 }, precision: 2, units: "mm" as const, rotation: 0 as const, style: rectangle.style };
+    const state = dispatch(createEditor({ ...document, elements: [rectangle, dimension] }), moveElements([dimension.id], { x: 3, y: 5 }));
+    expect(state.document.elements[1]).toMatchObject({ type: "dimension", offset: { x: 3, y: -3 } });
+    expect(undo(state).document.elements[1]).toEqual(dimension);
+    expect(redo(undo(state)).document.elements[1]).toMatchObject({ offset: { x: 3, y: -3 } });
   });
   it("deletes contour nodes through validation and keeps a ring valid", () => {
     const contour = { type: "contour" as const, id: elementId("delete-contour-node"), layerId: rectangle.layerId, position: { x: 1, y: 2 }, size: { width: 10, height: 5 }, contours: [{ points: [{ x: 1, y: 2 }, { x: 11, y: 2 }, { x: 11, y: 7 }, { x: 1, y: 7 }, { x: 1, y: 2 }] }], fillRule: "evenodd" as const, rotation: 0, style: rectangle.style };
@@ -412,6 +420,30 @@ describe("editor core", () => {
     const line = { type: "line" as const, id: elementId("shape-line"), layerId: rectangle.layerId, start: { x: 0, y: 0 }, end: { x: 1, y: 1 }, rotation: 0, style: rectangle.style };
     expect(dispatch(select(createEditor({ ...document, elements: [rectangle, line] }), [rectangle.id, line.id]), shapeOperation([rectangle.id, line.id], "weld")).document.elements).toEqual([rectangle, line]);
     expect(dispatch(select(createEditor({ ...document, elements: [rectangle, line] }), [line.id, rectangle.id]), shapeOperation([line.id, rectangle.id], "subtract")).document.elements).toEqual([rectangle, line]);
+  });
+
+  it("ignores selected dimensions as geometry", () => {
+    const dimension = { type: "dimension" as const, id: elementId("shape-dimension"), layerId: rectangle.layerId, kind: "horizontal" as const, references: [{ elementId: rectangle.id, nodeIndex: 0 }, { elementId: rectangle.id, nodeIndex: 1 }] as const, offset: { x: 0, y: -8 }, precision: 2, units: "mm" as const, rotation: 0 as const, style: rectangle.style };
+    const second = { ...rectangle, id: elementId("shape-second"), position: { x: 6, y: 2 } };
+    const initial = select(createEditor({ ...document, elements: [rectangle, dimension, second] }), [rectangle.id, dimension.id, second.id]);
+    const result = dispatch(initial, shapeOperation(initial.selection, "weld"));
+    expect(result.document.elements).toHaveLength(1);
+    expect(result.document.elements[0]?.type).toBe("contour");
+    expect(result.undo).toHaveLength(1);
+  });
+
+  it("removes invalid dimensions and preserves unrelated annotations", () => {
+    const second = { ...rectangle, id: elementId("shape-invalid"), position: { x: 6, y: 2 } };
+    const unrelated = { ...rectangle, id: elementId("shape-unrelated"), position: { x: 40, y: 2 } };
+    const invalid = { ...dimension, id: elementId("invalid-dimension"), references: [{ kind: "node" as const, elementId: second.id, nodeIndex: 0 }, { kind: "node" as const, elementId: second.id, nodeIndex: 1 }] as const };
+    const survivor = { ...dimension, id: elementId("surviving-dimension"), references: [{ kind: "node" as const, elementId: unrelated.id, nodeIndex: 0 }, { kind: "node" as const, elementId: unrelated.id, nodeIndex: 1 }] as const };
+    const source = { ...document, elements: [rectangle, invalid, second, survivor, unrelated] };
+    expect(invalidDimensionIdsForShapeOperation(source, [rectangle.id, second.id], "weld")).toEqual([invalid.id]);
+    const result = dispatch(select(createEditor(source), [rectangle.id, second.id]), shapeOperation([rectangle.id, second.id], "weld"));
+    expect(result.document.elements).toContainEqual(survivor);
+    expect(result.document.elements).not.toContainEqual(invalid);
+    expect(result.undo).toHaveLength(1);
+    expect(undo(result).document.elements).toEqual(source.elements);
   });
 
   it("flips contour geometry, restores shape-operation selection on undo, and preserves stacking order", () => {

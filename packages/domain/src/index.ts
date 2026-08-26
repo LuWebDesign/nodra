@@ -1,4 +1,4 @@
-export const CURRENT_SCHEMA_VERSION = 3 as const;
+export const CURRENT_SCHEMA_VERSION = 4 as const;
 
 export type SchemaVersion = typeof CURRENT_SCHEMA_VERSION;
 export type DocumentId = string & { readonly __brand: "DocumentId" };
@@ -75,6 +75,24 @@ export interface LineElement {
   readonly style: VisualStyle;
   readonly operation?: OperationMetadata;
 }
+export type DimensionKind = "aligned" | "horizontal" | "vertical" | "angular";
+export type DimensionReference =
+  | { readonly kind: "node"; readonly elementId: ElementId; readonly nodeIndex: number }
+  | { readonly kind: "line"; readonly elementId: ElementId }
+  /** Legacy node references are accepted at the boundary and normalized by validation. */
+  | { readonly elementId: ElementId; readonly nodeIndex: number };
+export interface DimensionElement {
+  readonly type: "dimension";
+  readonly id: ElementId;
+  readonly layerId: LayerId;
+  readonly kind: DimensionKind;
+  readonly references: readonly [DimensionReference, DimensionReference];
+  readonly offset: PointMm;
+  readonly precision: number;
+  readonly units: "mm";
+  readonly rotation: 0;
+  readonly style: VisualStyle;
+}
 export interface Contour {
   readonly points: readonly PointMm[];
 }
@@ -118,6 +136,10 @@ export interface PathElement {
   readonly nodes: readonly PathNode[];
   readonly segments: readonly PathSegment[];
   readonly closed: boolean;
+  /** Legacy transform fields retained for annotation-dimensions records. */
+  readonly rotation?: number;
+  readonly flipX?: boolean;
+  readonly flipY?: boolean;
   readonly style: VisualStyle;
   readonly operation?: OperationMetadata;
 }
@@ -130,7 +152,7 @@ export interface TextElement { readonly type: "text"; readonly id: ElementId; re
 export interface GlyphContour { readonly nodes: readonly PathNode[]; readonly segments: readonly PathSegment[] }
 /** Editable outline for one laid-out font glyph; multiple contours preserve holes. */
 export interface GlyphElement { readonly type: "glyph"; readonly id: ElementId; readonly layerId: LayerId; readonly position: PointMm; readonly size: SizeMm; readonly glyph: string; readonly contours: readonly GlyphContour[]; readonly fillRule: "evenodd"; readonly rotation: number; readonly flipX?: boolean; readonly flipY?: boolean; readonly style: VisualStyle; readonly operation?: OperationMetadata }
-export type Element = RectangleElement | EllipseElement | LineElement | ContourElement | PathElement | SplineElement | TextElement | GlyphElement;
+export type Element = RectangleElement | EllipseElement | LineElement | DimensionElement | ContourElement | PathElement | SplineElement | TextElement | GlyphElement;
 export interface DocumentCapabilities { readonly spline?: 1 }
 export interface DocumentSnapshot {
   readonly schemaVersion: SchemaVersion;
