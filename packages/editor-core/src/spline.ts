@@ -46,4 +46,78 @@ export function hitTestSpline(spline: SplineElement, point: PointMm, tolerance: 
   }
   return hits.sort((a, b) => a.priority - b.priority || a.distance - b.distance)[0]?.target;
 }
+
+export function createSplineEditor(spline: SplineElement): SplineEditorState {
+  return { spline, selection: undefined, undo: [], redo: [], gesture: undefined };
+}
+
+export function dispatchSpline(state: SplineEditorState, command: SplineCommand): SplineEditorState {
+  const result = command(state.spline);
+  if (!result.success || result.spline === state.spline) return state;
+  const transaction: SplineTransaction = {
+    before: state.spline,
+    after: result.spline,
+    selectionBefore: state.selection,
+    selectionAfter: state.selection,
+  };
+  return { ...state, spline: result.spline, undo: [...state.undo, transaction], redo: [] };
+}
+
+export function selectSpline(state: SplineEditorState, selection: SplineHitTarget | undefined): SplineEditorState {
+  return { ...state, selection };
+}
+
+export function beginSplineGesture(state: SplineEditorState): SplineEditorState {
+  return { ...state, gesture: { base: state.spline, preview: state.spline } };
+}
+
+export function previewSplineGesture(state: SplineEditorState, command: SplineCommand): SplineEditorState {
+  if (!state.gesture) return state;
+  const result = command(state.gesture.base);
+  return result.success
+    ? { ...state, spline: result.spline, gesture: { ...state.gesture, preview: result.spline } }
+    : state;
+}
+
+export function commitSplineGesture(state: SplineEditorState): SplineEditorState {
+  if (!state.gesture) return state;
+  const { base, preview } = state.gesture;
+  if (preview === base) return { ...state, gesture: undefined };
+  const transaction: SplineTransaction = {
+    before: base,
+    after: preview,
+    selectionBefore: state.selection,
+    selectionAfter: state.selection,
+  };
+  return { ...state, spline: preview, undo: [...state.undo, transaction], redo: [], gesture: undefined };
+}
+
+export function cancelSplineGesture(state: SplineEditorState): SplineEditorState {
+  return state.gesture ? { ...state, spline: state.gesture.base, gesture: undefined } : state;
+}
+
+export function undoSpline(state: SplineEditorState): SplineEditorState {
+  const transaction = state.undo.at(-1);
+  if (!transaction) return state;
+  return {
+    ...state,
+    spline: transaction.before,
+    selection: transaction.selectionBefore,
+    undo: state.undo.slice(0, -1),
+    redo: [...state.redo, transaction],
+  };
+}
+
+export function redoSpline(state: SplineEditorState): SplineEditorState {
+  const transaction = state.redo.at(-1);
+  if (!transaction) return state;
+  return {
+    ...state,
+    spline: transaction.after,
+    selection: transaction.selectionAfter,
+    undo: [...state.undo, transaction],
+    redo: state.redo.slice(0, -1),
+  };
+}
+
 export function deleteSplineNode(spline: SplineElement, nodeId: string): SplineResult { if (!spline.nodes.some((node) => node.id === nodeId)) return { success: false, error: `Spline node not found: ${nodeId}` }; if (spline.nodes.length <= 2) return { success: false, error: "A spline must retain at least two nodes" }; return { success: true, spline: { ...spline, nodes: spline.nodes.filter((node) => node.id !== nodeId) } }; }
