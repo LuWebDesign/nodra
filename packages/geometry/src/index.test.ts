@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { angularDimensionGeometry, boundsOf, boundsOfElements, boundsOutsidePage, closedElementToPolygon, cubicBezierBounds, cubicBezierDerivative, degreesToRadians, dimensionGeometry, dimensionKindForNodes, dimensionOffsetForAlignedPlacement, dimensionOffsetForPlacement, elementCenter, elementSegmentAt, elementToContour, evaluateCubicBezier, ELLIPSE_APPROXIMATION_SEGMENTS, groupCenter, groupHandlePoints, hitTest, mmToScreen, pointMidpoint, radiansToDegrees, realGeometryNodes, resizeGroup, resizeHandle, rotatedLineEndpoints, rotateElements, rotationFromDrag, rotationHandlePoints, screenToMm, shapeResultContours, splitCubicBezier, validateSize } from "./index.js";
+import { angularDimensionGeometry, boundsOf, boundsOfElements, boundsOutsidePage, closedElementToPolygon, cubicBezierBounds, cubicBezierDerivative, degreesToRadians, dimensionGeometry, dimensionKindForNodes, dimensionKindForPlacement, dimensionOffsetForAlignedPlacement, dimensionOffsetForPlacement, elementCenter, elementSegmentAt, elementToContour, evaluateCubicBezier, ELLIPSE_APPROXIMATION_SEGMENTS, groupCenter, groupHandlePoints, hitTest, mmToScreen, pointMidpoint, radiansToDegrees, realGeometryNodes, resizeGroup, resizeHandle, rotatedLineEndpoints, rotateElements, rotationFromDrag, rotationHandlePoints, screenToMm, shapeResultContours, splitCubicBezier, validateSize } from "./index.js";
 import { elementId, layerId } from "@nodra/domain";
 
 const style = { stroke: "#000", strokeWidth: 0.2 };
@@ -12,6 +12,15 @@ describe("canonical millimetre geometry", () => {
     expect(dimensionKindForNodes(first, second)).toBe("horizontal");
     expect(dimensionOffsetForPlacement("horizontal", pointMidpoint(first, second), { x: 999, y: 5 })).toEqual({ x: 0, y: -17 });
     expect(dimensionOffsetForPlacement("vertical", { x: 4, y: 8 }, { x: 20, y: 999 })).toEqual({ x: 16, y: 0 });
+  });
+  it("uses placement intent for non-axis dimension nodes", () => {
+    const first = { x: 10, y: 20 }; const second = { x: 50, y: 24 };
+    const midpoint = pointMidpoint(first, second);
+    expect(dimensionKindForNodes(first, second)).toBe("horizontal");
+    expect(dimensionKindForPlacement(first, second, { x: midpoint.x + 8, y: midpoint.y + 8 })).toBe("aligned");
+    expect(dimensionKindForPlacement(first, second, { x: midpoint.x + 40, y: midpoint.y + 4 })).toBe("horizontal");
+    expect(dimensionKindForPlacement(first, second, { x: midpoint.x + 4, y: midpoint.y + 40 })).toBe("vertical");
+    expect(dimensionKindForPlacement({ x: 0, y: 0 }, { x: 20, y: 0 }, { x: 10, y: 50 })).toBe("horizontal");
   });
   it("uses aligned Euclidean geometry and only the perpendicular placement offset for diagonals", () => {
     const start = { x: 10, y: 10 }; const end = { x: 40, y: 40 };
