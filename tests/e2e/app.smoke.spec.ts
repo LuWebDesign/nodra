@@ -618,6 +618,19 @@ test("recovers the latest local revision after reload", async ({ page }) => {
   await expect(page.getByText("Revisión local recuperada")).toBeVisible();
 });
 
+test("keeps a deleted object deleted after reload", async ({ page }) => {
+  await page.goto("/");
+  await drawRectangle(page);
+  await page.getByRole("button", { name: "Seleccion" }).click();
+  const rect = await page.locator(".page-svg svg rect").first().boundingBox();
+  expect(rect).not.toBeNull();
+  await page.mouse.click(rect!.x + rect!.width / 2, rect!.y + rect!.height / 2);
+  await page.keyboard.press("Delete");
+  await expect(page.locator(".page-svg svg rect")).toHaveCount(0);
+  await page.reload();
+  await expect(page.locator(".page-svg svg rect")).toHaveCount(0);
+});
+
 test("shows offline status while editing remains available", async ({ page, context }) => {
   await page.goto("/");
   await context.setOffline(true);
