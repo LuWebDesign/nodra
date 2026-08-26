@@ -532,7 +532,7 @@ test("creates an aligned Cota for a diagonal line", async ({ page }) => {
   await page.getByRole("button", { name: "Cota" }).click();
   await page.mouse.click(start.x, start.y);
   await page.mouse.click(end.x, end.y);
-  await page.mouse.click((start.x + end.x) / 2, (start.y + end.y) / 2 + 35);
+  await page.mouse.click((start.x + end.x) / 2 + 35, (start.y + end.y) / 2 + 35);
   await expect(page.locator('[data-dimension="aligned"]')).toHaveCount(1);
 });
 

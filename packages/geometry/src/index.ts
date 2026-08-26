@@ -29,6 +29,19 @@ export const dimensionKindForNodes = (first: PointMm, second: PointMm): Dimensio
   if (dx <= dy * 0.1) return "vertical";
   return "aligned";
 };
+
+/** Uses the third click as intent: natural/aligned unless movement clearly asks for one axis. */
+export const dimensionKindForPlacement = (first: PointMm, second: PointMm, placement: PointMm): DimensionPlacementKind => {
+  const segmentDx = Math.abs(second.x - first.x); const segmentDy = Math.abs(second.y - first.y);
+  if (segmentDx === 0) return "vertical";
+  if (segmentDy === 0) return "horizontal";
+  const midpoint = pointMidpoint(first, second);
+  const intentDx = Math.abs(placement.x - midpoint.x); const intentDy = Math.abs(placement.y - midpoint.y);
+  const clearIntentRatio = 1.75;
+  if (intentDx >= intentDy * clearIntentRatio) return "horizontal";
+  if (intentDy >= intentDx * clearIntentRatio) return "vertical";
+  return "aligned";
+};
 export const dimensionOffsetForPlacement = (kind: DimensionPlacementKind, midpoint: PointMm, placement: PointMm): PointMm => kind === "horizontal" ? { x: 0, y: placement.y - midpoint.y } : kind === "vertical" ? { x: placement.x - midpoint.x, y: 0 } : { x: placement.x - midpoint.x, y: placement.y - midpoint.y };
 export const dimensionOffsetForAlignedPlacement = (start: PointMm, end: PointMm, placement: PointMm): PointMm => {
   const length = Math.hypot(end.x - start.x, end.y - start.y); if (length === 0) return { x: 0, y: 0 };
