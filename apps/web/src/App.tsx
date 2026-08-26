@@ -12,6 +12,7 @@ import { pathJoinGuidance, pathJoinOptions } from "./pathJoins.js";
 import { textSizeFor } from "./textMetrics.js";
 import { extractTextGlyphOutlines, fontFamilyFromFileName, FontOutlineError } from "./fontOutline.js";
 
+const defaultFonts = ["Arial", "Helvetica", "Times New Roman", "Courier New", "Inter"] as const;
 const defaultStyle = { stroke: "#000000", strokeWidth: 1 };
 const defaultClosedFill = "rgba(101,217,255,0.22)";
 const isPropertyElement = (element: Element): element is PropertyElement => element.type === "rectangle" || element.type === "ellipse";
@@ -117,7 +118,8 @@ export function App() {
   const [textFontFamily, setTextFontFamily] = useState("Arial");
   const [textFontWeight, setTextFontWeight] = useState<"normal" | "bold">("normal");
   const [textFontStyle, setTextFontStyle] = useState<"normal" | "italic">("normal");
-  const [availableFonts, setAvailableFonts] = useState(["Arial", "Helvetica", "Times New Roman", "Courier New", "Inter"]);
+  const [availableFonts, setAvailableFonts] = useState<readonly string[]>(defaultFonts);
+  const [localFonts, setLocalFonts] = useState<readonly FontRecord[]>([]);
   const [fontSources, setFontSources] = useState<Record<string, ArrayBuffer>>({});
   const [fontLoadError, setFontLoadError] = useState<string>();
   const [textDraft, setTextDraft] = useState<{ readonly position: PointMm; readonly value: string; readonly elementId?: ElementId; readonly fontSize?: number; readonly element?: TextElement }>();
@@ -166,6 +168,7 @@ export function App() {
   useEffect(() => {
     let cancelled = false;
     void repository.listFonts(document.id).then(async (fonts) => {
+      if (!cancelled) setLocalFonts(fonts);
       for (const font of fonts) {
         if (cancelled) return;
         if (restoredFontIds.current.has(font.id)) continue;
@@ -369,6 +372,26 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
     return () => cancelAnimationFrame(frame);
   }, [textDraft]);
 
+  const deleteLocalFont = async (font: FontRecord) => {
+    if (!confirm(`¿Eliminar la fuente local "${font.family}"?`)) return;
+    try {
+      await repository.deleteFont(document.id, font.id);
+      restoredFontIds.current.delete(font.id);
+      setLocalFonts((current) => current.filter((item) => item.id !== font.id));
+      setFontSources((current) => {
+        const next = { ...current };
+        delete next[font.family];
+        return next;
+      });
+      setAvailableFonts((current) => defaultFonts.includes(font.family as typeof defaultFonts[number]) || localFonts.some((item) => item.id !== font.id && item.family === font.family) ? current : current.filter((family) => family !== font.family));
+      if (textFontFamily === font.family) setTextFontFamily("Arial");
+      persist.set("saved", `Fuente local eliminada: ${font.family}`);
+      setFontLoadError(undefined);
+    } catch (error) {
+      setFontLoadError(`No se pudo eliminar la fuente local${error instanceof Error ? `: ${error.message}` : "."}`);
+    }
+  };
+
   const loadFontFile = async (file: File, familyOverride?: string) => {
     const family = familyOverride?.trim() || fontFamilyFromFileName(file.name);
     try {
@@ -381,7 +404,14 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
       setFontSources((current) => ({ ...current, [family]: bytes }));
       const record: FontRecord = { id: `${document.id}:${family}`, projectId: document.id, family, name: file.name, ...(file.type ? { format: file.type } : {}), blob: new Blob([bytes], { type: file.type }), savedAt: Date.now() };
       setFontLoadError(undefined);
-      try { await repository.saveFont(record); } catch { setFontLoadError("La fuente se cargó, pero no se pudo guardar localmente."); }
+      try {
+        await repository.saveFont(record);
+        restoredFontIds.current.add(record.id);
+        setLocalFonts((current) => [record, ...current.filter((font) => font.id !== record.id)]);
+        persist.set("saved", `Fuente guardada localmente: ${family}`);
+      } catch (error) {
+        setFontLoadError(`La fuente se cargó, pero no se pudo guardar localmente${error instanceof Error ? `: ${error.message}` : "."}`);
+      }
     } catch { setFontLoadError("No se pudo cargar la fuente. Seleccione un archivo TTF, OTF, WOFF o WOFF2 válido."); }
   };
 
@@ -528,14 +558,27 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
 
   const convertSelectedText = () => {
     if (selectedElement?.type !== "text") return;
+    if (!confirm("Convertir a curvas hará que el texto ya no sea editable. ¿Continuar?")) return;
     try {
       const outlines = extractTextGlyphOutlines(selectedElement, (family) => fontSources[family]);
       const next = dispatch(editorRef.current, convertTextToGlyphs(selectedElement.id, outlines));
-      if (next === editorRef.current) return;
+      if (next === editorRef.current) { persist.set("failed", "No se pudo convertir el texto a curvas."); return; }
       setEditorState(next);
+      persist.set("saved", "Texto convertido a curvas");
     } catch (error) {
       persist.set("failed", error instanceof FontOutlineError ? error.message : "No se pudo convertir el texto a curvas");
     }
+  };
+
+  type TextTypographyPatch = { readonly fontFamily?: string; readonly fontSize?: number; readonly fontWeight?: "normal" | "bold"; readonly fontStyle?: "normal" | "italic"; readonly lineHeight?: number; readonly scaleX?: number; readonly scaleY?: number };
+  const updateTextElement = (element: TextElement, patch: TextTypographyPatch) => {
+    const fontFamily = patch.fontFamily ?? element.fontFamily;
+    const fontSize = patch.fontSize ?? element.fontSize;
+    const fontWeight = patch.fontWeight ?? element.fontWeight;
+    const fontStyle = patch.fontStyle ?? element.fontStyle;
+    const lineHeight = patch.lineHeight ?? element.lineHeight;
+    const size = patch.fontFamily || patch.fontSize || patch.fontWeight || patch.fontStyle || patch.lineHeight ? textSizeFor(element.text, fontSize, fontFamily, fontWeight, fontStyle, lineHeight) : element.size;
+    setEditorState(dispatch(editorRef.current, updateElement(element.id, { ...patch, size })));
   };
 
   const beginTextEdit = (element: TextElement) => {
@@ -1260,6 +1303,18 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
     </button>;
   };
 
+  const textPropertyPanel = () => {
+    if (selectedElement?.type !== "text") return <p className="muted">Seleccione un texto para editar sus propiedades.</p>;
+    const boxWidth = selectedElement.size.width * (selectedElement.scaleX ?? 1);
+    const boxHeight = selectedElement.size.height * (selectedElement.scaleY ?? 1);
+    const resizeTextBox = (axis: "width" | "height", value: number) => {
+      if (!Number.isFinite(value) || value <= 0) return;
+      updateTextElement(selectedElement, axis === "width" ? { scaleX: value / selectedElement.size.width } : { scaleY: value / selectedElement.size.height });
+    };
+    const selectedLocalFont = localFonts.find((font) => font.family === selectedElement.fontFamily);
+    return <div className="text-properties"><div className="text-box-fields"><label className="field"><span>Ancho caja</span><input type="number" min="1" step="0.1" value={formatMm(boxWidth)} onChange={(event) => resizeTextBox("width", Number(event.target.value))} /></label><label className="field"><span>Alto caja</span><input type="number" min="1" step="0.1" value={formatMm(boxHeight)} onChange={(event) => resizeTextBox("height", Number(event.target.value))} /></label></div><label className="field"><span>Tamaño (mm)</span><input type="number" min="1" value={selectedElement.fontSize} onChange={(event) => { const value = Number(event.target.value); if (Number.isFinite(value) && value > 0) updateTextElement(selectedElement, { fontSize: value }); }} /></label><label className="field"><span>Tipografía</span><div className="font-select-row"><select value={selectedElement.fontFamily} onChange={(event) => updateTextElement(selectedElement, { fontFamily: event.target.value })}>{availableFonts.map((font) => <option key={font} style={{ fontFamily: font }}>{font}</option>)}</select>{selectedLocalFont && <button type="button" className="font-delete-button" aria-label={`Eliminar fuente local ${selectedLocalFont.family}`} title="Eliminar fuente local" onClick={() => void deleteLocalFont(selectedLocalFont)}>×</button>}</div></label><label className="field"><span>Interlineado</span><input type="number" min="0.5" step="0.1" value={selectedElement.lineHeight} onChange={(event) => { const value = Number(event.target.value); if (Number.isFinite(value) && value > 0) updateTextElement(selectedElement, { lineHeight: value }); }} /></label><div className="text-style-buttons"><button type="button" aria-pressed={selectedElement.fontWeight === "bold"} onClick={() => updateTextElement(selectedElement, { fontWeight: selectedElement.fontWeight === "bold" ? "normal" : "bold" })}>Negrita</button><button type="button" aria-pressed={selectedElement.fontStyle === "italic"} onClick={() => updateTextElement(selectedElement, { fontStyle: selectedElement.fontStyle === "italic" ? "normal" : "italic" })}>Cursiva</button></div><label className="font-upload-button">Cargar fuente para esta familia<input type="file" accept=".ttf,.otf,.woff,.woff2,font/ttf,font/otf,font/woff,font/woff2" onChange={(event) => { const file = event.target.files?.[0]; if (file) void loadFontFile(file, selectedElement.fontFamily); event.currentTarget.value = ""; }} /></label><button type="button" aria-label="Convertir texto a curvas" title="Requiere una fuente cargada para esta familia" disabled={!fontSources[selectedElement.fontFamily]} onClick={convertSelectedText}>Convertir a curvas</button>{!fontSources[selectedElement.fontFamily] && <p className="muted">Cargue una fuente TTF, OTF, WOFF o WOFF2 para habilitar la conversión.</p>}{fontLoadError && <p className="muted">{fontLoadError}</p>}</div>;
+  };
+
   const objectPropertySections = (inspector = false) => propertyElement ? <>
      <div className={inspector ? "inspector-property-card" : "property-card"} role="group" aria-label="Posición">
        {geometryInput(propertyElement, "x", "X")}{geometryInput(propertyElement, "y", "Y")}
@@ -1284,7 +1339,7 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
     </header>
     {mode === "prepare" ? <section className="prepare"><div><div className="prepare-icon">◇</div><h1>Preparar aún no está disponible</h1><p>Nodra ofrece actualmente solo un espacio de trabajo de Diseño sin conexión. No hay hardware conectado, controlado ni listo.</p><button onClick={() => setMode("design")}>Volver a Diseño</button></div></section> : <div className="workspace">
       <section className="properties-bar" aria-label="Barra de propiedades">
-         <div className="page-selector"><label>Fuente de texto<select aria-label="Tipografía del texto" value={textFontFamily} onChange={(event) => { const family = event.target.value; setTextFontFamily(family); const selectedTextIds = selectedElements.filter((element): element is TextElement => element.type === "text").map((element) => element.id); const next = selectedTextIds.reduce((state, selectedId) => dispatch(state, updateElement(selectedId, { fontFamily: family })), editorRef.current); if (selectedTextIds.length) setEditorState(next); }}>{availableFonts.map((font) => <option key={font} style={{ fontFamily: font }}>{font}</option>)}</select><label className="font-upload-button">+ Fuente<input type="file" accept=".ttf,.otf,.woff,.woff2,font/ttf,font/otf,font/woff,font/woff2" onChange={(event) => { const file = event.target.files?.[0]; if (file) void loadFontFile(file); event.currentTarget.value = ""; }} /></label></label><label>Página<select aria-label="Página activa" value={project.activePageId} onChange={(event) => switchPage(event.target.value)}>{project.pages.map((page, index) => <option key={page.id} value={page.id}>{index + 1} · {page.page.width} × {page.page.height} mm</option>)}</select></label><button type="button" onClick={createPageAndSelect}>+ Nueva página</button></div>
+         <div className="page-selector"><label>Fuente de texto<select aria-label="Tipografía del texto" value={textFontFamily} onChange={(event) => { const family = event.target.value; setTextFontFamily(family); const textElements = selectedElements.filter((element): element is TextElement => element.type === "text"); let next = editorRef.current; for (const element of textElements) next = dispatch(next, updateElement(element.id, { fontFamily: family, size: textSizeFor(element.text, element.fontSize, family, element.fontWeight, element.fontStyle, element.lineHeight) })); if (textElements.length) setEditorState(next); }}>{availableFonts.map((font) => <option key={font} style={{ fontFamily: font }}>{font}</option>)}</select><label className="font-upload-button">+ Fuente<input type="file" accept=".ttf,.otf,.woff,.woff2,font/ttf,font/otf,font/woff,font/woff2" onChange={(event) => { const file = event.target.files?.[0]; if (file) void loadFontFile(file); event.currentTarget.value = ""; }} /></label></label><label>Página<select aria-label="Página activa" value={project.activePageId} onChange={(event) => switchPage(event.target.value)}>{project.pages.map((page, index) => <option key={page.id} value={page.id}>{index + 1} · {page.page.width} × {page.page.height} mm</option>)}</select></label><button type="button" onClick={createPageAndSelect}>+ Nueva página</button></div>
            {selectedElements.length > 0 ? <div className="property-fields">
                 {objectPropertySections()}{mirrorButton("horizontal")}{mirrorButton("vertical")}{shapeOperations()}
          </div> : <p className="muted">Seleccione un objeto para editar sus propiedades.</p>}
@@ -1323,7 +1378,7 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
          <div className="inspector-tab-content" role="tabpanel">
                 {inspectorTab === "properties" && <>{selectedElements.length === 0 ? <section className="inspector-card"><div className="panel-title">PÁGINA</div><div className="preset-row"><button onClick={() => setPage(1200, 900)}>Horizontal</button><button onClick={() => setPage(900, 1200)}>Vertical</button></div><div className="fields"><Field label="W" value={document.page.width} onChange={(value) => setPage(value, document.page.height)} /><Field label="H" value={document.page.height} onChange={(value) => setPage(document.page.width, value)} /></div><label className="grid-toggle"><input type="checkbox" checked={grid} onChange={(event) => setGrid(event.target.checked)} /> Mostrar cuadrícula del espacio de trabajo</label></section> : <section className="inspector-card inspector-object-card"><div className="panel-title">OBJETO</div>{propertyElement ? <div className="inspector-object-properties">{objectPropertySections(true)}</div> : <><div className="selected-type">{selectedElement?.type === "contour" ? "CONTORNO" : selectedElement?.type === "path" ? "TRAZADO" : selectedElement?.type === "spline" ? "SPLINE" : "LÍNEA"}</div><p className="muted">{selectedElement?.type === "contour" ? "Los contornos conservan su geometría real; las dimensiones no están disponibles." : selectedElement?.type === "path" ? "Los trazados conservan sus nodos y segmentos." : selectedElement?.type === "spline" ? "Las splines conservan sus nodos y handles relativos." : "Las líneas no tienen dimensiones rectangulares."}</p>{selectedElement && isRotatableElement(selectedElement) && rotationField(selectedElement)}</>}</section>}{pathClosureControls}{splineClosureControls}{pathJoinControls}{pathSegmentControls}</>}
               {inspectorTab === "transform" && transformControls()}
-            {inspectorTab === "text" && <section className="inspector-card"><div className="panel-title">TEXTO</div>{selectedElement?.type === "text" ? <div className="text-properties"><label className="field"><span>Tamaño (mm)</span><input type="number" min="1" value={selectedElement.fontSize} onChange={(event) => { const value = Number(event.target.value); if (Number.isFinite(value) && value > 0) setEditorState(dispatch(editorRef.current, updateElement(selectedElement.id, { fontSize: value }))); }} /></label><label className="field"><span>Tipografía</span><select value={selectedElement.fontFamily} onChange={(event) => setEditorState(dispatch(editorRef.current, updateElement(selectedElement.id, { fontFamily: event.target.value })))}>{availableFonts.map((font) => <option key={font} style={{ fontFamily: font }}>{font}</option>)}</select></label><label className="font-upload-button">Cargar fuente para esta familia<input type="file" accept=".ttf,.otf,.woff,.woff2,font/ttf,font/otf,font/woff,font/woff2" onChange={(event) => { const file = event.target.files?.[0]; if (file) void loadFontFile(file, selectedElement.fontFamily); event.currentTarget.value = ""; }} /></label><div className="text-style-buttons"><button type="button" aria-pressed={selectedElement.fontWeight === "bold"} onClick={() => setEditorState(dispatch(editorRef.current, updateElement(selectedElement.id, { fontWeight: selectedElement.fontWeight === "bold" ? "normal" : "bold" })))}>Negrita</button><button type="button" aria-pressed={selectedElement.fontStyle === "italic"} onClick={() => setEditorState(dispatch(editorRef.current, updateElement(selectedElement.id, { fontStyle: selectedElement.fontStyle === "italic" ? "normal" : "italic" })))}>Cursiva</button></div><p className="muted">La fuente cargada debe corresponder al peso y estilo seleccionados.</p><button type="button" aria-label="Convertir texto a curvas" title="Requiere una fuente cargada para esta familia" disabled={!fontSources[selectedElement.fontFamily]} onClick={convertSelectedText}>Convertir a curvas</button>{!fontSources[selectedElement.fontFamily] && <p className="muted">Cargue una fuente TTF, OTF, WOFF o WOFF2 para habilitar la conversión.</p>}{fontLoadError && <p className="muted">{fontLoadError}</p>}</div> : <p className="muted">Seleccione un texto para editar sus propiedades.</p>}</section>}
+            {inspectorTab === "text" && <section className="inspector-card"><div className="panel-title">TEXTO</div>{textPropertyPanel()}</section>}
          </div>
          <section className="inspector-lower-card"><div className="panel-title">CAPAS</div>{document.layers.map((layer) => <div className="layer" key={layer.id}><span>{layer.name}</span><span>{layer.visible ? "Visible" : "Oculta"}</span></div>)}</section>
          <section className="inspector-lower-card"><div className="panel-title">OBJETOS</div><p className="muted">Estructura de objetos próximamente.</p></section>
