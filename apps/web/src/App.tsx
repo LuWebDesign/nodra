@@ -120,6 +120,7 @@ export function App() {
   const [fontSources, setFontSources] = useState<Record<string, ArrayBuffer>>({});
   const [fontLoadError, setFontLoadError] = useState<string>();
   const [textDraft, setTextDraft] = useState<{ readonly position: PointMm; readonly value: string; readonly elementId?: ElementId; readonly fontSize?: number; readonly element?: TextElement }>();
+  const [pendingDimensionAnchorState, setPendingDimensionAnchorState] = useState<NodeHit>();
   const textDraftRef = useRef(textDraft);
   textDraftRef.current = textDraft;
   const textInput = useRef<HTMLTextAreaElement>(null);
@@ -218,7 +219,7 @@ export function App() {
     ? { type: "rectangle" as const, id: selectedElements[0]!.id, layerId: selectedElements[0]!.layerId, position: { x: selectedBounds.x, y: selectedBounds.y }, size: { width: selectedBounds.width, height: selectedBounds.height }, cornerRadius: 0, rotation: 0, style: selectedElements[0]!.style }
     : selectedElement && isPropertyElement(selectedElement) ? selectedElement : undefined;
   const selectionKey = selection.join(":");
-  useEffect(() => { setTransformMode("resize"); }, [tool, project.activePageId, selectionKey]);
+  useEffect(() => { pendingDimensionAnchor.current = undefined; setPendingDimensionAnchorState(undefined); setTransformMode("resize"); }, [tool, project.activePageId, selectionKey]);
   useEffect(() => {
     setActiveSplineId(undefined);
     setSplineDraftPoint(undefined);
@@ -622,10 +623,11 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
       if (tool === "dimension") {
         if (!nodeHit) return;
         const first = pendingDimensionAnchor.current;
-        if (!first) { pendingDimensionAnchor.current = nodeHit; return; }
+        if (!first) { pendingDimensionAnchor.current = nodeHit; setPendingDimensionAnchorState(nodeHit); return; }
         if (first.elementId === nodeHit.elementId && first.nodeIndex === nodeHit.nodeIndex) return;
         setEditorState(dispatch(editorRef.current, createElement(newDimension("layer-1", first, nodeHit))));
         pendingDimensionAnchor.current = undefined;
+        setPendingDimensionAnchorState(undefined);
         return;
       }
       const hit = formaNodeHit?.elementId ?? pathSegmentHit?.elementId ?? nodeHit?.elementId ?? pickElement(editorRef.current.document, point, zoom);
@@ -869,6 +871,8 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
           setSnapGuide(undefined);
           setAlignmentGuideState([]);
         }
+        pendingDimensionAnchor.current = undefined;
+        setPendingDimensionAnchorState(undefined);
         setTransformMode("resize");
         return;
       }
@@ -983,6 +987,10 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
     return { left: topLeft.x, top: topLeft.y, width: bounds.width * zoom, height: bounds.height * zoom };
   })() : undefined;
   const pageStyle = { width: document.page.width * zoom, height: document.page.height * zoom, left: -panMm.x * zoom, top: -panMm.y * zoom };
+  const pendingDimensionOverlay = tool === "dimension" && pendingDimensionAnchorState && cursorPoint ? (() => {
+    const start = pagePointToCanvas(pendingDimensionAnchorState.node.point, zoom, panMm);
+    return <svg className="dimension-pending-overlay" aria-hidden="true"><line x1={start.x} y1={start.y} x2={cursorPoint.x} y2={cursorPoint.y} /><circle cx={start.x} cy={start.y} r="7" /><text x={start.x + 10} y={start.y - 10}>Primer nodo</text><text x={cursorPoint.x + 12} y={cursorPoint.y - 12}>Seleccione el segundo nodo</text></svg>;
+  })() : undefined;
   const rulerMajorStep = [1, 5, 10, 25, 50, 100, 250, 500].find((step) => step * zoom >= 50) ?? 1000;
   const rulerValues = (limit: number) => Array.from({ length: Math.floor(limit / rulerMajorStep) + 1 }, (_, index) => index * rulerMajorStep);
   const rulerXValues = rulerValues(document.page.width);
@@ -1247,8 +1255,9 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
             {tool === "select" && transformMode === "resize" && (handlePoints || groupPoints) && <div className="resize-handles">{handleNames.map((handle) => <button key={handle} type="button" className={`resize-handle resize-handle-${handle}`} data-resize-handle={handle} aria-label={`Redimensionar ${handle}`} style={handleStyle(handle)} onPointerDown={(event) => resizePointerDown(event, handle)} onPointerUp={(event) => finishPointer(event, false)} onPointerCancel={(event) => finishPointer(event, true)} />)}{groupPoints && !isDrawingTool(tool) && <button type="button" className="resize-handle resize-handle-center" data-resize-handle="center" aria-label="Centro del grupo" style={handleStyle("center")} onPointerDown={(event) => event.stopPropagation()} />}</div>}
            {transformMode === "rotate" && selectedElements.length > 0 && <div className="rotation-controls" aria-label="Controles de rotación"><span className="rotation-center" style={selectedElements.length > 1 && selectedBounds ? { left: pagePointToCanvas(groupCenter(selectedBounds), zoom, panMm).x, top: pagePointToCanvas(groupCenter(selectedBounds), zoom, panMm).y } : centerStyle} aria-hidden="true" />{rotationPoints.map((point, index) => { const screen = pagePointToCanvas(point, zoom, panMm); return <button key={index} type="button" className="rotation-handle" aria-label={`Rotar objeto, control ${index + 1}`} style={{ left: screen.x, top: screen.y }} onPointerDown={rotationPointerDown} onPointerUp={(event) => finishPointer(event, false)} onPointerCancel={(event) => finishPointer(event, true)}><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M15.5 8A6 6 0 1 0 16 12" /><path d="m12.5 4 3 4-5 .5" /></svg></button>; })}</div>}
           {marqueeStyle && <div className="marquee" style={marqueeStyle} />}
+          {pendingDimensionOverlay}
            {cursorPoint && <span className={`tool-cursor${closeCursorActive ? " close-cursor" : ""}`} style={{ left: cursorPoint.x, top: cursorPoint.y }} aria-label={`Herramienta activa: ${toolCursorLabels[tool]}`} title={closeCursorActive ? "Cerrar trazado" : tool === "forma" && pickFormaSegment(document, screenPointToMm(cursorPoint, { x: 0, y: 0 }, zoom, panMm), zoom) ? "Doble clic para insertar un nodo" : undefined}>{toolCursorIcons[tool]}</span>}
-          <span className="canvas-hint">Clic: relleno · clic derecho: contorno · {toolCursorLabels[tool]}</span>
+          <span className="canvas-hint">{tool === "dimension" ? pendingDimensionAnchorState ? "Cota: seleccione el segundo nodo" : "Cota: seleccione el primer nodo" : `Clic: relleno · clic derecho: contorno · ${toolCursorLabels[tool]}`}</span>
         </div>
       </section>
        <aside className="inspector">
