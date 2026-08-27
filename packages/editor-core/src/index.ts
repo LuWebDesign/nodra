@@ -169,12 +169,44 @@ export const invalidDimensionIdsForShapeOperation = (document: DocumentSnapshot,
 };
 
 const contourToEditableGlyphContour = (contour: { readonly points: readonly PointMm[] }, index: number): GlyphElement["contours"][number] => {
-  const points = contour.points.length > 1 && contour.points.at(-1)?.x === contour.points[0]?.x && contour.points.at(-1)?.y === contour.points[0]?.y ? contour.points.slice(0, -1) : contour.points;
-  const nodes = points.map((anchor, nodeIndex) => ({ id: `shape-${index}-node-${nodeIndex}`, anchor, join: "corner" as const }));
+  const source = contour.points.length > 1 && contour.points.at(-1)?.x === contour.points[0]?.x && contour.points.at(-1)?.y === contour.points[0]?.y ? contour.points.slice(0, -1) : contour.points;
+  const extent = source.reduce((bounds, point) => ({ minX: Math.min(bounds.minX, point.x), maxX: Math.max(bounds.maxX, point.x), minY: Math.min(bounds.minY, point.y), maxY: Math.max(bounds.maxY, point.y) }), { minX: Number.POSITIVE_INFINITY, maxX: Number.NEGATIVE_INFINITY, minY: Number.POSITIVE_INFINITY, maxY: Number.NEGATIVE_INFINITY });
+  const tolerance = Math.max(0.01, Math.max(extent.maxX - extent.minX, extent.maxY - extent.minY) * 0.012);
+  const distanceToSegment = (point: PointMm, start: PointMm, end: PointMm): number => {
+    const dx = end.x - start.x; const dy = end.y - start.y; const lengthSquared = dx * dx + dy * dy;
+    if (lengthSquared === 0) return Math.hypot(point.x - start.x, point.y - start.y);
+    const t = Math.max(0, Math.min(1, ((point.x - start.x) * dx + (point.y - start.y) * dy) / lengthSquared));
+    return Math.hypot(point.x - (start.x + t * dx), point.y - (start.y + t * dy));
+  };
+  const points = [...source];
+  while (points.length > 3) {
+    let candidate = -1; let error = Number.POSITIVE_INFINITY;
+    for (let pointIndex = 0; pointIndex < points.length; pointIndex += 1) {
+      const previous = points[(pointIndex - 1 + points.length) % points.length]!;
+      const current = points[pointIndex]!;
+      const next = points[(pointIndex + 1) % points.length]!;
+      const distance = distanceToSegment(current, previous, next);
+      if (distance < error) { error = distance; candidate = pointIndex; }
+    }
+    if (candidate < 0 || error > tolerance) break;
+    points.splice(candidate, 1);
+  }
+  const isCorner = (pointIndex: number): boolean => {
+    const previous = points[(pointIndex - 1 + points.length) % points.length]!;
+    const current = points[pointIndex]!;
+    const next = points[(pointIndex + 1) % points.length]!;
+    const incoming = { x: current.x - previous.x, y: current.y - previous.y };
+    const outgoing = { x: next.x - current.x, y: next.y - current.y };
+    const lengths = Math.hypot(incoming.x, incoming.y) * Math.hypot(outgoing.x, outgoing.y);
+    return lengths === 0 || (incoming.x * outgoing.x + incoming.y * outgoing.y) / lengths < 0.75;
+  };
+  const corners = points.map((_, pointIndex) => isCorner(pointIndex));
+  const nodes = points.map((anchor, nodeIndex) => ({ id: `shape-${index}-node-${nodeIndex}`, anchor, join: corners[nodeIndex] ? "corner" as const : "smooth" as const }));
   const segments = nodes.map((node, nodeIndex) => {
+    const previous = nodes[(nodeIndex - 1 + nodes.length) % nodes.length]!;
     const end = nodes[(nodeIndex + 1) % nodes.length]!;
-    const delta = { x: (end.anchor.x - node.anchor.x) / 3, y: (end.anchor.y - node.anchor.y) / 3 };
-    return { type: "cubicBezier" as const, startNodeId: node.id, endNodeId: end.id, control1: { x: node.anchor.x + delta.x, y: node.anchor.y + delta.y }, control2: { x: end.anchor.x - delta.x, y: end.anchor.y - delta.y } };
+    const afterEnd = nodes[(nodeIndex + 2) % nodes.length]!;
+    return { type: "cubicBezier" as const, startNodeId: node.id, endNodeId: end.id, control1: corners[nodeIndex] ? node.anchor : { x: node.anchor.x + (end.anchor.x - previous.anchor.x) / 6, y: node.anchor.y + (end.anchor.y - previous.anchor.y) / 6 }, control2: corners[(nodeIndex + 1) % corners.length] ? end.anchor : { x: end.anchor.x - (afterEnd.anchor.x - node.anchor.x) / 6, y: end.anchor.y - (afterEnd.anchor.y - node.anchor.y) / 6 } };
   });
   return { nodes, segments };
 };
