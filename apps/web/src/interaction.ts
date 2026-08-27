@@ -272,25 +272,34 @@ export function pickContourSegment(document: DocumentSnapshot, point: PointMm, z
 }
 
 export function pickFormaNode(document: DocumentSnapshot, point: PointMm, zoom: number, tolerancePx = 8): FormaNodeHit | undefined {
+  if (![point.x, point.y, zoom, tolerancePx].every(Number.isFinite) || zoom <= 0 || tolerancePx < 0) return undefined;
   const visible = new Set(document.layers.filter((layer) => layer.visible).map((layer) => layer.id));
   let best: { hit: FormaNodeHit; distance: number; order: string } | undefined;
   for (const element of document.elements) if (visible.has(element.layerId)) {
-    if (element.type === "text") continue;
-    if (element.type === "contour") for (const node of contourVertexNodes(element)) {
-      const distance = Math.hypot(node.point.x - point.x, node.point.y - point.y) * zoom;
-      const order = `${element.id}:c:${node.ringIndex}:${node.pointIndex}`;
-      if (distance <= tolerancePx && (!best || distance < best.distance || distance === best.distance && order < best.order)) best = { hit: { elementId: element.id, contourNode: node, point: node.point }, distance, order };
-    }
-    else for (const [nodeIndex, node] of realGeometryNodes(element).entries()) {
-      const distance = Math.hypot(node.point.x - point.x, node.point.y - point.y) * zoom;
-      const order = `${element.id}:p:${nodeIndex}`;
-      if (distance <= tolerancePx && (!best || distance < best.distance || distance === best.distance && order < best.order)) best = { hit: { elementId: element.id, nodeIndex, point: node.point }, distance, order };
+    // Forma feedback is best-effort. Geometry helpers deliberately remain
+    // strict for domain/editor callers; one bad element must not take down
+    // the composition while computing this optional feedback.
+    try {
+      if (element.type === "text") continue;
+      if (element.type === "contour") for (const node of contourVertexNodes(element)) {
+        const distance = Math.hypot(node.point.x - point.x, node.point.y - point.y) * zoom;
+        const order = `${element.id}:c:${node.ringIndex}:${node.pointIndex}`;
+        if (distance <= tolerancePx && (!best || distance < best.distance || distance === best.distance && order < best.order)) best = { hit: { elementId: element.id, contourNode: node, point: node.point }, distance, order };
+      }
+      else for (const [nodeIndex, node] of realGeometryNodes(element).entries()) {
+        const distance = Math.hypot(node.point.x - point.x, node.point.y - point.y) * zoom;
+        const order = `${element.id}:p:${nodeIndex}`;
+        if (distance <= tolerancePx && (!best || distance < best.distance || distance === best.distance && order < best.order)) best = { hit: { elementId: element.id, nodeIndex, point: node.point }, distance, order };
+      }
+    } catch {
+      // Unsupported/malformed geometry simply has no Forma node hit.
     }
   }
   return best?.hit;
 }
 
 export function pickFormaSegment(document: DocumentSnapshot, point: PointMm, zoom: number, tolerancePx = 8): ContourSegmentHitResult | undefined {
+  if (![point.x, point.y, zoom, tolerancePx].every(Number.isFinite) || zoom <= 0 || tolerancePx < 0) return undefined;
   const visible = new Set(document.layers.filter((layer) => layer.visible).map((layer) => layer.id));
   let best: ContourSegmentHitResult | undefined;
   for (const element of document.elements) if (visible.has(element.layerId)) {
@@ -300,10 +309,31 @@ export function pickFormaSegment(document: DocumentSnapshot, point: PointMm, zoo
     // but must not enter the closed-shape conversion path during render-time
     // cursor feedback or double-click handling.
     if ((element.type === "path" || element.type === "spline") && !element.closed) continue;
-    const hit = elementSegmentAt(element, point, tolerancePx / zoom);
-    if (hit && (!best || hit.distance < best.distance || hit.distance === best.distance && `${hit.elementId}:${hit.ringIndex}:${hit.segmentIndex}` < `${best.elementId}:${best.ringIndex}:${best.segmentIndex}`)) best = hit;
+    try {
+      const hit = elementSegmentAt(element, point, tolerancePx / zoom);
+      if (hit && (!best || hit.distance < best.distance || hit.distance === best.distance && `${hit.elementId}:${hit.ringIndex}:${hit.segmentIndex}` < `${best.elementId}:${best.ringIndex}:${best.segmentIndex}`)) best = hit;
+    } catch {
+      // Segment insertion is optional feedback and is closed per element.
+    }
   }
   return best;
+}
+
+/** Safe body picking for Forma entry; ordinary selection keeps its strict path. */
+export function pickFormaElement(document: DocumentSnapshot, point: PointMm, zoom: number): ElementId | undefined {
+  if (![point.x, point.y, zoom].every(Number.isFinite) || zoom <= 0) return undefined;
+  const node = pickFormaNode(document, point, zoom);
+  if (node) return node.elementId;
+  const visible = new Set(document.layers.filter((layer) => layer.visible).map((layer) => layer.id));
+  const layerOrder = new Map(document.layers.map((layer) => [layer.id, layer.order]));
+  return [...document.elements].sort((a, b) => (layerOrder.get(a.layerId) ?? 0) - (layerOrder.get(b.layerId) ?? 0)).reverse().find((element) => {
+    if (!visible.has(element.layerId)) return false;
+    try {
+      return element.type !== "dimension" && hitTest(element, point, 6 / zoom);
+    } catch {
+      return false;
+    }
+  })?.id;
 }
 
 export function formaNodeKey(node: FormaNodeHit): string { return node.contourNode ? `${node.elementId}:c:${node.contourNode.ringIndex}:${node.contourNode.pointIndex}` : `${node.elementId}:p:${node.nodeIndex}`; }

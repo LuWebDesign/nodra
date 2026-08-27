@@ -5,7 +5,7 @@ import { boundsOfElements, contourVertexNodes, dimensionKindForPlacement, dimens
 import { DebouncedAutosave, DexieProjectRepository, requestStoragePersistence, type FontRecord } from "@nodra/persistence";
 import { validateDesign, validateProject } from "@nodra/validation";
 import { renderSvg } from "@nodra/renderer-svg";
-import { canActivateRotation, centerPageInCanvas, clientPointToCanvas, cubicPlacementControls, formaNodeKey, hoveredSelectionCenter, isDrawingTool, marqueeSelection, movementExceedsThreshold, normalizeBounds, normalizeDrag, pagePointToCanvas, pathGuides, pickDimensionTarget, pickElement, pickFormaNode, pickFormaSegment, pickHoverNode, pickNode, pickPathNode, pickPathSegment, pointerDownIntent, visibleEditablePathNodeIndexes, screenDeltaToMm, screenPointToMm, selectedNodeAnchor, selectedPathAnchorIds, alignmentGuides, snapMoveDelta, zoomAtPoint, type AlignmentGuide, type ContourNodeHit, type DimensionTarget, type FormaNodeHit, type HoverNode, type NodeHit, type PathNodeHit, type SnapGuide, type TransformMode } from "./interaction.js";
+import { canActivateRotation, centerPageInCanvas, clientPointToCanvas, cubicPlacementControls, formaNodeKey, hoveredSelectionCenter, isDrawingTool, marqueeSelection, movementExceedsThreshold, normalizeBounds, normalizeDrag, pagePointToCanvas, pathGuides, pickDimensionTarget, pickElement, pickFormaElement, pickFormaNode, pickFormaSegment, pickHoverNode, pickNode, pickPathNode, pickPathSegment, pointerDownIntent, visibleEditablePathNodeIndexes, screenDeltaToMm, screenPointToMm, selectedNodeAnchor, selectedPathAnchorIds, alignmentGuides, snapMoveDelta, zoomAtPoint, type AlignmentGuide, type ContourNodeHit, type DimensionTarget, type FormaNodeHit, type HoverNode, type NodeHit, type PathNodeHit, type SnapGuide, type TransformMode } from "./interaction.js";
 import { aspectGeometryPatch, aspectSize, formatMm, geometryValue, rotationDegreesValue, rotationPatch, type GeometryField, type PropertyElement, type RotatableElement } from "./propertyBar.js";
 import { useDocumentStore, usePersistenceStore, useUiStore, useViewportStore, type Tool } from "./stores.js";
 import { pathJoinGuidance, pathJoinOptions } from "./pathJoins.js";
@@ -646,7 +646,7 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
       return;
     }
     const point = pointAt(event);
-    const pickedElement = pickElement(editorRef.current.document, point, zoom);
+     const pickedElement = tool === "forma" ? pickFormaElement(editorRef.current.document, point, zoom) : pickElement(editorRef.current.document, point, zoom);
     const picked = pickedElement ? editorRef.current.document.elements.find((element) => element.id === pickedElement) : undefined;
     if (tool === "forma" && picked?.type === "text") {
       setEditorState(clearSelection(editorRef.current));
@@ -767,7 +767,7 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
 
   const onCanvasDoubleClick = (event: MouseEvent<HTMLDivElement>) => {
     const point = screenPointToMm(clientPointToCanvas({ x: event.clientX, y: event.clientY }, event.currentTarget.getBoundingClientRect()), { x: 0, y: 0 }, zoom, panMm);
-    if (!pickElement(editorRef.current.document, point, zoom)) {
+     if (!(tool === "forma" ? pickFormaElement(editorRef.current.document, point, zoom) : pickElement(editorRef.current.document, point, zoom))) {
       setSelectedSplineNodeKey(undefined);
       setEditModeElementIds([]);
       setActiveSplineId(undefined);
@@ -775,7 +775,7 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
       return;
     }
     if (tool === "forma") {
-      const hit = pickElement(editorRef.current.document, point, zoom);
+       const hit = pickFormaElement(editorRef.current.document, point, zoom);
       const hitElement = hit ? editorRef.current.document.elements.find((element) => element.id === hit) : undefined;
       if (!hitElement || hitElement.type === "text" || hitElement.type === "dimension") return;
       if (!editModeElementIds.includes(hitElement.id)) {
@@ -1035,19 +1035,24 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
     }, [activeSplineId, editModeElementIds, selectionKey, selectedFormaNodeKeys, tool, selectedElements]);
 
      const editableSelectionIds = tool === "pen" ? selection : editModeElementIds;
-     const formaNodes: readonly FormaNodeOverlay[] = (tool === "forma" || tool === "pen") ? selectedElements.filter((element) => editableSelectionIds.includes(element.id) && element.type !== "spline" && element.type !== "text" && element.type !== "dimension").flatMap((element): readonly FormaNodeOverlay[] => {
-       type EditablePathNode = ReturnType<typeof pathGeometryNodes>[number] & { readonly ringIndex?: number };
+      const formaNodes: readonly FormaNodeOverlay[] = (tool === "forma" || tool === "pen") ? selectedElements.filter((element) => editableSelectionIds.includes(element.id) && element.type !== "text" && element.type !== "dimension").flatMap((element): readonly FormaNodeOverlay[] => {
+        try {
+        type EditablePathNode = ReturnType<typeof pathGeometryNodes>[number] & { readonly ringIndex?: number };
        const visiblePathNodes = (nodes: readonly EditablePathNode[], segmentForNode: (node: EditablePathNode) => { readonly startNodeId: string; readonly endNodeId: string } | undefined) => {
          const selectedAnchors = new Set(selectedFormaNodeKeys.flatMap((key) => { const match = key.match(new RegExp(`^${element.id}:p:(\\d+)$`)); const node = match ? nodes[Number(match[1])] : undefined; return node?.kind === "anchor" ? [node.nodeId] : []; }));
          const touchesSelectedAnchor = (node: EditablePathNode) => { const segment = node.kind === "control" ? segmentForNode(node) : undefined; return Boolean(segment && (selectedAnchors.has(segment.startNodeId) || selectedAnchors.has(segment.endNodeId))); };
          return nodes.map((node, nodeIndex) => ({ node, nodeIndex })).filter(({ node }) => node.kind === "anchor" || selectedAnchors.has(node.nodeId) || touchesSelectedAnchor(node));
        };
-       return element.type === "contour"
-      ? contourVertexNodes(element).map((node) => ({ kind: "contour" as const, key: `${node.elementId}:c:${node.ringIndex}:${node.pointIndex}`, elementId: node.elementId, point: node.point, contour: node }))
-       : element.type === "path" ? (() => { const pathNodes = pathGeometryNodes(element); const selectedIndexes = selectedFormaNodeKeys.flatMap((key) => { const match = key.match(new RegExp(`^${element.id}:p:(\\d+)$`)); return match ? [Number(match[1])] : []; }); const visibleIndexes = new Set(visibleEditablePathNodeIndexes(pathNodes, element.segments, selectedIndexes)); return pathNodes.map((node, nodeIndex) => ({ node, nodeIndex })).filter(({ nodeIndex }) => visibleIndexes.has(nodeIndex)).map(({ node, nodeIndex }) => ({ kind: "path" as const, key: `${element.id}:p:${nodeIndex}`, elementId: element.id, point: node.point, nodeIndex, pathNode: { elementId: element.id, node } })); })()
-         : element.type === "glyph" ? visiblePathNodes(glyphGeometryNodes(element), (node) => node.segmentIndex === undefined || node.ringIndex === undefined ? undefined : element.contours[node.ringIndex]?.segments[node.segmentIndex]).map(({ node, nodeIndex }) => ({ kind: "path" as const, key: `${element.id}:p:${nodeIndex}`, elementId: element.id, point: node.point, nodeIndex, pathNode: { elementId: element.id, node } }))
-         : realGeometryNodes(element).map((node, nodeIndex) => ({ kind: "path" as const, key: `${element.id}:p:${nodeIndex}`, elementId: element.id, point: node.point, nodeIndex }));
-     }) : [];
+        return element.type === "contour"
+       ? contourVertexNodes(element).map((node) => ({ kind: "contour" as const, key: `${node.elementId}:c:${node.ringIndex}:${node.pointIndex}`, elementId: node.elementId, point: node.point, contour: node }))
+        : element.type === "path" ? (() => { const pathNodes = pathGeometryNodes(element); const selectedIndexes = selectedFormaNodeKeys.flatMap((key) => { const match = key.match(new RegExp(`^${element.id}:p:(\\d+)$`)); return match ? [Number(match[1])] : []; }); const visibleIndexes = new Set(visibleEditablePathNodeIndexes(pathNodes, element.segments, selectedIndexes)); return pathNodes.map((node, nodeIndex) => ({ node, nodeIndex })).filter(({ nodeIndex }) => visibleIndexes.has(nodeIndex)).map(({ node, nodeIndex }) => ({ kind: "path" as const, key: `${element.id}:p:${nodeIndex}`, elementId: element.id, point: node.point, nodeIndex, pathNode: { elementId: element.id, node } })); })()
+          : element.type === "glyph" ? visiblePathNodes(glyphGeometryNodes(element), (node) => node.segmentIndex === undefined || node.ringIndex === undefined ? undefined : element.contours[node.ringIndex]?.segments[node.segmentIndex]).map(({ node, nodeIndex }) => ({ kind: "path" as const, key: `${element.id}:p:${nodeIndex}`, elementId: element.id, point: node.point, nodeIndex, pathNode: { elementId: element.id, node } }))
+          : realGeometryNodes(element).map((node, nodeIndex) => ({ kind: "path" as const, key: `${element.id}:p:${nodeIndex}`, elementId: element.id, point: node.point, nodeIndex }));
+        } catch {
+          // Forma overlays are optional feedback; skip only this malformed element.
+          return [];
+        }
+      }) : [];
       const selectedPathAnchor = selectedElement?.type === "path"
        ? (() => { const selectedPathOverlay = formaNodes.find((node): node is Extract<FormaNodeOverlay, { readonly kind: "path" }> => node.kind === "path" && "pathNode" in node && node.pathNode?.node.kind === "anchor" && selectedFormaNodeKeys.includes(node.key)); const anchor = selectedPathOverlay?.pathNode?.node; return anchor?.kind === "anchor" ? selectedElement.nodes.find((node) => node.id === anchor.nodeId) : undefined; })()
         : undefined;

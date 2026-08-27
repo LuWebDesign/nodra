@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { createDocument, elementId, layerId } from "@nodra/domain";
+import { createDocument, elementId, layerId, type DocumentSnapshot } from "@nodra/domain";
 import { validateDocument } from "@nodra/validation";
-import { canActivateRotation, centerPageInCanvas, clientPointToCanvas, hoveredSelectionCenter, INITIAL_ZOOM, isDrawingTool, marqueeSelection, MAX_ZOOM, MIN_ZOOM, movementExceedsThreshold, normalizeBounds, normalizeDrag, pagePointToCanvas, pagePointToScreen, screenDeltaToMm, screenPointToMm, containsBounds, elementsContainedBy, pickDimensionTarget, pickElement, pickFormaNode, pickFormaSegment, pickHoverNode, pickNode, pointerDownIntent, selectedNodeAnchor, selectionCenter, selectionFrame, snapMoveDelta, visibleEditablePathNodeIndexes, zoomAtPoint } from "./interaction.js";
+import { canActivateRotation, centerPageInCanvas, clientPointToCanvas, hoveredSelectionCenter, INITIAL_ZOOM, isDrawingTool, marqueeSelection, MAX_ZOOM, MIN_ZOOM, movementExceedsThreshold, normalizeBounds, normalizeDrag, pagePointToCanvas, pagePointToScreen, screenDeltaToMm, screenPointToMm, containsBounds, elementsContainedBy, pickDimensionTarget, pickElement, pickFormaElement, pickFormaNode, pickFormaSegment, pickHoverNode, pickNode, pointerDownIntent, selectedNodeAnchor, selectionCenter, selectionFrame, snapMoveDelta, visibleEditablePathNodeIndexes, zoomAtPoint } from "./interaction.js";
 import { geometryPatch, geometryValue } from "./propertyBar.js";
 import { dimensionKindForNodes, dimensionOffsetForPlacement, pointMidpoint } from "@nodra/geometry";
 
@@ -117,6 +117,28 @@ describe("Forma hit testing", () => {
     expect(pickFormaSegment(checked, { x: 20, y: 50 }, 1)).toBeUndefined();
     expect(pickFormaNode(checked, { x: 10, y: 30 }, 1)).toMatchObject({ elementId: openPath.id });
     expect(pickFormaNode(checked, { x: 10, y: 50 }, 1)).toMatchObject({ elementId: openSpline.id });
+  });
+
+  it("fails closed per malformed element while preserving valid Forma hits", () => {
+    const layer = { id: layerId("forma-malformed"), name: "Forma", visible: true, order: 0 };
+    const valid = { type: "rectangle" as const, id: elementId("forma-valid"), layerId: layer.id, position: { x: 50, y: 10 }, size: { width: 20, height: 10 }, cornerRadius: 0, rotation: 0, style: { stroke: "#000", strokeWidth: 1 } };
+    const degenerate = { type: "contour" as const, id: elementId("forma-degenerate"), layerId: layer.id, position: { x: 0, y: 0 }, size: { width: 0, height: 0 }, rotation: 0, contours: [{ points: [] }], fillRule: "evenodd" as const, style: { stroke: "#000", strokeWidth: 1 } };
+    const malformedGlyph = {
+      type: "glyph" as const,
+      id: elementId("forma-malformed-glyph"),
+      layerId: layer.id,
+      position: { x: 0, y: 0 }, size: { width: 1, height: 1 }, rotation: 0,
+      contours: [{ nodes: [{ id: "known", anchor: { x: 0, y: 0 }, join: "corner" as const }], segments: [{ type: "line" as const, startNodeId: "known", endNodeId: "missing" }] }],
+      style: { stroke: "#000", strokeWidth: 1 },
+    };
+    const checked = { ...createDocument("forma-malformed-document", [layer]), elements: [malformedGlyph, degenerate, valid] } as unknown as DocumentSnapshot;
+
+    expect(() => pickFormaNode(checked, { x: 60, y: 15 }, 1)).not.toThrow();
+    expect(() => pickFormaSegment(checked, { x: 60, y: 15 }, 1)).not.toThrow();
+    expect(() => pickFormaElement(checked, { x: 60, y: 15 }, 1)).not.toThrow();
+    expect(pickFormaNode(checked, { x: 60, y: 15 }, 1)).toMatchObject({ elementId: valid.id });
+    expect(pickFormaSegment(checked, { x: 60, y: 15 }, 1)).toMatchObject({ elementId: valid.id });
+    expect(pickFormaElement(checked, { x: 60, y: 15 }, 1)).toBe(valid.id);
   });
 });
 
