@@ -797,6 +797,15 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
        beginTextEdit(hitElement);
        return;
     }
+    if (tool === "select" && hitElement && (hitElement.type === "path" || hitElement.type === "glyph" || hitElement.type === "spline")) {
+      event.preventDefault();
+      setSelectedFormaNodeKeys([]);
+      setSelectedPathSegment(undefined);
+      setEditModeElementIds([hitElement.id]);
+      setTool("forma");
+      setEditorState(select(editorRef.current, [hitElement.id]));
+      return;
+    }
     if (canActivateRotation(tool, editorRef.current.selection, hit) && hitElement && isRotatableElement(hitElement)) {
       event.preventDefault();
       setCenterHover(undefined);
