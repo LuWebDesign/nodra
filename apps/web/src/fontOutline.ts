@@ -101,7 +101,19 @@ const reduceClosedSamples = (samples: readonly SamplePoint[], tolerance: number,
   return points;
 };
 const smoothContourFromSamples = (samples: readonly SamplePoint[], smoothness: number): GlyphOutlineData["contours"][number] => {
-  const nodes = samples.map((sample) => ({ id: sample.id.replace(/[^A-Za-z0-9:_-]/g, "-"), anchor: sample.point, join: "smooth" as const }));
+  const isCorner = (index: number): boolean => {
+    const previous = samples[(index - 1 + samples.length) % samples.length]!.point;
+    const current = samples[index]!.point;
+    const next = samples[(index + 1) % samples.length]!.point;
+    const incoming = { x: current.x - previous.x, y: current.y - previous.y };
+    const outgoing = { x: next.x - current.x, y: next.y - current.y };
+    const incomingLength = Math.hypot(incoming.x, incoming.y);
+    const outgoingLength = Math.hypot(outgoing.x, outgoing.y);
+    if (incomingLength === 0 || outgoingLength === 0) return true;
+    return (incoming.x * outgoing.x + incoming.y * outgoing.y) / (incomingLength * outgoingLength) < 0.75;
+  };
+  const corners = samples.map((_, index) => isCorner(index));
+  const nodes = samples.map((sample, index) => ({ id: sample.id.replace(/[^A-Za-z0-9:_-]/g, "-"), anchor: sample.point, join: corners[index] ? "corner" as const : "smooth" as const }));
   const segments: PathSegment[] = nodes.map((node, index) => {
     const previous = nodes[(index - 1 + nodes.length) % nodes.length]!;
     const next = nodes[(index + 1) % nodes.length]!;
@@ -110,13 +122,12 @@ const smoothContourFromSamples = (samples: readonly SamplePoint[], smoothness: n
       type: "cubicBezier" as const,
       startNodeId: node.id,
       endNodeId: next.id,
-      control1: { x: node.anchor.x + (next.anchor.x - previous.anchor.x) * smoothness / 6, y: node.anchor.y + (next.anchor.y - previous.anchor.y) * smoothness / 6 },
-      control2: { x: next.anchor.x - (afterNext.anchor.x - node.anchor.x) * smoothness / 6, y: next.anchor.y - (afterNext.anchor.y - node.anchor.y) * smoothness / 6 },
+      control1: corners[index] ? node.anchor : { x: node.anchor.x + (next.anchor.x - previous.anchor.x) * smoothness / 6, y: node.anchor.y + (next.anchor.y - previous.anchor.y) * smoothness / 6 },
+      control2: corners[(index + 1) % corners.length] ? next.anchor : { x: next.anchor.x - (afterNext.anchor.x - node.anchor.x) * smoothness / 6, y: next.anchor.y - (afterNext.anchor.y - node.anchor.y) * smoothness / 6 },
     };
   });
   return { nodes, segments };
 };
-
 const contourNodeBudget = (sampleCount: number, totalSamples: number, settings: typeof curveModeSettings[TextCurveMode]): number => {
   if (!Number.isFinite(settings.maxGlyphNodes)) return settings.maxContourNodes;
   const proportional = Math.round(settings.maxGlyphNodes * sampleCount / Math.max(1, totalSamples));
