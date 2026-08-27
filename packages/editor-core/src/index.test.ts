@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { createDocument, elementId, layerId, type DimensionElement, type GlyphElement, type PathElement, type RectangleElement, type SplineElement, type TextElement } from "@nodra/domain";
 import { addToSelection, appendSplineNode, beginGesture, cancelGesture, clearSelection, closePath, closeSplineElement, commitGesture, createEditor, createElement, createPathCubicNode, deleteContourNodes, deleteElement, deleteElementNodes, deletePathNodes, dispatch, duplicateElements, flipElements, insertContourNode, invalidDimensionIdsForShapeOperation, moveElement, moveElements, movePathNode, movePathHandle, openPath, previewGesture, previewGestureFromBase, redo, removeFromSelection, reorderLayer, resizeElement, resizeElements, rotateElementsAroundCenter, select, selectForPointerDown, setLayerVisibility, setPathJoin, shapeOperation, splitPathSegment, toggleSelection, undo, updateContourNode, updateElement, updateElementNode, updateElementStyles, updateSplineHandle, updateSplineNode } from "./index.js";
 import type { Direction } from "@nodra/geometry";
+import { appendLinePoint } from "./index.js";
 
 const rectangle: RectangleElement = { type: "rectangle", id: elementId("r1"), layerId: layerId("default"), position: { x: 1, y: 2 }, size: { width: 10, height: 5 }, cornerRadius: 0, rotation: 0, style: { stroke: "#000", strokeWidth: 1 } };
 const document = createDocument("doc", [{ id: layerId("default"), name: "Default", visible: true, order: 0 }]);
@@ -12,6 +13,12 @@ const dimension: DimensionElement = { type: "dimension", id: elementId("dimensio
 const glyph: GlyphElement = { type: "glyph", id: elementId("glyph"), layerId: layerId("default"), position: { x: 0, y: 0 }, size: { width: 20, height: 20 }, glyph: "O", fillRule: "evenodd", rotation: 0, style: rectangle.style, contours: [{ nodes: [{ id: "ga", anchor: { x: 0, y: 0 }, join: "smooth" }, { id: "gb", anchor: { x: 10, y: 0 }, join: "smooth" }, { id: "gc", anchor: { x: 10, y: 10 }, join: "smooth" }, { id: "gd", anchor: { x: 0, y: 10 }, join: "smooth" }], segments: [{ type: "cubicBezier", startNodeId: "ga", endNodeId: "gb", control1: { x: 3, y: -2 }, control2: { x: 7, y: -2 } }, { type: "cubicBezier", startNodeId: "gb", endNodeId: "gc", control1: { x: 12, y: 3 }, control2: { x: 12, y: 7 } }, { type: "cubicBezier", startNodeId: "gc", endNodeId: "gd", control1: { x: 7, y: 12 }, control2: { x: 3, y: 12 } }, { type: "cubicBezier", startNodeId: "gd", endNodeId: "ga", control1: { x: -2, y: 7 }, control2: { x: -2, y: 3 } }] }] };
 
 describe("editor core", () => {
+  it("generalizes a committed native line when a third node is added", () => {
+    const line = { type: "line" as const, id: elementId("click-line"), layerId: layerId("default"), start: { x: 0, y: 0 }, end: { x: 10, y: 0 }, rotation: 0, style: rectangle.style };
+    const state = dispatch(dispatch(createEditor(document), createElement(line)), appendLinePoint(line.id, { x: 10, y: 10 }));
+    expect(state.document.elements[0]).toMatchObject({ type: "path", closed: false, nodes: [{ anchor: { x: 0, y: 0 } }, { anchor: { x: 10, y: 0 } }, { anchor: { x: 10, y: 10 } }] });
+    expect(state.undo).toHaveLength(2);
+  });
   it("creates, edits, closes, styles, deletes, and restores native splines through document history", () => {
     let state = dispatch(createEditor(document), createElement(spline));
     state = dispatch(state, appendSplineNode(spline.id, { id: "d", anchor: { x: 0, y: 10 }, continuity: "smooth" }));
@@ -135,6 +142,13 @@ describe("editor core", () => {
     const state = dispatch(createEditor({ ...document, elements: [symmetric] }), movePathHandle(symmetric.id, 0, "control1", { x: 3, y: 4 }));
     const result = state.document.elements[0];
     expect(result?.type === "path" ? result.segments[2] : undefined).toMatchObject({ control2: { x: -3, y: -4 } });
+  });
+  it("keeps symmetric glyph handles opposite around their shared anchor", () => {
+    const symmetricGlyph = { ...glyph, contours: glyph.contours.map((contour) => ({ ...contour, nodes: contour.nodes.map((node, index) => index === 0 ? { ...node, join: "symmetric" as const } : node) })) };
+    const state = dispatch(createEditor({ ...document, elements: [symmetricGlyph] }), movePathHandle(glyph.id, 0, "control1", { x: 4, y: 3 }, 0));
+    const result = state.document.elements[0];
+    expect(result?.type).toBe("glyph");
+    if (result?.type === "glyph") expect(result.contours[0]?.segments[3]).toMatchObject({ control2: { x: -4, y: -3 } });
   });
   it("closes and reopens a path as independent undoable commands", () => {
     let state = dispatch(createEditor({ ...document, elements: [path] }), closePath(path.id));

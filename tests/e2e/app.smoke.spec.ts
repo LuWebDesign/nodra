@@ -23,19 +23,16 @@ async function drawRectangle(page: Page) {
     y: visibleTop + 1 + Math.min(40, availableHeight - rectangleHeight),
   };
   const end = { x: start.x + rectangleWidth, y: start.y + rectangleHeight };
-  await page.mouse.move(start.x, start.y);
-  await page.mouse.down();
-  await page.mouse.move(end.x, end.y);
-  await page.mouse.up();
+   await page.mouse.click(start.x, start.y);
+   await page.mouse.move(end.x, end.y);
+   await page.mouse.click(end.x, end.y);
   await expect(page.locator(".page-svg svg")).toBeVisible();
 }
 
 async function drawLine(page: Page, start: { x: number; y: number }, end: { x: number; y: number }) {
   await page.getByRole("button", { name: "Línea" }).click();
-  await page.mouse.move(start.x, start.y);
-  await page.mouse.down();
-  await page.mouse.move(end.x, end.y);
-  await page.mouse.up();
+  await page.mouse.click(start.x, start.y);
+  await page.mouse.click(end.x, end.y);
 }
 
 test("loads the editor workspace", async ({ page }) => {
@@ -66,7 +63,7 @@ test("creates an open spline with Spline and exposes its anchors", async ({ page
   const secondNode = await nodes.nth(1).boundingBox();
   expect(secondNode).not.toBeNull();
   await page.mouse.click(secondNode!.x + secondNode!.width / 2, secondNode!.y + secondNode!.height / 2);
-  await expect(page.locator("[data-spline-handle]")).toHaveCount(4);
+  await expect(page.locator("[data-spline-handle]")).toHaveCount(2);
   const firstNode = await nodes.first().boundingBox();
   expect(firstNode).not.toBeNull();
   await page.mouse.move(firstNode!.x + firstNode!.width / 2, firstNode!.y + firstNode!.height / 2);
@@ -81,7 +78,7 @@ test("creates an open spline with Spline and exposes its anchors", async ({ page
   const selectedNode = await nodes.nth(1).boundingBox();
   expect(selectedNode).not.toBeNull();
   await page.mouse.click(selectedNode!.x + selectedNode!.width / 2, selectedNode!.y + selectedNode!.height / 2);
-  await expect(page.locator("[data-spline-handle]")).toHaveCount(6);
+  await expect(page.locator("[data-spline-handle]")).toHaveCount(2);
   const beforeNodeDrag = await spline.getAttribute("d");
   await page.mouse.move(selectedNode!.x + selectedNode!.width / 2, selectedNode!.y + selectedNode!.height / 2);
   await page.mouse.down();
@@ -190,7 +187,7 @@ test("selects and moves a Spline object like Pluma", async ({ page }) => {
   const nodeBounds = await node.boundingBox();
   expect(nodeBounds).not.toBeNull();
   await page.mouse.click(nodeBounds!.x + nodeBounds!.width / 2, nodeBounds!.y + nodeBounds!.height / 2);
-  await expect(page.locator("[data-spline-handle]")).toHaveCount(4);
+  await expect(page.locator("[data-spline-handle]")).toHaveCount(2);
   await page.mouse.dblclick(pageBounds!.x + 500, pageBounds!.y + 500);
   await expect(page.locator("[data-spline-handle]")).toHaveCount(0);
   await expect(page.locator("[data-spline-node]")).toHaveCount(0);
@@ -310,6 +307,39 @@ test("creates, transforms, and undoes a rectangle", async ({ page }) => {
   await expect(width).toHaveValue(String(originalWidth + 10));
   await page.getByRole("button", { name: "Deshacer" }).click();
   await expect(width).toHaveValue(String(originalWidth));
+});
+
+test("creates nested rectangle and circle objects with click gestures", async ({ page }) => {
+  await page.goto("/");
+  const bounds = await page.locator(".page").boundingBox();
+  expect(bounds).not.toBeNull();
+  await page.getByRole("button", { name: "Rectángulo" }).click();
+  await page.mouse.click(bounds!.x + 100, bounds!.y + 100);
+  await page.mouse.click(bounds!.x + 260, bounds!.y + 220);
+  await page.getByRole("button", { name: "Círculo" }).click();
+  await page.mouse.click(bounds!.x + 170, bounds!.y + 160);
+  await page.mouse.move(bounds!.x + 205, bounds!.y + 160);
+  await expect(page.locator(".creation-pending-overlay")).toBeVisible();
+  await page.mouse.click(bounds!.x + 205, bounds!.y + 160);
+  await expect(page.locator('.page-svg svg rect[data-element-id]')).toHaveCount(1);
+  await expect(page.locator('.page-svg svg ellipse[data-element-id]')).toHaveCount(1);
+});
+
+test("continues a click line and closes a valid non-collinear path", async ({ page }) => {
+  await page.goto("/");
+  const bounds = await page.locator(".page").boundingBox();
+  expect(bounds).not.toBeNull();
+  await page.getByRole("button", { name: "Línea" }).click();
+  const first = { x: bounds!.x + 120, y: bounds!.y + 120 };
+  const second = { x: first.x + 90, y: first.y };
+  const third = { x: second.x, y: second.y + 70 };
+  await page.mouse.click(first.x, first.y);
+  await page.mouse.click(second.x, second.y);
+  await page.mouse.move(third.x, third.y);
+  await expect(page.locator(".creation-pending-overlay")).toBeVisible();
+  await page.mouse.click(third.x, third.y);
+  await page.mouse.click(first.x, first.y);
+  await expect(page.locator('.page-svg svg path[data-element-id]')).toHaveAttribute("d", /Z/);
 });
 
 test("shows node hover feedback while keeping the system cursor as an arrow", async ({ page }) => {
@@ -609,10 +639,11 @@ test("exposes real contour vertices in Forma and edits one vertex", async ({ pag
   await page.getByRole("button", { name: "Rectángulo" }).click();
   const secondStart = { x: first!.x + first!.width / 2, y: first!.y + first!.height / 2 };
   const secondEnd = { x: secondStart.x + 30, y: secondStart.y + 20 };
-  await page.mouse.move(secondStart.x, secondStart.y);
-  await page.mouse.down();
+  await page.mouse.click(secondStart.x, secondStart.y);
   await page.mouse.move(secondEnd.x, secondEnd.y);
-  await page.mouse.up();
+  await expect(page.locator(".creation-pending-overlay")).toBeVisible();
+  await page.mouse.click(secondEnd.x, secondEnd.y);
+  await expect(page.locator(".page-svg svg rect")).toHaveCount(2);
 
   await page.getByRole("button", { name: "Seleccion" }).click();
   const rectangles = page.locator(".page-svg svg rect");
@@ -632,6 +663,7 @@ test("exposes real contour vertices in Forma and edits one vertex", async ({ pag
   await page.getByRole("button", { name: "Forma" }).click();
   const nodes = page.locator(".contour-node");
   await expect(nodes).toHaveCount(0);
+  await expect.poll(() => page.locator(".page-svg svg path[data-element-id]").first().boundingBox()).not.toBeNull();
   const editTarget = await page.locator(".page-svg svg path[data-element-id]").first().boundingBox();
   expect(editTarget).not.toBeNull();
   await page.mouse.dblclick(editTarget!.x + editTarget!.width / 2, editTarget!.y + editTarget!.height / 2);

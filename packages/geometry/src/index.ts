@@ -20,6 +20,8 @@ export interface CubicBezier { readonly p0: PointMm; readonly p1: PointMm; reado
 export type BezierHandleDirection = "in" | "out";
 export interface BezierHandlePoint { readonly direction: BezierHandleDirection; readonly point: PointMm }
 export interface BezierGeometryNode { readonly nodeId: string; readonly anchor: PointMm; readonly handles: readonly BezierHandlePoint[] }
+export interface EditableGeometryNode { readonly kind: "anchor" | "handle"; readonly nodeId: string; readonly point: PointMm; readonly direction?: BezierHandleDirection; readonly nodeIndex: number; readonly segmentIndex?: number; readonly ringIndex?: number }
+export interface BezierHandleGuide { readonly nodeId: string; readonly anchor: PointMm; readonly point: PointMm; readonly direction: BezierHandleDirection; readonly nodeIndex: number; readonly anchorNodeIndex: number; readonly segmentIndex?: number; readonly ringIndex?: number }
 export interface LinearDimensionGeometry { readonly kind: "aligned" | "horizontal" | "vertical"; readonly start: PointMm; readonly end: PointMm; readonly lineStart: PointMm; readonly lineEnd: PointMm; readonly text: PointMm; readonly value: number }
 export interface AngularDimensionGeometry { readonly kind: "angular"; readonly vertex: PointMm; readonly start: PointMm; readonly end: PointMm; readonly lineStart: PointMm; readonly lineEnd: PointMm; readonly text: PointMm; readonly value: number; readonly radius: number; readonly sweep: 0 | 1 }
 export type DimensionGeometry = LinearDimensionGeometry | AngularDimensionGeometry;
@@ -179,6 +181,30 @@ export function pathGeometryNodes(path: PathElement): readonly PathGeometryNode[
   return result;
 }
 export const derivedPathGeometryNodes = pathGeometryNodes;
+
+/** Projects every supported editable object into one node vocabulary for Forma feedback. */
+export function editableGeometryNodes(element: Element): readonly EditableGeometryNode[] {
+  if (element.type === "spline") return realGeometryNodes(element).map((node, nodeIndex) => ({ kind: node.kind === "control" ? "handle" : "anchor", nodeId: node.nodeId ?? `${element.id}:${nodeIndex}`, point: node.point, ...(node.kind === "control" ? { direction: node.handle === "control1" ? "out" as const : "in" as const } : {}), nodeIndex }));
+  if (element.type === "path") return pathGeometryNodes(element).map((node, nodeIndex) => ({ kind: node.kind === "control" ? "handle" : "anchor", nodeId: node.nodeId, point: node.point, ...(node.kind === "control" ? { direction: node.handle === "control1" ? "out" as const : "in" as const, segmentIndex: node.segmentIndex } : {}), nodeIndex }));
+  if (element.type === "glyph") return glyphGeometryNodes(element).map((node, nodeIndex) => ({ kind: node.kind === "control" ? "handle" : "anchor", nodeId: node.nodeId, point: node.point, ...(node.kind === "control" ? { direction: node.handle === "control1" ? "out" as const : "in" as const, segmentIndex: node.segmentIndex } : {}), ...(node.ringIndex !== undefined ? { ringIndex: node.ringIndex } : {}), nodeIndex }));
+  return realGeometryNodes(element).map((node, nodeIndex) => ({ kind: "anchor" as const, nodeId: node.nodeId ?? `${element.id}:${nodeIndex}`, point: node.point, nodeIndex }));
+}
+
+/** Returns only directional controls, preserving the shared Forma node index. */
+export function bezierHandleGuides(element: Element): readonly BezierHandleGuide[] {
+  const nodes = editableGeometryNodes(element);
+  return nodes.flatMap((node) => {
+    if (node.kind !== "handle" || !node.direction) return [];
+    const anchor = nodes.find((candidate) => candidate.kind === "anchor" && candidate.nodeId === node.nodeId);
+    return anchor ? [{ nodeId: node.nodeId, anchor: anchor.point, point: node.point, direction: node.direction, nodeIndex: node.nodeIndex, anchorNodeIndex: anchor.nodeIndex, ...(node.segmentIndex !== undefined ? { segmentIndex: node.segmentIndex } : {}), ...(node.ringIndex !== undefined ? { ringIndex: node.ringIndex } : {}) }] : [];
+  });
+}
+
+/** Keeps directional arrows scoped to the active anchor; inactive nodes show no handles. */
+export function visibleBezierHandleGuides(element: Element, activeNodeIndexes: readonly number[]): readonly BezierHandleGuide[] {
+  const active = new Set(activeNodeIndexes);
+  return bezierHandleGuides(element).filter((guide) => active.has(guide.anchorNodeIndex));
+}
 function flattenPath(path: PathElement, tolerance = 0.1): PointMm[] {
   const points: PointMm[] = [];
   path.segments.forEach((segment, index) => {

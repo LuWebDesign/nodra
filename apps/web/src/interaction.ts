@@ -2,6 +2,8 @@ import type { DocumentSnapshot, Element, ElementId, LineElement, PathElement, Pa
 import { boundsOf, boundsOfElements, contourSegmentAt, contourVertexNodes, dimensionGeometry, elementCenter, elementSegmentAt, hitTest, pathGeometryNodes, pathSegmentAt, realGeometryNodes, type Bounds, type ContourSegmentHit, type ContourVertexNode, type PathGeometryNode, type RealGeometryNode, type PathSegmentHit } from "@nodra/geometry";
 
 export interface DragGeometry { readonly position: PointMm; readonly size: { readonly width: number; readonly height: number } }
+export interface CircleGeometry { readonly position: PointMm; readonly size: { readonly width: number; readonly height: number }; readonly radius: number }
+export interface CreationGuide { readonly source: PointMm; readonly target: PointMm; readonly kind: "node" | "center" }
 export interface SnapGuide { readonly source: PointMm; readonly target: PointMm }
 export interface SnapMoveResult { readonly delta: PointMm; readonly guide: SnapGuide | undefined }
 export type AlignmentGuideOrientation = "vertical" | "horizontal";
@@ -217,6 +219,36 @@ export function pickNode(document: DocumentSnapshot, point: PointMm, zoom: numbe
     if (distance <= tolerancePx && (!best || distance < best.distance || distance === best.distance && order < best.order)) best = { hit: { elementId: element.id, nodeIndex, node }, distance, order };
   }
   return best?.hit;
+}
+
+/** Returns a perfect circle from a fixed center and a document-space pointer. */
+export function circleGeometry(center: PointMm, pointer: PointMm): CircleGeometry | undefined {
+  if (![center.x, center.y, pointer.x, pointer.y].every(Number.isFinite)) throw new Error("circle coordinates must be finite");
+  const radius = Math.hypot(pointer.x - center.x, pointer.y - center.y);
+  return radius > 0 ? { position: { x: center.x - radius, y: center.y - radius }, size: { width: radius * 2, height: radius * 2 }, radius } : undefined;
+}
+
+/** Finds visual-only creation guides. The returned target never changes the requested point. */
+export function creationGuides(document: DocumentSnapshot, point: PointMm, zoom: number, tolerancePx = 8): readonly CreationGuide[] {
+  if (![point.x, point.y, zoom, tolerancePx].every(Number.isFinite) || zoom <= 0 || tolerancePx < 0) throw new Error("creation guide coordinates, zoom, and tolerance must be valid");
+  const visible = new Set(document.layers.filter((layer) => layer.visible).map((layer) => layer.id));
+  let best: { readonly guide: CreationGuide; readonly distance: number; readonly order: string } | undefined;
+  for (const element of document.elements) if (visible.has(element.layerId)) for (const [index, node] of realGeometryNodes(element).entries()) {
+    const distance = Math.hypot(node.point.x - point.x, node.point.y - point.y) * zoom;
+    if (distance > tolerancePx) continue;
+    const candidate = { guide: { source: point, target: node.point, kind: node.kind === "center" ? "center" as const : "node" as const }, distance, order: `${element.id}:${index}` };
+    if (!best || distance < best.distance || distance === best.distance && candidate.order < best.order) best = candidate;
+  }
+  return best ? [best.guide] : [];
+}
+
+export function hasNonCollinearPoints(points: readonly PointMm[], epsilon = 1e-9): boolean {
+  if (points.length < 3) return false;
+  for (let first = 0; first < points.length - 2; first += 1) for (let second = first + 1; second < points.length - 1; second += 1) for (let third = second + 1; third < points.length; third += 1) {
+    const a = points[first]!, b = points[second]!, c = points[third]!;
+    if (Math.abs((b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x)) > epsilon) return true;
+  }
+  return false;
 }
 
 export type NodeFeedbackTool = "select" | "forma" | "dimension";

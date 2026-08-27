@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createDocument, elementId, layerId, type DocumentSnapshot } from "@nodra/domain";
 import { validateDocument } from "@nodra/validation";
-import { canActivateRotation, centerPageInCanvas, clientPointToCanvas, hoveredSelectionCenter, INITIAL_ZOOM, isDrawingTool, marqueeSelection, MAX_ZOOM, MIN_ZOOM, movementExceedsThreshold, normalizeBounds, normalizeDrag, pagePointToCanvas, pagePointToScreen, screenDeltaToMm, screenPointToMm, containsBounds, elementsContainedBy, pickDimensionTarget, pickElement, pickFormaElement, pickFormaNode, pickFormaSegment, pickHoverNode, pickNode, pointerDownIntent, selectedNodeAnchor, selectionCenter, selectionFrame, snapMoveDelta, visibleEditablePathNodeIndexes, zoomAtPoint } from "./interaction.js";
+import { canActivateRotation, circleGeometry, centerPageInCanvas, clientPointToCanvas, creationGuides, hasNonCollinearPoints, hoveredSelectionCenter, INITIAL_ZOOM, isDrawingTool, marqueeSelection, MAX_ZOOM, MIN_ZOOM, movementExceedsThreshold, normalizeBounds, normalizeDrag, pagePointToCanvas, pagePointToScreen, screenDeltaToMm, screenPointToMm, containsBounds, elementsContainedBy, pickDimensionTarget, pickElement, pickFormaElement, pickFormaNode, pickFormaSegment, pickHoverNode, pickNode, pointerDownIntent, selectedNodeAnchor, selectionCenter, selectionFrame, snapMoveDelta, visibleEditablePathNodeIndexes, zoomAtPoint } from "./interaction.js";
 import { geometryPatch, geometryValue } from "./propertyBar.js";
 import { dimensionKindForNodes, dimensionOffsetForPlacement, pointMidpoint } from "@nodra/geometry";
 
@@ -185,6 +185,25 @@ describe("drawing tool routing", () => {
   it("projects every selected object frame into canvas space and keeps line frames visible", () => {
     const line = { type: "line" as const, id: elementId("frame-line"), layerId: layerId("frame"), start: { x: 12, y: 20 }, end: { x: 12, y: 40 }, rotation: 0, style: { stroke: "#000", strokeWidth: 1 } };
     expect(selectionFrame(line, 3, { x: 10, y: 10 })).toEqual({ left: 5, top: 30, width: 2, height: 60 });
+  });
+});
+
+describe("click creation geometry", () => {
+  it("creates equal circle dimensions and rejects a zero radius", () => {
+    expect(circleGeometry({ x: 10, y: 20 }, { x: 13, y: 24 })).toMatchObject({ position: { x: 5, y: 15 }, size: { width: 10, height: 10 }, radius: 5 });
+    expect(circleGeometry({ x: 10, y: 20 }, { x: 10, y: 20 })).toBeUndefined();
+  });
+  it("closes only a non-collinear line draft with at least three points", () => {
+    expect(hasNonCollinearPoints([{ x: 0, y: 0 }, { x: 10, y: 0 }])).toBe(false);
+    expect(hasNonCollinearPoints([{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 20, y: 0 }])).toBe(false);
+    expect(hasNonCollinearPoints([{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }])).toBe(true);
+  });
+  it("shows one visual guide inside tolerance and none outside it", () => {
+    const layer = { id: layerId("creation-guides"), name: "Guides", visible: true, order: 0 };
+    const line = { type: "line" as const, id: elementId("guide-line"), layerId: layer.id, start: { x: 20, y: 20 }, end: { x: 40, y: 20 }, rotation: 0, style: { stroke: "#000", strokeWidth: 1 } };
+    const document = { ...createDocument("creation-guides-doc", [layer]), elements: [line] };
+    expect(creationGuides(document, { x: 20.5, y: 20 }, 4, 4)).toMatchObject([{ target: line.start, kind: "node" }]);
+    expect(creationGuides(document, { x: 20.5, y: 20 }, 1, 0.25)).toEqual([]);
   });
 });
 

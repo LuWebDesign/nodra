@@ -54,6 +54,20 @@ export const createElement = (element: Element): EditorCommand => ({
     : replaceElements(document, [...document.elements, { ...element }]),
 });
 
+/** Extends a native two-endpoint line into an editable open path. */
+export const appendLinePoint = (lineId: ElementId, point: PointMm): EditorCommand => ({
+  name: `line-create-node:${lineId}`,
+  apply: (document) => {
+    const line = document.elements.find((element): element is Extract<Element, { type: "line" }> => element.id === lineId && element.type === "line");
+    if (!line) return { success: false, error: "Line not found" };
+    const startId = `${line.id}:start`;
+    const endId = `${line.id}:end`;
+    const nodeId = `${line.id}:node:${crypto.randomUUID()}`;
+    const path: PathElement = { type: "path", id: line.id, layerId: line.layerId, nodes: [{ id: startId, anchor: line.start, join: "corner" }, { id: endId, anchor: line.end, join: "corner" }, { id: nodeId, anchor: point, join: "corner" }], segments: [{ type: "line", startNodeId: startId, endNodeId: endId }, { type: "line", startNodeId: endId, endNodeId: nodeId }], closed: false, style: line.style, ...(line.operation ? { operation: line.operation } : {}) };
+    return replaceElements(document, document.elements.map((element) => element.id === line.id ? path : element));
+  },
+});
+
 /** Replaces one text object atomically. Outline coordinates must already be in document space. */
 export const convertTextToGlyphs = (textId: ElementId, outlines: readonly GlyphOutlineData[]): EditorCommand => ({
   name: `text-to-glyphs:${textId}`,
@@ -479,8 +493,27 @@ export const movePathHandle = (pathId: ElementId, segmentIndex: number, handle: 
     return updatePath(document, { ...path, segments });
   }
   const glyph = glyphAt(document, pathId); if (!glyph) return { success: false, error: "Path or glyph not found" };
-  let found = false;
-  const contours = glyph.contours.map((contour, currentRing) => ({ ...contour, segments: contour.segments.map((segment, index) => { if ((ringIndex !== undefined && currentRing !== ringIndex) || index !== segmentIndex || segment.type !== "cubicBezier" || found) return segment; found = true; return handle === "control1" ? { ...segment, control1: point } : { ...segment, control2: point }; }) }));
+  let found = false; let nodeId: string | undefined;
+  const contours = glyph.contours.map((contour, currentRing) => ({ ...contour, segments: contour.segments.map((segment, index) => { if ((ringIndex !== undefined && currentRing !== ringIndex) || index !== segmentIndex || segment.type !== "cubicBezier" || found) return segment; found = true; nodeId = handle === "control1" ? segment.startNodeId : segment.endNodeId; return handle === "control1" ? { ...segment, control1: point } : { ...segment, control2: point }; }) }));
+  if (found && nodeId) {
+    const contour = glyph.contours[ringIndex ?? glyph.contours.findIndex((candidate) => candidate.segments[segmentIndex]?.type === "cubicBezier")];
+    const node = contour?.nodes.find((candidate) => candidate.id === nodeId);
+    if (node?.join === "symmetric") {
+      const mirrored = mirrorHandleOffset({ dx: point.x - node.anchor.x, dy: point.y - node.anchor.y });
+      let mirroredFound = false;
+      for (const [currentRing, candidate] of glyph.contours.entries()) {
+        if (ringIndex !== undefined && currentRing !== ringIndex) continue;
+        const segments = candidate.segments.map((segment) => {
+          if (mirroredFound || segment.type !== "cubicBezier") return segment;
+          if (handle === "control1" && segment.endNodeId === nodeId) { mirroredFound = true; return { ...segment, control2: { x: node.anchor.x + mirrored.dx, y: node.anchor.y + mirrored.dy } }; }
+          if (handle === "control2" && segment.startNodeId === nodeId) { mirroredFound = true; return { ...segment, control1: { x: node.anchor.x + mirrored.dx, y: node.anchor.y + mirrored.dy } }; }
+          return segment;
+        });
+        const target = contours[currentRing];
+        if (target) contours[currentRing] = { ...target, segments };
+      }
+    }
+  }
   return found ? replaceElements(document, document.elements.map((element) => element.id === glyph.id ? { ...glyph, contours } : element)) : { success: false, error: "Cubic segment not found" };
 } });
 export const setPathJoin = (pathId: ElementId, nodeId: string, join: PathJoin): EditorCommand => ({ name: `path-join:${pathId}:${nodeId}:${join}`, apply: (document) => { const path = pathAt(document, pathId); const node = path?.nodes.find((current) => current.id === nodeId); if (!path || !node) return { success: false, error: "Path node not found" }; const incoming = path.segments.find((segment) => segment.endNodeId === nodeId); const outgoing = path.segments.find((segment) => segment.startNodeId === nodeId); if (join !== "corner" && incoming?.type === "cubicBezier" && outgoing?.type === "cubicBezier") { const inLength = Math.hypot(incoming.control2.x - node.anchor.x, incoming.control2.y - node.anchor.y); const outLength = Math.hypot(outgoing.control1.x - node.anchor.x, outgoing.control1.y - node.anchor.y); const direction = { x: outgoing.control1.x - node.anchor.x, y: outgoing.control1.y - node.anchor.y }; const magnitude = Math.hypot(direction.x, direction.y) || 1; const length = join === "symmetric" ? (inLength + outLength) / 2 : outLength; const control1 = { x: node.anchor.x + direction.x / magnitude * length, y: node.anchor.y + direction.y / magnitude * length }; const control2 = { x: node.anchor.x - direction.x / magnitude * (join === "symmetric" ? length : inLength), y: node.anchor.y - direction.y / magnitude * (join === "symmetric" ? length : inLength) }; const segments = path.segments.map((segment) => segment === outgoing ? { ...segment, control1 } : segment === incoming ? { ...segment, control2 } : segment); return updatePath(document, { ...path, nodes: path.nodes.map((current) => current.id === nodeId ? { ...current, join } : current), segments }); } return updatePath(document, { ...path, nodes: path.nodes.map((current) => current.id === nodeId ? { ...current, join } : current) }); } });
