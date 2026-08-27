@@ -382,6 +382,14 @@ describe("editor core", () => {
     expect(redo(undo(state)).document.elements[0]?.type).toBe("contour");
   });
 
+  it("keeps welded glyph results editable with cubic handles", () => {
+    const second = { ...glyph, id: elementId("glyph-2"), position: { x: 6, y: 0 }, contours: glyph.contours.map((contour) => ({ ...contour, nodes: contour.nodes.map((node) => ({ ...node, anchor: { x: node.anchor.x + 6, y: node.anchor.y } })), segments: contour.segments.map((segment) => segment.type === "cubicBezier" ? { ...segment, control1: { x: segment.control1.x + 6, y: segment.control1.y }, control2: { x: segment.control2.x + 6, y: segment.control2.y } } : segment) })) };
+    const state = dispatch(select(createEditor({ ...document, elements: [glyph, second] }), [glyph.id, second.id]), shapeOperation([glyph.id, second.id], "weld"));
+    const result = state.document.elements[0];
+    expect(result?.type).toBe("glyph");
+    if (result?.type === "glyph") expect(result.contours.every((contour) => contour.segments.every((segment) => segment.type === "cubicBezier"))).toBe(true);
+  });
+
   it("uses the first selected object as cutter and the second as target", () => {
     const cutter = { ...rectangle, id: elementId("cutter"), position: { x: 6, y: 3 }, size: { width: 4, height: 3 } };
     let state = select(createEditor({ ...document, elements: [rectangle, cutter] }), [cutter.id, rectangle.id]);

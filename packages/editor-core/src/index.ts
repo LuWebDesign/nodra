@@ -168,6 +168,17 @@ export const invalidDimensionIdsForShapeOperation = (document: DocumentSnapshot,
     .map((dimension) => dimension.id);
 };
 
+const contourToEditableGlyphContour = (contour: { readonly points: readonly PointMm[] }, index: number): GlyphElement["contours"][number] => {
+  const points = contour.points.length > 1 && contour.points.at(-1)?.x === contour.points[0]?.x && contour.points.at(-1)?.y === contour.points[0]?.y ? contour.points.slice(0, -1) : contour.points;
+  const nodes = points.map((anchor, nodeIndex) => ({ id: `shape-${index}-node-${nodeIndex}`, anchor, join: "corner" as const }));
+  const segments = nodes.map((node, nodeIndex) => {
+    const end = nodes[(nodeIndex + 1) % nodes.length]!;
+    const delta = { x: (end.anchor.x - node.anchor.x) / 3, y: (end.anchor.y - node.anchor.y) / 3 };
+    return { type: "cubicBezier" as const, startNodeId: node.id, endNodeId: end.id, control1: { x: node.anchor.x + delta.x, y: node.anchor.y + delta.y }, control2: { x: end.anchor.x - delta.x, y: end.anchor.y - delta.y } };
+  });
+  return { nodes, segments };
+};
+
 export const shapeOperation = (ids: readonly ElementId[], operation: ShapeOperation): EditorCommand => ({
   name: `shape-${operation}:${ids.join(",")}`,
   apply: (document) => {
@@ -183,18 +194,33 @@ export const shapeOperation = (ids: readonly ElementId[], operation: ShapeOperat
     if (!contours.length) return { success: false, error: "The shape operation produced an empty result" };
     const points = contours.flatMap((contour) => contour.points);
     const xs = points.map((point) => point.x); const ys = points.map((point) => point.y);
-    const resultElement = {
-      type: "contour" as const,
-      id: elementId(`contour-${crypto.randomUUID()}`),
-      layerId: first.layerId,
-      position: { x: Math.min(...xs), y: Math.min(...ys) },
-      size: { width: Math.max(...xs) - Math.min(...xs), height: Math.max(...ys) - Math.min(...ys) },
-      contours,
-      fillRule: "evenodd" as const,
-      rotation: 0 as const,
-      style: first.style,
-       ...( "operation" in first && first.operation ? { operation: first.operation } : {}),
-    };
+    const resultId = elementId(`shape-${crypto.randomUUID()}`);
+    const resultElement = geometry.some((element) => element.type === "glyph" || element.type === "path")
+      ? {
+          type: "glyph" as const,
+          id: resultId,
+          layerId: first.layerId,
+          position: { x: Math.min(...xs), y: Math.min(...ys) },
+          size: { width: Math.max(...xs) - Math.min(...xs), height: Math.max(...ys) - Math.min(...ys) },
+          glyph: "shape-operation",
+          contours: contours.map(contourToEditableGlyphContour),
+          fillRule: "evenodd" as const,
+          rotation: 0 as const,
+          style: first.style,
+          ...( "operation" in first && first.operation ? { operation: first.operation } : {}),
+        }
+      : {
+          type: "contour" as const,
+          id: resultId,
+          layerId: first.layerId,
+          position: { x: Math.min(...xs), y: Math.min(...ys) },
+          size: { width: Math.max(...xs) - Math.min(...xs), height: Math.max(...ys) - Math.min(...ys) },
+          contours,
+          fillRule: "evenodd" as const,
+          rotation: 0 as const,
+          style: first.style,
+          ...( "operation" in first && first.operation ? { operation: first.operation } : {}),
+        };
     const removed = new Set(geometry.map((element) => element.id));
     const invalidDimensions = new Set(invalidDimensionIdsForShapeOperation(document, ids, operation));
     const firstIndex = Math.min(...geometry.map((element) => elementIndex(document, element.id)));
