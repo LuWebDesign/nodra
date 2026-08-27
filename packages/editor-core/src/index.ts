@@ -19,7 +19,7 @@ import {
   withElements,
 } from "@nodra/domain";
 import { validateDocument } from "@nodra/validation";
-import { boundsOfElements, contourWithPoints, directionVector, elementCenter, elementToContour, glyphGeometryNodes, groupCenter, realGeometryNodes, resizeGroup, rotateElements, shapeResultContours, transformPoint, type Direction } from "@nodra/geometry";
+import { boundsOfElements, contourWithPoints, directionVector, elementCenter, elementToContour, glyphGeometryNodes, groupCenter, mirrorHandleOffset, realGeometryNodes, resizeGroup, rotateElements, shapeResultContours, transformPoint, type Direction } from "@nodra/geometry";
 import { insertSplineNode, moveSplineHandle as moveSplineHandleData, moveSplineNode as moveSplineNodeData } from "./spline.js";
 
 export * from "./spline.js";
@@ -456,7 +456,28 @@ export const movePathNode = (pathId: ElementId, nodeId: string, anchor: PointMm)
 } });
 export const movePathHandle = (pathId: ElementId, segmentIndex: number, handle: "control1" | "control2", point: PointMm, ringIndex?: number): EditorCommand => ({ name: `path-move-handle:${pathId}:${ringIndex ?? ""}:${segmentIndex}:${handle}`, apply: (document) => {
   const path = pathAt(document, pathId);
-  if (path) { const segment = path.segments[segmentIndex]; if (!segment || segment.type !== "cubicBezier") return { success: false, error: "Cubic segment not found" }; const segments = [...path.segments]; segments[segmentIndex] = handle === "control1" ? { ...segment, control1: point } : { ...segment, control2: point }; return updatePath(document, { ...path, segments }); }
+  if (path) {
+    const segment = path.segments[segmentIndex];
+    if (!segment || segment.type !== "cubicBezier") return { success: false, error: "Cubic segment not found" };
+    const nodeId = handle === "control1" ? segment.startNodeId : segment.endNodeId;
+    const node = path.nodes.find((candidate) => candidate.id === nodeId);
+    if (!node) return { success: false, error: "Cubic segment node not found" };
+    const segments = [...path.segments];
+    segments[segmentIndex] = handle === "control1" ? { ...segment, control1: point } : { ...segment, control2: point };
+    if (node.join === "symmetric") {
+      const oppositeIndex = handle === "control1"
+        ? path.segments.findIndex((candidate) => candidate.type === "cubicBezier" && candidate.endNodeId === nodeId)
+        : path.segments.findIndex((candidate) => candidate.type === "cubicBezier" && candidate.startNodeId === nodeId);
+      const opposite = oppositeIndex >= 0 ? segments[oppositeIndex] : undefined;
+      if (opposite?.type === "cubicBezier") {
+        const mirrored = mirrorHandleOffset({ dx: point.x - node.anchor.x, dy: point.y - node.anchor.y });
+        segments[oppositeIndex] = handle === "control1"
+          ? { ...opposite, control2: { x: node.anchor.x + mirrored.dx, y: node.anchor.y + mirrored.dy } }
+          : { ...opposite, control1: { x: node.anchor.x + mirrored.dx, y: node.anchor.y + mirrored.dy } };
+      }
+    }
+    return updatePath(document, { ...path, segments });
+  }
   const glyph = glyphAt(document, pathId); if (!glyph) return { success: false, error: "Path or glyph not found" };
   let found = false;
   const contours = glyph.contours.map((contour, currentRing) => ({ ...contour, segments: contour.segments.map((segment, index) => { if ((ringIndex !== undefined && currentRing !== ringIndex) || index !== segmentIndex || segment.type !== "cubicBezier" || found) return segment; found = true; return handle === "control1" ? { ...segment, control1: point } : { ...segment, control2: point }; }) }));

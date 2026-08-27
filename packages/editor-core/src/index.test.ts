@@ -121,6 +121,21 @@ describe("editor core", () => {
     expect(closed.document.elements[0]).toMatchObject({ closed: true });
     expect(dispatch(state, setPathJoin(path.id, "a", "smooth")).document.elements[0]).toBeDefined();
   });
+  it("keeps symmetric path handles opposite around their shared anchor", () => {
+    const symmetric: PathElement = {
+      ...path,
+      nodes: [{ id: "a", anchor: { x: 0, y: 0 }, join: "symmetric" }, { id: "b", anchor: { x: 10, y: 0 }, join: "corner" }, { id: "c", anchor: { x: 0, y: 10 }, join: "corner" }],
+      segments: [
+        { type: "cubicBezier", startNodeId: "a", endNodeId: "b", control1: { x: 2, y: 0 }, control2: { x: 8, y: 0 } },
+        { type: "cubicBezier", startNodeId: "b", endNodeId: "c", control1: { x: 8, y: 4 }, control2: { x: 2, y: 8 } },
+        { type: "cubicBezier", startNodeId: "c", endNodeId: "a", control1: { x: 0, y: 8 }, control2: { x: 0, y: 2 } },
+      ],
+      closed: true,
+    };
+    const state = dispatch(createEditor({ ...document, elements: [symmetric] }), movePathHandle(symmetric.id, 0, "control1", { x: 3, y: 4 }));
+    const result = state.document.elements[0];
+    expect(result?.type === "path" ? result.segments[2] : undefined).toMatchObject({ control2: { x: -3, y: -4 } });
+  });
   it("closes and reopens a path as independent undoable commands", () => {
     let state = dispatch(createEditor({ ...document, elements: [path] }), closePath(path.id));
     expect(state.document.elements[0]).toMatchObject({ closed: true, segments: [{ type: "cubicBezier" }, { type: "line", startNodeId: "b", endNodeId: "a" }] });

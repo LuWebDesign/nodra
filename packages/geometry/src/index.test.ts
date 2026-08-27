@@ -1,11 +1,16 @@
 import { describe, expect, it } from "vitest";
-import { angularDimensionGeometry, boundsOf, boundsOfElements, boundsOutsidePage, closedElementToPolygon, cubicBezierBounds, cubicBezierDerivative, degreesToRadians, dimensionGeometry, dimensionKindForNodes, dimensionKindForPlacement, dimensionOffsetForAlignedPlacement, dimensionOffsetForPlacement, elementCenter, elementSegmentAt, elementToContour, evaluateCubicBezier, ELLIPSE_APPROXIMATION_SEGMENTS, groupCenter, groupHandlePoints, hitTest, mmToScreen, pointMidpoint, radiansToDegrees, realGeometryNodes, resizeGroup, resizeHandle, rotatedLineEndpoints, rotateElements, rotationFromDrag, rotationHandlePoints, screenToMm, shapeResultContours, splitCubicBezier, validateSize } from "./index.js";
+import { angularDimensionGeometry, bezierHandlePoint, boundsOf, boundsOfElements, boundsOutsidePage, closedElementToPolygon, cubicBezierBounds, cubicBezierDerivative, degreesToRadians, dimensionGeometry, dimensionKindForNodes, dimensionKindForPlacement, dimensionOffsetForAlignedPlacement, dimensionOffsetForPlacement, elementCenter, elementSegmentAt, elementToContour, evaluateCubicBezier, ELLIPSE_APPROXIMATION_SEGMENTS, groupCenter, groupHandlePoints, hitTest, mirrorHandleOffset, mmToScreen, pointMidpoint, radiansToDegrees, realGeometryNodes, resizeGroup, resizeHandle, rotatedLineEndpoints, rotateElements, rotationFromDrag, rotationHandlePoints, screenToMm, shapeResultContours, splitCubicBezier, validateSize } from "./index.js";
 import { elementId, layerId } from "@nodra/domain";
 
 const style = { stroke: "#000", strokeWidth: 0.2 };
 const rectangle = { type: "rectangle" as const, id: elementId("r"), layerId: layerId("l"), position: { x: 10, y: 20 }, size: { width: 20, height: 10 }, cornerRadius: 0, rotation: 0, style };
 
 describe("canonical millimetre geometry", () => {
+  it("provides shared directional Bézier handle primitives", () => {
+    const anchor = { x: 10, y: 20 };
+    expect(bezierHandlePoint(anchor, "out", { dx: 3, dy: -4 })).toEqual({ direction: "out", point: { x: 13, y: 16 } });
+    expect(mirrorHandleOffset({ dx: 3, dy: -4 })).toEqual({ dx: -3, dy: 4 });
+  });
   it("calculates dimension midpoint, axis, and natural placement offset", () => {
     const first = { x: 10, y: 20 }; const second = { x: 50, y: 24 };
     expect(pointMidpoint(first, second)).toEqual({ x: 30, y: 22 });
