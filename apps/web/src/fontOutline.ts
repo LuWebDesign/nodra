@@ -35,6 +35,72 @@ const cubicPoint = (start: PointMm, control1: PointMm, control2: PointMm, end: P
   };
 };
 const replacementLine = (startNodeId: string, endNodeId: string): PathLineSegment => ({ type: "line", startNodeId, endNodeId });
+
+export interface AnalyzedPathNode {
+  readonly nodeIndex: number;
+  readonly nodeId: string;
+  readonly join: "corner" | "smooth" | "symmetric";
+  readonly isExtremumX: boolean;
+  readonly isExtremumY: boolean;
+  readonly isInflection: boolean;
+  readonly tangentIn?: PointMm;
+  readonly tangentOut?: PointMm;
+  readonly tangentAngle: number;
+  readonly curvatureIn?: number;
+  readonly curvatureOut?: number;
+}
+
+const normalize = (vector: PointMm): PointMm | undefined => {
+  const length = Math.hypot(vector.x, vector.y);
+  return length > 1e-9 ? { x: vector.x / length, y: vector.y / length } : undefined;
+};
+const cross = (first: PointMm, second: PointMm): number => first.x * second.y - first.y * second.x;
+const dot = (first: PointMm, second: PointMm): number => first.x * second.x + first.y * second.y;
+const curvature = (first: PointMm, second: PointMm): number | undefined => {
+  const speed = Math.hypot(first.x, first.y);
+  return speed > 1e-9 ? cross(first, second) / speed ** 3 : undefined;
+};
+const cubicDerivatives = (start: PointMm, control1: PointMm, control2: PointMm, end: PointMm, atEnd: boolean): readonly [PointMm, PointMm] => atEnd
+  ? [{ x: 3 * (end.x - control2.x), y: 3 * (end.y - control2.y) }, { x: 6 * (end.x - 2 * control2.x + control1.x), y: 6 * (end.y - 2 * control2.y + control1.y) }]
+  : [{ x: 3 * (control1.x - start.x), y: 3 * (control1.y - start.y) }, { x: 6 * (start.x - 2 * control1.x + control2.x), y: 6 * (start.y - 2 * control1.y + control2.y) }];
+
+export function analyzeGlyphContour(contour: GlyphOutlineData["contours"][number]): readonly AnalyzedPathNode[] {
+  return contour.nodes.map((node, nodeIndex) => {
+    const incoming = contour.segments[(nodeIndex - 1 + contour.segments.length) % contour.segments.length];
+    const outgoing = contour.segments[nodeIndex];
+    const previous = contour.nodes[(nodeIndex - 1 + contour.nodes.length) % contour.nodes.length];
+    const next = contour.nodes[(nodeIndex + 1) % contour.nodes.length];
+    const incomingData = incoming?.type === "cubicBezier" && previous ? cubicDerivatives(previous.anchor, incoming.control1, incoming.control2, node.anchor, true) : previous ? [{ x: 3 * (node.anchor.x - previous.anchor.x), y: 3 * (node.anchor.y - previous.anchor.y) }, { x: 0, y: 0 }] as const : undefined;
+    const outgoingData = outgoing?.type === "cubicBezier" && next ? cubicDerivatives(node.anchor, outgoing.control1, outgoing.control2, next.anchor, false) : next ? [{ x: 3 * (next.anchor.x - node.anchor.x), y: 3 * (next.anchor.y - node.anchor.y) }, { x: 0, y: 0 }] as const : undefined;
+    const tangentIn = incomingData ? normalize(incomingData[0]) : undefined;
+    const tangentOut = outgoingData ? normalize(outgoingData[0]) : undefined;
+    const alignment = tangentIn && tangentOut ? dot(tangentIn, tangentOut) : -1;
+    const inLength = incoming?.type === "cubicBezier" ? Math.hypot(node.anchor.x - incoming.control2.x, node.anchor.y - incoming.control2.y) : 0;
+    const outLength = outgoing?.type === "cubicBezier" ? Math.hypot(outgoing.control1.x - node.anchor.x, outgoing.control1.y - node.anchor.y) : 0;
+    const symmetric = alignment >= Math.cos(Math.PI / 90) && inLength > 1e-9 && Math.abs(inLength - outLength) <= Math.max(inLength, outLength) * 0.1;
+    const smooth = alignment >= Math.cos(Math.PI / 22.5);
+    const curvatureIn = incomingData ? curvature(incomingData[0], incomingData[1]) : undefined;
+    const curvatureOut = outgoingData ? curvature(outgoingData[0], outgoingData[1]) : undefined;
+    return {
+      nodeIndex,
+      nodeId: node.id,
+      join: symmetric ? "symmetric" : smooth ? "smooth" : "corner",
+      isExtremumX: Boolean(tangentIn && tangentOut && tangentIn.x * tangentOut.x < -1e-6),
+      isExtremumY: Boolean(tangentIn && tangentOut && tangentIn.y * tangentOut.y < -1e-6),
+      isInflection: Boolean(curvatureIn !== undefined && curvatureOut !== undefined && Math.abs(curvatureIn) > 1e-9 && Math.abs(curvatureOut) > 1e-9 && curvatureIn * curvatureOut < 0),
+      ...(tangentIn ? { tangentIn } : {}),
+      ...(tangentOut ? { tangentOut } : {}),
+      tangentAngle: tangentIn && tangentOut ? Math.atan2(cross(tangentIn, tangentOut), dot(tangentIn, tangentOut)) : 0,
+      ...(curvatureIn !== undefined ? { curvatureIn } : {}),
+      ...(curvatureOut !== undefined ? { curvatureOut } : {}),
+    };
+  });
+}
+
+const classifyGlyphContour = (contour: GlyphOutlineData["contours"][number]): GlyphOutlineData["contours"][number] => {
+  const analysis = analyzeGlyphContour(contour);
+  return { ...contour, nodes: contour.nodes.map((node, index) => ({ ...node, join: analysis[index]?.join ?? node.join })) };
+};
 const canRemoveLinearNode = (contour: GlyphOutlineData["contours"][number], index: number, tolerance: number): boolean => {
   const previousIndex = (index - 1 + contour.nodes.length) % contour.nodes.length;
   const previous = contour.nodes[previousIndex];
@@ -204,7 +270,7 @@ export function extractTextGlyphOutlines(text: TextElement, resolveFont: FontSou
     }
     finish();
     if (contours.length) {
-      const outputContours = simplifyGlyphContoursForMode(contours, mode);
+      const outputContours = simplifyGlyphContoursForMode(contours, mode).map(classifyGlyphContour);
       const points = outputContours.flatMap((contour) => contour.nodes.map((node) => node.anchor));
       const xs = points.map((point) => point.x); const ys = points.map((point) => point.y);
       result.push({ glyph: glyph.name ?? String.fromCodePoint(...[...text.text].map((value) => value.codePointAt(0) ?? 0).slice(index, index + 1)), position: { x: Math.min(...xs), y: Math.min(...ys) }, size: { width: Math.max(0.001, Math.max(...xs) - Math.min(...xs)), height: Math.max(0.001, Math.max(...ys) - Math.min(...ys)) }, contours: outputContours });
