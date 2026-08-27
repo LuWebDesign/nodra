@@ -1,11 +1,16 @@
 import { describe, expect, it } from "vitest";
-import { angularDimensionGeometry, boundsOf, boundsOfElements, boundsOutsidePage, closedElementToPolygon, cubicBezierBounds, cubicBezierDerivative, degreesToRadians, dimensionGeometry, dimensionKindForNodes, dimensionKindForPlacement, dimensionOffsetForAlignedPlacement, dimensionOffsetForPlacement, elementCenter, elementSegmentAt, elementToContour, evaluateCubicBezier, ELLIPSE_APPROXIMATION_SEGMENTS, groupCenter, groupHandlePoints, hitTest, mmToScreen, pointMidpoint, radiansToDegrees, realGeometryNodes, resizeGroup, resizeHandle, rotatedLineEndpoints, rotateElements, rotationFromDrag, rotationHandlePoints, screenToMm, shapeResultContours, splitCubicBezier, validateSize } from "./index.js";
+import { angularDimensionGeometry, bezierHandlePoint, boundsOf, boundsOfElements, boundsOutsidePage, closedElementToPolygon, cubicBezierBounds, cubicBezierDerivative, degreesToRadians, dimensionGeometry, dimensionKindForNodes, dimensionKindForPlacement, dimensionOffsetForAlignedPlacement, dimensionOffsetForPlacement, editableGeometryNodes, elementCenter, elementSegmentAt, elementToContour, evaluateCubicBezier, ELLIPSE_APPROXIMATION_SEGMENTS, groupCenter, groupHandlePoints, hitTest, mirrorHandleOffset, mmToScreen, pointMidpoint, radiansToDegrees, realGeometryNodes, resizeGroup, resizeHandle, rotatedLineEndpoints, rotateElements, rotationFromDrag, rotationHandlePoints, screenToMm, shapeResultContours, splitCubicBezier, validateSize, visibleBezierHandleGuides } from "./index.js";
 import { elementId, layerId } from "@nodra/domain";
 
 const style = { stroke: "#000", strokeWidth: 0.2 };
 const rectangle = { type: "rectangle" as const, id: elementId("r"), layerId: layerId("l"), position: { x: 10, y: 20 }, size: { width: 20, height: 10 }, cornerRadius: 0, rotation: 0, style };
 
 describe("canonical millimetre geometry", () => {
+  it("provides shared directional Bézier handle primitives", () => {
+    const anchor = { x: 10, y: 20 };
+    expect(bezierHandlePoint(anchor, "out", { dx: 3, dy: -4 })).toEqual({ direction: "out", point: { x: 13, y: 16 } });
+    expect(mirrorHandleOffset({ dx: 3, dy: -4 })).toEqual({ dx: -3, dy: 4 });
+  });
   it("calculates dimension midpoint, axis, and natural placement offset", () => {
     const first = { x: 10, y: 20 }; const second = { x: 50, y: 24 };
     expect(pointMidpoint(first, second)).toEqual({ x: 30, y: 22 });
@@ -120,6 +125,13 @@ describe("canonical millimetre geometry", () => {
     expect(() => validateSize({ width: 0, height: 2 })).toThrow();
     expect(() => mmToScreen({ x: 1, y: 1 }, { zoom: 0, panMm: { x: 0, y: 0 } })).toThrow();
     expect(() => hitTest({ type: "line", id: elementId("line"), layerId: layerId("l"), start: { x: 0, y: 0 }, end: { x: 0, y: 0 }, rotation: 0, style }, { x: 0, y: 0 })).toThrow();
+  });
+  it("projects paths into shared anchors and directional handles", () => {
+    const path = { type: "path" as const, id: elementId("projection-path"), layerId: layerId("l"), nodes: [{ id: "a", anchor: { x: 0, y: 0 }, join: "symmetric" as const }, { id: "b", anchor: { x: 10, y: 0 }, join: "corner" as const }], segments: [{ type: "cubicBezier" as const, startNodeId: "a", endNodeId: "b", control1: { x: 3, y: 2 }, control2: { x: 7, y: 2 } }], closed: false, rotation: 0, style };
+    expect(editableGeometryNodes(path).map((node) => node.kind)).toEqual(["anchor", "anchor", "handle", "handle"]);
+    const active = visibleBezierHandleGuides(path, [0]);
+    expect(active).toHaveLength(1);
+    expect(active[0]).toMatchObject({ anchorNodeIndex: 0, direction: "out" });
   });
   it("keeps dimensions out of boolean polygon conversion", () => {
     const dimension = { type: "dimension" as const, id: elementId("boolean-dimension"), layerId: rectangle.layerId, kind: "horizontal" as const, references: [{ elementId: rectangle.id, nodeIndex: 0 }, { elementId: rectangle.id, nodeIndex: 1 }] as const, offset: { x: 0, y: -8 }, precision: 2, units: "mm" as const, rotation: 0 as const, style };

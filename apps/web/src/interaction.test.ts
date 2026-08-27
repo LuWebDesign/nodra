@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createDocument, elementId, layerId, type DocumentSnapshot } from "@nodra/domain";
 import { validateDocument } from "@nodra/validation";
-import { canActivateRotation, centerPageInCanvas, clientPointToCanvas, hoveredSelectionCenter, INITIAL_ZOOM, isDrawingTool, marqueeSelection, MAX_ZOOM, MIN_ZOOM, movementExceedsThreshold, normalizeBounds, normalizeDrag, pagePointToCanvas, pagePointToScreen, screenDeltaToMm, screenPointToMm, containsBounds, elementsContainedBy, pickDimensionTarget, pickElement, pickFormaElement, pickFormaNode, pickFormaSegment, pickHoverNode, pickNode, pointerDownIntent, selectedNodeAnchor, selectionCenter, selectionFrame, snapMoveDelta, visibleEditablePathNodeIndexes, zoomAtPoint } from "./interaction.js";
+import { canActivateRotation, circleGeometry, centerPageInCanvas, clientPointToCanvas, clientPointToPage, creationGuides, hasNonCollinearPoints, hoveredSelectionCenter, INITIAL_ZOOM, isDrawingTool, marqueeSelection, MAX_ZOOM, MIN_ZOOM, movementExceedsThreshold, normalizeBounds, normalizeDrag, pagePointToScreen, screenDeltaToMm, screenPointToMm, viewportPointToCanvas, containsBounds, elementsContainedBy, pickDimensionTarget, pickElement, pickFormaElement, pickFormaNode, pickFormaSegment, pickHoverNode, pickNode, pointerDownIntent, selectedNodeAnchor, selectionCenter, selectionFrame, snapCreationPoint, snapMoveDelta, visibleEditablePathNodeIndexes, zoomAtPoint } from "./interaction.js";
 import { geometryPatch, geometryValue } from "./propertyBar.js";
 import { dimensionKindForNodes, dimensionOffsetForPlacement, pointMidpoint } from "@nodra/geometry";
 
@@ -51,8 +51,22 @@ describe("canvas coordinates", () => {
     expect(clientPointToCanvas({ x: 130, y: 80 }, { left: 10, top: 20 })).toEqual({ x: 120, y: 60 });
   });
 
+  it("round-trips client points through the offset, scaled page boundary", () => {
+    const page = { width: 1200, height: 900 };
+    const zoom = 2.5;
+    const panMm = { x: 120, y: 80 };
+    const canvasRect = { left: 40, top: 60 };
+    const pageRect = { left: canvasRect.left - panMm.x * zoom + 1, top: canvasRect.top - panMm.y * zoom + 1 };
+    const metrics = { rect: pageRect, renderedWidth: page.width * zoom, renderedHeight: page.height * zoom, borderLeft: 1, borderTop: 1 };
+    for (const point of [{ x: 260, y: 190 }, { x: 415, y: 330 }, { x: 700, y: 510 }]) {
+      const client = { x: pageRect.left + 1 + point.x * zoom, y: pageRect.top + 1 + point.y * zoom };
+      expect(clientPointToPage(client, page, metrics)).toEqual(point);
+      expect({ x: client.x - canvasRect.left - 1, y: client.y - canvasRect.top - 1 }).toEqual({ ...viewportPointToCanvas(point, zoom, panMm), x: viewportPointToCanvas(point, zoom, panMm).x + 1, y: viewportPointToCanvas(point, zoom, panMm).y + 1 });
+    }
+  });
+
   it("projects page points into canvas pixels after pan and zoom", () => {
-    expect(pagePointToCanvas({ x: 32, y: 26 }, 3, { x: 20, y: 10 })).toEqual({ x: 36, y: 48 });
+    expect(viewportPointToCanvas({ x: 32, y: 26 }, 3, { x: 20, y: 10 })).toEqual({ x: 36, y: 48 });
   });
 
   it("calculates geometric centers without being affected by rotation", () => {
@@ -185,6 +199,60 @@ describe("drawing tool routing", () => {
   it("projects every selected object frame into canvas space and keeps line frames visible", () => {
     const line = { type: "line" as const, id: elementId("frame-line"), layerId: layerId("frame"), start: { x: 12, y: 20 }, end: { x: 12, y: 40 }, rotation: 0, style: { stroke: "#000", strokeWidth: 1 } };
     expect(selectionFrame(line, 3, { x: 10, y: 10 })).toEqual({ left: 5, top: 30, width: 2, height: 60 });
+  });
+});
+
+describe("click creation geometry", () => {
+  it("keeps creation previews aligned with the document point under the cursor after pan and zoom", () => {
+    const zoom = 2.5;
+    const panMm = { x: 120, y: 80 };
+    const documentPoint = { x: 260, y: 190 };
+    const canvasPoint = viewportPointToCanvas(documentPoint, zoom, panMm);
+    const pointer = screenPointToMm(canvasPoint, { x: 0, y: 0 }, zoom, panMm);
+    const start = { x: 220, y: 150 };
+    const lineDocument = { ...createDocument("creation-preview-space", [{ id: layerId("creation-preview"), name: "Preview", visible: true, order: 0 }]), elements: [{ type: "line" as const, id: elementId("creation-preview-line"), layerId: layerId("creation-preview"), start: documentPoint, end: { x: 300, y: 190 }, rotation: 0, style: { stroke: "#000", strokeWidth: 1 } }] };
+
+    expect(pointer).toEqual(documentPoint);
+    expect(normalizeDrag(start, pointer)).toEqual({ position: { x: 220, y: 150 }, size: { width: 40, height: 40 } });
+    expect(circleGeometry(start, pointer)).toMatchObject({ radius: 56.568542494923804 });
+    expect(creationGuides(lineDocument, pointer, zoom, 4)).toEqual([{ source: documentPoint, target: documentPoint, kind: "node" }]);
+    expect(viewportPointToCanvas(pointer, zoom, panMm)).toEqual(canvasPoint);
+  });
+
+  it("creates equal circle dimensions and rejects a zero radius", () => {
+    expect(circleGeometry({ x: 10, y: 20 }, { x: 13, y: 24 })).toMatchObject({ position: { x: 5, y: 15 }, size: { width: 10, height: 10 }, radius: 5 });
+    expect(circleGeometry({ x: 10, y: 20 }, { x: 10, y: 20 })).toBeUndefined();
+  });
+  it("closes only a non-collinear line draft with at least three points", () => {
+    expect(hasNonCollinearPoints([{ x: 0, y: 0 }, { x: 10, y: 0 }])).toBe(false);
+    expect(hasNonCollinearPoints([{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 20, y: 0 }])).toBe(false);
+    expect(hasNonCollinearPoints([{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }])).toBe(true);
+  });
+  it("shows one visual guide inside tolerance and none outside it", () => {
+    const layer = { id: layerId("creation-guides"), name: "Guides", visible: true, order: 0 };
+    const line = { type: "line" as const, id: elementId("guide-line"), layerId: layer.id, start: { x: 20, y: 20 }, end: { x: 40, y: 20 }, rotation: 0, style: { stroke: "#000", strokeWidth: 1 } };
+    const document = { ...createDocument("creation-guides-doc", [layer]), elements: [line] };
+    expect(creationGuides(document, { x: 20.5, y: 20 }, 4, 4)).toMatchObject([{ target: line.start, kind: "node" }]);
+    expect(creationGuides(document, { x: 20.5, y: 20 }, 1, 0.25)).toEqual([]);
+  });
+
+  it("prioritizes a node over a nearer center and returns the exact node point", () => {
+    const layer = { id: layerId("creation-snap-priority"), name: "Snap priority", visible: true, order: 0 };
+    const rectangle = { type: "rectangle" as const, id: elementId("creation-snap-rectangle"), layerId: layer.id, position: { x: 10, y: 10 }, size: { width: 20, height: 20 }, cornerRadius: 0, rotation: 0, style: { stroke: "#000", strokeWidth: 1 } };
+    const document = { ...createDocument("creation-snap-priority", [layer]), elements: [rectangle] };
+    expect(snapCreationPoint(document, { x: 11, y: 11 }, 1, 8)).toEqual({ point: { x: 10, y: 10 }, kind: "node" });
+    expect(snapCreationPoint(document, { x: 20.5, y: 20 }, 1, 8)).toEqual({ point: { x: 20, y: 20 }, kind: "center" });
+  });
+
+  it("uses one screen tolerance and excludes hidden geometry from creation snapping", () => {
+    const visible = { id: layerId("creation-snap-visible"), name: "Visible", visible: true, order: 0 };
+    const hidden = { id: layerId("creation-snap-hidden"), name: "Hidden", visible: false, order: 1 };
+    const rectangle = { type: "rectangle" as const, id: elementId("creation-snap-visible-rectangle"), layerId: visible.id, position: { x: 10, y: 10 }, size: { width: 20, height: 20 }, cornerRadius: 0, rotation: 0, style: { stroke: "#000", strokeWidth: 1 } };
+    const hiddenRectangle = { ...rectangle, id: elementId("creation-snap-hidden-rectangle"), layerId: hidden.id, position: { x: 100, y: 100 } };
+    const document = { ...createDocument("creation-snap-tolerance", [visible, hidden]), elements: [rectangle, hiddenRectangle] };
+    expect(snapCreationPoint(document, { x: 10.5, y: 10 }, 4, 2)?.point).toEqual(rectangle.position);
+    expect(snapCreationPoint(document, { x: 100, y: 100 }, 4, 2)).toBeUndefined();
+    expect(snapCreationPoint(document, { x: 10.5, y: 10 }, 1, 0.25)).toBeUndefined();
   });
 });
 
@@ -342,6 +410,8 @@ describe("drag geometry", () => {
     if (!checked.success) return;
     expect(pickHoverNode(checked.data, { x: 10, y: 10 }, 1, "select")).toMatchObject({ elementId: rectangle.id, nodeIndex: 0 });
     expect(pickHoverNode(checked.data, { x: 10, y: 10 }, 1, "forma")).toMatchObject({ elementId: rectangle.id, nodeIndex: 0 });
+    expect(pickHoverNode(checked.data, { x: 10, y: 10 }, 1, "pen")).toMatchObject({ elementId: rectangle.id, nodeIndex: 0 });
+    expect(pickHoverNode(checked.data, { x: 10, y: 10 }, 1, "spline")).toMatchObject({ elementId: rectangle.id, nodeIndex: 0 });
     expect(pickHoverNode(checked.data, { x: 10, y: 10 }, 1, "dimension")).toMatchObject({ elementId: rectangle.id, nodeIndex: 0 });
     expect(pickHoverNode(checked.data, { x: 100, y: 100 }, 1, "select")).toBeUndefined();
   });

@@ -17,6 +17,11 @@ export const ELLIPSE_APPROXIMATION_SEGMENTS = 64;
 export const ROUNDED_RECTANGLE_APPROXIMATION_SEGMENTS = 8;
 
 export interface CubicBezier { readonly p0: PointMm; readonly p1: PointMm; readonly p2: PointMm; readonly p3: PointMm }
+export type BezierHandleDirection = "in" | "out";
+export interface BezierHandlePoint { readonly direction: BezierHandleDirection; readonly point: PointMm }
+export interface BezierGeometryNode { readonly nodeId: string; readonly anchor: PointMm; readonly handles: readonly BezierHandlePoint[] }
+export interface EditableGeometryNode { readonly kind: "anchor" | "handle"; readonly nodeId: string; readonly point: PointMm; readonly direction?: BezierHandleDirection; readonly nodeIndex: number; readonly segmentIndex?: number; readonly ringIndex?: number }
+export interface BezierHandleGuide { readonly nodeId: string; readonly anchor: PointMm; readonly point: PointMm; readonly direction: BezierHandleDirection; readonly nodeIndex: number; readonly anchorNodeIndex: number; readonly segmentIndex?: number; readonly ringIndex?: number }
 export interface LinearDimensionGeometry { readonly kind: "aligned" | "horizontal" | "vertical"; readonly start: PointMm; readonly end: PointMm; readonly lineStart: PointMm; readonly lineEnd: PointMm; readonly text: PointMm; readonly value: number }
 export interface AngularDimensionGeometry { readonly kind: "angular"; readonly vertex: PointMm; readonly start: PointMm; readonly end: PointMm; readonly lineStart: PointMm; readonly lineEnd: PointMm; readonly text: PointMm; readonly value: number; readonly radius: number; readonly sweep: 0 | 1 }
 export type DimensionGeometry = LinearDimensionGeometry | AngularDimensionGeometry;
@@ -82,6 +87,8 @@ export function dimensionGeometry(element: DimensionElement, elements: readonly 
 }
 const alignedOffsetPoint = (point: PointMm, start: PointMm, end: PointMm, storedOffset: PointMm): PointMm => { const length = Math.hypot(end.x - start.x, end.y - start.y); if (length === 0) return point; const signed = ((end.x - start.x) * storedOffset.y - (end.y - start.y) * storedOffset.x) / length; return { x: point.x - (end.y - start.y) / length * signed, y: point.y + (end.x - start.x) / length * signed }; };
 export const resolveHandle = (anchor: PointMm, offset: HandleOffset): PointMm => ({ x: anchor.x + offset.dx, y: anchor.y + offset.dy });
+export const mirrorHandleOffset = (offset: HandleOffset): HandleOffset => ({ dx: -offset.dx, dy: -offset.dy });
+export const bezierHandlePoint = (anchor: PointMm, direction: BezierHandleDirection, offset: HandleOffset): BezierHandlePoint => ({ direction, point: resolveHandle(anchor, offset) });
 export const splineCubicBezier = (start: SplineNode, end: SplineNode): CubicBezier => ({ p0: start.anchor, p1: resolveHandle(start.anchor, start.outHandle ?? { dx: 0, dy: 0 }), p2: resolveHandle(end.anchor, end.inHandle ?? { dx: 0, dy: 0 }), p3: end.anchor });
 export interface PathGeometryNode { readonly kind: "anchor" | "control"; readonly nodeId: string; readonly segmentIndex?: number; readonly handle?: "control1" | "control2"; readonly point: PointMm }
 export interface PathSegmentHit { readonly elementId: ElementId; readonly segmentIndex: number; readonly distance: number }
@@ -174,6 +181,30 @@ export function pathGeometryNodes(path: PathElement): readonly PathGeometryNode[
   return result;
 }
 export const derivedPathGeometryNodes = pathGeometryNodes;
+
+/** Projects every supported editable object into one node vocabulary for Forma feedback. */
+export function editableGeometryNodes(element: Element): readonly EditableGeometryNode[] {
+  if (element.type === "spline") return realGeometryNodes(element).map((node, nodeIndex) => ({ kind: node.kind === "control" ? "handle" : "anchor", nodeId: node.nodeId ?? `${element.id}:${nodeIndex}`, point: node.point, ...(node.kind === "control" ? { direction: node.handle === "control1" ? "out" as const : "in" as const } : {}), nodeIndex }));
+  if (element.type === "path") return pathGeometryNodes(element).map((node, nodeIndex) => ({ kind: node.kind === "control" ? "handle" : "anchor", nodeId: node.nodeId, point: node.point, ...(node.kind === "control" ? { direction: node.handle === "control1" ? "out" as const : "in" as const, segmentIndex: node.segmentIndex } : {}), nodeIndex }));
+  if (element.type === "glyph") return glyphGeometryNodes(element).map((node, nodeIndex) => ({ kind: node.kind === "control" ? "handle" : "anchor", nodeId: node.nodeId, point: node.point, ...(node.kind === "control" ? { direction: node.handle === "control1" ? "out" as const : "in" as const, segmentIndex: node.segmentIndex } : {}), ...(node.ringIndex !== undefined ? { ringIndex: node.ringIndex } : {}), nodeIndex }));
+  return realGeometryNodes(element).map((node, nodeIndex) => ({ kind: "anchor" as const, nodeId: node.nodeId ?? `${element.id}:${nodeIndex}`, point: node.point, nodeIndex }));
+}
+
+/** Returns only directional controls, preserving the shared Forma node index. */
+export function bezierHandleGuides(element: Element): readonly BezierHandleGuide[] {
+  const nodes = editableGeometryNodes(element);
+  return nodes.flatMap((node) => {
+    if (node.kind !== "handle" || !node.direction) return [];
+    const anchor = nodes.find((candidate) => candidate.kind === "anchor" && candidate.nodeId === node.nodeId);
+    return anchor ? [{ nodeId: node.nodeId, anchor: anchor.point, point: node.point, direction: node.direction, nodeIndex: node.nodeIndex, anchorNodeIndex: anchor.nodeIndex, ...(node.segmentIndex !== undefined ? { segmentIndex: node.segmentIndex } : {}), ...(node.ringIndex !== undefined ? { ringIndex: node.ringIndex } : {}) }] : [];
+  });
+}
+
+/** Keeps directional arrows scoped to the active anchor; inactive nodes show no handles. */
+export function visibleBezierHandleGuides(element: Element, activeNodeIndexes: readonly number[]): readonly BezierHandleGuide[] {
+  const active = new Set(activeNodeIndexes);
+  return bezierHandleGuides(element).filter((guide) => active.has(guide.anchorNodeIndex));
+}
 function flattenPath(path: PathElement, tolerance = 0.1): PointMm[] {
   const points: PointMm[] = [];
   path.segments.forEach((segment, index) => {

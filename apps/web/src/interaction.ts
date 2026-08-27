@@ -2,6 +2,9 @@ import type { DocumentSnapshot, Element, ElementId, LineElement, PathElement, Pa
 import { boundsOf, boundsOfElements, contourSegmentAt, contourVertexNodes, dimensionGeometry, elementCenter, elementSegmentAt, hitTest, pathGeometryNodes, pathSegmentAt, realGeometryNodes, type Bounds, type ContourSegmentHit, type ContourVertexNode, type PathGeometryNode, type RealGeometryNode, type PathSegmentHit } from "@nodra/geometry";
 
 export interface DragGeometry { readonly position: PointMm; readonly size: { readonly width: number; readonly height: number } }
+export interface CircleGeometry { readonly position: PointMm; readonly size: { readonly width: number; readonly height: number }; readonly radius: number }
+export interface CreationGuide { readonly source: PointMm; readonly target: PointMm; readonly kind: "node" | "center" }
+export interface CreationSnap { readonly point: PointMm; readonly kind: "node" | "center" }
 export interface SnapGuide { readonly source: PointMm; readonly target: PointMm }
 export interface SnapMoveResult { readonly delta: PointMm; readonly guide: SnapGuide | undefined }
 export type AlignmentGuideOrientation = "vertical" | "horizontal";
@@ -219,7 +222,47 @@ export function pickNode(document: DocumentSnapshot, point: PointMm, zoom: numbe
   return best?.hit;
 }
 
-export type NodeFeedbackTool = "select" | "forma" | "dimension";
+/** Returns a perfect circle from a fixed center and a document-space pointer. */
+export function circleGeometry(center: PointMm, pointer: PointMm): CircleGeometry | undefined {
+  if (![center.x, center.y, pointer.x, pointer.y].every(Number.isFinite)) throw new Error("circle coordinates must be finite");
+  const radius = Math.hypot(pointer.x - center.x, pointer.y - center.y);
+  return radius > 0 ? { position: { x: center.x - radius, y: center.y - radius }, size: { width: radius * 2, height: radius * 2 }, radius } : undefined;
+}
+
+/** Finds the exact visible creation target under a pointer without changing the pointer itself. */
+export function snapCreationPoint(document: DocumentSnapshot, point: PointMm, zoom: number, tolerancePx = 8): CreationSnap | undefined {
+  if (![point.x, point.y, zoom, tolerancePx].every(Number.isFinite) || zoom <= 0 || tolerancePx < 0) throw new Error("creation snap coordinates, zoom, and tolerance must be valid");
+  const visible = new Set(document.layers.filter((layer) => layer.visible).map((layer) => layer.id));
+  let bestNode: { readonly point: PointMm; readonly distance: number; readonly order: string } | undefined;
+  let bestCenter: { readonly point: PointMm; readonly distance: number; readonly order: string } | undefined;
+  for (const element of document.elements) if (visible.has(element.layerId)) for (const [index, node] of realGeometryNodes(element).entries()) {
+    const distance = Math.hypot(node.point.x - point.x, node.point.y - point.y) * zoom;
+    if (distance > tolerancePx) continue;
+    const candidate = { point: node.point, distance, order: `${element.id}:${index}` };
+    if (node.kind === "center") {
+      if (!bestCenter || distance < bestCenter.distance || distance === bestCenter.distance && candidate.order < bestCenter.order) bestCenter = candidate;
+    } else if (!bestNode || distance < bestNode.distance || distance === bestNode.distance && candidate.order < bestNode.order) bestNode = candidate;
+  }
+  const best = bestNode ?? bestCenter;
+  return best ? { point: best.point, kind: best === bestNode ? "node" : "center" } : undefined;
+}
+
+/** Finds visual-only creation guides. The returned target never changes the requested point. */
+export function creationGuides(document: DocumentSnapshot, point: PointMm, zoom: number, tolerancePx = 8): readonly CreationGuide[] {
+  const snap = snapCreationPoint(document, point, zoom, tolerancePx);
+  return snap ? [{ source: point, target: snap.point, kind: snap.kind }] : [];
+}
+
+export function hasNonCollinearPoints(points: readonly PointMm[], epsilon = 1e-9): boolean {
+  if (points.length < 3) return false;
+  for (let first = 0; first < points.length - 2; first += 1) for (let second = first + 1; second < points.length - 1; second += 1) for (let third = second + 1; third < points.length; third += 1) {
+    const a = points[first]!, b = points[second]!, c = points[third]!;
+    if (Math.abs((b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x)) > epsilon) return true;
+  }
+  return false;
+}
+
+export type NodeFeedbackTool = "select" | "forma" | "pen" | "spline" | "rectangle" | "ellipse" | "line" | "dimension";
 export type HoverNode = NodeHit | FormaNodeHit;
 
 /** Finds the node feedback target supported by a tool without changing its hit semantics. */
@@ -348,10 +391,30 @@ export function clientPointToCanvas(client: PointMm, rect: { readonly left: numb
   return { x: client.x - rect.left, y: client.y - rect.top };
 }
 
+export interface PageClientMetrics {
+  readonly rect: { readonly left: number; readonly top: number };
+  readonly renderedWidth: number;
+  readonly renderedHeight: number;
+  readonly borderLeft: number;
+  readonly borderTop: number;
+}
+
+/** Converts a client point through the actual rendered page box into document mm. */
+export function clientPointToPage(client: PointMm, page: { readonly width: number; readonly height: number }, metrics: PageClientMetrics): PointMm {
+  if (![client.x, client.y, page.width, page.height, metrics.rect.left, metrics.rect.top, metrics.renderedWidth, metrics.renderedHeight, metrics.borderLeft, metrics.borderTop].every(Number.isFinite) || page.width <= 0 || page.height <= 0 || metrics.renderedWidth <= 0 || metrics.renderedHeight <= 0) throw new Error("page coordinates and rendered dimensions must be valid");
+  return { x: (client.x - metrics.rect.left - metrics.borderLeft) * page.width / metrics.renderedWidth, y: (client.y - metrics.rect.top - metrics.borderTop) * page.height / metrics.renderedHeight };
+}
+
 /** Converts canonical page coordinates into pixels relative to the canvas. */
-export function pagePointToCanvas(point: PointMm, zoom: number, panMm: PointMm): PointMm {
+/** Projects document millimetres into canvas-viewport pixels (used by canvas-level overlays). */
+export function viewportPointToCanvas(point: PointMm, zoom: number, panMm: PointMm): PointMm {
   if (!Number.isFinite(zoom) || zoom <= 0) throw new Error("zoom must be positive");
   return { x: (point.x - panMm.x) * zoom, y: (point.y - panMm.y) * zoom };
+}
+
+/** Projects document millimetres into the local coordinate system of the page element. */
+export function pagePointToCanvas(point: PointMm, zoom: number, panMm: PointMm): PointMm {
+  return viewportPointToCanvas(point, zoom, panMm);
 }
 
 export function selectionFrame(element: Element, zoom: number, panMm: PointMm): { readonly left: number; readonly top: number; readonly width: number; readonly height: number } {
@@ -374,6 +437,11 @@ export function hoveredSelectionCenter(document: DocumentSnapshot, element: Elem
 export function pagePointToScreen(point: PointMm, zoom: number): PointMm {
   if (!Number.isFinite(zoom) || zoom <= 0) throw new Error("zoom must be positive");
   return { x: point.x * zoom, y: point.y * zoom };
+}
+
+/** Projects document millimetres into the local coordinate system of the rendered page. */
+export function documentPointToPage(point: PointMm, zoom: number): PointMm {
+  return pagePointToScreen(point, zoom);
 }
 
 export function screenPointToMm(point: PointMm, origin: PointMm, zoom: number, panMm: PointMm): PointMm {

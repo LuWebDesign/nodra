@@ -145,7 +145,9 @@ export interface PathElement {
 }
 export type SplineContinuity = PathJoin;
 export interface HandleOffset { readonly dx: number; readonly dy: number }
-export interface SplineNode { readonly id: string; readonly anchor: PointMm; readonly continuity: SplineContinuity; readonly inHandle?: HandleOffset; readonly outHandle?: HandleOffset }
+/** Shared document-space Bézier node primitive for future native editors. */
+export interface BezierNode { readonly id: string; readonly anchor: PointMm; readonly inHandle?: HandleOffset; readonly outHandle?: HandleOffset }
+export interface SplineNode extends BezierNode { readonly continuity: SplineContinuity }
 export interface SplineElement { readonly type: "spline"; readonly id: ElementId; readonly layerId: LayerId; readonly nodes: readonly SplineNode[]; readonly closed: boolean; readonly style: VisualStyle; readonly operation?: OperationMetadata }
 export interface TextElement { readonly type: "text"; readonly id: ElementId; readonly layerId: LayerId; readonly position: PointMm; readonly size: SizeMm; readonly text: string; readonly fontFamily: string; readonly fontSize: number; readonly fontWeight: "normal" | "bold"; readonly fontStyle: "normal" | "italic"; readonly textAlign: "left" | "center" | "right"; readonly lineHeight: number; readonly scaleX?: number; readonly scaleY?: number; readonly rotation: number; readonly style: VisualStyle; readonly operation?: OperationMetadata }
 /** A single closed outline compound. Coordinates are document-space millimetres. */
