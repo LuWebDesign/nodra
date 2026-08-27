@@ -227,7 +227,8 @@ const sourceSubcurve = (curve: SourceCubic, from: number, to: number): SourceCub
 const contourToEditableGlyphContour = (contour: { readonly points: readonly PointMm[] }, index: number, sourceCurves: readonly SourceCubic[] = []): GlyphElement["contours"][number] => {
   const source = contour.points.length > 1 && contour.points.at(-1)?.x === contour.points[0]?.x && contour.points.at(-1)?.y === contour.points[0]?.y ? contour.points.slice(0, -1) : contour.points;
   const extent = source.reduce((bounds, point) => ({ minX: Math.min(bounds.minX, point.x), maxX: Math.max(bounds.maxX, point.x), minY: Math.min(bounds.minY, point.y), maxY: Math.max(bounds.maxY, point.y) }), { minX: Number.POSITIVE_INFINITY, maxX: Number.NEGATIVE_INFINITY, minY: Number.POSITIVE_INFINITY, maxY: Number.NEGATIVE_INFINITY });
-  const tolerance = Math.max(0.01, Math.max(extent.maxX - extent.minX, extent.maxY - extent.minY) * 0.012);
+  const extentSize = Math.max(extent.maxX - extent.minX, extent.maxY - extent.minY);
+  const tolerance = Math.max(0.005, Math.min(0.05, extentSize * 0.0005));
   const distanceToSegment = (point: PointMm, start: PointMm, end: PointMm): number => {
     const dx = end.x - start.x; const dy = end.y - start.y; const lengthSquared = dx * dx + dy * dy;
     if (lengthSquared === 0) return Math.hypot(point.x - start.x, point.y - start.y);
@@ -241,7 +242,11 @@ const contourToEditableGlyphContour = (contour: { readonly points: readonly Poin
       const previous = points[(pointIndex - 1 + points.length) % points.length]!;
       const current = points[pointIndex]!;
       const next = points[(pointIndex + 1) % points.length]!;
-      const distance = distanceToSegment(current, previous, next);
+      const previousHit = nearestSourcePoint(previous, sourceCurves);
+      const currentHit = nearestSourcePoint(current, sourceCurves);
+      const nextHit = nearestSourcePoint(next, sourceCurves);
+      const followsSourceCurve = previousHit && currentHit && nextHit && previousHit.curve === currentHit.curve && currentHit.curve === nextHit.curve && currentHit.t >= Math.min(previousHit.t, nextHit.t) - 0.03 && currentHit.t <= Math.max(previousHit.t, nextHit.t) + 0.03 && currentHit.distance <= 0.2 && previousHit.distance <= 0.2 && nextHit.distance <= 0.2;
+      const distance = followsSourceCurve ? 0 : distanceToSegment(current, previous, next);
       if (distance < error) { error = distance; candidate = pointIndex; }
     }
     if (candidate < 0 || error > tolerance) break;
