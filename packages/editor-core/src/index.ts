@@ -243,6 +243,18 @@ const contourToEditableGlyphContour = (contour: { readonly points: readonly Poin
   };
   const points = [...source];
   const hits: Array<SourceHit | undefined> = points.map(cachedSourcePoint);
+  let collapsed = true;
+  while (collapsed && points.length > 3) {
+    collapsed = false;
+    for (let pointIndex = 0; pointIndex < points.length; pointIndex += 1) {
+      const previousIndex = (pointIndex - 1 + points.length) % points.length;
+      const nextIndex = (pointIndex + 1) % points.length;
+      const previousHit = hits[previousIndex]; const currentHit = hits[pointIndex]; const nextHit = hits[nextIndex];
+      const followsSourceCurve = previousHit && currentHit && nextHit && previousHit.curve === currentHit.curve && currentHit.curve === nextHit.curve && currentHit.t >= Math.min(previousHit.t, nextHit.t) - 0.03 && currentHit.t <= Math.max(previousHit.t, nextHit.t) + 0.03 && currentHit.distance <= 0.2 && previousHit.distance <= 0.2 && nextHit.distance <= 0.2;
+      if (!followsSourceCurve) continue;
+      points.splice(pointIndex, 1); hits.splice(pointIndex, 1); collapsed = true; break;
+    }
+  }
   while (points.length > 3) {
     let candidate = -1; let error = Number.POSITIVE_INFINITY;
     for (let pointIndex = 0; pointIndex < points.length; pointIndex += 1) {
