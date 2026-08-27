@@ -10,7 +10,7 @@ import { aspectGeometryPatch, aspectSize, formatMm, geometryValue, rotationDegre
 import { useDocumentStore, usePersistenceStore, useUiStore, useViewportStore, type Tool } from "./stores.js";
 import { pathJoinGuidance, pathJoinOptions } from "./pathJoins.js";
 import { textSizeFor } from "./textMetrics.js";
-import { extractTextGlyphOutlines, fontFamilyFromFileName, FontOutlineError, type TextCurveMode } from "./fontOutline.js";
+import { extractTextGlyphOutlines, fontFamilyFromFileName, FontOutlineError } from "./fontOutline.js";
 
 const defaultFonts = ["Arial", "Helvetica", "Times New Roman", "Courier New", "Inter"] as const;
 const projectMirrorKey = (projectId: string) => `nodra:project-mirror:${projectId}`;
@@ -135,7 +135,6 @@ export function App() {
   const [localFonts, setLocalFonts] = useState<readonly FontRecord[]>([]);
   const [fontSources, setFontSources] = useState<Record<string, ArrayBuffer>>({});
   const [fontLoadError, setFontLoadError] = useState<string>();
-  const [textCurveMode, setTextCurveMode] = useState<TextCurveMode>("editable");
   const [persistenceReady, setPersistenceReady] = useState(false);
   const [textDraft, setTextDraft] = useState<{ readonly position: PointMm; readonly value: string; readonly elementId?: ElementId; readonly fontSize?: number; readonly element?: TextElement }>();
   type DimensionDraft = { readonly phase: "first"; readonly first: DimensionTarget } | { readonly phase: "placement"; readonly first: DimensionTarget; readonly second: DimensionTarget };
@@ -254,7 +253,7 @@ export function App() {
     setSelectedSplineNodeKey(undefined);
     if (tool !== "spline" && tool !== "forma" && editorRef.current.selection.some((id) => editorRef.current.document.elements.some((element) => element.id === id && element.type === "spline"))) setEditorState(clearSelection(editorRef.current));
   }, [tool]);
-  useEffect(() => { setSelectedPathSegment(undefined); setSelectedFormaNodeKeys([]); setEditModeElementIds([]); }, [tool, project.activePageId]);
+  useEffect(() => { setSelectedPathSegment(undefined); setSelectedFormaNodeKeys([]); if (tool !== "forma") setEditModeElementIds([]); }, [tool, project.activePageId]);
 
   useEffect(() => {
     setCenterHover(undefined);
@@ -588,7 +587,7 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
     if (selectedElement?.type !== "text") return;
     if (!confirm("Convertir a curvas hará que el texto ya no sea editable. ¿Continuar?")) return;
     try {
-      const outlines = extractTextGlyphOutlines(selectedElement, (family) => fontSources[family], textCurveMode);
+      const outlines = extractTextGlyphOutlines(selectedElement, (family) => fontSources[family], "editable");
       const next = dispatch(editorRef.current, convertTextToGlyphs(selectedElement.id, outlines));
       if (next === editorRef.current) { persist.set("failed", "No se pudo convertir el texto a curvas."); return; }
       setEditorState(next);
@@ -732,6 +731,13 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
       if (!next.selection.includes(hit)) return;
       event.currentTarget.setPointerCapture(event.pointerId);
         if (tool === "forma") {
+           const hitElement = editorRef.current.document.elements.find((element) => element.id === hit);
+           if (hitElement && hitElement.type !== "text" && hitElement.type !== "dimension" && !editModeElementIds.includes(hitElement.id)) {
+             setSelectedFormaNodeKeys([]);
+             setSelectedPathSegment(undefined);
+             setEditModeElementIds([hitElement.id]);
+             return;
+           }
            if (formaNodeHit && next.selection.includes(formaNodeHit.elementId)) {
              setSelectedPathSegment(undefined);
              const key = formaNodeKey(formaNodeHit);
@@ -789,6 +795,15 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
       if (hitElement?.type === "text") {
        beginTextEdit(hitElement);
        return;
+    }
+    if (hitElement && (hitElement.type === "path" || hitElement.type === "glyph" || hitElement.type === "spline") && tool === "select") {
+      event.preventDefault();
+      setSelectedFormaNodeKeys([]);
+      setSelectedPathSegment(undefined);
+      setEditModeElementIds([hitElement.id]);
+      setTool("forma");
+      setEditorState(select(editorRef.current, [hitElement.id]));
+      return;
     }
     if (canActivateRotation(tool, editorRef.current.selection, hit) && hitElement && isRotatableElement(hitElement)) {
       event.preventDefault();
@@ -1360,7 +1375,7 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
       updateTextElement(selectedElement, axis === "width" ? { scaleX: value / selectedElement.size.width } : { scaleY: value / selectedElement.size.height });
     };
     const selectedLocalFont = localFonts.find((font) => font.family === selectedElement.fontFamily);
-    return <div className="text-properties"><div className="text-box-fields"><label className="field"><span>Ancho caja</span><input type="number" min="1" step="0.1" value={formatMm(boxWidth)} onChange={(event) => resizeTextBox("width", Number(event.target.value))} /></label><label className="field"><span>Alto caja</span><input type="number" min="1" step="0.1" value={formatMm(boxHeight)} onChange={(event) => resizeTextBox("height", Number(event.target.value))} /></label></div><label className="field"><span>Tamaño (mm)</span><input type="number" min="1" value={selectedElement.fontSize} onChange={(event) => { const value = Number(event.target.value); if (Number.isFinite(value) && value > 0) updateTextElement(selectedElement, { fontSize: value }); }} /></label><label className="field"><span>Tipografía</span><div className="font-select-row"><select value={selectedElement.fontFamily} onChange={(event) => updateTextElement(selectedElement, { fontFamily: event.target.value })}>{availableFonts.map((font) => <option key={font} style={{ fontFamily: font }}>{font}</option>)}</select>{selectedLocalFont && <button type="button" className="font-delete-button" aria-label={`Eliminar fuente local ${selectedLocalFont.family}`} title="Eliminar fuente local" onClick={() => void deleteLocalFont(selectedLocalFont)}>×</button>}</div></label><label className="field"><span>Interlineado</span><input type="number" min="0.5" step="0.1" value={selectedElement.lineHeight} onChange={(event) => { const value = Number(event.target.value); if (Number.isFinite(value) && value > 0) updateTextElement(selectedElement, { lineHeight: value }); }} /></label><div className="text-style-buttons"><button type="button" aria-pressed={selectedElement.fontWeight === "bold"} onClick={() => updateTextElement(selectedElement, { fontWeight: selectedElement.fontWeight === "bold" ? "normal" : "bold" })}>Negrita</button><button type="button" aria-pressed={selectedElement.fontStyle === "italic"} onClick={() => updateTextElement(selectedElement, { fontStyle: selectedElement.fontStyle === "italic" ? "normal" : "italic" })}>Cursiva</button></div><label className="font-upload-button">Cargar fuente para esta familia<input type="file" accept=".ttf,.otf,.woff,.woff2,font/ttf,font/otf,font/woff,font/woff2" onChange={(event) => { const file = event.target.files?.[0]; if (file) void loadFontFile(file, selectedElement.fontFamily); event.currentTarget.value = ""; }} /></label><div className="curve-mode-switch" role="group" aria-label="Modo de conversión a curvas">{([{ value: "editable", label: "Editable" }, { value: "balanced", label: "Equilibrado" }, { value: "precise", label: "Preciso" }] satisfies ReadonlyArray<{ value: TextCurveMode; label: string }>).map((option) => <button key={option.value} type="button" aria-pressed={textCurveMode === option.value} onClick={() => setTextCurveMode(option.value)}>{option.label}</button>)}</div><button type="button" aria-label="Convertir texto a curvas" title="Requiere una fuente cargada para esta familia" disabled={!fontSources[selectedElement.fontFamily]} onClick={convertSelectedText}>Convertir a curvas</button>{!fontSources[selectedElement.fontFamily] && <p className="muted">Cargue una fuente TTF, OTF, WOFF o WOFF2 para habilitar la conversión.</p>}{fontLoadError && <p className="muted">{fontLoadError}</p>}</div>;
+    return <div className="text-properties"><div className="text-box-fields"><label className="field"><span>Ancho caja</span><input type="number" min="1" step="0.1" value={formatMm(boxWidth)} onChange={(event) => resizeTextBox("width", Number(event.target.value))} /></label><label className="field"><span>Alto caja</span><input type="number" min="1" step="0.1" value={formatMm(boxHeight)} onChange={(event) => resizeTextBox("height", Number(event.target.value))} /></label></div><label className="field"><span>Tamaño (mm)</span><input type="number" min="1" value={selectedElement.fontSize} onChange={(event) => { const value = Number(event.target.value); if (Number.isFinite(value) && value > 0) updateTextElement(selectedElement, { fontSize: value }); }} /></label><label className="field"><span>Tipografía</span><div className="font-select-row"><select value={selectedElement.fontFamily} onChange={(event) => updateTextElement(selectedElement, { fontFamily: event.target.value })}>{availableFonts.map((font) => <option key={font} style={{ fontFamily: font }}>{font}</option>)}</select>{selectedLocalFont && <button type="button" className="font-delete-button" aria-label={`Eliminar fuente local ${selectedLocalFont.family}`} title="Eliminar fuente local" onClick={() => void deleteLocalFont(selectedLocalFont)}>×</button>}</div></label><label className="field"><span>Interlineado</span><input type="number" min="0.5" step="0.1" value={selectedElement.lineHeight} onChange={(event) => { const value = Number(event.target.value); if (Number.isFinite(value) && value > 0) updateTextElement(selectedElement, { lineHeight: value }); }} /></label><div className="text-style-buttons"><button type="button" aria-pressed={selectedElement.fontWeight === "bold"} onClick={() => updateTextElement(selectedElement, { fontWeight: selectedElement.fontWeight === "bold" ? "normal" : "bold" })}>Negrita</button><button type="button" aria-pressed={selectedElement.fontStyle === "italic"} onClick={() => updateTextElement(selectedElement, { fontStyle: selectedElement.fontStyle === "italic" ? "normal" : "italic" })}>Cursiva</button></div><label className="font-upload-button">Cargar fuente para esta familia<input type="file" accept=".ttf,.otf,.woff,.woff2,font/ttf,font/otf,font/woff,font/woff2" onChange={(event) => { const file = event.target.files?.[0]; if (file) void loadFontFile(file, selectedElement.fontFamily); event.currentTarget.value = ""; }} /></label><button type="button" aria-label="Convertir texto a curvas" title="Requiere una fuente cargada para esta familia" disabled={!fontSources[selectedElement.fontFamily]} onClick={convertSelectedText}>Convertir a curvas</button>{!fontSources[selectedElement.fontFamily] && <p className="muted">Cargue una fuente TTF, OTF, WOFF o WOFF2 para habilitar la conversión.</p>}{fontLoadError && <p className="muted">{fontLoadError}</p>}</div>;
   };
 
   const objectPropertySections = (inspector = false) => propertyElement ? <>
