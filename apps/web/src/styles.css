@@ -111,6 +111,7 @@
 /* Shared node language: square anchors in Selection, diamond anchors in node-editing modes. */
 .contour-node { border-radius: 0; }
 .contour-node.editing-node { transform: translate(-50%,-50%) rotate(45deg); }
+.contour-node.bezier-handle { width:6px; height:6px; border-color:#1683ff; border-radius:0; background:#ffffff; transform:translate(-50%,-50%); }
 
 .ruler-horizontal,.ruler-vertical { position:absolute; z-index:6; background:#d8dee7eF; color:#526172; font-size:9px; pointer-events:none; overflow:hidden; }
 .ruler-horizontal { inset:0 0 auto 0; height:24px; border-bottom:1px solid #9aa8b8; }
