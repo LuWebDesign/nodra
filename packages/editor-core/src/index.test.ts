@@ -1,11 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { createDocument, elementId, layerId, type DimensionElement, type GlyphElement, type PathElement, type RectangleElement, type SplineElement, type TextElement } from "@nodra/domain";
+import { createDocument, elementId, layerId, type DimensionElement, type EllipseElement, type GlyphElement, type PathElement, type RectangleElement, type SplineElement, type TextElement } from "@nodra/domain";
 import { addToSelection, appendSplineNode, beginGesture, cancelGesture, clearSelection, closePath, closeSplineElement, commitGesture, createEditor, createElement, createPathCubicNode, deleteContourNodes, deleteElement, deleteElementNodes, deletePathNodes, dispatch, duplicateElements, flipElements, insertContourNode, invalidDimensionIdsForShapeOperation, moveElement, moveElements, movePathNode, movePathHandle, openPath, previewGesture, previewGestureFromBase, redo, removeFromSelection, reorderLayer, resizeElement, resizeElementToDimensions, resizeElements, resizeElementsToDimensions, rotateElementsAroundCenter, select, selectForPointerDown, setLayerVisibility, setPathJoin, shapeOperation, splitPathSegment, toggleSelection, undo, updateContourNode, updateElement, updateElementNode, updateElementStyles, updateSplineHandle, updateSplineNode } from "./index.js";
 import { boundsOfElements } from "@nodra/geometry";
 import type { Direction } from "@nodra/geometry";
 import { appendLinePoint } from "./index.js";
 
 const rectangle: RectangleElement = { type: "rectangle", id: elementId("r1"), layerId: layerId("default"), position: { x: 1, y: 2 }, size: { width: 10, height: 5 }, cornerRadius: 0, rotation: 0, style: { stroke: "#000", strokeWidth: 1 } };
+const ellipse: EllipseElement = { type: "ellipse", id: elementId("ellipse"), layerId: layerId("default"), position: { x: 11, y: 12 }, size: { width: 20, height: 10 }, rotation: 0, style: rectangle.style };
 const document = createDocument("doc", [{ id: layerId("default"), name: "Default", visible: true, order: 0 }]);
 const path: PathElement = { type: "path", id: elementId("path"), layerId: layerId("default"), nodes: [{ id: "a", anchor: { x: 0, y: 0 }, join: "corner" }, { id: "b", anchor: { x: 10, y: 0 }, join: "corner" }], segments: [{ type: "cubicBezier", startNodeId: "a", endNodeId: "b", control1: { x: 2, y: 4 }, control2: { x: 8, y: 4 } }], closed: false, style: rectangle.style };
 const spline: SplineElement = { type: "spline", id: elementId("spline"), layerId: layerId("default"), nodes: [{ id: "a", anchor: { x: 0, y: 0 }, continuity: "smooth" }, { id: "b", anchor: { x: 10, y: 0 }, continuity: "smooth" }, { id: "c", anchor: { x: 10, y: 10 }, continuity: "smooth" }], closed: false, style: rectangle.style };
@@ -90,6 +91,8 @@ describe("editor core", () => {
   it("preserves centered fallback and rejects a resize that would break opposite connections", () => {
     const centered = dispatch(createEditor({ ...document, elements: [rectangle] }), resizeElementToDimensions(rectangle.id, "width", 20));
     expect(centered.document.elements[0]).toMatchObject({ position: { x: -4 }, size: { width: 20 } });
+    const centeredHeight = dispatch(createEditor({ ...document, elements: [rectangle] }), resizeElementToDimensions(rectangle.id, "height", 15));
+    expect(centeredHeight.document.elements[0]).toMatchObject({ position: { x: 1, y: -3 }, size: { width: 10, height: 15 } });
     const both = { ...document, elements: [rectangle], connections: [
       { id: "left", first: { elementId: rectangle.id, node: { kind: "named" as const, name: "w" as const } }, second: { elementId: elementId("other"), node: { kind: "named" as const, name: "e" as const } } },
       { id: "right", first: { elementId: rectangle.id, node: { kind: "named" as const, name: "e" as const } }, second: { elementId: elementId("other-2"), node: { kind: "named" as const, name: "w" as const } } },
@@ -106,7 +109,26 @@ describe("editor core", () => {
     const bottom = dispatch(createEditor({ ...document, elements: [rectangle, other], connections: [makeConnection("bottom", "s")] }), resizeElementToDimensions(rectangle.id, "height", 20));
     expect(bottom.document.elements.find((element) => element.id === rectangle.id)).toMatchObject({ position: { y: -13 } });
     const proportional = dispatch(createEditor({ ...document, elements: [rectangle, other], connections: [makeConnection("left-proportional", "n")] }), resizeElementToDimensions(rectangle.id, "width", 20, true));
-    expect(proportional.document.elements.find((element) => element.id === rectangle.id)).toMatchObject({ size: { width: 20, height: 10 } });
+    expect(proportional.document.elements.find((element) => element.id === rectangle.id)).toMatchObject({ position: { x: -4, y: 2 }, size: { width: 20, height: 10 } });
+  });
+  it("resizes ellipses around their center on both axes", () => {
+    const width = dispatch(createEditor({ ...document, elements: [ellipse] }), resizeElementToDimensions(ellipse.id, "width", 30));
+    expect(width.document.elements[0]).toMatchObject({ position: { x: 6, y: 12 }, size: { width: 30, height: 10 } });
+    const height = dispatch(createEditor({ ...document, elements: [ellipse] }), resizeElementToDimensions(ellipse.id, "height", 20));
+    expect(height.document.elements[0]).toMatchObject({ position: { x: 11, y: 7 }, size: { width: 20, height: 20 } });
+  });
+  it("anchors both axes for connected rectangle corners, including proportional edits", () => {
+    const other = { ...rectangle, id: elementId("corner-anchor") };
+    const connection = { id: "north-west", first: { elementId: rectangle.id, node: { kind: "named" as const, name: "nw" as const } }, second: { elementId: other.id, node: { kind: "named" as const, name: "center" as const } } };
+    const resized = dispatch(createEditor({ ...document, elements: [rectangle, other], connections: [connection] }), resizeElementToDimensions(rectangle.id, "width", 20, true));
+    expect(resized.document.elements.find((element) => element.id === rectangle.id)).toMatchObject({ position: { x: 1, y: 2 }, size: { width: 20, height: 10 } });
+    expect(resized.undo).toHaveLength(1);
+    expect(redo(undo(resized)).document).toEqual(resized.document);
+
+    const bottomRight = { ...rectangle, id: elementId("bottom-right-anchor") };
+    const bottomConnection = { id: "south-east", first: { elementId: rectangle.id, node: { kind: "named" as const, name: "se" as const } }, second: { elementId: bottomRight.id, node: { kind: "named" as const, name: "center" as const } } };
+    const resizedHeight = dispatch(createEditor({ ...document, elements: [rectangle, bottomRight], connections: [bottomConnection] }), resizeElementToDimensions(rectangle.id, "height", 10, true));
+    expect(resizedHeight.document.elements.find((element) => element.id === rectangle.id)).toMatchObject({ position: { x: -9, y: -3 }, size: { width: 20, height: 10 } });
   });
   it("moves a dimension by changing only its placement offset and supports undo", () => {
     const dimension = { type: "dimension" as const, id: elementId("dimension-move"), layerId: rectangle.layerId, kind: "horizontal" as const, references: [{ elementId: rectangle.id, nodeIndex: 0 }, { elementId: rectangle.id, nodeIndex: 1 }] as const, offset: { x: 0, y: -8 }, precision: 2, units: "mm" as const, rotation: 0 as const, style: rectangle.style };
