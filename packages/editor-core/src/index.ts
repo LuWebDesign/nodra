@@ -168,7 +168,44 @@ export const invalidDimensionIdsForShapeOperation = (document: DocumentSnapshot,
     .map((dimension) => dimension.id);
 };
 
-const contourToEditableGlyphContour = (contour: { readonly points: readonly PointMm[] }, index: number): GlyphElement["contours"][number] => {
+interface SourceCubic {
+  readonly p0: PointMm;
+  readonly p1: PointMm;
+  readonly p2: PointMm;
+  readonly p3: PointMm;
+}
+const normalizeVector = (vector: PointMm): PointMm | undefined => {
+  const length = Math.hypot(vector.x, vector.y);
+  return length > 1e-9 ? { x: vector.x / length, y: vector.y / length } : undefined;
+};
+const cubicAt = (curve: SourceCubic, t: number): PointMm => {
+  const mt = 1 - t;
+  return { x: mt ** 3 * curve.p0.x + 3 * mt ** 2 * t * curve.p1.x + 3 * mt * t ** 2 * curve.p2.x + t ** 3 * curve.p3.x, y: mt ** 3 * curve.p0.y + 3 * mt ** 2 * t * curve.p1.y + 3 * mt * t ** 2 * curve.p2.y + t ** 3 * curve.p3.y };
+};
+const cubicTangentAt = (curve: SourceCubic, t: number): PointMm => {
+  const mt = 1 - t;
+  return { x: 3 * mt ** 2 * (curve.p1.x - curve.p0.x) + 6 * mt * t * (curve.p2.x - curve.p1.x) + 3 * t ** 2 * (curve.p3.x - curve.p2.x), y: 3 * mt ** 2 * (curve.p1.y - curve.p0.y) + 6 * mt * t * (curve.p2.y - curve.p1.y) + 3 * t ** 2 * (curve.p3.y - curve.p2.y) };
+};
+const sourceCubics = (elements: readonly Element[]): SourceCubic[] => elements.flatMap((element) => {
+  const contours = element.type === "glyph" ? element.contours : element.type === "path" ? [{ nodes: element.nodes, segments: element.segments }] : [];
+  return contours.flatMap((contour) => contour.segments.flatMap((segment) => {
+    if (segment.type !== "cubicBezier") return [];
+    const start = contour.nodes.find((node) => node.id === segment.startNodeId)?.anchor;
+    const end = contour.nodes.find((node) => node.id === segment.endNodeId)?.anchor;
+    return start && end ? [{ p0: start, p1: segment.control1, p2: segment.control2, p3: end }] : [];
+  }));
+});
+const sourceCurveAt = (start: PointMm, end: PointMm, curves: readonly SourceCubic[], tolerance: number): SourceCubic | undefined => {
+  const midpoint = { x: (start.x + end.x) / 2, y: (start.y + end.y) / 2 };
+  let best: { curve: SourceCubic; t: number; distance: number } | undefined;
+  for (const curve of curves) for (let step = 0; step <= 24; step += 1) {
+    const t = step / 24; const point = cubicAt(curve, t); const distance = Math.hypot(point.x - midpoint.x, point.y - midpoint.y);
+    if (!best || distance < best.distance) best = { curve, t, distance };
+  }
+  return best && best.distance <= tolerance ? best.curve : undefined;
+};
+
+const contourToEditableGlyphContour = (contour: { readonly points: readonly PointMm[] }, index: number, sourceCurves: readonly SourceCubic[] = []): GlyphElement["contours"][number] => {
   const source = contour.points.length > 1 && contour.points.at(-1)?.x === contour.points[0]?.x && contour.points.at(-1)?.y === contour.points[0]?.y ? contour.points.slice(0, -1) : contour.points;
   const extent = source.reduce((bounds, point) => ({ minX: Math.min(bounds.minX, point.x), maxX: Math.max(bounds.maxX, point.x), minY: Math.min(bounds.minY, point.y), maxY: Math.max(bounds.maxY, point.y) }), { minX: Number.POSITIVE_INFINITY, maxX: Number.NEGATIVE_INFINITY, minY: Number.POSITIVE_INFINITY, maxY: Number.NEGATIVE_INFINITY });
   const tolerance = Math.max(0.01, Math.max(extent.maxX - extent.minX, extent.maxY - extent.minY) * 0.012);
@@ -206,7 +243,14 @@ const contourToEditableGlyphContour = (contour: { readonly points: readonly Poin
     const previous = nodes[(nodeIndex - 1 + nodes.length) % nodes.length]!;
     const end = nodes[(nodeIndex + 1) % nodes.length]!;
     const afterEnd = nodes[(nodeIndex + 2) % nodes.length]!;
-    return { type: "cubicBezier" as const, startNodeId: node.id, endNodeId: end.id, control1: corners[nodeIndex] ? node.anchor : { x: node.anchor.x + (end.anchor.x - previous.anchor.x) / 6, y: node.anchor.y + (end.anchor.y - previous.anchor.y) / 6 }, control2: corners[(nodeIndex + 1) % corners.length] ? end.anchor : { x: end.anchor.x - (afterEnd.anchor.x - node.anchor.x) / 6, y: end.anchor.y - (afterEnd.anchor.y - node.anchor.y) / 6 } };
+    const source = sourceCurveAt(node.anchor, end.anchor, sourceCurves, Math.max(0.05, Math.max(extent.maxX - extent.minX, extent.maxY - extent.minY) * 0.002));
+    const tangent = source ? normalizeVector(cubicTangentAt(source, 0.5)) : undefined;
+    const edge = { x: end.anchor.x - node.anchor.x, y: end.anchor.y - node.anchor.y };
+    const sourceTangent = tangent && tangent.x * edge.x + tangent.y * edge.y >= 0 ? tangent : tangent ? { x: -tangent.x, y: -tangent.y } : undefined;
+    const edgeLength = Math.hypot(edge.x, edge.y);
+    const sourceControl1 = sourceTangent ? { x: node.anchor.x + sourceTangent.x * edgeLength / 3, y: node.anchor.y + sourceTangent.y * edgeLength / 3 } : undefined;
+    const sourceControl2 = sourceTangent ? { x: end.anchor.x - sourceTangent.x * edgeLength / 3, y: end.anchor.y - sourceTangent.y * edgeLength / 3 } : undefined;
+    return { type: "cubicBezier" as const, startNodeId: node.id, endNodeId: end.id, control1: corners[nodeIndex] ? node.anchor : sourceControl1 ?? { x: node.anchor.x + (end.anchor.x - previous.anchor.x) / 6, y: node.anchor.y + (end.anchor.y - previous.anchor.y) / 6 }, control2: corners[(nodeIndex + 1) % corners.length] ? end.anchor : sourceControl2 ?? { x: end.anchor.x - (afterEnd.anchor.x - node.anchor.x) / 6, y: end.anchor.y - (afterEnd.anchor.y - node.anchor.y) / 6 } };
   });
   return { nodes, segments };
 };
@@ -235,7 +279,7 @@ export const shapeOperation = (ids: readonly ElementId[], operation: ShapeOperat
           position: { x: Math.min(...xs), y: Math.min(...ys) },
           size: { width: Math.max(...xs) - Math.min(...xs), height: Math.max(...ys) - Math.min(...ys) },
           glyph: "shape-operation",
-          contours: contours.map(contourToEditableGlyphContour),
+          contours: contours.map((contour, index) => contourToEditableGlyphContour(contour, index, sourceCubics(geometry))),
           fillRule: "evenodd" as const,
           rotation: 0 as const,
           style: first.style,
