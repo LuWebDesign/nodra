@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createDocument, elementId, layerId, type DocumentSnapshot } from "@nodra/domain";
 import { validateDocument } from "@nodra/validation";
-import { canActivateRotation, circleGeometry, centerPageInCanvas, clientPointToCanvas, creationGuides, hasNonCollinearPoints, hoveredSelectionCenter, INITIAL_ZOOM, isDrawingTool, marqueeSelection, MAX_ZOOM, MIN_ZOOM, movementExceedsThreshold, normalizeBounds, normalizeDrag, pagePointToCanvas, pagePointToScreen, screenDeltaToMm, screenPointToMm, containsBounds, elementsContainedBy, pickDimensionTarget, pickElement, pickFormaElement, pickFormaNode, pickFormaSegment, pickHoverNode, pickNode, pointerDownIntent, selectedNodeAnchor, selectionCenter, selectionFrame, snapMoveDelta, visibleEditablePathNodeIndexes, zoomAtPoint } from "./interaction.js";
+import { canActivateRotation, circleGeometry, centerPageInCanvas, clientPointToCanvas, clientPointToPage, creationGuides, hasNonCollinearPoints, hoveredSelectionCenter, INITIAL_ZOOM, isDrawingTool, marqueeSelection, MAX_ZOOM, MIN_ZOOM, movementExceedsThreshold, normalizeBounds, normalizeDrag, pagePointToScreen, screenDeltaToMm, screenPointToMm, viewportPointToCanvas, containsBounds, elementsContainedBy, pickDimensionTarget, pickElement, pickFormaElement, pickFormaNode, pickFormaSegment, pickHoverNode, pickNode, pointerDownIntent, selectedNodeAnchor, selectionCenter, selectionFrame, snapMoveDelta, visibleEditablePathNodeIndexes, zoomAtPoint } from "./interaction.js";
 import { geometryPatch, geometryValue } from "./propertyBar.js";
 import { dimensionKindForNodes, dimensionOffsetForPlacement, pointMidpoint } from "@nodra/geometry";
 
@@ -51,8 +51,22 @@ describe("canvas coordinates", () => {
     expect(clientPointToCanvas({ x: 130, y: 80 }, { left: 10, top: 20 })).toEqual({ x: 120, y: 60 });
   });
 
+  it("round-trips client points through the offset, scaled page boundary", () => {
+    const page = { width: 1200, height: 900 };
+    const zoom = 2.5;
+    const panMm = { x: 120, y: 80 };
+    const canvasRect = { left: 40, top: 60 };
+    const pageRect = { left: canvasRect.left - panMm.x * zoom + 1, top: canvasRect.top - panMm.y * zoom + 1 };
+    const metrics = { rect: pageRect, renderedWidth: page.width * zoom, renderedHeight: page.height * zoom, borderLeft: 1, borderTop: 1 };
+    for (const point of [{ x: 260, y: 190 }, { x: 415, y: 330 }, { x: 700, y: 510 }]) {
+      const client = { x: pageRect.left + 1 + point.x * zoom, y: pageRect.top + 1 + point.y * zoom };
+      expect(clientPointToPage(client, page, metrics)).toEqual(point);
+      expect({ x: client.x - canvasRect.left - 1, y: client.y - canvasRect.top - 1 }).toEqual({ ...viewportPointToCanvas(point, zoom, panMm), x: viewportPointToCanvas(point, zoom, panMm).x + 1, y: viewportPointToCanvas(point, zoom, panMm).y + 1 });
+    }
+  });
+
   it("projects page points into canvas pixels after pan and zoom", () => {
-    expect(pagePointToCanvas({ x: 32, y: 26 }, 3, { x: 20, y: 10 })).toEqual({ x: 36, y: 48 });
+    expect(viewportPointToCanvas({ x: 32, y: 26 }, 3, { x: 20, y: 10 })).toEqual({ x: 36, y: 48 });
   });
 
   it("calculates geometric centers without being affected by rotation", () => {
@@ -193,7 +207,7 @@ describe("click creation geometry", () => {
     const zoom = 2.5;
     const panMm = { x: 120, y: 80 };
     const documentPoint = { x: 260, y: 190 };
-    const canvasPoint = pagePointToCanvas(documentPoint, zoom, panMm);
+    const canvasPoint = viewportPointToCanvas(documentPoint, zoom, panMm);
     const pointer = screenPointToMm(canvasPoint, { x: 0, y: 0 }, zoom, panMm);
     const start = { x: 220, y: 150 };
     const lineDocument = { ...createDocument("creation-preview-space", [{ id: layerId("creation-preview"), name: "Preview", visible: true, order: 0 }]), elements: [{ type: "line" as const, id: elementId("creation-preview-line"), layerId: layerId("creation-preview"), start: documentPoint, end: { x: 300, y: 190 }, rotation: 0, style: { stroke: "#000", strokeWidth: 1 } }] };
@@ -202,7 +216,7 @@ describe("click creation geometry", () => {
     expect(normalizeDrag(start, pointer)).toEqual({ position: { x: 220, y: 150 }, size: { width: 40, height: 40 } });
     expect(circleGeometry(start, pointer)).toMatchObject({ radius: 56.568542494923804 });
     expect(creationGuides(lineDocument, pointer, zoom, 4)).toEqual([{ source: documentPoint, target: documentPoint, kind: "node" }]);
-    expect(pagePointToCanvas(pointer, zoom, panMm)).toEqual(canvasPoint);
+    expect(viewportPointToCanvas(pointer, zoom, panMm)).toEqual(canvasPoint);
   });
 
   it("creates equal circle dimensions and rejects a zero radius", () => {

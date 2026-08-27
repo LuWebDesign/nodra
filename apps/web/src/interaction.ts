@@ -380,10 +380,30 @@ export function clientPointToCanvas(client: PointMm, rect: { readonly left: numb
   return { x: client.x - rect.left, y: client.y - rect.top };
 }
 
+export interface PageClientMetrics {
+  readonly rect: { readonly left: number; readonly top: number };
+  readonly renderedWidth: number;
+  readonly renderedHeight: number;
+  readonly borderLeft: number;
+  readonly borderTop: number;
+}
+
+/** Converts a client point through the actual rendered page box into document mm. */
+export function clientPointToPage(client: PointMm, page: { readonly width: number; readonly height: number }, metrics: PageClientMetrics): PointMm {
+  if (![client.x, client.y, page.width, page.height, metrics.rect.left, metrics.rect.top, metrics.renderedWidth, metrics.renderedHeight, metrics.borderLeft, metrics.borderTop].every(Number.isFinite) || page.width <= 0 || page.height <= 0 || metrics.renderedWidth <= 0 || metrics.renderedHeight <= 0) throw new Error("page coordinates and rendered dimensions must be valid");
+  return { x: (client.x - metrics.rect.left - metrics.borderLeft) * page.width / metrics.renderedWidth, y: (client.y - metrics.rect.top - metrics.borderTop) * page.height / metrics.renderedHeight };
+}
+
 /** Converts canonical page coordinates into pixels relative to the canvas. */
-export function pagePointToCanvas(point: PointMm, zoom: number, panMm: PointMm): PointMm {
+/** Projects document millimetres into canvas-viewport pixels (used by canvas-level overlays). */
+export function viewportPointToCanvas(point: PointMm, zoom: number, panMm: PointMm): PointMm {
   if (!Number.isFinite(zoom) || zoom <= 0) throw new Error("zoom must be positive");
   return { x: (point.x - panMm.x) * zoom, y: (point.y - panMm.y) * zoom };
+}
+
+/** Projects document millimetres into the local coordinate system of the page element. */
+export function pagePointToCanvas(point: PointMm, zoom: number, panMm: PointMm): PointMm {
+  return viewportPointToCanvas(point, zoom, panMm);
 }
 
 export function selectionFrame(element: Element, zoom: number, panMm: PointMm): { readonly left: number; readonly top: number; readonly width: number; readonly height: number } {
@@ -406,6 +426,11 @@ export function hoveredSelectionCenter(document: DocumentSnapshot, element: Elem
 export function pagePointToScreen(point: PointMm, zoom: number): PointMm {
   if (!Number.isFinite(zoom) || zoom <= 0) throw new Error("zoom must be positive");
   return { x: point.x * zoom, y: point.y * zoom };
+}
+
+/** Projects document millimetres into the local coordinate system of the rendered page. */
+export function documentPointToPage(point: PointMm, zoom: number): PointMm {
+  return pagePointToScreen(point, zoom);
 }
 
 export function screenPointToMm(point: PointMm, origin: PointMm, zoom: number, panMm: PointMm): PointMm {

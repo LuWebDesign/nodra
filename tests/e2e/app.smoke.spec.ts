@@ -316,6 +316,12 @@ test("creates nested rectangle and circle objects with click gestures", async ({
   await page.getByRole("button", { name: "Rectángulo" }).click();
   await page.mouse.click(bounds!.x + 100, bounds!.y + 100);
   await page.mouse.click(bounds!.x + 260, bounds!.y + 220);
+  const rectangle = page.locator('.page-svg svg rect[data-element-id]');
+  await expect(rectangle).toHaveCount(1);
+  const rectangleBox = await rectangle.boundingBox();
+  expect(rectangleBox).not.toBeNull();
+  expect(rectangleBox!.x).toBeCloseTo(bounds!.x + 100, 0);
+  expect(rectangleBox!.y).toBeCloseTo(bounds!.y + 100, 0);
   await page.getByRole("button", { name: "Círculo" }).click();
   await page.mouse.click(bounds!.x + 170, bounds!.y + 160);
   await page.mouse.move(bounds!.x + 205, bounds!.y + 160);
