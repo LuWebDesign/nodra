@@ -1182,15 +1182,16 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
     const label = dimensionDraft.phase === "placement" ? dimensionDraft.first.kind === "line" ? "Coloque el ángulo" : "Coloque la cota" : "Seleccione el segundo nodo o línea";
     return <svg className="dimension-pending-overlay" aria-hidden="true"><line x1={start.x} y1={start.y} x2={end.x} y2={end.y} /><circle cx={start.x} cy={start.y} r="7" /><circle cx={end.x} cy={end.y} r="7" /><text x={start.x + 10} y={start.y - 10}>Primer nodo</text><text x={end.x + 12} y={end.y - 12}>{label}</text></svg>;
    })() : undefined;
-   const pendingCreationOverlay = creationDraft && cursorPoint ? (() => {
-     const start = creationDraft.tool === "line" ? creationDraft.points.at(-1)! : creationDraft.points[0]!;
-     const pointer = cursorPoint;
-     const rectangle = creationDraft.tool === "rectangle" ? normalizeDrag(creationDraft.points[0]!, cursorPoint) : undefined;
-     const circle = creationDraft.tool === "ellipse" ? circleGeometry(creationDraft.points[0]!, cursorPoint) : undefined;
-     const shape = rectangle ? <rect x={rectangle.position.x} y={rectangle.position.y} width={rectangle.size.width} height={rectangle.size.height} /> : circle ? <circle cx={creationDraft.points[0]!.x} cy={creationDraft.points[0]!.y} r={circle.radius} /> : undefined;
-     const guides: readonly CreationGuide[] = creationDraft.tool === "line" ? creationGuides(document, cursorPoint, zoom) : [];
-     return <svg className="creation-pending-overlay" viewBox={`0 0 ${document.page.width} ${document.page.height}`} aria-label="Vista previa de creación"><g className="creation-preview-shape">{shape}</g><line className="creation-preview-radius" x1={start.x} y1={start.y} x2={pointer.x} y2={pointer.y} />{guides.map((guide, index) => <line key={index} className={`creation-guide creation-guide-${guide.kind}`} x1={guide.source.x} y1={guide.source.y} x2={guide.target.x} y2={guide.target.y} />)}</svg>;
-   })() : undefined;
+    const pendingCreationOverlay = creationDraft && cursorPoint ? (() => {
+      const start = creationDraft.tool === "line" ? creationDraft.points.at(-1)! : creationDraft.points[0]!;
+      // cursorPoint is canvas-local pixels; creation geometry is document-space mm.
+      const pointer = screenPointToMm(cursorPoint, { x: 0, y: 0 }, zoom, panMm);
+      const rectangle = creationDraft.tool === "rectangle" ? normalizeDrag(creationDraft.points[0]!, pointer) : undefined;
+      const circle = creationDraft.tool === "ellipse" ? circleGeometry(creationDraft.points[0]!, pointer) : undefined;
+      const shape = rectangle ? <rect x={rectangle.position.x} y={rectangle.position.y} width={rectangle.size.width} height={rectangle.size.height} /> : circle ? <circle cx={creationDraft.points[0]!.x} cy={creationDraft.points[0]!.y} r={circle.radius} /> : undefined;
+      const guides: readonly CreationGuide[] = creationDraft.tool === "line" ? creationGuides(document, pointer, zoom) : [];
+      return <svg className="creation-pending-overlay" viewBox={`0 0 ${document.page.width} ${document.page.height}`} aria-label="Vista previa de creación"><g className="creation-preview-shape">{shape}</g><line className="creation-preview-radius" x1={start.x} y1={start.y} x2={pointer.x} y2={pointer.y} />{guides.map((guide, index) => <line key={index} className={`creation-guide creation-guide-${guide.kind}`} x1={guide.source.x} y1={guide.source.y} x2={guide.target.x} y2={guide.target.y} />)}</svg>;
+    })() : undefined;
    const dimensionHoverStyle = dimensionNodeHover && tool === "dimension" ? (() => { const point = pagePointToCanvas(dimensionNodeHover.node.point, zoom, panMm); return { left: point.x, top: point.y }; })() : undefined;
   const rulerMajorStep = [1, 5, 10, 25, 50, 100, 250, 500].find((step) => step * zoom >= 50) ?? 1000;
   const rulerValues = (limit: number) => Array.from({ length: Math.floor(limit / rulerMajorStep) + 1 }, (_, index) => index * rulerMajorStep);

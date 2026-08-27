@@ -189,6 +189,22 @@ describe("drawing tool routing", () => {
 });
 
 describe("click creation geometry", () => {
+  it("keeps creation previews aligned with the document point under the cursor after pan and zoom", () => {
+    const zoom = 2.5;
+    const panMm = { x: 120, y: 80 };
+    const documentPoint = { x: 260, y: 190 };
+    const canvasPoint = pagePointToCanvas(documentPoint, zoom, panMm);
+    const pointer = screenPointToMm(canvasPoint, { x: 0, y: 0 }, zoom, panMm);
+    const start = { x: 220, y: 150 };
+    const lineDocument = { ...createDocument("creation-preview-space", [{ id: layerId("creation-preview"), name: "Preview", visible: true, order: 0 }]), elements: [{ type: "line" as const, id: elementId("creation-preview-line"), layerId: layerId("creation-preview"), start: documentPoint, end: { x: 300, y: 190 }, rotation: 0, style: { stroke: "#000", strokeWidth: 1 } }] };
+
+    expect(pointer).toEqual(documentPoint);
+    expect(normalizeDrag(start, pointer)).toEqual({ position: { x: 220, y: 150 }, size: { width: 40, height: 40 } });
+    expect(circleGeometry(start, pointer)).toMatchObject({ radius: 56.568542494923804 });
+    expect(creationGuides(lineDocument, pointer, zoom, 4)).toEqual([{ source: documentPoint, target: documentPoint, kind: "node" }]);
+    expect(pagePointToCanvas(pointer, zoom, panMm)).toEqual(canvasPoint);
+  });
+
   it("creates equal circle dimensions and rejects a zero radius", () => {
     expect(circleGeometry({ x: 10, y: 20 }, { x: 13, y: 24 })).toMatchObject({ position: { x: 5, y: 15 }, size: { width: 10, height: 10 }, radius: 5 });
     expect(circleGeometry({ x: 10, y: 20 }, { x: 10, y: 20 })).toBeUndefined();
