@@ -2,6 +2,7 @@ import type { DocumentSnapshot, Element, ElementId, LineElement, PathElement, Pa
 import { boundsOf, boundsOfElements, contourSegmentAt, contourVertexNodes, dimensionGeometry, elementCenter, elementSegmentAt, hitTest, pathGeometryNodes, pathSegmentAt, realGeometryNodes, type Bounds, type ContourSegmentHit, type ContourVertexNode, type PathGeometryNode, type RealGeometryNode, type PathSegmentHit } from "@nodra/geometry";
 
 export interface DragGeometry { readonly position: PointMm; readonly size: { readonly width: number; readonly height: number } }
+export interface CircleGeometry { readonly position: PointMm; readonly size: { readonly width: number; readonly height: number }; readonly radius: number }
 export interface SnapGuide { readonly source: PointMm; readonly target: PointMm }
 export interface SnapMoveResult { readonly delta: PointMm; readonly guide: SnapGuide | undefined }
 export type AlignmentGuideOrientation = "vertical" | "horizontal";
@@ -357,6 +358,14 @@ export function zoomAtPoint(zoom: number, panMm: PointMm, pointPx: PointMm, next
 export function normalizeDrag(start: PointMm, end: PointMm, minimumSize = 1): DragGeometry {
   if (!Number.isFinite(minimumSize) || minimumSize <= 0) throw new Error("minimumSize must be positive");
   return { position: { x: Math.min(start.x, end.x), y: Math.min(start.y, end.y) }, size: { width: Math.max(minimumSize, Math.abs(end.x - start.x)), height: Math.max(minimumSize, Math.abs(end.y - start.y)) } };
+}
+
+/** Derives a non-degenerate circle from a fixed center and a document-space pointer. */
+export function circleGeometry(center: PointMm, pointer: PointMm): CircleGeometry | undefined {
+  if (![center.x, center.y, pointer.x, pointer.y].every(Number.isFinite)) throw new Error("circle coordinates must be finite");
+  const radius = Math.hypot(pointer.x - center.x, pointer.y - center.y);
+  if (radius === 0) return undefined;
+  return { position: { x: center.x - radius, y: center.y - radius }, size: { width: radius * 2, height: radius * 2 }, radius };
 }
 
 export function normalizeBounds(start: PointMm, end: PointMm): Bounds {

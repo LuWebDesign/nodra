@@ -5,7 +5,7 @@ import { boundsOfElements, contourVertexNodes, dimensionKindForPlacement, dimens
 import { DebouncedAutosave, DexieProjectRepository, requestStoragePersistence, type FontRecord } from "@nodra/persistence";
 import { validateDesign, validateProject } from "@nodra/validation";
 import { renderSvg } from "@nodra/renderer-svg";
-import { canActivateRotation, centerPageInCanvas, clientPointToCanvas, cubicPlacementControls, formaNodeKey, hoveredSelectionCenter, isDrawingTool, marqueeSelection, movementExceedsThreshold, normalizeBounds, normalizeDrag, pagePointToCanvas, pathGuides, pickDimensionTarget, pickElement, pickFormaNode, pickFormaSegment, pickNode, pickPathNode, pickPathSegment, pointerDownIntent, visibleEditablePathNodeIndexes, screenDeltaToMm, screenPointToMm, selectedNodeAnchor, selectedPathAnchorIds, alignmentGuides, snapMoveDelta, zoomAtPoint, type AlignmentGuide, type ContourNodeHit, type DimensionTarget, type FormaNodeHit, type NodeHit, type PathNodeHit, type SnapGuide, type TransformMode } from "./interaction.js";
+import { canActivateRotation, centerPageInCanvas, circleGeometry, clientPointToCanvas, cubicPlacementControls, formaNodeKey, hoveredSelectionCenter, isDrawingTool, marqueeSelection, movementExceedsThreshold, normalizeBounds, normalizeDrag, pagePointToCanvas, pathGuides, pickDimensionTarget, pickElement, pickFormaNode, pickFormaSegment, pickNode, pickPathNode, pickPathSegment, pointerDownIntent, visibleEditablePathNodeIndexes, screenDeltaToMm, screenPointToMm, selectedNodeAnchor, selectedPathAnchorIds, alignmentGuides, snapMoveDelta, zoomAtPoint, type AlignmentGuide, type ContourNodeHit, type DimensionTarget, type FormaNodeHit, type NodeHit, type PathNodeHit, type SnapGuide, type TransformMode } from "./interaction.js";
 import { aspectGeometryPatch, aspectSize, formatMm, geometryValue, rotationDegreesValue, rotationPatch, type GeometryField, type PropertyElement, type RotatableElement } from "./propertyBar.js";
 import { useDocumentStore, usePersistenceStore, useUiStore, useViewportStore, type Tool } from "./stores.js";
 import { pathJoinGuidance, pathJoinOptions } from "./pathJoins.js";
@@ -42,7 +42,7 @@ const newElement = (tool: Exclude<Tool, "select" | "dimension" | "pan" | "forma"
   ? { type: "line", id: nextId, layerId: layerId(layer), start, end, rotation: 0, style: defaultStyle }
   : tool === "rectangle"
     ? { type: "rectangle", id: nextId, layerId: layerId(layer), ...normalizeDrag(start, end), cornerRadius: 0, rotation: 0, style: defaultStyle }
-     : { type: tool, id: nextId, layerId: layerId(layer), ...normalizeDrag(start, end), rotation: 0, style: defaultStyle };
+     : (() => { const geometry = circleGeometry(start, end); return { type: "ellipse", id: nextId, layerId: layerId(layer), position: geometry?.position ?? start, size: geometry?.size ?? { width: 0, height: 0 }, rotation: 0, style: defaultStyle }; })();
 const splinePathData = (spline: SplineElement): string => {
   const first = spline.nodes[0];
   if (!first) return "";
@@ -97,7 +97,7 @@ type FormaNodeOverlay =
 type InspectorTab = "properties" | "transform" | "text";
 
 const toolCursorIcons: Record<Tool, string> = { select: "↖", forma: "⌘", pen: "✒", spline: "✒", text: "T", rectangle: "□", ellipse: "○", line: "╱", dimension: "↔", pan: "✣" };
-const toolCursorLabels: Record<Tool, string> = { select: "Seleccion", forma: "Forma", pen: "Pluma", spline: "Spline", text: "Texto", rectangle: "Rectángulo", ellipse: "Elipse", line: "Línea", dimension: "Cota", pan: "Desplazar" };
+const toolCursorLabels: Record<Tool, string> = { select: "Seleccion", forma: "Forma", pen: "Pluma", spline: "Spline", text: "Texto", rectangle: "Rectángulo", ellipse: "Círculo", line: "Línea", dimension: "Cota", pan: "Desplazar" };
 
 export function App() {
   const { mode, tool, setMode, setTool } = useUiStore();
@@ -139,6 +139,7 @@ export function App() {
   const [textDraft, setTextDraft] = useState<{ readonly position: PointMm; readonly value: string; readonly elementId?: ElementId; readonly fontSize?: number; readonly element?: TextElement }>();
   type DimensionDraft = { readonly phase: "first"; readonly first: DimensionTarget } | { readonly phase: "placement"; readonly first: DimensionTarget; readonly second: DimensionTarget };
   const [dimensionDraft, setDimensionDraft] = useState<DimensionDraft>();
+  const [circleDraft, setCircleDraft] = useState<{ readonly center: PointMm; readonly pointer: PointMm }>();
   const [dimensionNodeHover, setDimensionNodeHover] = useState<NodeHit>();
   const [pendingShapeOperation, setPendingShapeOperation] = useState<{ readonly operation: "weld" | "subtract"; readonly ids: readonly ElementId[]; readonly invalidDimensionCount: number }>();
   const textDraftRef = useRef(textDraft);
@@ -149,12 +150,14 @@ export function App() {
   const canvas = useRef<HTMLDivElement>(null);
   const editorRef = useRef(editor);
   const interaction = useRef<ActiveInteraction | undefined>(undefined);
+  const circleDraftRef = useRef(circleDraft);
   const viewportInteracted = useRef(false);
   const centeredViewport = useRef<string | undefined>(undefined);
   const recoveredNotice = useRef(false);
   const restoredFontIds = useRef(new Set<string>());
   const directionTooltipTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   editorRef.current = editor;
+  circleDraftRef.current = circleDraft;
 
   useEffect(() => () => {
     if (directionTooltipTimer.current) clearTimeout(directionTooltipTimer.current);
@@ -644,10 +647,24 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
       interaction.current = { pointerId: event.pointerId, lastX: event.clientX, lastY: event.clientY, kind: "pan", dragged: false };
       return;
     }
-    const point = pointAt(event);
-    const pickedElement = pickElement(editorRef.current.document, point, zoom);
-    const picked = pickedElement ? editorRef.current.document.elements.find((element) => element.id === pickedElement) : undefined;
-    if (tool === "forma" && picked?.type === "text") {
+     const point = pointAt(event);
+     const pickedElement = pickElement(editorRef.current.document, point, zoom);
+     const picked = pickedElement ? editorRef.current.document.elements.find((element) => element.id === pickedElement) : undefined;
+     if (tool === "ellipse") {
+       const pending = circleDraftRef.current;
+       if (pending) {
+         const circle = newElement("ellipse", editorRef.current.document.layers[0]?.id ?? "layer-1", pending.center, point, id());
+         if (circle.type === "ellipse" && circle.size.width > 0) setEditorState(select(dispatch(editorRef.current, createElement(circle)), [circle.id]));
+         circleDraftRef.current = undefined;
+         setCircleDraft(undefined);
+       } else if (!pickedElement) {
+         const draft = { center: point, pointer: point };
+         circleDraftRef.current = draft;
+         setCircleDraft(draft);
+         return;
+       }
+     }
+     if (tool === "forma" && picked?.type === "text") {
       setEditorState(clearSelection(editorRef.current));
       return;
     }
@@ -821,11 +838,18 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
     setSnapGuide(undefined);
     setAlignmentGuideState([]);
     setPenDraftPoint(undefined);
+    setCircleDraft(undefined);
+    circleDraftRef.current = undefined;
   };
 
   const onCanvasPointerMove = (event: PointerEvent<HTMLDivElement>) => {
-    setCursorPoint(canvasPointAt(event));
-    if (tool === "dimension" && dimensionDraft?.phase !== "placement" && !interaction.current) setDimensionNodeHover(pickNode(editorRef.current.document, pointAt(event), zoom));
+     setCursorPoint(canvasPointAt(event));
+     if (tool === "ellipse" && circleDraftRef.current) {
+       const pointer = pointAt(event);
+       setCircleDraft((current) => current ? { ...current, pointer } : current);
+       circleDraftRef.current = { ...circleDraftRef.current, pointer };
+     }
+     if (tool === "dimension" && dimensionDraft?.phase !== "placement" && !interaction.current) setDimensionNodeHover(pickNode(editorRef.current.document, pointAt(event), zoom));
     else if (tool !== "dimension") setDimensionNodeHover(undefined);
     const active = interaction.current;
     if (!active || active.pointerId !== event.pointerId) return;
@@ -986,9 +1010,11 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
           setSnapGuide(undefined);
           setAlignmentGuideState([]);
         }
-        setDimensionDraft(undefined);
-        setDimensionNodeHover(undefined);
-        setTransformMode("resize");
+         setDimensionDraft(undefined);
+         setDimensionNodeHover(undefined);
+         setCircleDraft(undefined);
+         circleDraftRef.current = undefined;
+         setTransformMode("resize");
         return;
       }
       if ((event.key === "Delete" || event.key === "Backspace") && tool === "pen" && selectedFormaNodeKeys.length) {
@@ -1111,14 +1137,21 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
     return { left: topLeft.x, top: topLeft.y, width: bounds.width * zoom, height: bounds.height * zoom };
   })() : undefined;
   const pageStyle = { width: document.page.width * zoom, height: document.page.height * zoom, left: -panMm.x * zoom, top: -panMm.y * zoom };
-   const pendingDimensionOverlay = tool === "dimension" && dimensionDraft && cursorPoint ? (() => {
+    const pendingDimensionOverlay = tool === "dimension" && dimensionDraft && cursorPoint ? (() => {
     const firstPoint = dimensionDraft.first.kind === "node" ? dimensionDraft.first.hit.node.point : dimensionDraft.first.hit.line.start;
     const start = pagePointToCanvas(firstPoint, zoom, panMm);
     const secondPoint = dimensionDraft.phase === "placement" ? dimensionDraft.second.kind === "node" ? dimensionDraft.second.hit.node.point : dimensionDraft.second.hit.line.start : undefined;
     const end = secondPoint ? pagePointToCanvas(secondPoint, zoom, panMm) : cursorPoint;
     const label = dimensionDraft.phase === "placement" ? dimensionDraft.first.kind === "line" ? "Coloque el ángulo" : "Coloque la cota" : "Seleccione el segundo nodo o línea";
     return <svg className="dimension-pending-overlay" aria-hidden="true"><line x1={start.x} y1={start.y} x2={end.x} y2={end.y} /><circle cx={start.x} cy={start.y} r="7" /><circle cx={end.x} cy={end.y} r="7" /><text x={start.x + 10} y={start.y - 10}>Primer nodo</text><text x={end.x + 12} y={end.y - 12}>{label}</text></svg>;
-  })() : undefined;
+   })() : undefined;
+   const pendingCircleOverlay = tool === "ellipse" && circleDraft ? (() => {
+     const geometry = circleGeometry(circleDraft.center, circleDraft.pointer);
+     if (!geometry) return undefined;
+     const center = pagePointToCanvas({ x: circleDraft.center.x, y: circleDraft.center.y }, zoom, panMm);
+     const pointer = pagePointToCanvas(circleDraft.pointer, zoom, panMm);
+     return <svg className="circle-pending-overlay" aria-label={`Vista previa de círculo, radio ${formatMm(geometry.radius)} milímetros`}><line x1={center.x} y1={center.y} x2={pointer.x} y2={pointer.y} /><circle cx={center.x} cy={center.y} r={4} /><circle cx={center.x} cy={center.y} r={geometry.radius * zoom} /><text x={pointer.x + 10} y={pointer.y - 10}>Radio: {formatMm(geometry.radius)} mm</text></svg>;
+   })() : undefined;
    const dimensionHoverStyle = dimensionNodeHover && tool === "dimension" ? (() => { const point = pagePointToCanvas(dimensionNodeHover.node.point, zoom, panMm); return { left: point.x, top: point.y }; })() : undefined;
   const rulerMajorStep = [1, 5, 10, 25, 50, 100, 250, 500].find((step) => step * zoom >= 50) ?? 1000;
   const rulerValues = (limit: number) => Array.from({ length: Math.floor(limit / rulerMajorStep) + 1 }, (_, index) => index * rulerMajorStep);
@@ -1407,7 +1440,7 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
                 {objectPropertySections()}{mirrorButton("horizontal")}{mirrorButton("vertical")}{shapeOperations()}
          </div> : <p className="muted">Seleccione un objeto para editar sus propiedades.</p>}
       </section>
-        <aside className="workspace-tools"><div className="tool-column" role="toolbar" aria-label="Herramientas de diseño">{(["select", "forma", "pen", "spline", "text", "rectangle", "ellipse", "line", "dimension", "pan"] as const).map((item) => <ToolButton key={item} label={toolCursorLabels[item]} icon={item} active={tool === item} onClick={() => { setTransformMode("resize"); setPenDraftPoint(undefined); if (item === "forma" && selectedElements.some((element) => element.type === "text")) setEditorState(clearSelection(editorRef.current)); if (item !== "forma") setEditModeElementIds([]); setTool(item); }} />)}</div></aside>
+         <aside className="workspace-tools"><div className="tool-column" role="toolbar" aria-label="Herramientas de diseño">{(["select", "forma", "pen", "spline", "text", "rectangle", "ellipse", "line", "dimension", "pan"] as const).map((item) => <ToolButton key={item} label={toolCursorLabels[item]} icon={item} active={tool === item} onClick={() => { setTransformMode("resize"); setPenDraftPoint(undefined); setCircleDraft(undefined); circleDraftRef.current = undefined; if (item === "forma" && selectedElements.some((element) => element.type === "text")) setEditorState(clearSelection(editorRef.current)); if (item !== "forma") setEditModeElementIds([]); setTool(item); }} />)}</div></aside>
       <section className="canvas-area">
         <header className="canvas-header"><span>DISEÑO / SIN TÍTULO</span><span>{document.elements.length} objetos · {document.page.width} × {document.page.height} mm</span><div className="zoom-controls"><button aria-label="Alejar" onClick={() => setZoom(zoom - 0.5)}>−</button><span className="zoom-label">{Math.round(zoom * 100 / 3)}%</span><button aria-label="Acercar" onClick={() => setZoom(zoom + 0.5)}>+</button></div></header>
             <div ref={canvas} className={`${grid ? "canvas" : "canvas no-grid"}${isDrawingTool(tool) ? " drawing-tool" : ""}${closeTargetActive ? " close-target-active" : ""}`} onPointerDown={onCanvasPointerDown} onPointerMove={onCanvasPointerMove} onPointerUp={(event) => finishPointer(event, false)} onPointerCancel={(event) => finishPointer(event, true)} onLostPointerCapture={cancelPointerInteraction} onPointerLeave={() => setCursorPoint(undefined)} onDoubleClick={onCanvasDoubleClick} onWheel={onWheel}>
@@ -1426,10 +1459,10 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
             {tool === "select" && transformMode === "resize" && (handlePoints || groupPoints) && <div className="resize-handles">{handleNames.map((handle) => <button key={handle} type="button" className={`resize-handle resize-handle-${handle}`} data-resize-handle={handle} aria-label={`Redimensionar ${handle}`} style={handleStyle(handle)} onPointerDown={(event) => resizePointerDown(event, handle)} onPointerUp={(event) => finishPointer(event, false)} onPointerCancel={(event) => finishPointer(event, true)} />)}{groupPoints && !isDrawingTool(tool) && <button type="button" className="resize-handle resize-handle-center" data-resize-handle="center" aria-label="Centro del grupo" style={handleStyle("center")} onPointerDown={(event) => event.stopPropagation()} />}</div>}
            {transformMode === "rotate" && selectedElements.length > 0 && <div className="rotation-controls" aria-label="Controles de rotación"><span className="rotation-center" style={selectedElements.length > 1 && selectedBounds ? { left: pagePointToCanvas(groupCenter(selectedBounds), zoom, panMm).x, top: pagePointToCanvas(groupCenter(selectedBounds), zoom, panMm).y } : centerStyle} aria-hidden="true" />{rotationPoints.map((point, index) => { const screen = pagePointToCanvas(point, zoom, panMm); return <button key={index} type="button" className="rotation-handle" aria-label={`Rotar objeto, control ${index + 1}`} style={{ left: screen.x, top: screen.y }} onPointerDown={rotationPointerDown} onPointerUp={(event) => finishPointer(event, false)} onPointerCancel={(event) => finishPointer(event, true)}><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M15.5 8A6 6 0 1 0 16 12" /><path d="m12.5 4 3 4-5 .5" /></svg></button>; })}</div>}
           {marqueeStyle && <div className="marquee" style={marqueeStyle} />}
-          {pendingDimensionOverlay}
+           {pendingDimensionOverlay}{pendingCircleOverlay}
             {cursorPoint && <span className={`tool-cursor${closeCursorActive ? " close-cursor" : ""}${dimensionNodeHover && tool === "dimension" ? " dimension-node-cursor" : ""}`} style={{ left: cursorPoint.x, top: cursorPoint.y }} aria-label={`Herramienta activa: ${toolCursorLabels[tool]}`} title={closeCursorActive ? "Cerrar trazado" : dimensionNodeHover && tool === "dimension" ? "Nodo de dimensión" : tool === "forma" && pickFormaSegment(document, screenPointToMm(cursorPoint, { x: 0, y: 0 }, zoom, panMm), zoom) ? "Doble clic para insertar un nodo" : undefined}>{toolCursorIcons[tool]}</span>}
           {dimensionHoverStyle && <span className="dimension-node-target" data-dimension-node-target={`${dimensionNodeHover!.elementId}:${dimensionNodeHover!.nodeIndex}`} style={dimensionHoverStyle} aria-label="Nodo de dimensión bajo el puntero" title="Nodo de dimensión" />}
-          <span className="canvas-hint">{tool === "dimension" ? !dimensionDraft ? "Cota: seleccione el primer nodo" : dimensionDraft.phase === "first" ? "Cota: seleccione el segundo nodo" : "Cota: coloque la cota" : `Clic: relleno · clic derecho: contorno · ${toolCursorLabels[tool]}`}</span>
+           <span className="canvas-hint">{tool === "dimension" ? !dimensionDraft ? "Cota: seleccione el primer nodo" : dimensionDraft.phase === "first" ? "Cota: seleccione el segundo nodo" : "Cota: coloque la cota" : tool === "ellipse" ? circleDraft ? "Círculo: mueva el puntero y haga clic para confirmar" : "Círculo: haga clic para fijar el centro" : `Clic: relleno · clic derecho: contorno · ${toolCursorLabels[tool]}`}</span>
         </div>
       </section>
        <aside className="inspector">
@@ -1453,7 +1486,7 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
   </main>;
 }
 
-const toolDescriptions: Record<string, string> = { Seleccion: "Seleccione, coloque o transforme objetos.", Forma: "Editar la forma mediante sus nodos.", Pluma: "Cree un trazado Bézier con clics y arrastre para editar sus controles.", Spline: "Cree curvas con nodos y handles. Haga clic en el primer nodo para cerrarla; arrastre nodos y controles para editarla.", Texto: "Escriba texto editable sobre la hoja.", Rectángulo: "Dibuje formas rectangulares.", Elipse: "Dibuje formas elípticas.", Línea: "Dibuje líneas rectas.", Desplazar: "Desplace el espacio de trabajo." };
+  const toolDescriptions: Record<string, string> = { Seleccion: "Seleccione, coloque o transforme objetos.", Forma: "Editar la forma mediante sus nodos.", Pluma: "Cree un trazado Bézier con clics y arrastre para editar sus controles.", Spline: "Cree curvas con nodos y handles. Haga clic en el primer nodo para cerrarla; arrastre nodos y controles para editarla.", Texto: "Escriba texto editable sobre la hoja.", Rectángulo: "Dibuje formas rectangulares.", Círculo: "Fije el centro con un clic, mueva el puntero para definir el radio y haga clic para crear un círculo.", Línea: "Dibuje líneas rectas.", Desplazar: "Desplace el espacio de trabajo." };
 function ToolIcon({ icon }: { icon: Tool }) {
   const shape = icon === "select" ? <path d="m5 3 13 8-6 2-3 6z" /> : icon === "text" ? <><path d="M6 5h12M12 5v14M8 19h8" /><path d="M5 5h2M17 5h2" /></> : icon === "forma" ? <><rect x="5" y="5" width="14" height="14" rx="1" /><circle cx="5" cy="5" r="1.5" fill="currentColor" /><circle cx="12" cy="5" r="1.5" fill="currentColor" /><circle cx="19" cy="5" r="1.5" fill="currentColor" /><circle cx="5" cy="12" r="1.5" fill="currentColor" /><circle cx="19" cy="12" r="1.5" fill="currentColor" /><circle cx="5" cy="19" r="1.5" fill="currentColor" /><circle cx="12" cy="19" r="1.5" fill="currentColor" /><circle cx="19" cy="19" r="1.5" fill="currentColor" /></> : icon === "pen" ? <><path d="M4 19 9 14" /><path d="M9 14c3-5 6-7 11-8" /><path d="M14 8 18 4" /><path d="M5 19h4" /><rect x="3" y="17" width="4" height="4" /><rect x="18" y="3" width="4" height="4" /><circle cx="9" cy="14" r="1.5" fill="currentColor" /></> : icon === "spline" ? <><path d="M4 18c4 0 4-10 9-10 3 0 3 4 7 0" /><path d="M4 18 9 14M13 8 18 6" /><circle cx="4" cy="18" r="2" fill="currentColor" /><circle cx="13" cy="8" r="2" fill="currentColor" /><circle cx="20" cy="8" r="2" fill="currentColor" /></> : icon === "rectangle" ? <rect x="5" y="5" width="14" height="14" rx="1" /> : icon === "ellipse" ? <circle cx="12" cy="12" r="7" /> : icon === "line" ? <path d="M5 19 19 5" /> : <><path d="M12 4v16M4 12h16" /><path d="m9 7 3-3 3 3M9 17l3 3 3-3M7 9l-3 3 3 3M17 9l3 3-3 3" /></>;
   return <svg className="tool-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{shape}</svg>;

@@ -312,6 +312,41 @@ test("creates, transforms, and undoes a rectangle", async ({ page }) => {
   await expect(width).toHaveValue(String(originalWidth));
 });
 
+test("creates a circular Círculo from two clicks and previews its radius", async ({ page }) => {
+  await page.goto("/");
+  const pageBounds = await page.locator(".page").boundingBox();
+  expect(pageBounds).not.toBeNull();
+  await page.getByRole("button", { name: "Círculo" }).click();
+
+  const center = { x: pageBounds!.x + 180, y: pageBounds!.y + 150 };
+  const pointer = { x: center.x + 60, y: center.y + 80 };
+  await page.mouse.click(center.x, center.y);
+  await expect(page.getByText("Círculo: mueva el puntero y haga clic para confirmar")).toBeVisible();
+  await page.mouse.move(pointer.x, pointer.y);
+  await expect(page.locator(".circle-pending-overlay")).toBeVisible();
+  await expect(page.locator(".circle-pending-overlay text")).toContainText("Radio:");
+
+  await page.mouse.click(pointer.x, pointer.y);
+  const circle = page.locator('.page-svg svg ellipse[data-element-id]').first();
+  await expect(circle).toHaveCount(1);
+  const radius = await circle.getAttribute("rx");
+  expect(radius).not.toBeNull();
+  await expect(circle).toHaveAttribute("ry", radius!);
+  await expect(page.locator(".circle-pending-overlay")).toHaveCount(0);
+});
+
+test("cancels a pending Círculo with Escape", async ({ page }) => {
+  await page.goto("/");
+  const pageBounds = await page.locator(".page").boundingBox();
+  expect(pageBounds).not.toBeNull();
+  await page.getByRole("button", { name: "Círculo" }).click();
+  await page.mouse.click(pageBounds!.x + 180, pageBounds!.y + 150);
+  await expect(page.getByText("Círculo: mueva el puntero y haga clic para confirmar")).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(page.getByText("Círculo: haga clic para fijar el centro")).toBeVisible();
+  await expect(page.locator('.page-svg svg ellipse[data-element-id]')).toHaveCount(0);
+});
+
 test("moves text with Selection and edits it inline on double-click", async ({ page }) => {
   await page.goto("/");
   const pageBounds = await page.locator(".page").boundingBox();
