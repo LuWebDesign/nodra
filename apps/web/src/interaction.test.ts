@@ -410,6 +410,8 @@ describe("drag geometry", () => {
     if (!checked.success) return;
     expect(pickHoverNode(checked.data, { x: 10, y: 10 }, 1, "select")).toMatchObject({ elementId: rectangle.id, nodeIndex: 0 });
     expect(pickHoverNode(checked.data, { x: 10, y: 10 }, 1, "forma")).toMatchObject({ elementId: rectangle.id, nodeIndex: 0 });
+    expect(pickHoverNode(checked.data, { x: 10, y: 10 }, 1, "pen")).toMatchObject({ elementId: rectangle.id, nodeIndex: 0 });
+    expect(pickHoverNode(checked.data, { x: 10, y: 10 }, 1, "spline")).toMatchObject({ elementId: rectangle.id, nodeIndex: 0 });
     expect(pickHoverNode(checked.data, { x: 10, y: 10 }, 1, "dimension")).toMatchObject({ elementId: rectangle.id, nodeIndex: 0 });
     expect(pickHoverNode(checked.data, { x: 100, y: 100 }, 1, "select")).toBeUndefined();
   });

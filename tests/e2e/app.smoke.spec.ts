@@ -67,8 +67,12 @@ test("creates an open spline with Spline and exposes its anchors", async ({ page
   const firstNode = await nodes.first().boundingBox();
   expect(firstNode).not.toBeNull();
   await page.mouse.move(firstNode!.x + firstNode!.width / 2, firstNode!.y + firstNode!.height / 2);
-  await expect(page.locator(".tool-cursor")).toBeHidden();
-  await expect(page.locator(".tool-cursor")).toHaveAttribute("title", "Cerrar trazado");
+  await expect(page.locator("[data-node-hover-feedback]")).toBeVisible();
+  await expect(page.locator("[data-node-hover-feedback]")).toHaveCSS("background-color", "rgb(245, 158, 11)");
+  await expect(page.locator(".canvas")).not.toHaveClass(/close-target-active/);
+  await expect(nodes.first()).not.toHaveAttribute("data-spline-close-target");
+  await expect(page.locator(".tool-cursor")).toBeVisible();
+  await expect(page.locator(".tool-cursor")).not.toHaveAttribute("title", "Cerrar trazado");
   await page.mouse.click(firstNode!.x + firstNode!.width / 2, firstNode!.y + firstNode!.height / 2);
   await expect(spline).toHaveAttribute("d", / Z$/);
   await expect(page.locator("[data-spline-handle]")).toHaveCount(0);
@@ -207,6 +211,12 @@ test("closes a Pluma silhouette by clicking its first anchor and supports fill a
   const first = page.locator(".contour-node").first();
   const firstBounds = await first.boundingBox();
   expect(firstBounds).not.toBeNull();
+  await page.mouse.move(firstBounds!.x + firstBounds!.width / 2, firstBounds!.y + firstBounds!.height / 2);
+  await expect(page.locator("[data-node-hover-feedback]")).toBeVisible();
+  await expect(page.locator("[data-node-hover-feedback]")).toHaveCSS("background-color", "rgb(245, 158, 11)");
+  await expect(page.locator(".canvas")).not.toHaveClass(/close-target-active/);
+  await expect(page.locator(".tool-cursor")).toBeVisible();
+  await expect(page.locator(".tool-cursor")).not.toHaveAttribute("title", "Cerrar trazado");
   await page.mouse.click(firstBounds!.x + firstBounds!.width / 2, firstBounds!.y + firstBounds!.height / 2);
   await expect(page.locator(".page-svg svg path[data-element-id]")).toHaveAttribute("d", / Z$/);
   await expect(page.getByRole("button", { name: "Reabrir trazado" })).toBeVisible();
