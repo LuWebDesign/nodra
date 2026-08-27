@@ -242,21 +242,25 @@ const contourToEditableGlyphContour = (contour: { readonly points: readonly Poin
     return sourceHitCache.get(key);
   };
   const points = [...source];
+  const hits: Array<SourceHit | undefined> = points.map(cachedSourcePoint);
   while (points.length > 3) {
     let candidate = -1; let error = Number.POSITIVE_INFINITY;
     for (let pointIndex = 0; pointIndex < points.length; pointIndex += 1) {
-      const previous = points[(pointIndex - 1 + points.length) % points.length]!;
+      const previousIndex = (pointIndex - 1 + points.length) % points.length;
+      const nextIndex = (pointIndex + 1) % points.length;
+      const previous = points[previousIndex]!;
       const current = points[pointIndex]!;
-      const next = points[(pointIndex + 1) % points.length]!;
-      const previousHit = cachedSourcePoint(previous);
-      const currentHit = cachedSourcePoint(current);
-      const nextHit = cachedSourcePoint(next);
+      const next = points[nextIndex]!;
+      const previousHit = hits[previousIndex];
+      const currentHit = hits[pointIndex];
+      const nextHit = hits[nextIndex];
       const followsSourceCurve = previousHit && currentHit && nextHit && previousHit.curve === currentHit.curve && currentHit.curve === nextHit.curve && currentHit.t >= Math.min(previousHit.t, nextHit.t) - 0.03 && currentHit.t <= Math.max(previousHit.t, nextHit.t) + 0.03 && currentHit.distance <= 0.2 && previousHit.distance <= 0.2 && nextHit.distance <= 0.2;
       const distance = followsSourceCurve ? 0 : distanceToSegment(current, previous, next);
       if (distance < error) { error = distance; candidate = pointIndex; }
     }
     if (candidate < 0 || error > tolerance) break;
     points.splice(candidate, 1);
+    hits.splice(candidate, 1);
   }
   const isCorner = (pointIndex: number): boolean => {
     const previous = points[(pointIndex - 1 + points.length) % points.length]!;
