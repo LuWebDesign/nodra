@@ -118,6 +118,7 @@ export function App() {
   const [centerHover, setCenterHover] = useState<{ elementId: ElementId; point: PointMm }>();
   const [transformMode, setTransformMode] = useState<TransformMode>("resize");
   const [selectedFormaNodeKeys, setSelectedFormaNodeKeys] = useState<readonly string[]>([]);
+  const [editModeElementIds, setEditModeElementIds] = useState<readonly ElementId[]>([]);
   const [selectedSplineNodeKey, setSelectedSplineNodeKey] = useState<string>();
   const [selectedPathSegment, setSelectedPathSegment] = useState<{ readonly elementId: ElementId; readonly segmentIndex: number }>();
   const [inspectorTab, setInspectorTab] = useState<InspectorTab>("properties");
@@ -253,7 +254,7 @@ export function App() {
     setSelectedSplineNodeKey(undefined);
     if (tool !== "spline" && tool !== "forma" && editorRef.current.selection.some((id) => editorRef.current.document.elements.some((element) => element.id === id && element.type === "spline"))) setEditorState(clearSelection(editorRef.current));
   }, [tool]);
-  useEffect(() => { setSelectedPathSegment(undefined); setSelectedFormaNodeKeys([]); }, [tool, project.activePageId]);
+  useEffect(() => { setSelectedPathSegment(undefined); setSelectedFormaNodeKeys([]); setEditModeElementIds([]); }, [tool, project.activePageId]);
 
   useEffect(() => {
     setCenterHover(undefined);
@@ -635,6 +636,7 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
      setCursorPoint(canvasPointAt(event));
      setSnapGuide(undefined);
      setAlignmentGuideState([]);
+     if (tool !== "forma") setEditModeElementIds([]);
      setSelectedSplineNodeKey(undefined);
      const resizeTarget = tool === "forma" ? null : (event.target as HTMLElement).closest<HTMLElement>("[data-resize-handle]");
     if (resizeTarget) { resizePointerDown(event, resizeTarget.dataset.resizeHandle as ResizeHandle); return; }
@@ -690,10 +692,11 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
       }
       return;
     }
-      const formaNodeHit = tool === "forma" ? pickFormaNode(editorRef.current.document, point, zoom) : undefined;
+      const rawFormaNodeHit = tool === "forma" ? pickFormaNode(editorRef.current.document, point, zoom) : undefined;
+      const formaNodeHit = rawFormaNodeHit && editModeElementIds.includes(rawFormaNodeHit.elementId) ? rawFormaNodeHit : undefined;
       const contourNodeHit = formaNodeHit?.contourNode;
       const nodeHit = tool !== "forma" && transformMode === "resize" ? pickNode(editorRef.current.document, point, zoom) : undefined;
-      const pathSegmentHit = tool === "forma" && !formaNodeHit ? pickPathSegment(editorRef.current.document, point, zoom) : undefined;
+      const pathSegmentHit = tool === "forma" && !formaNodeHit ? (() => { const hit = pickPathSegment(editorRef.current.document, point, zoom); return hit && editModeElementIds.includes(hit.elementId) ? hit : undefined; })() : undefined;
        if (tool === "dimension") {
           if (dimensionDraft?.phase === "placement") {
             const placement = pointAt(event);
@@ -759,16 +762,25 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
     const point = screenPointToMm(clientPointToCanvas({ x: event.clientX, y: event.clientY }, event.currentTarget.getBoundingClientRect()), { x: 0, y: 0 }, zoom, panMm);
     if (!pickElement(editorRef.current.document, point, zoom)) {
       setSelectedSplineNodeKey(undefined);
+      setEditModeElementIds([]);
       setActiveSplineId(undefined);
       setEditorState(clearSelection(editorRef.current));
       return;
     }
     if (tool === "forma") {
+      const hit = pickElement(editorRef.current.document, point, zoom);
+      const hitElement = hit ? editorRef.current.document.elements.find((element) => element.id === hit) : undefined;
+      if (!hitElement || hitElement.type === "text" || hitElement.type === "dimension") return;
+      if (!editModeElementIds.includes(hitElement.id)) {
+        setSelectedFormaNodeKeys([]);
+        setSelectedPathSegment(undefined);
+        setEditModeElementIds([hitElement.id]);
+        setEditorState(select(editorRef.current, [hitElement.id]));
+        return;
+      }
       if (pickFormaNode(editorRef.current.document, point, zoom)) return;
       const segment = pickFormaSegment(editorRef.current.document, point, zoom);
-      if (segment) {
-        setEditorState(dispatch(select(editorRef.current, [segment.elementId]), insertFormaNode(segment.elementId, segment, point)));
-      }
+      if (segment) setEditorState(dispatch(select(editorRef.current, [segment.elementId]), insertFormaNode(segment.elementId, segment, point)));
       return;
     }
     if ((event.target as HTMLElement).closest("textarea")) return;
@@ -891,7 +903,7 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
       if (!cancelled && active.start && active.dragged && active.document) {
         if (tool === "forma") {
           const bounds = normalizeBounds(active.start, pointAt(event));
-          const keys = formaNodes.filter((node) => node.point.x >= bounds.x && node.point.x <= bounds.x + bounds.width && node.point.y >= bounds.y && node.point.y <= bounds.y + bounds.height).map((node) => node.key);
+          const keys = formaNodes.filter((node) => editModeElementIds.includes(node.elementId) && node.point.x >= bounds.x && node.point.x <= bounds.x + bounds.width && node.point.y >= bounds.y && node.point.y <= bounds.y + bounds.height).map((node) => node.key);
           setSelectedFormaNodeKeys((current) => active.shiftKey ? [...new Set([...current, ...keys])] : keys);
         } else {
           const nextIds = marqueeSelection(active.document, active.start, pointAt(event));
@@ -1001,13 +1013,20 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
     };
     addEventListener("keydown", onKey);
     return () => removeEventListener("keydown", onKey);
-    }, [activeSplineId, selectionKey, selectedFormaNodeKeys, tool, selectedElements]);
+    }, [activeSplineId, editModeElementIds, selectionKey, selectedFormaNodeKeys, tool, selectedElements]);
 
-     const formaNodes: readonly FormaNodeOverlay[] = (tool === "forma" || tool === "pen") ? selectedElements.filter((element) => element.type !== "spline" && element.type !== "text").flatMap((element): readonly FormaNodeOverlay[] => element.type === "contour"
+     const editableSelectionIds = tool === "pen" ? selection : editModeElementIds;
+     const formaNodes: readonly FormaNodeOverlay[] = (tool === "forma" || tool === "pen") ? selectedElements.filter((element) => editableSelectionIds.includes(element.id) && element.type !== "spline" && element.type !== "text" && element.type !== "dimension").flatMap((element): readonly FormaNodeOverlay[] => {
+       const visiblePathNodes = (nodes: readonly ReturnType<typeof pathGeometryNodes>[number][]) => {
+         const selectedAnchors = new Set(selectedFormaNodeKeys.flatMap((key) => { const match = key.match(new RegExp(`^${element.id}:p:(\\d+)$`)); const node = match ? nodes[Number(match[1])] : undefined; return node?.kind === "anchor" ? [node.nodeId] : []; }));
+         return nodes.map((node, nodeIndex) => ({ node, nodeIndex })).filter(({ node }) => node.kind === "anchor" || selectedAnchors.has(node.nodeId));
+       };
+       return element.type === "contour"
       ? contourVertexNodes(element).map((node) => ({ kind: "contour" as const, key: `${node.elementId}:c:${node.ringIndex}:${node.pointIndex}`, elementId: node.elementId, point: node.point, contour: node }))
-       : element.type === "path" ? pathGeometryNodes(element).map((node, nodeIndex) => ({ kind: "path" as const, key: `${element.id}:p:${nodeIndex}`, elementId: element.id, point: node.point, nodeIndex, pathNode: { elementId: element.id, node } }))
-         : element.type === "glyph" ? glyphGeometryNodes(element).map((node, nodeIndex) => ({ kind: "path" as const, key: `${element.id}:p:${nodeIndex}`, elementId: element.id, point: node.point, nodeIndex, pathNode: { elementId: element.id, node } }))
-         : realGeometryNodes(element).map((node, nodeIndex) => ({ kind: "path" as const, key: `${element.id}:p:${nodeIndex}`, elementId: element.id, point: node.point, nodeIndex }))) : [];
+       : element.type === "path" ? visiblePathNodes(pathGeometryNodes(element)).map(({ node, nodeIndex }) => ({ kind: "path" as const, key: `${element.id}:p:${nodeIndex}`, elementId: element.id, point: node.point, nodeIndex, pathNode: { elementId: element.id, node } }))
+         : element.type === "glyph" ? visiblePathNodes(glyphGeometryNodes(element)).map(({ node, nodeIndex }) => ({ kind: "path" as const, key: `${element.id}:p:${nodeIndex}`, elementId: element.id, point: node.point, nodeIndex, pathNode: { elementId: element.id, node } }))
+         : realGeometryNodes(element).map((node, nodeIndex) => ({ kind: "path" as const, key: `${element.id}:p:${nodeIndex}`, elementId: element.id, point: node.point, nodeIndex }));
+     }) : [];
       const selectedPathAnchor = selectedElement?.type === "path"
        ? (() => { const selectedPathOverlay = formaNodes.find((node): node is Extract<FormaNodeOverlay, { readonly kind: "path" }> => node.kind === "path" && "pathNode" in node && node.pathNode?.node.kind === "anchor" && selectedFormaNodeKeys.includes(node.key)); const anchor = selectedPathOverlay?.pathNode?.node; return anchor?.kind === "anchor" ? selectedElement.nodes.find((node) => node.id === anchor.nodeId) : undefined; })()
         : undefined;
@@ -1094,7 +1113,7 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
   const rulerVertical = <div className="ruler-vertical" data-ruler-vertical="true" aria-hidden="true">
     {rulerYValues.map((value) => <span className="ruler-tick ruler-tick-vertical" key={`ruler-y-${value}`} style={{ top: (value - panMm.y) * zoom }}><i /><b>{value}</b></span>)}
   </div>;
-       const selectedEditOverlay = tool === "forma" ? selectedElements.filter((element) => element.type !== "spline" && element.type !== "line" && element.type !== "text").map((element) => {
+       const selectedEditOverlay = tool === "forma" ? selectedElements.filter((element) => editModeElementIds.includes(element.id) && element.type !== "spline" && element.type !== "line" && element.type !== "text").map((element) => {
          if (element.type === "rectangle") return <rect key={`edit-${element.id}`} x={element.position.x} y={element.position.y} width={element.size.width} height={element.size.height} rx={element.cornerRadius} fill="none" stroke="#1683ff" strokeWidth={1 / zoom} transform={`rotate(${element.rotation * 180 / Math.PI} ${element.position.x + element.size.width / 2} ${element.position.y + element.size.height / 2})`} pointerEvents="none" />;
          if (element.type === "ellipse") return <ellipse key={`edit-${element.id}`} cx={element.position.x + element.size.width / 2} cy={element.position.y + element.size.height / 2} rx={element.size.width / 2} ry={element.size.height / 2} fill="none" stroke="#1683ff" strokeWidth={1 / zoom} transform={`rotate(${element.rotation * 180 / Math.PI} ${element.position.x + element.size.width / 2} ${element.position.y + element.size.height / 2})`} pointerEvents="none" />;
          if (element.type === "contour") return <path key={`edit-${element.id}`} d={element.contours.map((contour) => `${contour.points.map((point, pointIndex) => `${pointIndex === 0 ? "M" : "L"} ${point.x} ${point.y}`).join(" ")} Z`).join(" ")} fill="none" stroke="#1683ff" strokeWidth={1 / zoom} pointerEvents="none" />;
@@ -1114,18 +1133,18 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
        const alignmentGuideOverlay = alignmentGuideState.map((guide, index) => guide.orientation === "vertical"
          ? <line key={`alignment-guide-v-${index}`} data-alignment-guide="vertical" x1={guide.coordinate} y1={guide.start} x2={guide.coordinate} y2={guide.end} stroke="#1683ff" strokeWidth={0.75 / zoom} strokeDasharray={`${3 / zoom} ${3 / zoom}`} vectorEffect="non-scaling-stroke" pointerEvents="none" />
          : <line key={`alignment-guide-h-${index}`} data-alignment-guide="horizontal" x1={guide.start} y1={guide.coordinate} x2={guide.end} y2={guide.coordinate} stroke="#1683ff" strokeWidth={0.75 / zoom} strokeDasharray={`${3 / zoom} ${3 / zoom}`} vectorEffect="non-scaling-stroke" pointerEvents="none" />);
-       const pathGuideOverlay = selectedElements.filter((element): element is Extract<Element, { type: "path" }> => element.type === "path").flatMap((path) => path.segments.flatMap((segment) => segment.type === "cubicBezier" ? (() => {
+       const pathGuideOverlay = selectedElements.filter((element): element is Extract<Element, { type: "path" }> => element.type === "path" && (tool === "pen" || editModeElementIds.includes(element.id))).flatMap((path) => path.segments.flatMap((segment) => segment.type === "cubicBezier" ? (() => {
          const start = path.nodes.find((node) => node.id === segment.startNodeId)?.anchor;
          const end = path.nodes.find((node) => node.id === segment.endNodeId)?.anchor;
          return start && end ? [<line key={`${path.id}-${segment.startNodeId}-out`} x1={start.x} y1={start.y} x2={segment.control1.x} y2={segment.control1.y} stroke="#1683ff" strokeWidth={1 / zoom} strokeDasharray={`${3 / zoom} ${2 / zoom}`} pointerEvents="none" />, <line key={`${path.id}-${segment.endNodeId}-in`} x1={end.x} y1={end.y} x2={segment.control2.x} y2={segment.control2.y} stroke="#1683ff" strokeWidth={1 / zoom} strokeDasharray={`${3 / zoom} ${2 / zoom}`} pointerEvents="none" />] : [];
        })() : []));
        const splineOverlay = document.elements.filter((element): element is SplineElement => element.type === "spline").map((spline) => {
-      const editing = tool === "forma" || tool === "spline";
-      const visible = selection.includes(spline.id) || selectedSplineNodeKey?.startsWith(`${spline.id}:`);
+      const editing = tool === "spline" || editModeElementIds.includes(spline.id);
+      const visible = tool === "spline" ? selection.includes(spline.id) || selectedSplineNodeKey?.startsWith(`${spline.id}:`) : editModeElementIds.includes(spline.id);
       return <g key={`spline-overlay-${spline.id}`} data-spline-overlay={spline.id}>
 
         {editing && visible && <path data-spline-edit-path={spline.id} d={splinePathData(spline)} fill="none" stroke="#1683ff" strokeWidth={1 / zoom} pointerEvents="none" />}
-        <path data-spline-hit={spline.id} d={splinePathData(spline)} fill={spline.closed ? "transparent" : "none"} stroke="#2563eb" strokeOpacity={0.01} strokeWidth={12 / zoom} style={{ pointerEvents: tool === "select" ? "visiblePainted" : "none", cursor: tool === "select" ? "move" : "default" }} onPointerDown={(event) => selectSplineObject(event, spline)} onPointerMove={(event) => onCanvasPointerMove(event as unknown as PointerEvent<HTMLDivElement>)} onPointerUp={(event) => finishPointer(event as unknown as PointerEvent<HTMLDivElement>, false)} onPointerCancel={(event) => finishPointer(event as unknown as PointerEvent<HTMLDivElement>, true)} />
+        <path data-spline-hit={spline.id} d={splinePathData(spline)} fill={spline.closed ? "transparent" : "none"} stroke="#2563eb" strokeOpacity={0.01} strokeWidth={12 / zoom} style={{ pointerEvents: tool === "select" || tool === "forma" ? "visiblePainted" : "none", cursor: tool === "select" ? "move" : tool === "forma" ? "crosshair" : "default" }} onDoubleClick={(event) => { if (tool === "forma") { event.preventDefault(); event.stopPropagation(); setEditModeElementIds([spline.id]); setSelectedSplineNodeKey(undefined); setEditorState(select(editorRef.current, [spline.id])); } }} onPointerDown={(event) => selectSplineObject(event, spline)} onPointerMove={(event) => onCanvasPointerMove(event as unknown as PointerEvent<HTMLDivElement>)} onPointerUp={(event) => finishPointer(event as unknown as PointerEvent<HTMLDivElement>, false)} onPointerCancel={(event) => finishPointer(event as unknown as PointerEvent<HTMLDivElement>, true)} />
         {visible && spline.nodes.map((node, nodeIndex) => {
           const selectedNodeIndex = spline.nodes.findIndex((candidate) => selectedSplineNodeKey === `${spline.id}:${candidate.id}`);
           const previousNodeIndex = selectedNodeIndex > 0 ? selectedNodeIndex - 1 : spline.closed && selectedNodeIndex === 0 ? spline.nodes.length - 1 : -1;
@@ -1371,7 +1390,7 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
                 {objectPropertySections()}{mirrorButton("horizontal")}{mirrorButton("vertical")}{shapeOperations()}
          </div> : <p className="muted">Seleccione un objeto para editar sus propiedades.</p>}
       </section>
-        <aside className="workspace-tools"><div className="tool-column" role="toolbar" aria-label="Herramientas de diseño">{(["select", "forma", "pen", "spline", "text", "rectangle", "ellipse", "line", "dimension", "pan"] as const).map((item) => <ToolButton key={item} label={toolCursorLabels[item]} icon={item} active={tool === item} onClick={() => { setTransformMode("resize"); setPenDraftPoint(undefined); if (item === "forma" && selectedElements.some((element) => element.type === "text")) setEditorState(clearSelection(editorRef.current)); setTool(item); }} />)}</div></aside>
+        <aside className="workspace-tools"><div className="tool-column" role="toolbar" aria-label="Herramientas de diseño">{(["select", "forma", "pen", "spline", "text", "rectangle", "ellipse", "line", "dimension", "pan"] as const).map((item) => <ToolButton key={item} label={toolCursorLabels[item]} icon={item} active={tool === item} onClick={() => { setTransformMode("resize"); setPenDraftPoint(undefined); if (item === "forma" && selectedElements.some((element) => element.type === "text")) setEditorState(clearSelection(editorRef.current)); if (item !== "forma") setEditModeElementIds([]); setTool(item); }} />)}</div></aside>
       <section className="canvas-area">
         <header className="canvas-header"><span>DISEÑO / SIN TÍTULO</span><span>{document.elements.length} objetos · {document.page.width} × {document.page.height} mm</span><div className="zoom-controls"><button aria-label="Alejar" onClick={() => setZoom(zoom - 0.5)}>−</button><span className="zoom-label">{Math.round(zoom * 100 / 3)}%</span><button aria-label="Acercar" onClick={() => setZoom(zoom + 0.5)}>+</button></div></header>
             <div ref={canvas} className={`${grid ? "canvas" : "canvas no-grid"}${isDrawingTool(tool) ? " drawing-tool" : ""}${closeTargetActive ? " close-target-active" : ""}`} onPointerDown={onCanvasPointerDown} onPointerMove={onCanvasPointerMove} onPointerUp={(event) => finishPointer(event, false)} onPointerCancel={(event) => finishPointer(event, true)} onLostPointerCapture={cancelPointerInteraction} onPointerLeave={() => setCursorPoint(undefined)} onDoubleClick={onCanvasDoubleClick} onWheel={onWheel}>

@@ -76,6 +76,8 @@ test("creates an open spline with Spline and exposes its anchors", async ({ page
   await expect(spline).toHaveAttribute("d", / Z$/);
   await expect(page.locator("[data-spline-handle]")).toHaveCount(0);
   await page.getByRole("button", { name: "Forma" }).click();
+  await page.mouse.dblclick(x + 80, y + 20);
+  await expect(nodes).toHaveCount(3);
   const selectedNode = await nodes.nth(1).boundingBox();
   expect(selectedNode).not.toBeNull();
   await page.mouse.click(selectedNode!.x + selectedNode!.width / 2, selectedNode!.y + selectedNode!.height / 2);
@@ -183,6 +185,7 @@ test("selects and moves a Spline object like Pluma", async ({ page }) => {
   await page.mouse.click(pageBounds!.x + 160, pageBounds!.y + 110);
   await page.mouse.click(pageBounds!.x + 240, pageBounds!.y + 80);
   await page.getByRole("button", { name: "Forma" }).click();
+  await page.mouse.dblclick(pageBounds!.x + 160, pageBounds!.y + 110);
   const node = page.locator("[data-spline-node]").nth(1);
   const nodeBounds = await node.boundingBox();
   expect(nodeBounds).not.toBeNull();
@@ -597,6 +600,10 @@ test("exposes real contour vertices in Forma and edits one vertex", async ({ pag
   await weld.click();
   await page.getByRole("button", { name: "Forma" }).click();
   const nodes = page.locator(".contour-node");
+  await expect(nodes).toHaveCount(0);
+  const editTarget = await page.locator(".page-svg svg path[data-element-id]").first().boundingBox();
+  expect(editTarget).not.toBeNull();
+  await page.mouse.dblclick(editTarget!.x + editTarget!.width / 2, editTarget!.y + editTarget!.height / 2);
   await expect(nodes.first()).toBeVisible();
   await expect(nodes.first()).toHaveAttribute("data-contour-node", /.+:.+:.+/);
   const node = await nodes.first().boundingBox();
