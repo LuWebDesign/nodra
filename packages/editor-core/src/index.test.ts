@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createDocument, elementId, layerId, type DimensionElement, type GlyphElement, type PathElement, type RectangleElement, type SplineElement, type TextElement } from "@nodra/domain";
-import { addToSelection, appendSplineNode, beginGesture, cancelGesture, clearSelection, closePath, closeSplineElement, commitGesture, createEditor, createElement, createPathCubicNode, deleteContourNodes, deleteElement, deleteElementNodes, deletePathNodes, dispatch, duplicateElements, flipElements, insertContourNode, invalidDimensionIdsForShapeOperation, moveElement, moveElements, movePathNode, movePathHandle, openPath, previewGesture, previewGestureFromBase, redo, removeFromSelection, reorderLayer, resizeElement, resizeElements, rotateElementsAroundCenter, select, selectForPointerDown, setLayerVisibility, setPathJoin, shapeOperation, splitPathSegment, toggleSelection, undo, updateContourNode, updateElement, updateElementNode, updateElementStyles, updateSplineHandle, updateSplineNode } from "./index.js";
+import { addToSelection, appendSplineNode, beginGesture, cancelGesture, clearSelection, closePath, closeSplineElement, commitGesture, createEditor, createElement, createPathCubicNode, deleteContourNodes, deleteElement, deleteElementNodes, deletePathNodes, dispatch, duplicateElements, flipElements, insertContourNode, invalidDimensionIdsForShapeOperation, moveElement, moveElements, movePathNode, movePathHandle, openPath, previewGesture, previewGestureFromBase, redo, removeFromSelection, reorderLayer, resizeElement, resizeElementToDimensions, resizeElements, resizeElementsToDimensions, rotateElementsAroundCenter, select, selectForPointerDown, setLayerVisibility, setPathJoin, shapeOperation, splitPathSegment, toggleSelection, undo, updateContourNode, updateElement, updateElementNode, updateElementStyles, updateSplineHandle, updateSplineNode } from "./index.js";
+import { boundsOfElements } from "@nodra/geometry";
 import type { Direction } from "@nodra/geometry";
 import { appendLinePoint } from "./index.js";
 
@@ -75,6 +76,37 @@ describe("editor core", () => {
     const state = dispatch(createEditor({ ...document, elements: [text] }), moveElements([text.id], { x: 7, y: -3 }));
     expect(state.document.elements[0]).toMatchObject({ ...text, position: { x: 19, y: 15 } });
     expect(state.undo).toHaveLength(1);
+  });
+  it("keeps a connected left side fixed during property resize and undoes atomically", () => {
+    const external = { ...rectangle, id: elementId("external"), position: { x: -9, y: 2 } };
+    const connected = { id: "connection-left", first: { elementId: rectangle.id, node: { kind: "named" as const, name: "w" as const } }, second: { elementId: external.id, node: { kind: "named" as const, name: "e" as const } } };
+    const initial = createEditor({ ...document, elements: [external, rectangle], connections: [connected] });
+    const resized = dispatch(initial, resizeElementToDimensions(rectangle.id, "width", 20));
+    expect(resized.document.elements.find((element) => element.id === rectangle.id)).toMatchObject({ position: { x: 1 }, size: { width: 20 } });
+    expect(resized.undo).toHaveLength(1);
+    expect(undo(resized).document).toEqual(initial.document);
+    expect(redo(undo(resized)).document).toEqual(resized.document);
+  });
+  it("preserves centered fallback and rejects a resize that would break opposite connections", () => {
+    const centered = dispatch(createEditor({ ...document, elements: [rectangle] }), resizeElementToDimensions(rectangle.id, "width", 20));
+    expect(centered.document.elements[0]).toMatchObject({ position: { x: -4 }, size: { width: 20 } });
+    const both = { ...document, elements: [rectangle], connections: [
+      { id: "left", first: { elementId: rectangle.id, node: { kind: "named" as const, name: "w" as const } }, second: { elementId: elementId("other"), node: { kind: "named" as const, name: "e" as const } } },
+      { id: "right", first: { elementId: rectangle.id, node: { kind: "named" as const, name: "e" as const } }, second: { elementId: elementId("other-2"), node: { kind: "named" as const, name: "w" as const } } },
+    ] };
+    expect(dispatch(createEditor(both), resizeElementToDimensions(rectangle.id, "width", 20)).document).toEqual(both);
+  });
+  it("anchors right, top, bottom, and proportional property resizes", () => {
+    const other = { ...rectangle, id: elementId("other-anchor") };
+    const makeConnection = (id: string, name: "e" | "n" | "s") => ({ id, first: { elementId: rectangle.id, node: { kind: "named" as const, name } }, second: { elementId: other.id, node: { kind: "named" as const, name: "center" as const } } });
+    const right = dispatch(createEditor({ ...document, elements: [rectangle, other], connections: [makeConnection("right", "e")] }), resizeElementToDimensions(rectangle.id, "width", 20));
+    expect(right.document.elements.find((element) => element.id === rectangle.id)).toMatchObject({ position: { x: -9 } });
+    const top = dispatch(createEditor({ ...document, elements: [rectangle, other], connections: [makeConnection("top", "n")] }), resizeElementToDimensions(rectangle.id, "height", 20));
+    expect(top.document.elements.find((element) => element.id === rectangle.id)).toMatchObject({ position: { y: 2 } });
+    const bottom = dispatch(createEditor({ ...document, elements: [rectangle, other], connections: [makeConnection("bottom", "s")] }), resizeElementToDimensions(rectangle.id, "height", 20));
+    expect(bottom.document.elements.find((element) => element.id === rectangle.id)).toMatchObject({ position: { y: -13 } });
+    const proportional = dispatch(createEditor({ ...document, elements: [rectangle, other], connections: [makeConnection("left-proportional", "n")] }), resizeElementToDimensions(rectangle.id, "width", 20, true));
+    expect(proportional.document.elements.find((element) => element.id === rectangle.id)).toMatchObject({ size: { width: 20, height: 10 } });
   });
   it("moves a dimension by changing only its placement offset and supports undo", () => {
     const dimension = { type: "dimension" as const, id: elementId("dimension-move"), layerId: rectangle.layerId, kind: "horizontal" as const, references: [{ elementId: rectangle.id, nodeIndex: 0 }, { elementId: rectangle.id, nodeIndex: 1 }] as const, offset: { x: 0, y: -8 }, precision: 2, units: "mm" as const, rotation: 0 as const, style: rectangle.style };
@@ -333,6 +365,20 @@ describe("editor core", () => {
     state = commitGesture(state);
     expect(state.undo).toHaveLength(2);
     expect((undo(state).document.elements[0] as RectangleElement).size.width).toBeGreaterThan(rectangle.size.width);
+  });
+  it("resizes grouped property dimensions around the selection center in one command", () => {
+    const second = { ...rectangle, id: elementId("r2"), position: { x: 20, y: 2 } };
+    let state = select(createEditor({ ...document, elements: [rectangle, second] }), [rectangle.id, second.id]);
+    state = dispatch(state, resizeElementsToDimensions(state.selection, { width: 30, height: 10 }));
+    const resized = boundsOfElements(state.document.elements.filter((element) => state.selection.includes(element.id)));
+    expect(resized.x).toBeCloseTo(0.5);
+    expect(resized.y).toBeCloseTo(-0.5);
+    expect(resized.width).toBeCloseTo(30);
+    expect(resized.height).toBeCloseTo(10);
+    expect(resized.x + resized.width / 2).toBeCloseTo(15.5);
+    expect(resized.y + resized.height / 2).toBeCloseTo(4.5);
+    expect(state.undo).toHaveLength(1);
+    expect(undo(state).document.elements).toEqual([rectangle, second]);
   });
 
   it("recomputes pointer previews from the gesture base without cumulative drift", () => {

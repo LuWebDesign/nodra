@@ -26,6 +26,18 @@ describe("DexieProjectRepository", () => {
     expect((await db.listProjects()).map((project) => project.id)).toEqual([metadata.id]);
   });
 
+  it("round-trips explicit connections through the repository", async () => {
+    db = await repository();
+    const base = document();
+    const first = { type: "rectangle" as const, id: elementId("first"), layerId: layerId("layer-1"), position: { x: 0, y: 0 }, size: { width: 10, height: 10 }, cornerRadius: 0, rotation: 0, style: { stroke: "#000", strokeWidth: 1 } };
+    const second = { ...first, id: elementId("second"), position: { x: 10, y: 0 } };
+    const connection = { id: "join", first: { elementId: first.id, node: { kind: "named" as const, name: "e" as const } }, second: { elementId: second.id, node: { kind: "named" as const, name: "w" as const } } };
+    const saved = { ...base, elements: [first, second], connections: [connection], revision: revision(1) };
+    expect((await db.saveProject(metadata, saved)).ok).toBe(true);
+    const recovered = await db.getProject(metadata.id);
+    expect(recovered.ok && recovered.revision.document).toMatchObject({ connections: [connection] });
+  });
+
   it("does not let a stale write replace a newer revision", async () => {
     db = await repository();
     const first = document();
