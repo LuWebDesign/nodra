@@ -162,10 +162,10 @@ function splineBounds(spline: SplineElement): Bounds {
   const xs = points.map((point) => point.x); const ys = points.map((point) => point.y);
   return { x: Math.min(...xs), y: Math.min(...ys), width: Math.max(...xs) - Math.min(...xs), height: Math.max(...ys) - Math.min(...ys) };
 }
-function splinePoints(spline: SplineElement): PointMm[] {
+function splinePoints(spline: SplineElement, tolerance = 0.1): PointMm[] {
   const points: PointMm[] = [];
-  for (let index = 1; index < spline.nodes.length; index += 1) points.push(...flattenCubicBezier(splineCubicBezier(spline.nodes[index - 1]!, spline.nodes[index]!), 0.1).slice(points.length ? 1 : 0));
-  if (spline.closed) points.push(...flattenCubicBezier(splineCubicBezier(spline.nodes.at(-1)!, spline.nodes[0]!), 0.1).slice(1));
+  for (let index = 1; index < spline.nodes.length; index += 1) points.push(...flattenCubicBezier(splineCubicBezier(spline.nodes[index - 1]!, spline.nodes[index]!), tolerance).slice(points.length ? 1 : 0));
+  if (spline.closed) points.push(...flattenCubicBezier(splineCubicBezier(spline.nodes.at(-1)!, spline.nodes[0]!), tolerance).slice(1));
   return points;
 }
 export function pathGeometryNodes(path: PathElement): readonly PathGeometryNode[] {
@@ -174,11 +174,11 @@ export function pathGeometryNodes(path: PathElement): readonly PathGeometryNode[
   return result;
 }
 export const derivedPathGeometryNodes = pathGeometryNodes;
-function flattenPath(path: PathElement): PointMm[] {
+function flattenPath(path: PathElement, tolerance = 0.1): PointMm[] {
   const points: PointMm[] = [];
   path.segments.forEach((segment, index) => {
     const start = path.nodes.find((node) => node.id === segment.startNodeId)!.anchor;
-    const values = segment.type === "cubicBezier" ? flattenCubicBezier(cubic(segment, path)) : [start, path.nodes.find((node) => node.id === segment.endNodeId)!.anchor];
+    const values = segment.type === "cubicBezier" ? flattenCubicBezier(cubic(segment, path), tolerance) : [start, path.nodes.find((node) => node.id === segment.endNodeId)!.anchor];
     points.push(...(index === 0 ? values : values.slice(1)));
   });
   return points;
@@ -334,9 +334,9 @@ function primitivePolygon(element: RectangleElement | EllipseElement): [number, 
 
 export function closedElementToPolygon(element: Element): MultiPolygon {
   if (element.type === "line" || element.type === "dimension" || element.type === "text") throw new Error("Shape operations require closed objects");
-  if (element.type === "path") { if (!element.closed) throw new Error("Shape operations require closed objects"); return [[flattenPath(element).map((point) => [point.x, point.y] as [number, number])]]; }
-  if (element.type === "spline") { if (!element.closed) throw new Error("Shape operations require closed objects"); return [[splinePoints(element).map((point) => [point.x, point.y] as [number, number])]]; }
-  if (element.type === "glyph") return [element.contours.map((contour) => flattenPath(glyphPath(element, contour)).map((point) => [point.x, point.y] as [number, number]))];
+  if (element.type === "path") { if (!element.closed) throw new Error("Shape operations require closed objects"); return [[flattenPath(element, 0.01).map((point) => [point.x, point.y] as [number, number])]]; }
+  if (element.type === "spline") { if (!element.closed) throw new Error("Shape operations require closed objects"); return [[splinePoints(element, 0.01).map((point) => [point.x, point.y] as [number, number])]]; }
+  if (element.type === "glyph") return [element.contours.map((contour) => flattenPath(glyphPath(element, contour), 0.01).map((point) => [point.x, point.y] as [number, number]))];
   if (element.type === "contour") return [element.contours.map((contour) => contour.points.map((point) => [point.x, point.y] as [number, number]))];
   return [[primitivePolygon(element)]];
 }

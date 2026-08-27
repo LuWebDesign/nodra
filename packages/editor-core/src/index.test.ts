@@ -387,7 +387,10 @@ describe("editor core", () => {
     const state = dispatch(select(createEditor({ ...document, elements: [glyph, second] }), [glyph.id, second.id]), shapeOperation([glyph.id, second.id], "weld"));
     const result = state.document.elements[0];
     expect(result?.type).toBe("glyph");
-    if (result?.type === "glyph") expect(result.contours.every((contour) => contour.segments.every((segment) => segment.type === "cubicBezier"))).toBe(true);
+    if (result?.type === "glyph") {
+      expect(result.contours.every((contour) => contour.segments.every((segment) => segment.type === "cubicBezier"))).toBe(true);
+      expect(result.contours.reduce((count, contour) => count + contour.nodes.length, 0)).toBeLessThan(24);
+    }
   });
 
   it("uses the first selected object as cutter and the second as target", () => {
