@@ -327,7 +327,8 @@ test("shows node hover feedback while keeping the system cursor as an arrow", as
   await expect(feedback).toHaveCSS("width", "4.5px");
   await expect(feedback).toHaveCSS("height", "4.5px");
   await expect(feedback).toHaveCSS("background-color", "rgb(245, 158, 11)");
-  await expect(feedback).toHaveCSS("border-top-width", "0px");
+  await expect(feedback).toHaveCSS("border-top-width", "1px");
+  await expect(feedback).toHaveCSS("border-top-color", "rgb(17, 24, 39)");
   await expect(feedback).toHaveCSS("box-shadow", "none");
   expect(feedbackBounds!.x + feedbackBounds!.width / 2).toBeCloseTo(bounds!.x, 0);
   expect(feedbackBounds!.y + feedbackBounds!.height / 2).toBeCloseTo(bounds!.y, 0);
