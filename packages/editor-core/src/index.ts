@@ -235,6 +235,12 @@ const contourToEditableGlyphContour = (contour: { readonly points: readonly Poin
     const t = Math.max(0, Math.min(1, ((point.x - start.x) * dx + (point.y - start.y) * dy) / lengthSquared));
     return Math.hypot(point.x - (start.x + t * dx), point.y - (start.y + t * dy));
   };
+  const sourceHitCache = new Map<string, SourceHit | undefined>();
+  const cachedSourcePoint = (point: PointMm): SourceHit | undefined => {
+    const key = `${point.x}:${point.y}`;
+    if (!sourceHitCache.has(key)) sourceHitCache.set(key, nearestSourcePoint(point, sourceCurves));
+    return sourceHitCache.get(key);
+  };
   const points = [...source];
   while (points.length > 3) {
     let candidate = -1; let error = Number.POSITIVE_INFINITY;
@@ -242,9 +248,9 @@ const contourToEditableGlyphContour = (contour: { readonly points: readonly Poin
       const previous = points[(pointIndex - 1 + points.length) % points.length]!;
       const current = points[pointIndex]!;
       const next = points[(pointIndex + 1) % points.length]!;
-      const previousHit = nearestSourcePoint(previous, sourceCurves);
-      const currentHit = nearestSourcePoint(current, sourceCurves);
-      const nextHit = nearestSourcePoint(next, sourceCurves);
+      const previousHit = cachedSourcePoint(previous);
+      const currentHit = cachedSourcePoint(current);
+      const nextHit = cachedSourcePoint(next);
       const followsSourceCurve = previousHit && currentHit && nextHit && previousHit.curve === currentHit.curve && currentHit.curve === nextHit.curve && currentHit.t >= Math.min(previousHit.t, nextHit.t) - 0.03 && currentHit.t <= Math.max(previousHit.t, nextHit.t) + 0.03 && currentHit.distance <= 0.2 && previousHit.distance <= 0.2 && nextHit.distance <= 0.2;
       const distance = followsSourceCurve ? 0 : distanceToSegment(current, previous, next);
       if (distance < error) { error = distance; candidate = pointIndex; }
