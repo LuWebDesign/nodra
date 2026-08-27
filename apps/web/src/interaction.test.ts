@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createDocument, elementId, layerId } from "@nodra/domain";
-import { canActivateRotation, centerPageInCanvas, clientPointToCanvas, hoveredSelectionCenter, INITIAL_ZOOM, isDrawingTool, marqueeSelection, MAX_ZOOM, MIN_ZOOM, movementExceedsThreshold, normalizeBounds, normalizeDrag, pagePointToCanvas, pagePointToScreen, screenDeltaToMm, screenPointToMm, containsBounds, elementsContainedBy, pickDimensionTarget, pickElement, pickFormaNode, pickFormaSegment, pickNode, pointerDownIntent, selectedNodeAnchor, selectionCenter, selectionFrame, snapMoveDelta, visibleEditablePathNodeIndexes, zoomAtPoint } from "./interaction.js";
+import { validateDocument } from "@nodra/validation";
+import { canActivateRotation, centerPageInCanvas, clientPointToCanvas, hoveredSelectionCenter, INITIAL_ZOOM, isDrawingTool, marqueeSelection, MAX_ZOOM, MIN_ZOOM, movementExceedsThreshold, normalizeBounds, normalizeDrag, pagePointToCanvas, pagePointToScreen, screenDeltaToMm, screenPointToMm, containsBounds, elementsContainedBy, pickDimensionTarget, pickElement, pickFormaNode, pickFormaSegment, pickHoverNode, pickNode, pointerDownIntent, selectedNodeAnchor, selectionCenter, selectionFrame, snapMoveDelta, visibleEditablePathNodeIndexes, zoomAtPoint } from "./interaction.js";
 import { geometryPatch, geometryValue } from "./propertyBar.js";
 import { dimensionKindForNodes, dimensionOffsetForPlacement, pointMidpoint } from "@nodra/geometry";
 
@@ -279,5 +280,18 @@ describe("drag geometry", () => {
     const node = pickNode(checked, { x: 10, y: 10 }, 1);
     expect(selectedNodeAnchor(node, [rectangle.id])).toBe(node);
     expect(selectedNodeAnchor(node, [])).toBeUndefined();
+  });
+
+  it("uses the minimal tool-specific node feedback targets", () => {
+    const layer = { id: layerId("hover-feedback"), name: "Hover feedback", visible: true, order: 0 };
+    const document = createDocument("hover-feedback", [layer]);
+    const rectangle = { type: "rectangle" as const, id: elementId("hover-rectangle"), layerId: layer.id, position: { x: 10, y: 10 }, size: { width: 20, height: 10 }, cornerRadius: 0, rotation: 0, style: { stroke: "#000", strokeWidth: 1 } };
+    const checked = validateDocument({ ...document, elements: [rectangle] });
+    expect(checked.success).toBe(true);
+    if (!checked.success) return;
+    expect(pickHoverNode(checked.data, { x: 10, y: 10 }, 1, "select")).toMatchObject({ elementId: rectangle.id, nodeIndex: 0 });
+    expect(pickHoverNode(checked.data, { x: 10, y: 10 }, 1, "forma")).toMatchObject({ elementId: rectangle.id, nodeIndex: 0 });
+    expect(pickHoverNode(checked.data, { x: 10, y: 10 }, 1, "dimension")).toMatchObject({ elementId: rectangle.id, nodeIndex: 0 });
+    expect(pickHoverNode(checked.data, { x: 100, y: 100 }, 1, "select")).toBeUndefined();
   });
 });

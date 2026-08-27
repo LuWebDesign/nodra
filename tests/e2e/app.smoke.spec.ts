@@ -312,6 +312,25 @@ test("creates, transforms, and undoes a rectangle", async ({ page }) => {
   await expect(width).toHaveValue(String(originalWidth));
 });
 
+test("shows node hover feedback while keeping the system cursor as an arrow", async ({ page }) => {
+  await page.goto("/");
+  await drawRectangle(page);
+  await page.getByRole("button", { name: "Seleccion" }).click();
+  const rectangle = page.locator(".page-svg svg rect").first();
+  const bounds = await rectangle.boundingBox();
+  expect(bounds).not.toBeNull();
+  await page.mouse.move(bounds!.x, bounds!.y);
+  const feedback = page.locator("[data-node-hover-feedback]");
+  await expect(feedback).toBeVisible();
+  const feedbackBounds = await feedback.boundingBox();
+  expect(feedbackBounds).not.toBeNull();
+  expect(feedbackBounds!.x + feedbackBounds!.width / 2).toBeCloseTo(bounds!.x, 0);
+  expect(feedbackBounds!.y + feedbackBounds!.height / 2).toBeCloseTo(bounds!.y, 0);
+  await expect(page.locator(".canvas")).toHaveCSS("cursor", "default");
+  await page.mouse.move(bounds!.x + bounds!.width + 80, bounds!.y + bounds!.height + 80);
+  await expect(feedback).toHaveCount(0);
+});
+
 test("moves text with Selection and edits it inline on double-click", async ({ page }) => {
   await page.goto("/");
   const pageBounds = await page.locator(".page").boundingBox();

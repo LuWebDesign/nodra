@@ -219,6 +219,15 @@ export function pickNode(document: DocumentSnapshot, point: PointMm, zoom: numbe
   return best?.hit;
 }
 
+export type NodeFeedbackTool = "select" | "forma" | "dimension";
+export type HoverNode = NodeHit | FormaNodeHit;
+
+/** Finds the node feedback target supported by a tool without changing its hit semantics. */
+export function pickHoverNode(document: DocumentSnapshot, point: PointMm, zoom: number, tool: NodeFeedbackTool, tolerancePx = 8): HoverNode | undefined {
+  if (tool === "forma") return pickFormaNode(document, point, zoom, tolerancePx);
+  return pickNode(document, point, zoom, tolerancePx);
+}
+
 /** Picks endpoints first, then the body of a visible native line. */
 export function pickDimensionTarget(document: DocumentSnapshot, point: PointMm, zoom: number, tolerancePx = 8): DimensionTarget | undefined {
   const node = pickNode(document, point, zoom, tolerancePx);
