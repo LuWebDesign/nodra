@@ -43,6 +43,7 @@ Use the smallest matching project skill before changing a subsystem; read its lo
 
 - Architecture and boundaries: `skills/nodra-architecture/SKILL.md`
 - Editor commands, gestures, tools, and history: `skills/nodra-editor-workflow/SKILL.md`
+- Exact editor tool runtime contract and interaction matrix: `skills/nodra-editor-tools-contract/SKILL.md` (trigger: Nodra editor tool contract, tool gesture, connection, or any of select, forma, pen, spline, text, rectangle, ellipse, line, dimension, pan)
 - Domain and geometry: `skills/nodra-domain-geometry/SKILL.md`
 - Persistence and autosave: `skills/nodra-persistence/SKILL.md`
 - SVG rendering and performance: `skills/nodra-rendering-performance/SKILL.md`
