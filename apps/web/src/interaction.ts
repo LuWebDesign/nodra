@@ -1,4 +1,4 @@
-import type { DocumentSnapshot, Element, ElementId, LineElement, PathElement, PointMm } from "@nodra/domain";
+import type { DocumentSnapshot, Element, ElementId, LineElement, PathElement, PathSegment, PointMm } from "@nodra/domain";
 import { boundsOf, boundsOfElements, contourSegmentAt, contourVertexNodes, dimensionGeometry, elementCenter, elementSegmentAt, hitTest, pathGeometryNodes, pathSegmentAt, realGeometryNodes, type Bounds, type ContourSegmentHit, type ContourVertexNode, type PathGeometryNode, type RealGeometryNode, type PathSegmentHit } from "@nodra/geometry";
 
 export interface DragGeometry { readonly position: PointMm; readonly size: { readonly width: number; readonly height: number } }
@@ -32,6 +32,15 @@ export type ContourNodeHit = ContourVertexNode;
 export type ContourSegmentHitResult = ContourSegmentHit;
 export type PathSegmentHitResult = PathSegmentHit;
 export type FormaNodeHit = { readonly elementId: ElementId; readonly nodeIndex?: number; readonly contourNode?: ContourNodeHit; readonly point: PointMm };
+
+export function visibleEditablePathNodeIndexes(nodes: readonly PathGeometryNode[], segments: readonly Pick<PathSegment, "startNodeId" | "endNodeId">[], selectedNodeIndexes: readonly number[]): readonly number[] {
+  const selectedAnchors = new Set(selectedNodeIndexes.flatMap((index) => nodes[index]?.kind === "anchor" ? [nodes[index]!.nodeId] : []));
+  return nodes.flatMap((node, index) => {
+    if (node.kind === "anchor" || selectedAnchors.has(node.nodeId)) return [index];
+    const segment = node.segmentIndex === undefined ? undefined : segments[node.segmentIndex];
+    return segment && (selectedAnchors.has(segment.startNodeId) || selectedAnchors.has(segment.endNodeId)) ? [index] : [];
+  });
+}
 
 export function selectedPathAnchorIds(path: PathElement, keys: readonly string[]): string[] {
   return [...new Set(keys.flatMap((key) => {

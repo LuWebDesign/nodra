@@ -1,8 +1,28 @@
 import { describe, expect, it } from "vitest";
 import { createDocument, elementId, layerId } from "@nodra/domain";
-import { canActivateRotation, centerPageInCanvas, clientPointToCanvas, hoveredSelectionCenter, INITIAL_ZOOM, isDrawingTool, marqueeSelection, MAX_ZOOM, MIN_ZOOM, movementExceedsThreshold, normalizeBounds, normalizeDrag, pagePointToCanvas, pagePointToScreen, screenDeltaToMm, screenPointToMm, containsBounds, elementsContainedBy, pickDimensionTarget, pickElement, pickFormaNode, pickFormaSegment, pickNode, pointerDownIntent, selectedNodeAnchor, selectionCenter, selectionFrame, snapMoveDelta, zoomAtPoint } from "./interaction.js";
+import { canActivateRotation, centerPageInCanvas, clientPointToCanvas, hoveredSelectionCenter, INITIAL_ZOOM, isDrawingTool, marqueeSelection, MAX_ZOOM, MIN_ZOOM, movementExceedsThreshold, normalizeBounds, normalizeDrag, pagePointToCanvas, pagePointToScreen, screenDeltaToMm, screenPointToMm, containsBounds, elementsContainedBy, pickDimensionTarget, pickElement, pickFormaNode, pickFormaSegment, pickNode, pointerDownIntent, selectedNodeAnchor, selectionCenter, selectionFrame, snapMoveDelta, visibleEditablePathNodeIndexes, zoomAtPoint } from "./interaction.js";
 import { geometryPatch, geometryValue } from "./propertyBar.js";
 import { dimensionKindForNodes, dimensionOffsetForPlacement, pointMidpoint } from "@nodra/geometry";
+
+describe("editable path handles", () => {
+  const nodes = [
+    { kind: "anchor" as const, nodeId: "a", point: { x: 0, y: 0 } },
+    { kind: "anchor" as const, nodeId: "b", point: { x: 10, y: 0 } },
+    { kind: "anchor" as const, nodeId: "c", point: { x: 20, y: 0 } },
+    { kind: "control" as const, nodeId: "a", segmentIndex: 0, handle: "control1" as const, point: { x: 3, y: -3 } },
+    { kind: "control" as const, nodeId: "b", segmentIndex: 0, handle: "control2" as const, point: { x: 7, y: -3 } },
+    { kind: "control" as const, nodeId: "b", segmentIndex: 1, handle: "control1" as const, point: { x: 13, y: 3 } },
+    { kind: "control" as const, nodeId: "c", segmentIndex: 1, handle: "control2" as const, point: { x: 17, y: 3 } },
+  ];
+  const segments = [
+    { type: "cubicBezier" as const, startNodeId: "a", endNodeId: "b", control1: nodes[3]!.point, control2: nodes[4]!.point },
+    { type: "cubicBezier" as const, startNodeId: "b", endNodeId: "c", control1: nodes[5]!.point, control2: nodes[6]!.point },
+  ];
+  it("shows anchors before selection and neighbouring handles after selecting an anchor", () => {
+    expect(visibleEditablePathNodeIndexes(nodes, segments, [])).toEqual([0, 1, 2]);
+    expect(visibleEditablePathNodeIndexes(nodes, segments, [1])).toEqual([0, 1, 2, 3, 4, 5, 6]);
+  });
+});
 
 describe("canvas coordinates", () => {
   it("keeps node picking separate from element picking for dimension placement", () => {
