@@ -295,6 +295,11 @@ export function pickFormaSegment(document: DocumentSnapshot, point: PointMm, zoo
   let best: ContourSegmentHitResult | undefined;
   for (const element of document.elements) if (visible.has(element.layerId)) {
     if (element.type === "text") continue;
+    // Forma segment insertion converts the element to a closed contour. Open
+    // paths and splines remain editable through their native node controls,
+    // but must not enter the closed-shape conversion path during render-time
+    // cursor feedback or double-click handling.
+    if ((element.type === "path" || element.type === "spline") && !element.closed) continue;
     const hit = elementSegmentAt(element, point, tolerancePx / zoom);
     if (hit && (!best || hit.distance < best.distance || hit.distance === best.distance && `${hit.elementId}:${hit.ringIndex}:${hit.segmentIndex}` < `${best.elementId}:${best.ringIndex}:${best.segmentIndex}`)) best = hit;
   }

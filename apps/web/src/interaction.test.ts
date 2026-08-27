@@ -89,6 +89,35 @@ describe("Forma hit testing", () => {
     expect(pickFormaSegment(checked, { x: 60, y: 10 }, 1)).toMatchObject({ elementId: rectangle.id });
     expect(pickFormaNode(checked, { x: 20, y: 10 }, 1)).toBeUndefined();
   });
+
+  it("does not route open paths or splines through closed-shape Forma insertion", () => {
+    const layer = { id: layerId("forma-open"), name: "Forma", visible: true, order: 0 };
+    const openPath = {
+      type: "path" as const,
+      id: elementId("forma-open-path"),
+      layerId: layer.id,
+      nodes: [{ id: "a", anchor: { x: 10, y: 30 }, join: "corner" as const }, { id: "b", anchor: { x: 30, y: 30 }, join: "corner" as const }],
+      segments: [{ type: "line" as const, startNodeId: "a", endNodeId: "b" }],
+      closed: false,
+      style: { stroke: "#000", strokeWidth: 1 },
+    };
+    const openSpline = {
+      type: "spline" as const,
+      id: elementId("forma-open-spline"),
+      layerId: layer.id,
+      nodes: [{ id: "a", anchor: { x: 10, y: 50 }, continuity: "smooth" as const }, { id: "b", anchor: { x: 30, y: 50 }, continuity: "smooth" as const }],
+      closed: false,
+      style: { stroke: "#000", strokeWidth: 1 },
+    };
+    const checked = { ...createDocument("forma-open-document", [layer]), elements: [openPath, openSpline] };
+
+    expect(() => pickFormaSegment(checked, { x: 20, y: 30 }, 1)).not.toThrow();
+    expect(() => pickFormaSegment(checked, { x: 20, y: 50 }, 1)).not.toThrow();
+    expect(pickFormaSegment(checked, { x: 20, y: 30 }, 1)).toBeUndefined();
+    expect(pickFormaSegment(checked, { x: 20, y: 50 }, 1)).toBeUndefined();
+    expect(pickFormaNode(checked, { x: 10, y: 30 }, 1)).toMatchObject({ elementId: openPath.id });
+    expect(pickFormaNode(checked, { x: 10, y: 50 }, 1)).toMatchObject({ elementId: openSpline.id });
+  });
 });
 
 describe("screenDeltaToMm", () => {
