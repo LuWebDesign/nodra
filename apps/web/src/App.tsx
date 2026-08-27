@@ -1,12 +1,12 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent, type PointerEvent, type ReactNode, type WheelEvent } from "react";
-import { createProject, elementId, layerId, pageId, projectFromDocument, revision, type DocumentSnapshot, type DimensionElement, type Element, type ElementId, type PointMm, type ProjectSnapshot, type SplineElement, type TextElement } from "@nodra/domain";
-import { addToSelection, appendLinePoint, appendSplineNode, beginGesture, cancelGesture, clearSelection, closePath, closeSplineElement, commitGesture, convertTextToGlyphs, createElement, createPathCubicNode, createPathNode, deleteContourNodes, deleteElement, deleteElementNodes, deletePathNodes, dispatch, duplicateElements, flipElements, insertFormaNode, invalidDimensionIdsForShapeOperation, moveElements, movePathHandle, movePathNode, openPath, updateSplineNode, previewGesture, previewGestureFromBase, redo, resizeElement, resizeElements, rotateElement, rotateElementsAroundCenter, select, selectForPointerDown, setPathJoin, shapeOperation, splitPathSegment, undo, updateContourNode, updateElement, updateElementNode, updateElementStyles, updatePage, updateSplineHandle, type FlipAxis, type ShapeOperation } from "@nodra/editor-core";
-import { boundsOfElements, contourVertexNodes, dimensionKindForPlacement, dimensionOffsetForAlignedPlacement, dimensionOffsetForPlacement, elementCenter, editableGeometryNodes, glyphGeometryNodes, groupCenter, groupHandlePoints, pathGeometryNodes, pointMidpoint, realGeometryNodes, resizeHandle, rotatedResizeHandles, rotationFromDrag, rotationHandlePoints, visibleBezierHandleGuides, type Direction, type GroupHandle, type ResizeHandle } from "@nodra/geometry";
+import { createProject, elementId, layerId, pageId, projectFromDocument, revision, type DocumentSnapshot, type DimensionElement, type Element, type ElementId, type PointMm, type ProjectSnapshot, type SplineElement, type TextElement, type ExplicitConnection } from "@nodra/domain";
+import { addToSelection, appendLinePoint, appendSplineNode, beginGesture, cancelGesture, clearSelection, closePath, closeSplineElement, commitGesture, convertTextToGlyphs, createElement, createPathCubicNode, createPathNode, deleteContourNodes, deleteElement, deleteElementNodes, deletePathNodes, dispatch, duplicateElements, flipElements, insertFormaNode, invalidDimensionIdsForShapeOperation, moveElements, movePathHandle, movePathNode, openPath, updateSplineNode, previewGesture, previewGestureFromBase, redo, resizeElement, resizeElementToDimensions, resizeElements, resizeElementsToDimensions, rotateElement, rotateElementsAroundCenter, select, selectForPointerDown, setPathJoin, shapeOperation, splitPathSegment, undo, updateContourNode, updateElement, updateElementNode, updateElementStyles, updatePage, updateSplineHandle, type FlipAxis, type ShapeOperation } from "@nodra/editor-core";
+import { boundsOfElements, connectableNodeAddress, contourVertexNodes, dimensionKindForPlacement, dimensionOffsetForAlignedPlacement, dimensionOffsetForPlacement, elementCenter, editableGeometryNodes, glyphGeometryNodes, groupCenter, groupHandlePoints, pathGeometryNodes, pointMidpoint, realGeometryNodes, resizeHandle, rotatedResizeHandles, rotationFromDrag, rotationHandlePoints, visibleBezierHandleGuides, type Direction, type GroupHandle, type ResizeHandle } from "@nodra/geometry";
 import { DebouncedAutosave, DexieProjectRepository, requestStoragePersistence, type FontRecord } from "@nodra/persistence";
 import { validateDesign, validateProject } from "@nodra/validation";
 import { renderSvg } from "@nodra/renderer-svg";
-import { canActivateRotation, centerPageInCanvas, clientPointToCanvas, clientPointToPage, cubicPlacementControls, formaNodeKey, hoveredSelectionCenter, isDrawingTool, marqueeSelection, movementExceedsThreshold, normalizeBounds, normalizeDrag, pagePointToCanvas, pathGuides, pickDimensionTarget, pickElement, pickFormaElement, pickFormaNode, pickFormaSegment, pickHoverNode, pickNode, pickPathNode, pickPathSegment, pointerDownIntent, visibleEditablePathNodeIndexes, screenDeltaToMm, screenPointToMm, selectedNodeAnchor, selectedPathAnchorIds, alignmentGuides, snapCreationPoint, snapMoveDelta, viewportPointToCanvas, zoomAtPoint, type AlignmentGuide, type ContourNodeHit, type DimensionTarget, type FormaNodeHit, type HoverNode, type NodeHit, type PathNodeHit, type SnapGuide, type TransformMode } from "./interaction.js";
-import { aspectGeometryPatch, aspectSize, formatMm, geometryValue, rotationDegreesValue, rotationPatch, type GeometryField, type PropertyElement, type RotatableElement } from "./propertyBar.js";
+import { canActivateRotation, centerPageInCanvas, clientPointToCanvas, clientPointToPage, cubicPlacementControls, formaNodeKey, hoveredSelectionCenter, isDrawingTool, marqueeSelection, movementExceedsThreshold, normalizeBounds, normalizeDrag, pagePointToCanvas, pathGuides, pickDimensionTarget, pickElement, pickFormaElement, pickFormaNode, pickFormaSegment, pickHoverNode, pickNode, pickPathNode, pickPathSegment, pointerDownIntent, visibleEditablePathNodeIndexes, screenDeltaToMm, screenPointToMm, selectedNodeAnchor, selectedPathAnchorIds, alignmentGuides, snapCreationPoint, snapMoveDelta, viewportPointToCanvas, zoomAtPoint, type AlignmentGuide, type ContourNodeHit, type DimensionTarget, type FormaNodeHit, type HoverNode, type NodeHit, type PathNodeHit, type SnapGuide, type TransformMode, type CreationSnap } from "./interaction.js";
+import { aspectSize, formatMm, geometryValue, rotationDegreesValue, rotationPatch, type GeometryField, type PropertyElement, type RotatableElement } from "./propertyBar.js";
 import { useDocumentStore, usePersistenceStore, useUiStore, useViewportStore, type Tool } from "./stores.js";
 import { pathJoinGuidance, pathJoinOptions } from "./pathJoins.js";
 import { textSizeFor } from "./textMetrics.js";
@@ -44,6 +44,15 @@ const newElement = (tool: Exclude<Tool, "select" | "dimension" | "pan" | "forma"
   : tool === "rectangle"
     ? { type: "rectangle", id: nextId, layerId: layerId(layer), ...normalizeDrag(start, end), cornerRadius: 0, rotation: 0, style: defaultStyle }
      : (() => { const geometry = circleGeometry(start, end); return { type: "ellipse" as const, id: nextId, layerId: layerId(layer), position: geometry?.position ?? start, size: geometry?.size ?? { width: 0, height: 0 }, rotation: 0, style: defaultStyle }; })();
+const creationConnections = (element: Element, snaps: readonly (CreationSnap | undefined)[]): readonly ExplicitConnection[] => snaps.flatMap((snap) => {
+  if (!snap?.node) return [];
+  const sourceNodes = realGeometryNodes(element);
+  let sourceIndex = 0; let sourceDistance = Number.POSITIVE_INFINITY;
+  sourceNodes.forEach((node, index) => { const distance = Math.hypot(node.point.x - snap.point.x, node.point.y - snap.point.y); if (distance < sourceDistance) { sourceDistance = distance; sourceIndex = index; } });
+  const sourceAddress = connectableNodeAddress(element, sourceIndex);
+  if (!sourceAddress || !snap.address || snap.node.elementId === element.id) return [];
+  return [{ id: `connection-${crypto.randomUUID()}`, first: { elementId: element.id, node: sourceAddress }, second: { elementId: snap.node.elementId, node: snap.address } }];
+});
 const splinePathData = (spline: SplineElement): string => {
   const first = spline.nodes[0];
   if (!first) return "";
@@ -90,7 +99,7 @@ type ActiveInteraction = {
   splineNodeId?: string;
   splineHandle?: "in" | "out";
 };
-type CreationDraft = { readonly tool: "rectangle" | "ellipse" | "line"; readonly points: readonly PointMm[]; readonly pointer: PointMm; readonly elementId?: ElementId };
+type CreationDraft = { readonly tool: "rectangle" | "ellipse" | "line"; readonly points: readonly PointMm[]; readonly pointer: PointMm; readonly snaps?: readonly (CreationSnap | undefined)[]; readonly elementId?: ElementId };
 
 type FormaNodeOverlay =
   | { readonly kind: "contour"; readonly key: string; readonly elementId: ElementId; readonly point: PointMm; readonly contour: ContourNodeHit }
@@ -681,19 +690,20 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
     }
       const point = pointAt(event);
        const rawCreationPoint = isDrawingTool(tool) ? point : undefined;
-       const creationPointForClick = rawCreationPoint ? snapCreationPoint(editorRef.current.document, rawCreationPoint, zoom)?.point ?? rawCreationPoint : undefined;
+        const creationSnap = rawCreationPoint ? snapCreationPoint(editorRef.current.document, rawCreationPoint, zoom) : undefined;
+        const creationPointForClick = creationSnap?.point ?? rawCreationPoint;
        const inferredPoint = snapCreationPoint(editorRef.current.document, point, zoom)?.point ?? point;
       if (tool === "rectangle" || tool === "ellipse") {
         const creationPoint = creationPointForClick ?? point;
         const draft = creationDraftRef.current;
         if (!draft) {
-          const nextDraft = { tool, points: [creationPoint], pointer: creationPoint } as const;
+          const nextDraft = { tool, points: [creationPoint], pointer: creationPoint, snaps: [creationSnap] } as const;
          creationDraftRef.current = nextDraft;
          setCreationDraft(nextDraft);
        } else {
           const element = newElement(tool, editorRef.current.document.layers[0]?.id ?? "layer-1", draft.points[0]!, creationPoint, id());
           if (tool === "rectangle" || circleGeometry(draft.points[0]!, creationPoint)) {
-           const next = dispatch(editorRef.current, createElement(element));
+            const next = dispatch(editorRef.current, createElement(element, creationConnections(element, [...(draft.snaps ?? []), creationSnap])));
            if (next !== editorRef.current) setEditorState(select(next, [element.id]));
          }
          creationDraftRef.current = undefined;
@@ -705,12 +715,12 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
         const creationPoint = creationPointForClick ?? point;
         const draft = creationDraftRef.current;
         if (!draft) {
-          const nextDraft = { tool, points: [creationPoint], pointer: creationPoint } as const;
+          const nextDraft = { tool, points: [creationPoint], pointer: creationPoint, snaps: [creationSnap] } as const;
          creationDraftRef.current = nextDraft;
          setCreationDraft(nextDraft);
        } else if (draft.points.length === 1) {
           const line = newElement("line", editorRef.current.document.layers[0]?.id ?? "layer-1", draft.points[0]!, creationPoint, id());
-         const next = dispatch(editorRef.current, createElement(line));
+          const next = dispatch(editorRef.current, createElement(line, creationConnections(line, [...(draft.snaps ?? []), creationSnap])));
           const nextDraft = { tool, points: [...draft.points, creationPoint], pointer: creationPoint, elementId: line.id } as const;
          creationDraftRef.current = nextDraft;
          setCreationDraft(nextDraft);
@@ -1321,15 +1331,28 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
       setDrafts((current) => ({ ...current, [key]: formatMm(geometryValue(element, field)) }));
       return;
     }
-    setDrafts((current) => { const next = { ...current }; delete next[key]; return next; });
+    const clearDimensionDrafts = () => setDrafts((current) => {
+      const next = { ...current };
+      const prefix = selectedElements.length > 1 ? "group" : element.id;
+      delete next[`${prefix}:width`];
+      delete next[`${prefix}:height`];
+      return next;
+    });
     if (selectedElements.length > 1 && selectedBounds) {
       const current = field === "x" ? selectedBounds.x : field === "y" ? selectedBounds.y : field === "width" ? selectedBounds.width : selectedBounds.height;
       if (field === "x" || field === "y") setEditorState(dispatch(editorRef.current, moveElements(selection, { x: field === "x" ? value - current : 0, y: field === "y" ? value - current : 0 })));
        else {
          const size = aspectLock ? aspectSize(selectedBounds.width, selectedBounds.height, field, value) : { width: field === "width" ? value : selectedBounds.width, height: field === "height" ? value : selectedBounds.height };
-         setEditorState(dispatch(editorRef.current, resizeElements(selection, "se", { x: selectedBounds.x + size.width, y: selectedBounds.y + size.height }, aspectLock)));
+          setEditorState(dispatch(editorRef.current, resizeElementsToDimensions(selection, size, false)));
        }
-     } else setEditorState(dispatch(editorRef.current, updateElement(element.id, aspectGeometryPatch(element, field, value, aspectLock))));
+       } else {
+         const next = field === "width" || field === "height"
+           ? dispatch(editorRef.current, resizeElementToDimensions(element.id, field, value, aspectLock))
+           : dispatch(editorRef.current, updateElement(element.id, { position: { ...element.position, [field]: value } }));
+         if (next === editorRef.current && (field === "width" || field === "height")) persist.set("failed", "No se puede redimensionar sin romper una conexión existente.");
+         setEditorState(next);
+       }
+      clearDimensionDrafts();
   };
 
   const cornerRadiusField = (element: Extract<Element, { type: "rectangle" }>) => {
