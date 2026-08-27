@@ -9,6 +9,7 @@ import {
   type VisualStyle,
   type OperationMetadata,
   type PathElement,
+  type PathSegment,
   type PathJoin,
   type GlyphElement,
   type SplineElement,
@@ -482,6 +483,34 @@ export const updateElementNode = (id: ElementId, nodeIndex: number, point: Point
   },
 });
 
+const deleteGlyphAnchorNodes = (glyph: GlyphElement, nodeIndexes: readonly number[]): GlyphElement | undefined => {
+  const geometryNodes = glyphGeometryNodes(glyph);
+  const nodeIds = new Set(nodeIndexes.flatMap((index) => geometryNodes[index]?.kind === "anchor" ? [geometryNodes[index]!.nodeId] : []));
+  if (!nodeIds.size) return undefined;
+  const contours = glyph.contours.map((contour) => {
+    const kept = contour.nodes.filter((node) => !nodeIds.has(node.id));
+    if (kept.length < 3) return undefined;
+    const originalSegment = (startIndex: number, endIndex: number): PathSegment[] => {
+      const segments: PathSegment[] = [];
+      let index = startIndex;
+      do {
+        const segment = contour.segments[index];
+        if (segment) segments.push(segment);
+        index = (index + 1) % contour.nodes.length;
+      } while (index !== endIndex);
+      return segments;
+    };
+    const segments = kept.map((node, index) => {
+      const end = kept[(index + 1) % kept.length]!;
+      const startIndex = contour.nodes.findIndex((candidate) => candidate.id === node.id);
+      const endIndex = contour.nodes.findIndex((candidate) => candidate.id === end.id);
+      return rebuildPathSegment(node, end, originalSegment(startIndex, endIndex));
+    });
+    return { ...contour, nodes: kept, segments };
+  });
+  return contours.every((contour): contour is NonNullable<typeof contour> => contour !== undefined) ? { ...glyph, contours } : undefined;
+};
+
 export const deleteElementNodes = (id: ElementId, nodeIndexes: readonly number[]): EditorCommand => ({
   name: `forma-node-delete:${id}:${[...nodeIndexes].join(",")}`,
   apply: (document) => {
@@ -489,6 +518,10 @@ export const deleteElementNodes = (id: ElementId, nodeIndexes: readonly number[]
     if (!current) return { success: false, error: `Element not found: ${id}` };
     const indexes = [...new Set(nodeIndexes)].sort((a, b) => b - a);
     if (!indexes.length) return { success: false, error: "No Forma nodes selected" };
+    if (current.type === "glyph") {
+      const glyph = deleteGlyphAnchorNodes(current, indexes);
+      return glyph ? replaceElements(document, document.elements.map((element) => element.id === id ? glyph : element)) : { success: false, error: "No se puede eliminar: el glifo debe conservar al menos tres anclas por contorno" };
+    }
     if (current.type !== "contour" && indexes.some((index) => realGeometryNodes(current)[index]?.kind === "center")) return { success: false, error: "El centro no es un nodo de contorno eliminable" };
     const contour = current.type === "contour" ? current : elementToContour(current);
     const remove = new Set(indexes);
