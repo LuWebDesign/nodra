@@ -168,28 +168,111 @@ export const invalidDimensionIdsForShapeOperation = (document: DocumentSnapshot,
     .map((dimension) => dimension.id);
 };
 
-const contourToEditableGlyphContour = (contour: { readonly points: readonly PointMm[] }, index: number): GlyphElement["contours"][number] => {
+interface SourceCubic {
+  readonly p0: PointMm;
+  readonly p1: PointMm;
+  readonly p2: PointMm;
+  readonly p3: PointMm;
+}
+const normalizeVector = (vector: PointMm): PointMm | undefined => {
+  const length = Math.hypot(vector.x, vector.y);
+  return length > 1e-9 ? { x: vector.x / length, y: vector.y / length } : undefined;
+};
+const cubicAt = (curve: SourceCubic, t: number): PointMm => {
+  const mt = 1 - t;
+  return { x: mt ** 3 * curve.p0.x + 3 * mt ** 2 * t * curve.p1.x + 3 * mt * t ** 2 * curve.p2.x + t ** 3 * curve.p3.x, y: mt ** 3 * curve.p0.y + 3 * mt ** 2 * t * curve.p1.y + 3 * mt * t ** 2 * curve.p2.y + t ** 3 * curve.p3.y };
+};
+const cubicTangentAt = (curve: SourceCubic, t: number): PointMm => {
+  const mt = 1 - t;
+  return { x: 3 * mt ** 2 * (curve.p1.x - curve.p0.x) + 6 * mt * t * (curve.p2.x - curve.p1.x) + 3 * t ** 2 * (curve.p3.x - curve.p2.x), y: 3 * mt ** 2 * (curve.p1.y - curve.p0.y) + 6 * mt * t * (curve.p2.y - curve.p1.y) + 3 * t ** 2 * (curve.p3.y - curve.p2.y) };
+};
+const sourceCubics = (elements: readonly Element[]): SourceCubic[] => elements.flatMap((element) => {
+  const contours = element.type === "glyph" ? element.contours : element.type === "path" ? [{ nodes: element.nodes, segments: element.segments }] : [];
+  return contours.flatMap((contour) => contour.segments.flatMap((segment) => {
+    if (segment.type !== "cubicBezier") return [];
+    const start = contour.nodes.find((node) => node.id === segment.startNodeId)?.anchor;
+    const end = contour.nodes.find((node) => node.id === segment.endNodeId)?.anchor;
+    return start && end ? [{ p0: start, p1: segment.control1, p2: segment.control2, p3: end }] : [];
+  }));
+});
+interface SourceHit { readonly curve: SourceCubic; readonly t: number; readonly distance: number }
+const nearestSourcePoint = (point: PointMm, curves: readonly SourceCubic[]): SourceHit | undefined => {
+  let best: SourceHit | undefined;
+  for (const curve of curves) for (let step = 0; step <= 32; step += 1) {
+    const t = step / 32; const candidate = cubicAt(curve, t); const distance = Math.hypot(candidate.x - point.x, candidate.y - point.y);
+    if (!best || distance < best.distance) best = { curve, t, distance };
+  }
+  return best;
+};
+const sourceCurveAt = (start: PointMm, end: PointMm, curves: readonly SourceCubic[], tolerance: number): { readonly curve: SourceCubic; readonly start: SourceHit; readonly end: SourceHit } | undefined => {
+  const startHit = nearestSourcePoint(start, curves); const endHit = nearestSourcePoint(end, curves);
+  if (startHit && endHit && startHit.curve === endHit.curve && startHit.distance <= tolerance && endHit.distance <= tolerance && Math.abs(startHit.t - endHit.t) > 0.01) return { curve: startHit.curve, start: startHit, end: endHit };
+  const midpoint = { x: (start.x + end.x) / 2, y: (start.y + end.y) / 2 }; const midpointHit = nearestSourcePoint(midpoint, curves);
+  return midpointHit && midpointHit.distance <= tolerance ? { curve: midpointHit.curve, start: midpointHit, end: midpointHit } : undefined;
+};
+const splitSourceCubic = (curve: SourceCubic, t: number): readonly [SourceCubic, SourceCubic] => {
+  const lerp = (a: PointMm, b: PointMm): PointMm => ({ x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t });
+  const a = lerp(curve.p0, curve.p1); const b = lerp(curve.p1, curve.p2); const c = lerp(curve.p2, curve.p3); const d = lerp(a, b); const e = lerp(b, c); const middle = lerp(d, e);
+  return [{ p0: curve.p0, p1: a, p2: d, p3: middle }, { p0: middle, p1: e, p2: c, p3: curve.p3 }];
+};
+const sourceSubcurve = (curve: SourceCubic, from: number, to: number): SourceCubic => {
+  if (from <= to) {
+    const left = splitSourceCubic(curve, to)[0];
+    return splitSourceCubic(left!, from / Math.max(to, 1e-9))[1]!;
+  }
+  const reversed = sourceSubcurve(curve, to, from);
+  return { p0: reversed.p3, p1: reversed.p2, p2: reversed.p1, p3: reversed.p0 };
+};
+
+const contourToEditableGlyphContour = (contour: { readonly points: readonly PointMm[] }, index: number, sourceCurves: readonly SourceCubic[] = []): GlyphElement["contours"][number] => {
   const source = contour.points.length > 1 && contour.points.at(-1)?.x === contour.points[0]?.x && contour.points.at(-1)?.y === contour.points[0]?.y ? contour.points.slice(0, -1) : contour.points;
   const extent = source.reduce((bounds, point) => ({ minX: Math.min(bounds.minX, point.x), maxX: Math.max(bounds.maxX, point.x), minY: Math.min(bounds.minY, point.y), maxY: Math.max(bounds.maxY, point.y) }), { minX: Number.POSITIVE_INFINITY, maxX: Number.NEGATIVE_INFINITY, minY: Number.POSITIVE_INFINITY, maxY: Number.NEGATIVE_INFINITY });
-  const tolerance = Math.max(0.01, Math.max(extent.maxX - extent.minX, extent.maxY - extent.minY) * 0.012);
+  const extentSize = Math.max(extent.maxX - extent.minX, extent.maxY - extent.minY);
+  const tolerance = Math.max(0.005, Math.min(0.05, extentSize * 0.0005));
   const distanceToSegment = (point: PointMm, start: PointMm, end: PointMm): number => {
     const dx = end.x - start.x; const dy = end.y - start.y; const lengthSquared = dx * dx + dy * dy;
     if (lengthSquared === 0) return Math.hypot(point.x - start.x, point.y - start.y);
     const t = Math.max(0, Math.min(1, ((point.x - start.x) * dx + (point.y - start.y) * dy) / lengthSquared));
     return Math.hypot(point.x - (start.x + t * dx), point.y - (start.y + t * dy));
   };
+  const sourceHitCache = new Map<string, SourceHit | undefined>();
+  const cachedSourcePoint = (point: PointMm): SourceHit | undefined => {
+    const key = `${point.x}:${point.y}`;
+    if (!sourceHitCache.has(key)) sourceHitCache.set(key, nearestSourcePoint(point, sourceCurves));
+    return sourceHitCache.get(key);
+  };
   const points = [...source];
+  const hits: Array<SourceHit | undefined> = points.map(cachedSourcePoint);
+  let collapsed = true;
+  while (collapsed && points.length > 3) {
+    collapsed = false;
+    for (let pointIndex = 0; pointIndex < points.length; pointIndex += 1) {
+      const previousIndex = (pointIndex - 1 + points.length) % points.length;
+      const nextIndex = (pointIndex + 1) % points.length;
+      const previousHit = hits[previousIndex]; const currentHit = hits[pointIndex]; const nextHit = hits[nextIndex];
+      const followsSourceCurve = previousHit && currentHit && nextHit && previousHit.curve === currentHit.curve && currentHit.curve === nextHit.curve && currentHit.t >= Math.min(previousHit.t, nextHit.t) - 0.03 && currentHit.t <= Math.max(previousHit.t, nextHit.t) + 0.03 && currentHit.distance <= 0.2 && previousHit.distance <= 0.2 && nextHit.distance <= 0.2;
+      if (!followsSourceCurve) continue;
+      points.splice(pointIndex, 1); hits.splice(pointIndex, 1); collapsed = true; break;
+    }
+  }
   while (points.length > 3) {
     let candidate = -1; let error = Number.POSITIVE_INFINITY;
     for (let pointIndex = 0; pointIndex < points.length; pointIndex += 1) {
-      const previous = points[(pointIndex - 1 + points.length) % points.length]!;
+      const previousIndex = (pointIndex - 1 + points.length) % points.length;
+      const nextIndex = (pointIndex + 1) % points.length;
+      const previous = points[previousIndex]!;
       const current = points[pointIndex]!;
-      const next = points[(pointIndex + 1) % points.length]!;
-      const distance = distanceToSegment(current, previous, next);
+      const next = points[nextIndex]!;
+      const previousHit = hits[previousIndex];
+      const currentHit = hits[pointIndex];
+      const nextHit = hits[nextIndex];
+      const followsSourceCurve = previousHit && currentHit && nextHit && previousHit.curve === currentHit.curve && currentHit.curve === nextHit.curve && currentHit.t >= Math.min(previousHit.t, nextHit.t) - 0.03 && currentHit.t <= Math.max(previousHit.t, nextHit.t) + 0.03 && currentHit.distance <= 0.2 && previousHit.distance <= 0.2 && nextHit.distance <= 0.2;
+      const distance = followsSourceCurve ? 0 : distanceToSegment(current, previous, next);
       if (distance < error) { error = distance; candidate = pointIndex; }
     }
     if (candidate < 0 || error > tolerance) break;
     points.splice(candidate, 1);
+    hits.splice(candidate, 1);
   }
   const isCorner = (pointIndex: number): boolean => {
     const previous = points[(pointIndex - 1 + points.length) % points.length]!;
@@ -206,7 +289,16 @@ const contourToEditableGlyphContour = (contour: { readonly points: readonly Poin
     const previous = nodes[(nodeIndex - 1 + nodes.length) % nodes.length]!;
     const end = nodes[(nodeIndex + 1) % nodes.length]!;
     const afterEnd = nodes[(nodeIndex + 2) % nodes.length]!;
-    return { type: "cubicBezier" as const, startNodeId: node.id, endNodeId: end.id, control1: corners[nodeIndex] ? node.anchor : { x: node.anchor.x + (end.anchor.x - previous.anchor.x) / 6, y: node.anchor.y + (end.anchor.y - previous.anchor.y) / 6 }, control2: corners[(nodeIndex + 1) % corners.length] ? end.anchor : { x: end.anchor.x - (afterEnd.anchor.x - node.anchor.x) / 6, y: end.anchor.y - (afterEnd.anchor.y - node.anchor.y) / 6 } };
+    const source = sourceCurveAt(node.anchor, end.anchor, sourceCurves, Math.max(0.05, Math.max(extent.maxX - extent.minX, extent.maxY - extent.minY) * 0.002));
+    const sourceSegment = source && source.start.curve === source.end.curve && source.start !== source.end ? sourceSubcurve(source.curve, source.start.t, source.end.t) : undefined;
+    const sourceTangentPoint = sourceSegment ? { x: sourceSegment.p3.x - sourceSegment.p0.x, y: sourceSegment.p3.y - sourceSegment.p0.y } : source ? cubicTangentAt(source.curve, source.start.t || 0.5) : undefined;
+    const tangent = sourceTangentPoint ? normalizeVector(sourceTangentPoint) : undefined;
+    const edge = { x: end.anchor.x - node.anchor.x, y: end.anchor.y - node.anchor.y };
+    const sourceTangent = tangent && tangent.x * edge.x + tangent.y * edge.y >= 0 ? tangent : tangent ? { x: -tangent.x, y: -tangent.y } : undefined;
+    const edgeLength = Math.hypot(edge.x, edge.y);
+    const sourceControl1 = sourceSegment ? { x: node.anchor.x + sourceSegment.p1.x - sourceSegment.p0.x, y: node.anchor.y + sourceSegment.p1.y - sourceSegment.p0.y } : sourceTangent ? { x: node.anchor.x + sourceTangent.x * edgeLength / 3, y: node.anchor.y + sourceTangent.y * edgeLength / 3 } : undefined;
+    const sourceControl2 = sourceSegment ? { x: end.anchor.x + sourceSegment.p2.x - sourceSegment.p3.x, y: end.anchor.y + sourceSegment.p2.y - sourceSegment.p3.y } : sourceTangent ? { x: end.anchor.x - sourceTangent.x * edgeLength / 3, y: end.anchor.y - sourceTangent.y * edgeLength / 3 } : undefined;
+    return { type: "cubicBezier" as const, startNodeId: node.id, endNodeId: end.id, control1: corners[nodeIndex] ? node.anchor : sourceControl1 ?? { x: node.anchor.x + (end.anchor.x - previous.anchor.x) / 6, y: node.anchor.y + (end.anchor.y - previous.anchor.y) / 6 }, control2: corners[(nodeIndex + 1) % corners.length] ? end.anchor : sourceControl2 ?? { x: end.anchor.x - (afterEnd.anchor.x - node.anchor.x) / 6, y: end.anchor.y - (afterEnd.anchor.y - node.anchor.y) / 6 } };
   });
   return { nodes, segments };
 };
@@ -235,7 +327,7 @@ export const shapeOperation = (ids: readonly ElementId[], operation: ShapeOperat
           position: { x: Math.min(...xs), y: Math.min(...ys) },
           size: { width: Math.max(...xs) - Math.min(...xs), height: Math.max(...ys) - Math.min(...ys) },
           glyph: "shape-operation",
-          contours: contours.map(contourToEditableGlyphContour),
+          contours: contours.map((contour, index) => contourToEditableGlyphContour(contour, index, sourceCubics(geometry))),
           fillRule: "evenodd" as const,
           rotation: 0 as const,
           style: first.style,
