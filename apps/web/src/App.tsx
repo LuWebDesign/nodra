@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent, type PointerEvent, type ReactNode, type WheelEvent } from "react";
 import { createProject, elementId, layerId, pageId, projectFromDocument, revision, type DocumentSnapshot, type DimensionElement, type Element, type ElementId, type PointMm, type ProjectSnapshot, type SplineElement, type TextElement } from "@nodra/domain";
 import { addToSelection, appendSplineNode, beginGesture, cancelGesture, clearSelection, closePath, closeSplineElement, commitGesture, convertTextToGlyphs, createElement, createPathCubicNode, createPathNode, deleteContourNodes, deleteElement, deleteElementNodes, deletePathNodes, dispatch, duplicateElements, flipElements, insertFormaNode, invalidDimensionIdsForShapeOperation, moveElements, movePathHandle, movePathNode, openPath, updateSplineNode, previewGesture, previewGestureFromBase, redo, resizeElement, resizeElements, rotateElement, rotateElementsAroundCenter, select, selectForPointerDown, setPathJoin, shapeOperation, splitPathSegment, undo, updateContourNode, updateElement, updateElementNode, updateElementStyles, updatePage, updateSplineHandle, type FlipAxis, type ShapeOperation } from "@nodra/editor-core";
-import { boundsOf, boundsOfElements, contourVertexNodes, dimensionKindForPlacement, dimensionOffsetForAlignedPlacement, dimensionOffsetForPlacement, elementCenter, glyphGeometryNodes, groupCenter, groupHandlePoints, pathGeometryNodes, pointMidpoint, realGeometryNodes, resizeHandle, rotatedResizeHandles, rotationFromDrag, rotationHandlePoints, type Direction, type GroupHandle, type ResizeHandle } from "@nodra/geometry";
+import { boundsOfElements, contourVertexNodes, dimensionKindForPlacement, dimensionOffsetForAlignedPlacement, dimensionOffsetForPlacement, elementCenter, glyphGeometryNodes, groupCenter, groupHandlePoints, pathGeometryNodes, pointMidpoint, realGeometryNodes, resizeHandle, rotatedResizeHandles, rotationFromDrag, rotationHandlePoints, type Direction, type GroupHandle, type ResizeHandle } from "@nodra/geometry";
 import { DebouncedAutosave, DexieProjectRepository, requestStoragePersistence, type FontRecord } from "@nodra/persistence";
 import { validateDesign, validateProject } from "@nodra/validation";
 import { renderSvg } from "@nodra/renderer-svg";
@@ -766,9 +766,7 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
 
   const onCanvasDoubleClick = (event: MouseEvent<HTMLDivElement>) => {
     const point = screenPointToMm(clientPointToCanvas({ x: event.clientX, y: event.clientY }, event.currentTarget.getBoundingClientRect()), { x: 0, y: 0 }, zoom, panMm);
-    const pickedAtPoint = pickElement(editorRef.current.document, point, zoom);
-    const selectedAtPoint = editorRef.current.selection.length === 1 ? editorRef.current.document.elements.find((element) => element.id === editorRef.current.selection[0] && element.type !== "text" && element.type !== "dimension" && (() => { const bounds = boundsOf(element); return point.x >= bounds.x - 6 / zoom && point.x <= bounds.x + bounds.width + 6 / zoom && point.y >= bounds.y - 6 / zoom && point.y <= bounds.y + bounds.height + 6 / zoom; })())?.id : undefined;
-    if (!pickedAtPoint && !selectedAtPoint) {
+    if (!pickElement(editorRef.current.document, point, zoom)) {
       setSelectedSplineNodeKey(undefined);
       setEditModeElementIds([]);
       setActiveSplineId(undefined);
@@ -792,7 +790,7 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
       return;
     }
     if ((event.target as HTMLElement).closest("textarea")) return;
-    const hit = pickedAtPoint ?? selectedAtPoint;
+    const hit = pickElement(editorRef.current.document, point, zoom);
     const hitElement = hit ? editorRef.current.document.elements.find((element) => element.id === hit) : undefined;
       if (hitElement?.type === "text") {
        beginTextEdit(hitElement);
@@ -1016,15 +1014,7 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
           if (contourAddresses.length) next = dispatch(next, deleteContourNodes(element.id, contourAddresses));
           if (primitiveIndexes.length) next = dispatch(next, deleteElementNodes(element.id, primitiveIndexes));
         }
-        const remainingKeys = selectedElements.flatMap((element) => {
-          if (element.type !== "path" && element.type !== "glyph") return [];
-          const current = next.document.elements.find((candidate) => candidate.id === element.id);
-          if (!current || (current.type !== "path" && current.type !== "glyph")) return [];
-          const nodes = current.type === "path" ? pathGeometryNodes(current) : glyphGeometryNodes(current);
-          const index = nodes.findIndex((node) => node.kind === "anchor");
-          return index >= 0 ? [`${element.id}:p:${index}`] : [];
-        });
-        setSelectedFormaNodeKeys(remainingKeys); setEditorState(next);
+        setSelectedFormaNodeKeys([]); setEditorState(next);
       } else if (selection.length && event.key === "Delete" && !(selectedFormaNodeKeys.length && selectedElements.some((element) => element.type === "path"))) {
         event.preventDefault();
         let next = editorRef.current;
