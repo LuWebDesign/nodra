@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createDocument, elementId, layerId, type DimensionElement, type PathElement, type RectangleElement, type SplineElement, type TextElement } from "@nodra/domain";
+import { createDocument, elementId, layerId, type DimensionElement, type GlyphElement, type PathElement, type RectangleElement, type SplineElement, type TextElement } from "@nodra/domain";
 import { addToSelection, appendSplineNode, beginGesture, cancelGesture, clearSelection, closePath, closeSplineElement, commitGesture, createEditor, createElement, createPathCubicNode, deleteContourNodes, deleteElement, deleteElementNodes, deletePathNodes, dispatch, duplicateElements, flipElements, insertContourNode, invalidDimensionIdsForShapeOperation, moveElement, moveElements, movePathNode, movePathHandle, openPath, previewGesture, previewGestureFromBase, redo, removeFromSelection, reorderLayer, resizeElement, resizeElements, rotateElementsAroundCenter, select, selectForPointerDown, setLayerVisibility, setPathJoin, shapeOperation, splitPathSegment, toggleSelection, undo, updateContourNode, updateElement, updateElementNode, updateElementStyles, updateSplineHandle, updateSplineNode } from "./index.js";
 import type { Direction } from "@nodra/geometry";
 
@@ -9,6 +9,7 @@ const path: PathElement = { type: "path", id: elementId("path"), layerId: layerI
 const spline: SplineElement = { type: "spline", id: elementId("spline"), layerId: layerId("default"), nodes: [{ id: "a", anchor: { x: 0, y: 0 }, continuity: "smooth" }, { id: "b", anchor: { x: 10, y: 0 }, continuity: "smooth" }, { id: "c", anchor: { x: 10, y: 10 }, continuity: "smooth" }], closed: false, style: rectangle.style };
 const text: TextElement = { type: "text", id: elementId("text"), layerId: layerId("default"), position: { x: 12, y: 18 }, size: { width: 32, height: 14 }, text: "Keep formatting", fontFamily: "Times New Roman", fontSize: 18, fontWeight: "bold", fontStyle: "italic", textAlign: "left", lineHeight: 1.2, rotation: 0, style: { stroke: "#123456", fill: "#654321", strokeWidth: 0.5 } };
 const dimension: DimensionElement = { type: "dimension", id: elementId("dimension"), layerId: layerId("default"), kind: "horizontal", references: [{ kind: "node", elementId: rectangle.id, nodeIndex: 0 }, { kind: "node", elementId: rectangle.id, nodeIndex: 1 }], offset: { x: 0, y: -10 }, precision: 2, units: "mm", rotation: 0, style: rectangle.style };
+const glyph: GlyphElement = { type: "glyph", id: elementId("glyph"), layerId: layerId("default"), position: { x: 0, y: 0 }, size: { width: 20, height: 20 }, glyph: "O", fillRule: "evenodd", rotation: 0, style: rectangle.style, contours: [{ nodes: [{ id: "ga", anchor: { x: 0, y: 0 }, join: "smooth" }, { id: "gb", anchor: { x: 10, y: 0 }, join: "smooth" }, { id: "gc", anchor: { x: 10, y: 10 }, join: "smooth" }, { id: "gd", anchor: { x: 0, y: 10 }, join: "smooth" }], segments: [{ type: "cubicBezier", startNodeId: "ga", endNodeId: "gb", control1: { x: 3, y: -2 }, control2: { x: 7, y: -2 } }, { type: "cubicBezier", startNodeId: "gb", endNodeId: "gc", control1: { x: 12, y: 3 }, control2: { x: 12, y: 7 } }, { type: "cubicBezier", startNodeId: "gc", endNodeId: "gd", control1: { x: 7, y: 12 }, control2: { x: 3, y: 12 } }, { type: "cubicBezier", startNodeId: "gd", endNodeId: "ga", control1: { x: -2, y: 7 }, control2: { x: -2, y: 3 } }] }] };
 
 describe("editor core", () => {
   it("creates, edits, closes, styles, deletes, and restores native splines through document history", () => {
@@ -89,6 +90,17 @@ describe("editor core", () => {
     expect(state.document.elements[0]?.type === "contour" ? state.document.elements[0].contours[0]?.points : []).toHaveLength(4);
   });
 
+  it("deletes a glyph anchor without flattening its Bézier handles", () => {
+    const state = dispatch(createEditor({ ...document, elements: [glyph] }), deleteElementNodes(glyph.id, [1]));
+    const updated = state.document.elements[0];
+    expect(updated?.type).toBe("glyph");
+    if (updated?.type === "glyph") {
+      expect(updated.contours[0]?.nodes.map((node) => node.id)).toEqual(["ga", "gc", "gd"]);
+      expect(updated.contours[0]?.segments.every((segment) => segment.type === "cubicBezier")).toBe(true);
+      expect(updated.contours[0]?.segments[0]).toMatchObject({ control1: { x: 3, y: -2 }, control2: { x: 12, y: 7 } });
+    }
+    expect(state.undo).toHaveLength(1);
+  });
   it("moves a primitive Forma node through a validated command", () => {
     const state = dispatch(createEditor({ ...document, elements: [rectangle] }), updateElementNode(rectangle.id, 0, { x: 2, y: 3 }));
     expect(state.document.elements[0]).toMatchObject({ type: "rectangle", position: { x: 2, y: 3 }, size: { width: 10, height: 5 } });
