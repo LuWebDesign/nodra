@@ -195,14 +195,33 @@ const sourceCubics = (elements: readonly Element[]): SourceCubic[] => elements.f
     return start && end ? [{ p0: start, p1: segment.control1, p2: segment.control2, p3: end }] : [];
   }));
 });
-const sourceCurveAt = (start: PointMm, end: PointMm, curves: readonly SourceCubic[], tolerance: number): SourceCubic | undefined => {
-  const midpoint = { x: (start.x + end.x) / 2, y: (start.y + end.y) / 2 };
-  let best: { curve: SourceCubic; t: number; distance: number } | undefined;
-  for (const curve of curves) for (let step = 0; step <= 24; step += 1) {
-    const t = step / 24; const point = cubicAt(curve, t); const distance = Math.hypot(point.x - midpoint.x, point.y - midpoint.y);
+interface SourceHit { readonly curve: SourceCubic; readonly t: number; readonly distance: number }
+const nearestSourcePoint = (point: PointMm, curves: readonly SourceCubic[]): SourceHit | undefined => {
+  let best: SourceHit | undefined;
+  for (const curve of curves) for (let step = 0; step <= 32; step += 1) {
+    const t = step / 32; const candidate = cubicAt(curve, t); const distance = Math.hypot(candidate.x - point.x, candidate.y - point.y);
     if (!best || distance < best.distance) best = { curve, t, distance };
   }
-  return best && best.distance <= tolerance ? best.curve : undefined;
+  return best;
+};
+const sourceCurveAt = (start: PointMm, end: PointMm, curves: readonly SourceCubic[], tolerance: number): { readonly curve: SourceCubic; readonly start: SourceHit; readonly end: SourceHit } | undefined => {
+  const startHit = nearestSourcePoint(start, curves); const endHit = nearestSourcePoint(end, curves);
+  if (startHit && endHit && startHit.curve === endHit.curve && startHit.distance <= tolerance && endHit.distance <= tolerance && Math.abs(startHit.t - endHit.t) > 0.01) return { curve: startHit.curve, start: startHit, end: endHit };
+  const midpoint = { x: (start.x + end.x) / 2, y: (start.y + end.y) / 2 }; const midpointHit = nearestSourcePoint(midpoint, curves);
+  return midpointHit && midpointHit.distance <= tolerance ? { curve: midpointHit.curve, start: midpointHit, end: midpointHit } : undefined;
+};
+const splitSourceCubic = (curve: SourceCubic, t: number): readonly [SourceCubic, SourceCubic] => {
+  const lerp = (a: PointMm, b: PointMm): PointMm => ({ x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t });
+  const a = lerp(curve.p0, curve.p1); const b = lerp(curve.p1, curve.p2); const c = lerp(curve.p2, curve.p3); const d = lerp(a, b); const e = lerp(b, c); const middle = lerp(d, e);
+  return [{ p0: curve.p0, p1: a, p2: d, p3: middle }, { p0: middle, p1: e, p2: c, p3: curve.p3 }];
+};
+const sourceSubcurve = (curve: SourceCubic, from: number, to: number): SourceCubic => {
+  if (from <= to) {
+    const left = splitSourceCubic(curve, to)[0];
+    return splitSourceCubic(left!, from / Math.max(to, 1e-9))[1]!;
+  }
+  const reversed = sourceSubcurve(curve, to, from);
+  return { p0: reversed.p3, p1: reversed.p2, p2: reversed.p1, p3: reversed.p0 };
 };
 
 const contourToEditableGlyphContour = (contour: { readonly points: readonly PointMm[] }, index: number, sourceCurves: readonly SourceCubic[] = []): GlyphElement["contours"][number] => {
@@ -244,12 +263,14 @@ const contourToEditableGlyphContour = (contour: { readonly points: readonly Poin
     const end = nodes[(nodeIndex + 1) % nodes.length]!;
     const afterEnd = nodes[(nodeIndex + 2) % nodes.length]!;
     const source = sourceCurveAt(node.anchor, end.anchor, sourceCurves, Math.max(0.05, Math.max(extent.maxX - extent.minX, extent.maxY - extent.minY) * 0.002));
-    const tangent = source ? normalizeVector(cubicTangentAt(source, 0.5)) : undefined;
+    const sourceSegment = source && source.start.curve === source.end.curve && source.start !== source.end ? sourceSubcurve(source.curve, source.start.t, source.end.t) : undefined;
+    const sourceTangentPoint = sourceSegment ? { x: sourceSegment.p3.x - sourceSegment.p0.x, y: sourceSegment.p3.y - sourceSegment.p0.y } : source ? cubicTangentAt(source.curve, source.start.t || 0.5) : undefined;
+    const tangent = sourceTangentPoint ? normalizeVector(sourceTangentPoint) : undefined;
     const edge = { x: end.anchor.x - node.anchor.x, y: end.anchor.y - node.anchor.y };
     const sourceTangent = tangent && tangent.x * edge.x + tangent.y * edge.y >= 0 ? tangent : tangent ? { x: -tangent.x, y: -tangent.y } : undefined;
     const edgeLength = Math.hypot(edge.x, edge.y);
-    const sourceControl1 = sourceTangent ? { x: node.anchor.x + sourceTangent.x * edgeLength / 3, y: node.anchor.y + sourceTangent.y * edgeLength / 3 } : undefined;
-    const sourceControl2 = sourceTangent ? { x: end.anchor.x - sourceTangent.x * edgeLength / 3, y: end.anchor.y - sourceTangent.y * edgeLength / 3 } : undefined;
+    const sourceControl1 = sourceSegment ? { x: node.anchor.x + sourceSegment.p1.x - sourceSegment.p0.x, y: node.anchor.y + sourceSegment.p1.y - sourceSegment.p0.y } : sourceTangent ? { x: node.anchor.x + sourceTangent.x * edgeLength / 3, y: node.anchor.y + sourceTangent.y * edgeLength / 3 } : undefined;
+    const sourceControl2 = sourceSegment ? { x: end.anchor.x + sourceSegment.p2.x - sourceSegment.p3.x, y: end.anchor.y + sourceSegment.p2.y - sourceSegment.p3.y } : sourceTangent ? { x: end.anchor.x - sourceTangent.x * edgeLength / 3, y: end.anchor.y - sourceTangent.y * edgeLength / 3 } : undefined;
     return { type: "cubicBezier" as const, startNodeId: node.id, endNodeId: end.id, control1: corners[nodeIndex] ? node.anchor : sourceControl1 ?? { x: node.anchor.x + (end.anchor.x - previous.anchor.x) / 6, y: node.anchor.y + (end.anchor.y - previous.anchor.y) / 6 }, control2: corners[(nodeIndex + 1) % corners.length] ? end.anchor : sourceControl2 ?? { x: end.anchor.x - (afterEnd.anchor.x - node.anchor.x) / 6, y: end.anchor.y - (afterEnd.anchor.y - node.anchor.y) / 6 } };
   });
   return { nodes, segments };
