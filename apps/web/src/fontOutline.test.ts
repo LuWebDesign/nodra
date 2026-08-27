@@ -65,6 +65,24 @@ describe("font outline adapter", () => {
     expect(contour.nodes.length).toBeLessThanOrEqual(20);
     expect(contour.segments.every((segment) => segment.type === "cubicBezier")).toBe(true);
   });
+  it("preserves source cubic handles in editable mode instead of refitting them", () => {
+    const source = {
+      nodes: [
+        { id: "a", anchor: { x: 0, y: 0 }, join: "corner" as const },
+        { id: "b", anchor: { x: 10, y: 0 }, join: "corner" as const },
+        { id: "c", anchor: { x: 10, y: 10 }, join: "corner" as const },
+        { id: "d", anchor: { x: 0, y: 10 }, join: "corner" as const },
+      ],
+      segments: [
+        { type: "cubicBezier" as const, startNodeId: "a", endNodeId: "b", control1: { x: 2, y: -4 }, control2: { x: 8, y: -4 } },
+        { type: "line" as const, startNodeId: "b", endNodeId: "c" },
+        { type: "line" as const, startNodeId: "c", endNodeId: "d" },
+        { type: "line" as const, startNodeId: "d", endNodeId: "a" },
+      ],
+    };
+    expect(simplifyGlyphContourForMode(source, "editable")).toEqual(source);
+  });
+
   it("keeps precise glyph contours closer to the source node count", () => {
     const source = {
       nodes: Array.from({ length: 24 }, (_, index) => {
@@ -97,14 +115,14 @@ describe("font outline adapter", () => {
     const text: TextElement = { type: "text", id: elementId("text"), layerId: layerId("layer"), position: { x: 0, y: 0 }, size: { width: 10, height: 10 }, text: "A", fontFamily: "Arial", fontSize: 10, fontWeight: "normal", fontStyle: "normal", textAlign: "left", lineHeight: 1.2, rotation: 0, style: { stroke: "#000", fill: "#000", strokeWidth: 1 } };
     expect(() => extractTextGlyphOutlines(text, () => undefined)).toThrow(FontOutlineError);
   });
-  it("keeps editable compound glyphs within a small node budget", () => {
+  it("keeps editable compound glyphs faithful to their source curves", () => {
     const fontPath = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf";
     if (!existsSync(fontPath)) return;
     const text: TextElement = { type: "text", id: elementId("text"), layerId: layerId("layer"), position: { x: 0, y: 0 }, size: { width: 10, height: 10 }, text: "O", fontFamily: "DejaVuSans", fontSize: 10, fontWeight: "normal", fontStyle: "normal", textAlign: "left", lineHeight: 1.2, rotation: 0, style: { stroke: "#000", fill: "#000", strokeWidth: 1 } };
     const outline = extractTextGlyphOutlines(text, () => fontBytes(fontPath), "editable")[0]!;
     const nodeCount = outline.contours.reduce((count, contour) => count + contour.nodes.length, 0);
-    expect(nodeCount).toBeLessThanOrEqual(24);
-    expect(outline.contours.every((contour) => contour.segments.every((segment) => segment.type === "cubicBezier"))).toBe(true);
+    expect(nodeCount).toBeGreaterThan(0);
+    expect(outline.contours.some((contour) => contour.segments.some((segment) => segment.type === "cubicBezier"))).toBe(true);
   });
   it("creates valid unique node IDs for compound glyphs", () => {
     const fontPath = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf";

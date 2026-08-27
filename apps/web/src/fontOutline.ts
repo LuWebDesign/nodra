@@ -127,6 +127,10 @@ export function simplifyGlyphContourForMode(contour: GlyphOutlineData["contours"
   const settings = curveModeSettings[mode];
   const precise = simplifyGlyphContour(contour, settings.tolerance);
   if (mode === "precise" || precise.nodes.length <= 3) return precise;
+  // Existing cubic segments already contain the font's designed handles. Sampling
+  // them into a polyline and fitting a new spline is visually worse than keeping
+  // those handles, even when the result has fewer anchors.
+  if (precise.segments.some((segment) => segment.type === "cubicBezier")) return precise;
   const samples = contourSamples(precise, settings.samplesPerCubic);
   const reduced = reduceClosedSamples(samples, settings.tolerance, maxNodes);
   return reduced.length >= 3 ? smoothContourFromSamples(reduced, settings.smoothness) : precise;
