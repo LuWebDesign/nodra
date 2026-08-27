@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { angularDimensionGeometry, bezierHandlePoint, boundsOf, boundsOfElements, boundsOutsidePage, closedElementToPolygon, cubicBezierBounds, cubicBezierDerivative, degreesToRadians, dimensionGeometry, dimensionKindForNodes, dimensionKindForPlacement, dimensionOffsetForAlignedPlacement, dimensionOffsetForPlacement, editableGeometryNodes, elementCenter, elementSegmentAt, elementToContour, evaluateCubicBezier, ELLIPSE_APPROXIMATION_SEGMENTS, groupCenter, groupHandlePoints, hitTest, mirrorHandleOffset, mmToScreen, pointMidpoint, radiansToDegrees, realGeometryNodes, resizeGroup, resizeHandle, rotatedLineEndpoints, rotateElements, rotationFromDrag, rotationHandlePoints, screenToMm, shapeResultContours, splitCubicBezier, validateSize, visibleBezierHandleGuides } from "./index.js";
+import { angularDimensionGeometry, bezierHandlePoint, boundsOf, boundsOfElements, boundsOutsidePage, connectableNode, connectableNodeAddress, closedElementToPolygon, cubicBezierBounds, cubicBezierDerivative, degreesToRadians, dimensionGeometry, dimensionKindForNodes, dimensionKindForPlacement, dimensionOffsetForAlignedPlacement, dimensionOffsetForPlacement, editableGeometryNodes, elementCenter, elementSegmentAt, elementToContour, evaluateCubicBezier, ELLIPSE_APPROXIMATION_SEGMENTS, groupCenter, groupHandlePoints, hitTest, mirrorHandleOffset, mmToScreen, pointMidpoint, radiansToDegrees, realGeometryNodes, resizeGroup, resizeHandle, rotatedLineEndpoints, rotateElements, rotationFromDrag, rotationHandlePoints, screenToMm, shapeResultContours, splitCubicBezier, validateSize, visibleBezierHandleGuides } from "./index.js";
 import { elementId, layerId } from "@nodra/domain";
 
 const style = { stroke: "#000", strokeWidth: 0.2 };
@@ -36,6 +36,14 @@ describe("canonical millimetre geometry", () => {
     const geometry = dimensionGeometry(dimension, [line]);
     expect(geometry?.value).toBeCloseTo(Math.hypot(30, 30));
     expect(geometry && geometry.lineEnd.x - geometry.lineStart.x).toBeCloseTo(geometry ? geometry.lineEnd.y - geometry.lineStart.y : 0);
+  });
+  it("resizes a group around its existing bounds center when requested", () => {
+    const second = { ...rectangle, id: elementId("r2"), position: { x: 40, y: 25 }, size: { width: 10, height: 15 } };
+    const before = boundsOfElements([rectangle, second]);
+    const resized = resizeGroup([rectangle, second], "se", { x: before.x + 80, y: before.y + 40 }, 1, false, true);
+    const after = boundsOfElements(resized);
+    expect(after).toEqual({ x: -10, y: 10, width: 80, height: 40 });
+    expect(groupCenter(after)).toEqual(groupCenter(before));
   });
   it("calculates a stable 90 degree angle from connected lines", () => {
     const first = { type: "line" as const, id: elementId("first"), layerId: layerId("l"), start: { x: 20, y: 20 }, end: { x: 60, y: 20 }, rotation: 0, style };
@@ -179,6 +187,10 @@ describe("canonical millimetre geometry", () => {
     const ellipse = { type: "ellipse" as const, id: elementId("ellipse-nodes"), layerId: layerId("l"), position: { x: 10, y: 20 }, size: { width: 20, height: 10 }, rotation: Math.PI / 2, style };
     expect(realGeometryNodes(ellipse).map(({ point }) => point)).toEqual([{ x: 20, y: 25 }, { x: 25, y: 25 }, { x: 20, y: 35 }, { x: 15, y: 25 }, { x: 20, y: 15 }]);
   });
+  it("resolves stable addresses without using screen coordinates", () => {
+    expect(connectableNodeAddress(rectangle, 0)).toEqual({ kind: "named", name: "nw" });
+    expect(connectableNode(rectangle, { kind: "named", name: "e" })?.point).toEqual({ x: 30, y: 25 });
+  });
   it("normalizes angle conversion and crosses the angle branch without jumping", () => {
     expect(radiansToDegrees(degreesToRadians(-90))).toBeCloseTo(270);
     expect(radiansToDegrees(degreesToRadians(450))).toBeCloseTo(90);
@@ -226,7 +238,7 @@ describe("canonical millimetre geometry", () => {
     expect(boundsOf(line)).toEqual({ x: 5, y: -5, width: 0, height: 10 });
     expect(hitTest(line, { x: 5, y: 4 }, 0.01)).toBe(true);
     expect(hitTest(line, { x: 9, y: 0 }, 0.01)).toBe(false);
-    expect(realGeometryNodes(line)).toEqual([{ kind: "endpoint", point: start }, { kind: "center", point: { x: 5, y: 0 } }, { kind: "endpoint", point: end }]);
+    expect(realGeometryNodes(line)).toEqual([{ kind: "endpoint", nodeId: "start", point: start }, { kind: "center", nodeId: "center", point: { x: 5, y: 0 } }, { kind: "endpoint", nodeId: "end", point: end }]);
   });
   it("computes nine group handles and scales a group from one atomic geometry result", () => {
     const second = { ...rectangle, id: elementId("r2"), position: { x: 40, y: 30 }, size: { width: 10, height: 10 } };

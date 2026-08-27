@@ -299,7 +299,7 @@ test("creates a cubic segment when placing an anchor with a drag", async ({ page
   await expect(page.locator(".page-svg svg path[data-element-id]")).toHaveAttribute("d", / C/);
 });
 
-test("creates, transforms, and undoes a rectangle", async ({ page }) => {
+test("edits rectangle dimensions around its center with proportional lock and undo", async ({ page }) => {
   await page.goto("/");
   await drawRectangle(page);
 
@@ -310,13 +310,74 @@ test("creates, transforms, and undoes a rectangle", async ({ page }) => {
   expect(rectangleBounds).not.toBeNull();
   await page.getByRole("button", { name: "Seleccion" }).click();
   await page.mouse.click(rectangleBounds!.x + rectangleBounds!.width / 2, rectangleBounds!.y + rectangleBounds!.height / 2);
+  const x = page.locator(".inspector").getByLabel("X en milímetros");
+  const y = page.locator(".inspector").getByLabel("Y en milímetros");
   const width = page.locator(".inspector").getByLabel("Ancho en milímetros");
+  const height = page.locator(".inspector").getByLabel("Alto en milímetros");
+  const original = { x: Number(await x.inputValue()), y: Number(await y.inputValue()), width: Number(await width.inputValue()), height: Number(await height.inputValue()) };
+  await width.fill(String(original.width + 10));
+  await width.press("Enter");
+  await expect(width).toHaveValue(String(original.width + 10));
+  await expect.poll(async () => Number(await x.inputValue())).toBeCloseTo(original.x - 5);
+  await expect(y).toHaveValue(String(original.y));
+  await height.fill(String(original.height + 10));
+  await height.press("Enter");
+  await expect.poll(async () => Number(await y.inputValue())).toBeCloseTo(original.y - 5);
+  await expect(width).toHaveValue(String(original.width + 10));
+  await page.getByRole("button", { name: "Bloquear proporción" }).click();
+  const lockedWidth = Number(await width.inputValue());
+  const lockedHeight = Number(await height.inputValue());
+  const lockedX = Number(await x.inputValue());
+  const lockedY = Number(await y.inputValue());
+  await width.fill(String(lockedWidth + 10));
+  await width.press("Enter");
+  const nextWidth = lockedWidth + 10;
+  const nextHeight = nextWidth * lockedHeight / lockedWidth;
+  await expect.poll(async () => Number(await height.inputValue())).toBeCloseTo(nextHeight);
+  await expect.poll(async () => Number(await x.inputValue())).toBeCloseTo(lockedX - 5);
+  await expect.poll(async () => Number(await y.inputValue())).toBeCloseTo(lockedY + (lockedHeight - nextHeight) / 2);
+  await page.getByRole("button", { name: "Deshacer" }).click();
+  await expect(width).toHaveValue(String(lockedWidth));
+  await expect(height).toHaveValue(String(lockedHeight));
+  await expect(x).toHaveValue(String(lockedX));
+  await expect(y).toHaveValue(String(lockedY));
+});
+
+test("persists a confirmed node snap and anchors inspector width to the connected side", async ({ page }) => {
+  await page.goto("/");
+  await drawRectangle(page);
+  const original = await page.locator(".page-svg svg rect").first().boundingBox();
+  expect(original).not.toBeNull();
+  await page.getByRole("button", { name: "Rectángulo" }).click();
+  await page.mouse.click(original!.x + original!.width, original!.y + original!.height / 2);
+  await page.mouse.click(original!.x + original!.width + 60, original!.y + original!.height / 2 + 40);
+  await expect(page.locator(".page-svg svg rect")).toHaveCount(2);
+  const width = page.locator(".inspector").getByLabel("Ancho en milímetros");
+  const x = page.locator(".inspector").getByLabel("X en milímetros");
+  const originalX = Number(await x.inputValue());
   const originalWidth = Number(await width.inputValue());
   await width.fill(String(originalWidth + 10));
   await width.press("Enter");
-  await expect(width).toHaveValue(String(originalWidth + 10));
-  await page.getByRole("button", { name: "Deshacer" }).click();
-  await expect(width).toHaveValue(String(originalWidth));
+  await expect.poll(async () => Number(await x.inputValue())).toBeCloseTo(originalX);
+});
+
+test("does not create a connection from hover alone", async ({ page }) => {
+  await page.goto("/");
+  await drawRectangle(page);
+  const rectangle = page.locator(".page-svg svg rect").first();
+  const bounds = await rectangle.boundingBox();
+  expect(bounds).not.toBeNull();
+  await page.mouse.move(bounds!.x + bounds!.width, bounds!.y + bounds!.height / 2);
+  await expect(page.locator("[data-node-hover-feedback]")).toBeVisible();
+  await page.getByRole("button", { name: "Seleccion" }).click();
+  await page.mouse.click(bounds!.x + bounds!.width / 2, bounds!.y + bounds!.height / 2);
+  const x = page.locator(".inspector").getByLabel("X en milímetros");
+  const width = page.locator(".inspector").getByLabel("Ancho en milímetros");
+  const originalX = Number(await x.inputValue());
+  const originalWidth = Number(await width.inputValue());
+  await width.fill(String(originalWidth + 10));
+  await width.press("Enter");
+  await expect.poll(async () => Number(await x.inputValue())).toBeCloseTo(originalX - 5);
 });
 
 test("creates nested rectangle and circle objects with click gestures", async ({ page }) => {
