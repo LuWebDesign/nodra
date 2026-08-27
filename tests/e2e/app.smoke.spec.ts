@@ -379,6 +379,25 @@ test("shows node hover feedback while keeping the system cursor as an arrow", as
   await expect(feedback).toHaveCount(0);
 });
 
+test("keeps the tool cursor beside the pointer and shows node feedback for a drawing tool", async ({ page }) => {
+  await page.goto("/");
+  await drawRectangle(page);
+  await page.getByRole("button", { name: "Rectángulo" }).click();
+  const rectangle = page.locator(".page-svg svg rect").first();
+  const bounds = await rectangle.boundingBox();
+  expect(bounds).not.toBeNull();
+  const pointer = { x: bounds!.x, y: bounds!.y };
+  await page.mouse.move(pointer.x, pointer.y);
+  const feedback = page.locator("[data-node-hover-feedback]");
+  await expect(feedback).toBeVisible();
+  const cursor = page.locator(".tool-cursor");
+  await expect(cursor).toBeVisible();
+  const cursorBounds = await cursor.boundingBox();
+  expect(cursorBounds).not.toBeNull();
+  expect(cursorBounds!.x).toBeGreaterThan(pointer.x);
+  expect(cursorBounds!.y).toBeGreaterThan(pointer.y);
+});
+
 test("moves text with Selection and edits it inline on double-click", async ({ page }) => {
   await page.goto("/");
   const pageBounds = await page.locator(".page").boundingBox();

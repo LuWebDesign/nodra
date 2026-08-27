@@ -4,6 +4,7 @@ import { boundsOf, boundsOfElements, contourSegmentAt, contourVertexNodes, dimen
 export interface DragGeometry { readonly position: PointMm; readonly size: { readonly width: number; readonly height: number } }
 export interface CircleGeometry { readonly position: PointMm; readonly size: { readonly width: number; readonly height: number }; readonly radius: number }
 export interface CreationGuide { readonly source: PointMm; readonly target: PointMm; readonly kind: "node" | "center" }
+export interface CreationSnap { readonly point: PointMm; readonly kind: "node" | "center" }
 export interface SnapGuide { readonly source: PointMm; readonly target: PointMm }
 export interface SnapMoveResult { readonly delta: PointMm; readonly guide: SnapGuide | undefined }
 export type AlignmentGuideOrientation = "vertical" | "horizontal";
@@ -228,18 +229,28 @@ export function circleGeometry(center: PointMm, pointer: PointMm): CircleGeometr
   return radius > 0 ? { position: { x: center.x - radius, y: center.y - radius }, size: { width: radius * 2, height: radius * 2 }, radius } : undefined;
 }
 
-/** Finds visual-only creation guides. The returned target never changes the requested point. */
-export function creationGuides(document: DocumentSnapshot, point: PointMm, zoom: number, tolerancePx = 8): readonly CreationGuide[] {
-  if (![point.x, point.y, zoom, tolerancePx].every(Number.isFinite) || zoom <= 0 || tolerancePx < 0) throw new Error("creation guide coordinates, zoom, and tolerance must be valid");
+/** Finds the exact visible creation target under a pointer without changing the pointer itself. */
+export function snapCreationPoint(document: DocumentSnapshot, point: PointMm, zoom: number, tolerancePx = 8): CreationSnap | undefined {
+  if (![point.x, point.y, zoom, tolerancePx].every(Number.isFinite) || zoom <= 0 || tolerancePx < 0) throw new Error("creation snap coordinates, zoom, and tolerance must be valid");
   const visible = new Set(document.layers.filter((layer) => layer.visible).map((layer) => layer.id));
-  let best: { readonly guide: CreationGuide; readonly distance: number; readonly order: string } | undefined;
+  let bestNode: { readonly point: PointMm; readonly distance: number; readonly order: string } | undefined;
+  let bestCenter: { readonly point: PointMm; readonly distance: number; readonly order: string } | undefined;
   for (const element of document.elements) if (visible.has(element.layerId)) for (const [index, node] of realGeometryNodes(element).entries()) {
     const distance = Math.hypot(node.point.x - point.x, node.point.y - point.y) * zoom;
     if (distance > tolerancePx) continue;
-    const candidate = { guide: { source: point, target: node.point, kind: node.kind === "center" ? "center" as const : "node" as const }, distance, order: `${element.id}:${index}` };
-    if (!best || distance < best.distance || distance === best.distance && candidate.order < best.order) best = candidate;
+    const candidate = { point: node.point, distance, order: `${element.id}:${index}` };
+    if (node.kind === "center") {
+      if (!bestCenter || distance < bestCenter.distance || distance === bestCenter.distance && candidate.order < bestCenter.order) bestCenter = candidate;
+    } else if (!bestNode || distance < bestNode.distance || distance === bestNode.distance && candidate.order < bestNode.order) bestNode = candidate;
   }
-  return best ? [best.guide] : [];
+  const best = bestNode ?? bestCenter;
+  return best ? { point: best.point, kind: best === bestNode ? "node" : "center" } : undefined;
+}
+
+/** Finds visual-only creation guides. The returned target never changes the requested point. */
+export function creationGuides(document: DocumentSnapshot, point: PointMm, zoom: number, tolerancePx = 8): readonly CreationGuide[] {
+  const snap = snapCreationPoint(document, point, zoom, tolerancePx);
+  return snap ? [{ source: point, target: snap.point, kind: snap.kind }] : [];
 }
 
 export function hasNonCollinearPoints(points: readonly PointMm[], epsilon = 1e-9): boolean {
@@ -251,7 +262,7 @@ export function hasNonCollinearPoints(points: readonly PointMm[], epsilon = 1e-9
   return false;
 }
 
-export type NodeFeedbackTool = "select" | "forma" | "dimension";
+export type NodeFeedbackTool = "select" | "forma" | "pen" | "spline" | "rectangle" | "ellipse" | "line" | "dimension";
 export type HoverNode = NodeHit | FormaNodeHit;
 
 /** Finds the node feedback target supported by a tool without changing its hit semantics. */

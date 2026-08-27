@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createDocument, elementId, layerId, type DocumentSnapshot } from "@nodra/domain";
 import { validateDocument } from "@nodra/validation";
-import { canActivateRotation, circleGeometry, centerPageInCanvas, clientPointToCanvas, clientPointToPage, creationGuides, hasNonCollinearPoints, hoveredSelectionCenter, INITIAL_ZOOM, isDrawingTool, marqueeSelection, MAX_ZOOM, MIN_ZOOM, movementExceedsThreshold, normalizeBounds, normalizeDrag, pagePointToScreen, screenDeltaToMm, screenPointToMm, viewportPointToCanvas, containsBounds, elementsContainedBy, pickDimensionTarget, pickElement, pickFormaElement, pickFormaNode, pickFormaSegment, pickHoverNode, pickNode, pointerDownIntent, selectedNodeAnchor, selectionCenter, selectionFrame, snapMoveDelta, visibleEditablePathNodeIndexes, zoomAtPoint } from "./interaction.js";
+import { canActivateRotation, circleGeometry, centerPageInCanvas, clientPointToCanvas, clientPointToPage, creationGuides, hasNonCollinearPoints, hoveredSelectionCenter, INITIAL_ZOOM, isDrawingTool, marqueeSelection, MAX_ZOOM, MIN_ZOOM, movementExceedsThreshold, normalizeBounds, normalizeDrag, pagePointToScreen, screenDeltaToMm, screenPointToMm, viewportPointToCanvas, containsBounds, elementsContainedBy, pickDimensionTarget, pickElement, pickFormaElement, pickFormaNode, pickFormaSegment, pickHoverNode, pickNode, pointerDownIntent, selectedNodeAnchor, selectionCenter, selectionFrame, snapCreationPoint, snapMoveDelta, visibleEditablePathNodeIndexes, zoomAtPoint } from "./interaction.js";
 import { geometryPatch, geometryValue } from "./propertyBar.js";
 import { dimensionKindForNodes, dimensionOffsetForPlacement, pointMidpoint } from "@nodra/geometry";
 
@@ -234,6 +234,25 @@ describe("click creation geometry", () => {
     const document = { ...createDocument("creation-guides-doc", [layer]), elements: [line] };
     expect(creationGuides(document, { x: 20.5, y: 20 }, 4, 4)).toMatchObject([{ target: line.start, kind: "node" }]);
     expect(creationGuides(document, { x: 20.5, y: 20 }, 1, 0.25)).toEqual([]);
+  });
+
+  it("prioritizes a node over a nearer center and returns the exact node point", () => {
+    const layer = { id: layerId("creation-snap-priority"), name: "Snap priority", visible: true, order: 0 };
+    const rectangle = { type: "rectangle" as const, id: elementId("creation-snap-rectangle"), layerId: layer.id, position: { x: 10, y: 10 }, size: { width: 20, height: 20 }, cornerRadius: 0, rotation: 0, style: { stroke: "#000", strokeWidth: 1 } };
+    const document = { ...createDocument("creation-snap-priority", [layer]), elements: [rectangle] };
+    expect(snapCreationPoint(document, { x: 11, y: 11 }, 1, 8)).toEqual({ point: { x: 10, y: 10 }, kind: "node" });
+    expect(snapCreationPoint(document, { x: 20.5, y: 20 }, 1, 8)).toEqual({ point: { x: 20, y: 20 }, kind: "center" });
+  });
+
+  it("uses one screen tolerance and excludes hidden geometry from creation snapping", () => {
+    const visible = { id: layerId("creation-snap-visible"), name: "Visible", visible: true, order: 0 };
+    const hidden = { id: layerId("creation-snap-hidden"), name: "Hidden", visible: false, order: 1 };
+    const rectangle = { type: "rectangle" as const, id: elementId("creation-snap-visible-rectangle"), layerId: visible.id, position: { x: 10, y: 10 }, size: { width: 20, height: 20 }, cornerRadius: 0, rotation: 0, style: { stroke: "#000", strokeWidth: 1 } };
+    const hiddenRectangle = { ...rectangle, id: elementId("creation-snap-hidden-rectangle"), layerId: hidden.id, position: { x: 100, y: 100 } };
+    const document = { ...createDocument("creation-snap-tolerance", [visible, hidden]), elements: [rectangle, hiddenRectangle] };
+    expect(snapCreationPoint(document, { x: 10.5, y: 10 }, 4, 2)?.point).toEqual(rectangle.position);
+    expect(snapCreationPoint(document, { x: 100, y: 100 }, 4, 2)).toBeUndefined();
+    expect(snapCreationPoint(document, { x: 10.5, y: 10 }, 1, 0.25)).toBeUndefined();
   });
 });
 

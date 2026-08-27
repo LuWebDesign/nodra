@@ -5,7 +5,7 @@ import { boundsOfElements, contourVertexNodes, dimensionKindForPlacement, dimens
 import { DebouncedAutosave, DexieProjectRepository, requestStoragePersistence, type FontRecord } from "@nodra/persistence";
 import { validateDesign, validateProject } from "@nodra/validation";
 import { renderSvg } from "@nodra/renderer-svg";
-import { canActivateRotation, centerPageInCanvas, clientPointToCanvas, clientPointToPage, cubicPlacementControls, documentPointToPage, formaNodeKey, hoveredSelectionCenter, isDrawingTool, marqueeSelection, movementExceedsThreshold, normalizeBounds, normalizeDrag, pagePointToCanvas, pathGuides, pickDimensionTarget, pickElement, pickFormaElement, pickFormaNode, pickFormaSegment, pickHoverNode, pickNode, pickPathNode, pickPathSegment, pointerDownIntent, visibleEditablePathNodeIndexes, screenDeltaToMm, screenPointToMm, selectedNodeAnchor, selectedPathAnchorIds, alignmentGuides, snapMoveDelta, viewportPointToCanvas, zoomAtPoint, type AlignmentGuide, type ContourNodeHit, type DimensionTarget, type FormaNodeHit, type HoverNode, type NodeHit, type PathNodeHit, type SnapGuide, type TransformMode } from "./interaction.js";
+import { canActivateRotation, centerPageInCanvas, clientPointToCanvas, clientPointToPage, cubicPlacementControls, formaNodeKey, hoveredSelectionCenter, isDrawingTool, marqueeSelection, movementExceedsThreshold, normalizeBounds, normalizeDrag, pagePointToCanvas, pathGuides, pickDimensionTarget, pickElement, pickFormaElement, pickFormaNode, pickFormaSegment, pickHoverNode, pickNode, pickPathNode, pickPathSegment, pointerDownIntent, visibleEditablePathNodeIndexes, screenDeltaToMm, screenPointToMm, selectedNodeAnchor, selectedPathAnchorIds, alignmentGuides, snapCreationPoint, snapMoveDelta, viewportPointToCanvas, zoomAtPoint, type AlignmentGuide, type ContourNodeHit, type DimensionTarget, type FormaNodeHit, type HoverNode, type NodeHit, type PathNodeHit, type SnapGuide, type TransformMode } from "./interaction.js";
 import { aspectGeometryPatch, aspectSize, formatMm, geometryValue, rotationDegreesValue, rotationPatch, type GeometryField, type PropertyElement, type RotatableElement } from "./propertyBar.js";
 import { useDocumentStore, usePersistenceStore, useUiStore, useViewportStore, type Tool } from "./stores.js";
 import { pathJoinGuidance, pathJoinOptions } from "./pathJoins.js";
@@ -426,21 +426,6 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
   };
   const canvasPointAt = (event: PointerEvent<HTMLElement> | WheelEvent<HTMLElement>) => clientPointToCanvas({ x: event.clientX, y: event.clientY }, canvas.current!.getBoundingClientRect());
   const pointAt = (event: PointerEvent<HTMLElement> | WheelEvent<HTMLElement>) => documentPointAtClient(event.clientX, event.clientY);
-  const creationPointAt = (event: PointerEvent<HTMLElement>) => {
-    const pageElement = canvas.current?.querySelector<HTMLDivElement>(".page");
-    if (!pageElement) return pointAt(event);
-    const rect = pageElement.getBoundingClientRect();
-    const style = getComputedStyle(pageElement);
-    const borderLeft = parseFloat(style.borderLeftWidth);
-    const borderTop = parseFloat(style.borderTopWidth);
-    return clientPointToPage({ x: event.clientX, y: event.clientY }, document.page, {
-      rect,
-      renderedWidth: rect.width - borderLeft - parseFloat(style.borderRightWidth),
-      renderedHeight: rect.height - borderTop - parseFloat(style.borderBottomWidth),
-      borderLeft,
-      borderTop,
-    });
-  };
 
   useEffect(() => {
     if (!textDraft) return;
@@ -680,9 +665,9 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
      }
      if (interaction.current) return;
      setCenterHover(undefined);
-      setCursorPoint(documentPointToPage(pointAt(event), zoom));
-      setDocumentCursorPoint(pointAt(event));
-      if (isDrawingTool(tool)) setCreationPoint(creationPointAt(event));
+       setCursorPoint(canvasPointAt(event));
+       setDocumentCursorPoint(pointAt(event));
+       if (isDrawingTool(tool)) setCreationPoint(pointAt(event));
      setSnapGuide(undefined);
      setAlignmentGuideState([]);
      if (tool !== "forma") setEditModeElementIds([]);
@@ -695,7 +680,9 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
       return;
     }
       const point = pointAt(event);
-      const creationPointForClick = isDrawingTool(tool) ? creationPointAt(event) : undefined;
+       const rawCreationPoint = isDrawingTool(tool) ? point : undefined;
+       const creationPointForClick = rawCreationPoint ? snapCreationPoint(editorRef.current.document, rawCreationPoint, zoom)?.point ?? rawCreationPoint : undefined;
+       const inferredPoint = snapCreationPoint(editorRef.current.document, point, zoom)?.point ?? point;
       if (tool === "rectangle" || tool === "ellipse") {
         const creationPoint = creationPointForClick ?? point;
         const draft = creationDraftRef.current;
@@ -728,7 +715,7 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
          creationDraftRef.current = nextDraft;
          setCreationDraft(nextDraft);
          setEditorState(select(next, [line.id]));
-        } else if (draft.elementId && draft.points.length >= 3 && Math.hypot(draft.points[0]!.x - creationPoint.x, draft.points[0]!.y - creationPoint.y) <= 10 / zoom && hasNonCollinearPoints(draft.points)) {
+        } else if (draft.elementId && draft.points.length >= 3 && Math.hypot(draft.points[0]!.x - creationPoint.x, draft.points[0]!.y - creationPoint.y) <= 8 / zoom && hasNonCollinearPoints(draft.points)) {
          setEditorState(dispatch(editorRef.current, closePath(draft.elementId)));
          creationDraftRef.current = undefined;
          setCreationDraft(undefined);
@@ -755,10 +742,10 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
        else setTextDraft({ position: point, value: "" });
        return;
     }
-    if (tool === "spline") { addSplinePoint(point); return; }
+     if (tool === "spline") { addSplinePoint(inferredPoint); return; }
     if (tool === "pen") {
       const pathNode = pickPathNode(editorRef.current.document, point, zoom);
-      if (pathNode) {
+       if (pathNode) {
         const selectedPath = editorRef.current.document.elements.find((element) => element.id === pathNode.elementId && element.type === "path");
         if (selectedPath?.type === "path" && pathNode.node.kind === "anchor" && selectedPath.nodes[0]?.id === pathNode.node.nodeId && !selectedPath.closed) {
           setPenDraftPoint(undefined);
@@ -783,8 +770,8 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
         if (start) {
           event.currentTarget.setPointerCapture(event.pointerId);
           setEditorState(beginGesture(editorRef.current));
-          interaction.current = { pointerId: event.pointerId, lastX: event.clientX, lastY: event.clientY, kind: "pen-place", start, placement: point, ...(last && selectedPath ? { pathId: selectedPath.id } : {}), startClient: { x: event.clientX, y: event.clientY }, dragged: false };
-        } else addPenPoint(point);
+           interaction.current = { pointerId: event.pointerId, lastX: event.clientX, lastY: event.clientY, kind: "pen-place", start, placement: inferredPoint, ...(last && selectedPath ? { pathId: selectedPath.id } : {}), startClient: { x: event.clientX, y: event.clientY }, dragged: false };
+         } else addPenPoint(inferredPoint);
       }
       return;
     }
@@ -921,10 +908,10 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
   };
 
   const onCanvasPointerMove = (event: PointerEvent<HTMLDivElement>) => {
-      setCursorPoint(documentPointToPage(pointAt(event), zoom));
+       setCursorPoint(canvasPointAt(event));
       setDocumentCursorPoint(pointAt(event));
-      if (isDrawingTool(tool)) setCreationPoint(creationPointAt(event));
-     const feedbackTool = tool === "select" || tool === "forma" || tool === "dimension" ? tool : undefined;
+       if (isDrawingTool(tool)) setCreationPoint(pointAt(event));
+      const feedbackTool = tool === "text" || tool === "pan" ? undefined : tool;
      if (feedbackTool && !interaction.current && (tool !== "dimension" || dimensionDraft?.phase !== "placement")) setNodeHover(pickHoverNode(editorRef.current.document, pointAt(event), zoom, feedbackTool));
      else setNodeHover(undefined);
      if (tool === "dimension" && dimensionDraft?.phase !== "placement" && !interaction.current) setDimensionNodeHover(pickNode(editorRef.current.document, pointAt(event), zoom));
@@ -1161,8 +1148,8 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
      const activeSpline = activeSplineId ? document.elements.find((element): element is SplineElement => element.id === activeSplineId && element.type === "spline") : undefined;
          const activePenPath = selectedElements.find((element): element is Extract<Element, { type: "path" }> => element.type === "path" && !element.closed);
           const pointerMm = documentCursorPoint;
-         const splineCloseTarget = tool === "spline" && activeSpline && !activeSpline.closed && activeSpline.nodes.length >= 3 && pointerMm && (() => { const first = activeSpline.nodes[0]; return Boolean(first && Math.hypot(first.anchor.x - pointerMm.x, first.anchor.y - pointerMm.y) <= 10 / zoom); })();
-         const penCloseTarget = tool === "pen" && activePenPath && pointerMm && (() => { const first = activePenPath.nodes[0]; return Boolean(first && Math.hypot(first.anchor.x - pointerMm.x, first.anchor.y - pointerMm.y) <= 10 / zoom); })();
+          const splineCloseTarget = tool === "spline" && activeSpline && !activeSpline.closed && activeSpline.nodes.length >= 3 && pointerMm && (() => { const first = activeSpline.nodes[0]; return Boolean(first && Math.hypot(first.anchor.x - pointerMm.x, first.anchor.y - pointerMm.y) <= 8 / zoom); })();
+          const penCloseTarget = tool === "pen" && activePenPath && pointerMm && (() => { const first = activePenPath.nodes[0]; return Boolean(first && Math.hypot(first.anchor.x - pointerMm.x, first.anchor.y - pointerMm.y) <= 8 / zoom); })();
          const closeTargetActive = Boolean(activePenPath) || Boolean(splineCloseTarget);
          const closeCursorActive = Boolean(splineCloseTarget || penCloseTarget);
     const splitSelectedPathSegment = () => {
@@ -1238,7 +1225,7 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
       const rectangle = creationDraft.tool === "rectangle" ? normalizeDrag(creationDraft.points[0]!, pointer) : undefined;
       const circle = creationDraft.tool === "ellipse" ? circleGeometry(creationDraft.points[0]!, pointer) : undefined;
       const shape = rectangle ? <rect x={rectangle.position.x} y={rectangle.position.y} width={rectangle.size.width} height={rectangle.size.height} /> : circle ? <circle cx={creationDraft.points[0]!.x} cy={creationDraft.points[0]!.y} r={circle.radius} /> : undefined;
-      const guides: readonly CreationGuide[] = creationDraft.tool === "line" ? creationGuides(document, pointer, zoom) : [];
+       const guides: readonly CreationGuide[] = creationGuides(document, pointer, zoom);
        return <svg className="creation-pending-overlay" viewBox={`0 0 ${document.page.width} ${document.page.height}`} style={{ left: pageStyle.left + 1, top: pageStyle.top + 1, width: document.page.width * zoom, height: document.page.height * zoom, right: "auto", bottom: "auto" }} aria-label="Vista previa de creación"><g className="creation-preview-shape">{shape}</g><line className="creation-preview-radius" x1={start.x} y1={start.y} x2={pointer.x} y2={pointer.y} />{guides.map((guide, index) => <line key={index} className={`creation-guide creation-guide-${guide.kind}`} x1={guide.source.x} y1={guide.source.y} x2={guide.target.x} y2={guide.target.y} />)}</svg>;
     })() : undefined;
    const dimensionHoverStyle = dimensionNodeHover && tool === "dimension" ? (() => { const point = pagePointToCanvas(dimensionNodeHover.node.point, zoom, panMm); return { left: point.x, top: point.y }; })() : undefined;
