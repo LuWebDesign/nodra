@@ -167,18 +167,23 @@ export const rotateElementsAroundCenter = (ids: readonly ElementId[], delta: num
 export const resizeElement = (id: ElementId, position: PointMm, size: SizeMm): EditorCommand => updateElement(id, { position, size });
 const connectedSide = (document: DocumentSnapshot, id: ElementId, axis: "x" | "y"): { leftOrTop: boolean; rightOrBottom: boolean } => {
   const result = { leftOrTop: false, rightOrBottom: false };
-  const side = (address: ConnectableNodeAddress): "left" | "right" | "top" | "bottom" | undefined => {
-    if (address.kind !== "named") return undefined;
-    if (address.name === "w" || address.name === "nw" || address.name === "sw") return "left";
-    if (address.name === "e" || address.name === "ne" || address.name === "se") return "right";
-    if (address.name === "n") return "top";
-    if (address.name === "s") return "bottom";
-    return undefined;
+  const sides = (address: ConnectableNodeAddress): readonly ("left" | "right" | "top" | "bottom")[] => {
+    if (address.kind !== "named") return [];
+    if (address.name === "nw") return ["left", "top"];
+    if (address.name === "ne") return ["right", "top"];
+    if (address.name === "se") return ["right", "bottom"];
+    if (address.name === "sw") return ["left", "bottom"];
+    if (address.name === "w") return ["left"];
+    if (address.name === "e") return ["right"];
+    if (address.name === "n") return ["top"];
+    if (address.name === "s") return ["bottom"];
+    return [];
   };
   for (const connection of document.connections ?? []) for (const reference of [connection.first, connection.second]) if (reference.elementId === id) {
-    const value = side(reference.node);
-    if (value === (axis === "x" ? "left" : "top")) result.leftOrTop = true;
-    if (value === (axis === "x" ? "right" : "bottom")) result.rightOrBottom = true;
+    for (const value of sides(reference.node)) {
+      if (value === (axis === "x" ? "left" : "top")) result.leftOrTop = true;
+      if (value === (axis === "x" ? "right" : "bottom")) result.rightOrBottom = true;
+    }
   }
   return result;
 };
