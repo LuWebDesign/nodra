@@ -65,6 +65,27 @@ describe("font outline adapter", () => {
     expect(contour.nodes.length).toBeLessThanOrEqual(20);
     expect(contour.segments.every((segment) => segment.type === "cubicBezier")).toBe(true);
   });
+  it("keeps sharp corners as corner nodes when creating cubic handles", () => {
+    const source = {
+      nodes: [
+        { id: "a", anchor: { x: 0, y: 0 }, join: "corner" as const },
+        { id: "b", anchor: { x: 10, y: 0 }, join: "corner" as const },
+        { id: "c", anchor: { x: 10, y: 10 }, join: "corner" as const },
+        { id: "d", anchor: { x: 0, y: 10 }, join: "corner" as const },
+      ],
+      segments: [
+        { type: "line" as const, startNodeId: "a", endNodeId: "b" },
+        { type: "line" as const, startNodeId: "b", endNodeId: "c" },
+        { type: "line" as const, startNodeId: "c", endNodeId: "d" },
+        { type: "line" as const, startNodeId: "d", endNodeId: "a" },
+      ],
+    };
+    const result = simplifyGlyphContourForMode(source, "editable");
+    expect(result.nodes.every((node) => node.join === "corner")).toBe(true);
+    expect(result.segments.every((segment) => segment.type === "cubicBezier")).toBe(true);
+    expect(result.segments.every((segment) => segment.type !== "cubicBezier" || segment.control1.x === result.nodes.find((node) => node.id === segment.startNodeId)?.anchor.x && segment.control1.y === result.nodes.find((node) => node.id === segment.startNodeId)?.anchor.y)).toBe(true);
+  });
+
   it("preserves source cubic handles in editable mode instead of refitting them", () => {
     const source = {
       nodes: [
