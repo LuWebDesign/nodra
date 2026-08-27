@@ -312,6 +312,37 @@ test("creates, transforms, and undoes a rectangle", async ({ page }) => {
   await expect(width).toHaveValue(String(originalWidth));
 });
 
+test("shows node hover feedback while keeping the system cursor as an arrow", async ({ page }) => {
+  await page.goto("/");
+  await drawRectangle(page);
+  await page.getByRole("button", { name: "Seleccion" }).click();
+  const rectangle = page.locator(".page-svg svg rect").first();
+  const bounds = await rectangle.boundingBox();
+  expect(bounds).not.toBeNull();
+  await page.mouse.move(bounds!.x, bounds!.y);
+  const feedback = page.locator("[data-node-hover-feedback]");
+  await expect(feedback).toBeVisible();
+  const feedbackBounds = await feedback.boundingBox();
+  expect(feedbackBounds).not.toBeNull();
+  await expect(feedback).toHaveCSS("width", "4.5px");
+  await expect(feedback).toHaveCSS("height", "4.5px");
+  await expect(feedback).toHaveCSS("background-color", "rgb(245, 158, 11)");
+  await expect(feedback).toHaveCSS("border-top-width", "1px");
+  await expect(feedback).toHaveCSS("border-top-color", "rgb(17, 24, 39)");
+  await expect(feedback).toHaveCSS("box-shadow", "none");
+  expect(Math.abs(feedbackBounds!.x + feedbackBounds!.width / 2 - bounds!.x)).toBeLessThan(1);
+  expect(Math.abs(feedbackBounds!.y + feedbackBounds!.height / 2 - bounds!.y)).toBeLessThan(1);
+  await expect(page.locator(".canvas")).toHaveCSS("cursor", "default");
+  await page.getByRole("button", { name: "Acercar" }).click();
+  const zoomedBounds = await rectangle.boundingBox();
+  expect(zoomedBounds).not.toBeNull();
+  await page.mouse.move(zoomedBounds!.x, zoomedBounds!.y);
+  await expect(feedback).toHaveCSS("width", "7.5px");
+  await expect(feedback).toHaveCSS("height", "7.5px");
+  await page.mouse.move(zoomedBounds!.x + zoomedBounds!.width + 80, zoomedBounds!.y + zoomedBounds!.height + 80);
+  await expect(feedback).toHaveCount(0);
+});
+
 test("moves text with Selection and edits it inline on double-click", async ({ page }) => {
   await page.goto("/");
   const pageBounds = await page.locator(".page").boundingBox();

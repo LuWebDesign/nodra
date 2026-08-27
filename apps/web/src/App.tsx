@@ -5,7 +5,7 @@ import { boundsOfElements, contourVertexNodes, dimensionKindForPlacement, dimens
 import { DebouncedAutosave, DexieProjectRepository, requestStoragePersistence, type FontRecord } from "@nodra/persistence";
 import { validateDesign, validateProject } from "@nodra/validation";
 import { renderSvg } from "@nodra/renderer-svg";
-import { canActivateRotation, centerPageInCanvas, clientPointToCanvas, cubicPlacementControls, formaNodeKey, hoveredSelectionCenter, isDrawingTool, marqueeSelection, movementExceedsThreshold, normalizeBounds, normalizeDrag, pagePointToCanvas, pathGuides, pickDimensionTarget, pickElement, pickFormaNode, pickFormaSegment, pickNode, pickPathNode, pickPathSegment, pointerDownIntent, visibleEditablePathNodeIndexes, screenDeltaToMm, screenPointToMm, selectedNodeAnchor, selectedPathAnchorIds, alignmentGuides, snapMoveDelta, zoomAtPoint, type AlignmentGuide, type ContourNodeHit, type DimensionTarget, type FormaNodeHit, type NodeHit, type PathNodeHit, type SnapGuide, type TransformMode } from "./interaction.js";
+import { canActivateRotation, centerPageInCanvas, clientPointToCanvas, cubicPlacementControls, formaNodeKey, hoveredSelectionCenter, isDrawingTool, marqueeSelection, movementExceedsThreshold, normalizeBounds, normalizeDrag, pagePointToCanvas, pathGuides, pickDimensionTarget, pickElement, pickFormaNode, pickFormaSegment, pickHoverNode, pickNode, pickPathNode, pickPathSegment, pointerDownIntent, visibleEditablePathNodeIndexes, screenDeltaToMm, screenPointToMm, selectedNodeAnchor, selectedPathAnchorIds, alignmentGuides, snapMoveDelta, zoomAtPoint, type AlignmentGuide, type ContourNodeHit, type DimensionTarget, type FormaNodeHit, type HoverNode, type NodeHit, type PathNodeHit, type SnapGuide, type TransformMode } from "./interaction.js";
 import { aspectGeometryPatch, aspectSize, formatMm, geometryValue, rotationDegreesValue, rotationPatch, type GeometryField, type PropertyElement, type RotatableElement } from "./propertyBar.js";
 import { useDocumentStore, usePersistenceStore, useUiStore, useViewportStore, type Tool } from "./stores.js";
 import { pathJoinGuidance, pathJoinOptions } from "./pathJoins.js";
@@ -140,6 +140,7 @@ export function App() {
   type DimensionDraft = { readonly phase: "first"; readonly first: DimensionTarget } | { readonly phase: "placement"; readonly first: DimensionTarget; readonly second: DimensionTarget };
   const [dimensionDraft, setDimensionDraft] = useState<DimensionDraft>();
   const [dimensionNodeHover, setDimensionNodeHover] = useState<NodeHit>();
+  const [nodeHover, setNodeHover] = useState<HoverNode>();
   const [pendingShapeOperation, setPendingShapeOperation] = useState<{ readonly operation: "weld" | "subtract"; readonly ids: readonly ElementId[]; readonly invalidDimensionCount: number }>();
   const textDraftRef = useRef(textDraft);
   textDraftRef.current = textDraft;
@@ -246,7 +247,7 @@ export function App() {
     ? { type: "rectangle" as const, id: selectedElements[0]!.id, layerId: selectedElements[0]!.layerId, position: { x: selectedBounds.x, y: selectedBounds.y }, size: { width: selectedBounds.width, height: selectedBounds.height }, cornerRadius: 0, rotation: 0, style: selectedElements[0]!.style }
     : selectedElement && isPropertyElement(selectedElement) ? selectedElement : undefined;
   const selectionKey = selection.join(":");
-  useEffect(() => { setDimensionDraft(undefined); setDimensionNodeHover(undefined); setTransformMode("resize"); }, [tool, project.activePageId, selectionKey]);
+  useEffect(() => { setDimensionDraft(undefined); setDimensionNodeHover(undefined); setNodeHover(undefined); setTransformMode("resize"); }, [tool, project.activePageId, selectionKey]);
   useEffect(() => {
     setActiveSplineId(undefined);
     setSplineDraftPoint(undefined);
@@ -306,7 +307,7 @@ export function App() {
       hitArea.setAttribute("r", "8");
       hitArea.setAttribute("fill", "transparent");
       hitArea.style.pointerEvents = "auto";
-      hitArea.style.cursor = "move";
+       hitArea.style.cursor = "default";
       overlay.append(hitArea);
 const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "rect");
       mark.setAttribute("x", String(screen.x - 2.5));
@@ -824,8 +825,11 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
   };
 
   const onCanvasPointerMove = (event: PointerEvent<HTMLDivElement>) => {
-    setCursorPoint(canvasPointAt(event));
-    if (tool === "dimension" && dimensionDraft?.phase !== "placement" && !interaction.current) setDimensionNodeHover(pickNode(editorRef.current.document, pointAt(event), zoom));
+     setCursorPoint(canvasPointAt(event));
+     const feedbackTool = tool === "select" || tool === "forma" || tool === "dimension" ? tool : undefined;
+     if (feedbackTool && !interaction.current && (tool !== "dimension" || dimensionDraft?.phase !== "placement")) setNodeHover(pickHoverNode(editorRef.current.document, pointAt(event), zoom, feedbackTool));
+     else setNodeHover(undefined);
+     if (tool === "dimension" && dimensionDraft?.phase !== "placement" && !interaction.current) setDimensionNodeHover(pickNode(editorRef.current.document, pointAt(event), zoom));
     else if (tool !== "dimension") setDimensionNodeHover(undefined);
     const active = interaction.current;
     if (!active || active.pointerId !== event.pointerId) return;
@@ -1410,7 +1414,7 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
         <aside className="workspace-tools"><div className="tool-column" role="toolbar" aria-label="Herramientas de diseño">{(["select", "forma", "pen", "spline", "text", "rectangle", "ellipse", "line", "dimension", "pan"] as const).map((item) => <ToolButton key={item} label={toolCursorLabels[item]} icon={item} active={tool === item} onClick={() => { setTransformMode("resize"); setPenDraftPoint(undefined); if (item === "forma" && selectedElements.some((element) => element.type === "text")) setEditorState(clearSelection(editorRef.current)); if (item !== "forma") setEditModeElementIds([]); setTool(item); }} />)}</div></aside>
       <section className="canvas-area">
         <header className="canvas-header"><span>DISEÑO / SIN TÍTULO</span><span>{document.elements.length} objetos · {document.page.width} × {document.page.height} mm</span><div className="zoom-controls"><button aria-label="Alejar" onClick={() => setZoom(zoom - 0.5)}>−</button><span className="zoom-label">{Math.round(zoom * 100 / 3)}%</span><button aria-label="Acercar" onClick={() => setZoom(zoom + 0.5)}>+</button></div></header>
-            <div ref={canvas} className={`${grid ? "canvas" : "canvas no-grid"}${isDrawingTool(tool) ? " drawing-tool" : ""}${closeTargetActive ? " close-target-active" : ""}`} onPointerDown={onCanvasPointerDown} onPointerMove={onCanvasPointerMove} onPointerUp={(event) => finishPointer(event, false)} onPointerCancel={(event) => finishPointer(event, true)} onLostPointerCapture={cancelPointerInteraction} onPointerLeave={() => setCursorPoint(undefined)} onDoubleClick={onCanvasDoubleClick} onWheel={onWheel}>
+            <div ref={canvas} className={`${grid ? "canvas" : "canvas no-grid"}${isDrawingTool(tool) ? " drawing-tool" : ""}${closeTargetActive ? " close-target-active" : ""}`} onPointerDown={onCanvasPointerDown} onPointerMove={onCanvasPointerMove} onPointerUp={(event) => finishPointer(event, false)} onPointerCancel={(event) => finishPointer(event, true)} onLostPointerCapture={cancelPointerInteraction} onPointerLeave={() => { setCursorPoint(undefined); setNodeHover(undefined); setDimensionNodeHover(undefined); }} onDoubleClick={onCanvasDoubleClick} onWheel={onWheel}>
            {rulerHorizontal}{rulerVertical}<span className="ruler-corner" aria-hidden="true" />
            <div className="page" style={pageStyle}>{/* SAFETY: renderSvg emits allowlisted SVG from validated document data. */}<div className={`page-svg${textDraft ? " editing-text" : ""}`} dangerouslySetInnerHTML={{ __html: rendered.success ? rendered.svg : "" }} />{(alignmentGuideOverlay.length > 0 || splineOverlay.length > 0 || selectedEditOverlay.length > 0 || pathGuideOverlay.length > 0) && <svg data-spline-overlay-layer="true" viewBox={`0 0 ${document.page.width} ${document.page.height}`} style={{ position: "absolute", inset: 0, width: "100%", height: "100%", pointerEvents: "none", overflow: "visible", zIndex: 5 }}>{alignmentGuideOverlay}{selectedEditOverlay}{pathGuideOverlay}{splineOverlay}</svg>}</div>
               {textDraft && (() => {
@@ -1428,7 +1432,8 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
           {marqueeStyle && <div className="marquee" style={marqueeStyle} />}
           {pendingDimensionOverlay}
             {cursorPoint && <span className={`tool-cursor${closeCursorActive ? " close-cursor" : ""}${dimensionNodeHover && tool === "dimension" ? " dimension-node-cursor" : ""}`} style={{ left: cursorPoint.x, top: cursorPoint.y }} aria-label={`Herramienta activa: ${toolCursorLabels[tool]}`} title={closeCursorActive ? "Cerrar trazado" : dimensionNodeHover && tool === "dimension" ? "Nodo de dimensión" : tool === "forma" && pickFormaSegment(document, screenPointToMm(cursorPoint, { x: 0, y: 0 }, zoom, panMm), zoom) ? "Doble clic para insertar un nodo" : undefined}>{toolCursorIcons[tool]}</span>}
-          {dimensionHoverStyle && <span className="dimension-node-target" data-dimension-node-target={`${dimensionNodeHover!.elementId}:${dimensionNodeHover!.nodeIndex}`} style={dimensionHoverStyle} aria-label="Nodo de dimensión bajo el puntero" title="Nodo de dimensión" />}
+            {nodeHover && tool !== "dimension" && !interaction.current && (() => { const point = "node" in nodeHover ? nodeHover.node.point : nodeHover.point; const screen = pagePointToCanvas(point, zoom, panMm); const size = 6 * zoom; return <span className="node-hover-feedback" data-node-hover-feedback={`${nodeHover.elementId}:${nodeHover.nodeIndex ?? "forma"}`} style={{ left: screen.x, top: screen.y, width: size, height: size }} aria-label="Nodo bajo el puntero" />; })()}
+           {dimensionHoverStyle && <span className="dimension-node-target" data-dimension-node-target={`${dimensionNodeHover!.elementId}:${dimensionNodeHover!.nodeIndex}`} style={dimensionHoverStyle} aria-label="Nodo de dimensión bajo el puntero" title="Nodo de dimensión" />}
           <span className="canvas-hint">{tool === "dimension" ? !dimensionDraft ? "Cota: seleccione el primer nodo" : dimensionDraft.phase === "first" ? "Cota: seleccione el segundo nodo" : "Cota: coloque la cota" : `Clic: relleno · clic derecho: contorno · ${toolCursorLabels[tool]}`}</span>
         </div>
       </section>
