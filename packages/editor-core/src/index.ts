@@ -21,7 +21,7 @@ import {
   withElements,
 } from "@nodra/domain";
 import { validateDocument } from "@nodra/validation";
-import { boundsOfElements, contourWithPoints, directionVector, elementCenter, elementToContour, glyphGeometryNodes, groupCenter, mirrorHandleOffset, realGeometryNodes, resizeGroup, rotateElements, shapeResultContours, transformPoint, type Direction } from "@nodra/geometry";
+import { boundsOfElements, contourWithPoints, directionVector, elementCenter, elementToContour, glyphGeometryNodes, groupCenter, mirrorHandleOffset, realGeometryNodes, resizeGroup, rotateElements, shapeResultContours, transformPoint, splitCuttableSegments, classifyCutGraph, cuttableSegments, type Direction } from "@nodra/geometry";
 import { insertSplineNode, moveSplineHandle as moveSplineHandleData, moveSplineNode as moveSplineNodeData } from "./spline.js";
 
 export * from "./spline.js";
@@ -573,6 +573,81 @@ export const movePathHandle = (pathId: ElementId, segmentIndex: number, handle: 
 } });
 export const setPathJoin = (pathId: ElementId, nodeId: string, join: PathJoin): EditorCommand => ({ name: `path-join:${pathId}:${nodeId}:${join}`, apply: (document) => { const path = pathAt(document, pathId); const node = path?.nodes.find((current) => current.id === nodeId); if (!path || !node) return { success: false, error: "Path node not found" }; const incoming = path.segments.find((segment) => segment.endNodeId === nodeId); const outgoing = path.segments.find((segment) => segment.startNodeId === nodeId); if (join !== "corner" && incoming?.type === "cubicBezier" && outgoing?.type === "cubicBezier") { const inLength = Math.hypot(incoming.control2.x - node.anchor.x, incoming.control2.y - node.anchor.y); const outLength = Math.hypot(outgoing.control1.x - node.anchor.x, outgoing.control1.y - node.anchor.y); const direction = { x: outgoing.control1.x - node.anchor.x, y: outgoing.control1.y - node.anchor.y }; const magnitude = Math.hypot(direction.x, direction.y) || 1; const length = join === "symmetric" ? (inLength + outLength) / 2 : outLength; const control1 = { x: node.anchor.x + direction.x / magnitude * length, y: node.anchor.y + direction.y / magnitude * length }; const control2 = { x: node.anchor.x - direction.x / magnitude * (join === "symmetric" ? length : inLength), y: node.anchor.y - direction.y / magnitude * (join === "symmetric" ? length : inLength) }; const segments = path.segments.map((segment) => segment === outgoing ? { ...segment, control1 } : segment === incoming ? { ...segment, control2 } : segment); return updatePath(document, { ...path, nodes: path.nodes.map((current) => current.id === nodeId ? { ...current, join } : current), segments }); } return updatePath(document, { ...path, nodes: path.nodes.map((current) => current.id === nodeId ? { ...current, join } : current) }); } });
 export const setPathJoinMode = setPathJoin;
+/** Splits a straight path segment at a normalized intersection parameter. */
+export const splitPathLineAt = (pathId: ElementId, segmentIndex: number, parameter: number, newNodeId = `path-node-${crypto.randomUUID()}`): EditorCommand => ({ name: `path-split-at:${pathId}:${segmentIndex}`, apply: (document) => {
+  const path = pathAt(document, pathId); const segment = path?.segments[segmentIndex];
+  if (!path || !segment || segment.type !== "line" || !Number.isFinite(parameter) || parameter <= 0 || parameter >= 1 || path.nodes.some((node) => node.id === newNodeId)) return { success: false, error: "Line segment or split parameter is invalid" };
+  const start = path.nodes.find((node) => node.id === segment.startNodeId); const end = path.nodes.find((node) => node.id === segment.endNodeId);
+  const endIndex = path.nodes.findIndex((node) => node.id === segment.endNodeId);
+  if (!start || !end || endIndex < 0) return { success: false, error: "Path segment nodes are invalid" };
+  const node = { id: newNodeId, anchor: { x: start.anchor.x + (end.anchor.x - start.anchor.x) * parameter, y: start.anchor.y + (end.anchor.y - start.anchor.y) * parameter }, join: "corner" as const };
+  const nodes = [...path.nodes]; nodes.splice(endIndex, 0, node);
+  const segments = [...path.segments]; segments.splice(segmentIndex, 1, { type: "line", startNodeId: segment.startNodeId, endNodeId: node.id }, { type: "line", startNodeId: node.id, endNodeId: segment.endNodeId });
+  return updatePath(document, { ...path, nodes, segments });
+} });
+
+/** Cuts the line piece under a point after splitting it at line/rectangle intersections. */
+export const cutLineAtPoint = (lineId: ElementId, point: PointMm): EditorCommand => ({ name: `cut-line-at:${lineId}`, apply: (document) => {
+  const line = document.elements.find((element): element is Extract<Element, { type: "line" }> => element.id === lineId && element.type === "line");
+  if (!line || ![point.x, point.y].every(Number.isFinite)) return { success: false, error: "Line or cut point is invalid" };
+  const target = cuttableSegments(line)[0];
+  if (!target) return { success: false, error: "Line geometry is invalid" };
+  const others = document.elements.filter((element) => element.id !== lineId).flatMap((element) => cuttableSegments(element));
+  const allPieces = splitCuttableSegments([target, ...others]);
+  const pieces = allPieces.filter((piece) => piece.elementId === lineId);
+  if (pieces.length < 2) return replaceElements(document, document.elements.filter((element) => element.id !== lineId));
+  const hitIndex = pieces.reduce((best, piece, index) => {
+    const dx = piece.end.x - piece.start.x; const dy = piece.end.y - piece.start.y; const lengthSquared = dx * dx + dy * dy;
+    const t = lengthSquared === 0 ? 0 : Math.max(0, Math.min(1, ((point.x - piece.start.x) * dx + (point.y - piece.start.y) * dy) / lengthSquared));
+    const distance = Math.hypot(point.x - (piece.start.x + t * dx), point.y - (piece.start.y + t * dy));
+    return distance < best.distance ? { index, distance } : best;
+  }, { index: 0, distance: Number.POSITIVE_INFINITY }).index;
+  const remaining = pieces.filter((_, index) => index !== hitIndex);
+  const paths = remaining.map((piece, index): PathElement => ({ type: "path", id: index === 0 ? line.id : elementId(`${line.id}:piece:${index}`), layerId: line.layerId, nodes: [{ id: `${line.id}:start:${index}`, anchor: piece.start, join: "corner" }, { id: `${line.id}:end:${index}`, anchor: piece.end, join: "corner" }], segments: [{ type: "line", startNodeId: `${line.id}:start:${index}`, endNodeId: `${line.id}:end:${index}` }], closed: false, style: line.style, ...(line.operation ? { operation: line.operation } : {}) }));
+  const graph = classifyCutGraph(allPieces.filter((piece, index) => !(piece.elementId === lineId && index === hitIndex)));
+  const affectedRectangles = document.elements.filter((element): element is Extract<Element, { type: "rectangle" }> => element.type === "rectangle" && graph.cycles.some((cycle) => cycle.points.some((point) => point.x >= element.position.x && point.x <= element.position.x + element.size.width && point.y >= element.position.y && point.y <= element.position.y + element.size.height)));
+  const facePaths = graph.cycles.map((cycle, cycleIndex): PathElement => {
+    const source = affectedRectangles[0]; const id = elementId(`${line.id}:face:${cycleIndex}`); const nodes = cycle.points.map((anchor, index) => ({ id: `${id}:node:${index}`, anchor, join: "corner" as const }));
+    return { type: "path", id, layerId: source?.layerId ?? line.layerId, nodes, segments: nodes.map((node, index) => ({ type: "line" as const, startNodeId: node.id, endNodeId: nodes[(index + 1) % nodes.length]!.id })), closed: true, style: { ...(source?.style ?? line.style), fill: source?.style.fill ?? "rgba(101,217,255,0.22)" } };
+  });
+  const removedRectangles = new Set(affectedRectangles.map((element) => element.id));
+  return replaceElements(document, document.elements.flatMap((element) => element.id === lineId || removedRectangles.has(element.id) ? [] : [element]).concat(paths, facePaths));
+} });
+
+/** Removes one already-isolated straight segment; rectangles are converted only when cut. */
+export const cutPathSegment = (pathId: ElementId, segmentIndex: number, point?: PointMm): EditorCommand => ({ name: `cut-segment:${pathId}:${segmentIndex}`, apply: (document) => {
+  const path = pathAt(document, pathId); const segment = path?.segments[segmentIndex];
+  if (path) {
+    if (!segment || segment.type !== "line") return { success: false, error: "Only a straight path segment can be cut" };
+    if (path.segments.length === 1) return replaceElements(document, document.elements.filter((element) => element.id !== pathId));
+    if (path.closed) return { success: false, error: "Closed paths must be reconstructed before cutting an interior segment" };
+    const ranges = [[0, segmentIndex], [segmentIndex + 1, path.segments.length]] as const;
+    const pieces = ranges.filter(([start, end]) => end > start).map(([start, end], pieceIndex): PathElement => {
+      const segments = path.segments.slice(start, end);
+      const used = new Set(segments.flatMap((current) => [current.startNodeId, current.endNodeId]));
+      return { ...path, id: pieceIndex === 0 ? path.id : elementId(`${path.id}:piece:${pieceIndex}`), nodes: path.nodes.filter((node) => used.has(node.id)), segments, closed: false };
+    });
+    return replaceElements(document, document.elements.flatMap((element) => element.id === pathId ? pieces : [element]));
+  }
+  const rectangle = document.elements.find((element): element is Extract<Element, { type: "rectangle" }> => element.id === pathId && element.type === "rectangle");
+  if (!rectangle || rectangle.cornerRadius !== 0 || segmentIndex < 0 || segmentIndex > 3) return { success: false, error: "Only straight path or zero-radius rectangle segments can be cut" };
+  const target = cuttableSegments(rectangle);
+  const source = document.elements.filter((element) => element.id !== rectangle.id).flatMap((element) => cuttableSegments(element));
+  const pieces = splitCuttableSegments([...target, ...source]).filter((piece) => piece.elementId === rectangle.id);
+  const selected = point ? pieces.reduce((best, piece, index) => {
+    const dx = piece.end.x - piece.start.x; const dy = piece.end.y - piece.start.y; const lengthSquared = dx * dx + dy * dy;
+    const t = lengthSquared === 0 ? 0 : Math.max(0, Math.min(1, ((point.x - piece.start.x) * dx + (point.y - piece.start.y) * dy) / lengthSquared));
+    const distance = Math.hypot(point.x - (piece.start.x + t * dx), point.y - (piece.start.y + t * dy));
+    return distance < best.distance ? { index, distance } : best;
+  }, { index: Math.max(0, pieces.findIndex((piece) => piece.segmentIndex === segmentIndex)), distance: Number.POSITIVE_INFINITY }).index : pieces.findIndex((piece) => piece.segmentIndex === segmentIndex);
+  if (selected < 0 || pieces.length < 2) return { success: false, error: "Rectangle boundary has no cuttable piece" };
+  const remaining = pieces.filter((_, index) => index !== selected);
+  const ordered = [...remaining.slice(selected), ...remaining.slice(0, selected)];
+  const nodes = [...ordered.map((piece, index) => ({ id: `${rectangle.id}:cut:${index}`, anchor: piece.start, join: "corner" as const })), { id: `${rectangle.id}:cut:end`, anchor: ordered.at(-1)!.end, join: "corner" as const }];
+  const pathElement: PathElement = { type: "path", id: rectangle.id, layerId: rectangle.layerId, nodes, segments: ordered.map((_, index) => ({ type: "line" as const, startNodeId: nodes[index]!.id, endNodeId: nodes[index + 1]!.id })), closed: false, style: rectangle.style, ...(rectangle.operation ? { operation: rectangle.operation } : {}) };
+  return replaceElements(document, document.elements.map((element) => element.id === rectangle.id ? pathElement : element));
+} });
+
 export const splitPathSegment = (pathId: ElementId, segmentIndex: number, newNodeId = `path-node-${crypto.randomUUID()}`): EditorCommand => ({ name: `path-split:${pathId}:${segmentIndex}`, apply: (document) => {
   const path = pathAt(document, pathId); const segment = path?.segments[segmentIndex];
   if (!path || !segment || path.nodes.some((node) => node.id === newNodeId)) return { success: false, error: "Path segment or node is invalid" };

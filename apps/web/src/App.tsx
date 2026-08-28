@@ -107,8 +107,8 @@ type FormaNodeOverlay =
 
 type InspectorTab = "properties" | "transform" | "text";
 
-const toolCursorIcons: Record<Tool, string> = { select: "↖", forma: "⌘", pen: "✒", spline: "✒", text: "T", rectangle: "□", ellipse: "○", line: "╱", dimension: "↔", pan: "✣" };
-const toolCursorLabels: Record<Tool, string> = { select: "Seleccion", forma: "Forma", pen: "Pluma", spline: "Spline", text: "Texto", rectangle: "Rectángulo", ellipse: "Círculo", line: "Línea", dimension: "Cota", pan: "Desplazar" };
+const toolCursorIcons: Record<Tool, string> = { select: "↖", forma: "⌘", pen: "✒", spline: "✒", text: "T", rectangle: "□", ellipse: "○", line: "╱", cut: "✂", dimension: "↔", pan: "✣" };
+const toolCursorLabels: Record<Tool, string> = { select: "Seleccion", forma: "Forma", pen: "Pluma", spline: "Spline", text: "Texto", rectangle: "Rectángulo", ellipse: "Círculo", line: "Línea", cut: "Cortar segmentos", dimension: "Cota", pan: "Desplazar" };
 
 export function App() {
   const { mode, tool, setMode, setTool } = useUiStore();
@@ -752,7 +752,20 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
        else setTextDraft({ position: point, value: "" });
        return;
     }
-     if (tool === "spline") { addSplinePoint(inferredPoint); return; }
+     if (tool === "cut") {
+        const hit = pickCuttableSegment(editorRef.current.document, point, zoom);
+        const element = hit ? editorRef.current.document.elements.find((candidate) => candidate.id === hit.elementId) : undefined;
+        const segment = element?.type === "path" ? element.segments[hit?.segmentIndex ?? -1] : undefined;
+        if (hit && element?.type === "line") {
+              const next = dispatch(editorRef.current, cutLineAtPoint(hit.elementId, point));
+              if (next !== editorRef.current) setEditorState(select(next, next.document.elements.filter((candidate) => candidate.type === "path" && (candidate.id === hit.elementId || candidate.id.startsWith(`${hit.elementId}:piece:`))).map((candidate) => candidate.id)));
+            } else if (hit && (element?.type === "rectangle" || segment?.type === "line")) {
+          const next = dispatch(editorRef.current, cutPathSegment(hit.elementId, hit.segmentIndex, point));
+          if (next !== editorRef.current) setEditorState(select(next, [hit.elementId]));
+        }
+        return;
+      }
+      if (tool === "spline") { addSplinePoint(inferredPoint); return; }
     if (tool === "pen") {
       const pathNode = pickPathNode(editorRef.current.document, point, zoom);
        if (pathNode) {
@@ -1529,7 +1542,7 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
                 {objectPropertySections()}{mirrorButton("horizontal")}{mirrorButton("vertical")}{shapeOperations()}
          </div> : <p className="muted">Seleccione un objeto para editar sus propiedades.</p>}
       </section>
-         <aside className="workspace-tools"><div className="tool-column" role="toolbar" aria-label="Herramientas de diseño">{(["select", "forma", "pen", "spline", "text", "rectangle", "ellipse", "line", "dimension", "pan"] as const).map((item) => <ToolButton key={item} label={toolCursorLabels[item]} icon={item} active={tool === item} onClick={() => { setTransformMode("resize"); setPenDraftPoint(undefined); creationDraftRef.current = undefined; setCreationDraft(undefined); if (item === "forma" && selectedElements.some((element) => element.type === "text")) setEditorState(clearSelection(editorRef.current)); if (item !== "forma") setEditModeElementIds([]); setTool(item); }} />)}</div></aside>
+         <aside className="workspace-tools"><div className="tool-column" role="toolbar" aria-label="Herramientas de diseño">{(["select", "forma", "pen", "spline", "text", "rectangle", "ellipse", "line", "cut", "dimension", "pan"] as const).map((item) => <ToolButton key={item} label={toolCursorLabels[item]} icon={item} active={tool === item} onClick={() => { setTransformMode("resize"); setPenDraftPoint(undefined); creationDraftRef.current = undefined; setCreationDraft(undefined); if (item === "forma" && selectedElements.some((element) => element.type === "text")) setEditorState(clearSelection(editorRef.current)); if (item !== "forma") setEditModeElementIds([]); setTool(item); }} />)}</div></aside>
       <section className="canvas-area">
         <header className="canvas-header"><span>DISEÑO / SIN TÍTULO</span><span>{document.elements.length} objetos · {document.page.width} × {document.page.height} mm</span><div className="zoom-controls"><button aria-label="Alejar" onClick={() => setZoom(zoom - 0.5)}>−</button><span className="zoom-label">{Math.round(zoom * 100 / 3)}%</span><button aria-label="Acercar" onClick={() => setZoom(zoom + 0.5)}>+</button></div></header>
              <div ref={canvas} className={`${grid ? "canvas" : "canvas no-grid"}${isDrawingTool(tool) ? " drawing-tool" : ""}`} onPointerDown={onCanvasPointerDown} onPointerMove={onCanvasPointerMove} onPointerUp={(event) => finishPointer(event, false)} onPointerCancel={(event) => finishPointer(event, true)} onLostPointerCapture={cancelPointerInteraction} onPointerLeave={() => { setCursorPoint(undefined); setNodeHover(undefined); setDimensionNodeHover(undefined); }} onDoubleClick={onCanvasDoubleClick} onWheel={onWheel}>
