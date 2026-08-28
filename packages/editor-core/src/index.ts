@@ -607,10 +607,13 @@ const cutStraightComponent = (document: DocumentSnapshot, elementIdToCut: Elemen
   const selected = candidates.reduce<CutPieceGraph | undefined>((best, candidate) => !best || cutPointDistance(candidate, point) < cutPointDistance(best, point) ? candidate : best, undefined);
   if (!selected || !selected.source) return { success: false, error: "The selected segment is not cuttable" };
   const key = (pointValue: PointMm) => `${Math.round(pointValue.x / 1e-8)}:${Math.round(pointValue.y / 1e-8)}`;
+  const selectedSourcePieces = graph.filter(({ piece }) => piece.elementId === selected.piece.elementId);
+  const sharesSelectedSourceNode = (piece: CutPieceGraph["piece"]) => selectedSourcePieces.some((source) => [source.piece.start, source.piece.end].some((sourcePoint) => [piece.start, piece.end].some((candidatePoint) => key(sourcePoint) === key(candidatePoint))));
+  const edgeKey = (start: PointMm, end: PointMm) => [key(start), key(end)].sort().join("|");
   const connected = new Set<CutPieceGraph>([selected]); let changed = true;
   while (changed) { changed = false; for (const candidate of graph) if (!connected.has(candidate) && [...connected].some(({ piece }) => [piece.start, piece.end].some((end) => [candidate.piece.start, candidate.piece.end].some((start) => key(end) === key(start))))) { connected.add(candidate); changed = true; } }
-  const edgeKey = (start: PointMm, end: PointMm) => [key(start), key(end)].sort().join("|");
-  const component = [...connected];
+  const directElementIds = new Set(graph.filter(({ piece }) => piece.elementId === selected.piece.elementId || sharesSelectedSourceNode(piece)).map(({ piece }) => piece.elementId));
+  const component = selected.source.type === "line" ? graph.filter(({ piece }) => directElementIds.has(piece.elementId)) : [...connected];
   const selectedEdge = edgeKey(selected.piece.start, selected.piece.end);
   const remaining = component.filter(({ piece, source }) => selected.source.type === "ellipse" && source.type === "ellipse"
     ? !(piece.elementId === selected.piece.elementId && piece.segmentIndex === selected.piece.segmentIndex)

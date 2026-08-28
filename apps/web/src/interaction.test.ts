@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createDocument, elementId, layerId, type DocumentSnapshot } from "@nodra/domain";
 import { validateDocument } from "@nodra/validation";
-import { arcReferenceCenters, canActivateRotation, circleGeometry, centerPageInCanvas, clientPointToCanvas, clientPointToPage, creationGuides, hasNonCollinearPoints, hoveredSelectionCenter, INITIAL_ZOOM, isDrawingTool, marqueeSelection, MAX_ZOOM, MIN_ZOOM, movementExceedsThreshold, normalizeBounds, normalizeDrag, pagePointToScreen, screenDeltaToMm, screenPointToMm, viewportPointToCanvas, containsBounds, elementsContainedBy, pickDimensionTarget, pickElement, pickFormaElement, pickFormaNode, pickFormaSegment, pickHoverNode, pickCuttableSegment, pickNode, pointerDownIntent, selectedNodeAnchor, selectionCenter, selectionFrame, snapCreationPoint, snapMoveDelta, visibleEditablePathNodeIndexes, zoomAtPoint } from "./interaction.js";
+import { arcReferenceCenters, canActivateRotation, circleGeometry, centerPageInCanvas, clientPointToCanvas, clientPointToPage, creationGuides, hasNonCollinearPoints, hoveredSelectionCenter, INITIAL_ZOOM, intersectionReferenceNodes, isDrawingTool, marqueeSelection, MAX_ZOOM, MIN_ZOOM, movementExceedsThreshold, normalizeBounds, normalizeDrag, pagePointToScreen, screenDeltaToMm, screenPointToMm, viewportPointToCanvas, containsBounds, elementsContainedBy, pickDimensionTarget, pickElement, pickFormaElement, pickFormaNode, pickFormaSegment, pickHoverNode, pickCuttableSegment, pickNode, pointerDownIntent, selectedNodeAnchor, selectionCenter, selectionFrame, snapCreationPoint, snapMoveDelta, visibleEditablePathNodeIndexes, zoomAtPoint } from "./interaction.js";
 import { geometryPatch, geometryValue } from "./propertyBar.js";
 import { dimensionKindForNodes, dimensionOffsetForPlacement, pointMidpoint } from "@nodra/geometry";
 
@@ -43,6 +43,14 @@ describe("canvas coordinates", () => {
     expect(pickDimensionTarget(checked, { x: 30, y: 10 }, 1)?.kind).toBe("line");
     expect(pickDimensionTarget(checked, { x: 10, y: 10 }, 1)?.kind).toBe("node");
     expect(pickNode(checked, { x: 30, y: 10 }, 1)).toMatchObject({ node: { kind: "center" } });
+  });
+  it("uses object intersections as reference-only creation snaps", () => {
+    const layer = { id: layerId("intersection-ref"), name: "References", visible: true, order: 0 };
+    const first = { type: "line" as const, id: elementId("intersection-a"), layerId: layer.id, start: { x: 0, y: 5 }, end: { x: 10, y: 5 }, rotation: 0, style: { stroke: "#000", strokeWidth: 1 } };
+    const second = { type: "line" as const, id: elementId("intersection-b"), layerId: layer.id, start: { x: 5, y: 0 }, end: { x: 5, y: 10 }, rotation: 0, style: { stroke: "#000", strokeWidth: 1 } };
+    const checked = { ...createDocument("intersection-ref-doc", [layer]), elements: [first, second] };
+    expect(intersectionReferenceNodes(checked)).toEqual([{ x: 5, y: 5 }]);
+    expect(snapCreationPoint(checked, { x: 5.5, y: 5.25 }, 10)).toEqual({ point: { x: 5, y: 5 }, kind: "intersection" });
   });
   it("centers the default 1200x900 page in a measured canvas", () => {
     expect(centerPageInCanvas({ width: 360, height: 270 }, { width: 1200, height: 900 }, INITIAL_ZOOM)).toEqual({ x: expect.closeTo(360), y: expect.closeTo(270) });

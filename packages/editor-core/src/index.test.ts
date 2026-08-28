@@ -110,6 +110,13 @@ describe("editor core", () => {
     expect(closedFilled.some((element) => element.type === "path" && element.nodes.some((node) => node.anchor.x === 0 && node.anchor.y === 5))).toBe(true);
     expect(state.undo).toHaveLength(3);
   });
+  it("does not propagate a cut through objects that only touch direct targets", () => {
+    const first = { ...rectangle, id: elementId("direct-cut-rectangle"), position: { x: 0, y: 0 }, size: { width: 10, height: 10 }, style: { ...rectangle.style, fill: "#f00" } };
+    const touching = { ...rectangle, id: elementId("touching-neighbor"), position: { x: 10, y: 0 }, size: { width: 10, height: 10 }, style: { ...rectangle.style, fill: "#0f0" } };
+    const divider = { type: "line" as const, id: elementId("direct-divider"), layerId: rectangle.layerId, start: { x: 5, y: -2 }, end: { x: 5, y: 12 }, rotation: 0, style: rectangle.style };
+    const state = dispatch(createEditor({ ...document, elements: [first, touching, divider] }), cutLineAtPoint(divider.id, { x: 5, y: -1 }));
+    expect(state.document.elements.find((element) => element.id === touching.id)).toMatchObject(touching);
+  });
   it("cuts a rotated rectangle without changing an unrelated element", () => {
     const rotated = { ...rectangle, id: elementId("rotated"), rotation: Math.PI / 4, style: { ...rectangle.style, fill: "#0f0" } };
     const unrelated = { ...rectangle, id: elementId("unrelated"), position: { x: 100, y: 100 } };

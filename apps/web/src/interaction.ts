@@ -1,10 +1,10 @@
 import type { DocumentSnapshot, Element, ElementId, LineElement, PathElement, PathSegment, PointMm } from "@nodra/domain";
-import { boundsOf, boundsOfElements, connectableNodeAddress, contourSegmentAt, contourVertexNodes, dimensionGeometry, elementCenter, elementSegmentAt, hitTest, pathGeometryNodes, cuttableSegments, splitCuttableSegments, pathSegmentAt, realGeometryNodes, type Bounds, type ContourSegmentHit, type ContourVertexNode, type PathGeometryNode, type RealGeometryNode, type PathSegmentHit } from "@nodra/geometry";
+import { boundsOf, boundsOfElements, connectableNodeAddress, contourSegmentAt, contourVertexNodes, dimensionGeometry, elementCenter, elementSegmentAt, hitTest, lineSegmentIntersection, pathGeometryNodes, cuttableSegments, splitCuttableSegments, pathSegmentAt, realGeometryNodes, type Bounds, type ContourSegmentHit, type ContourVertexNode, type PathGeometryNode, type RealGeometryNode, type PathSegmentHit } from "@nodra/geometry";
 
 export interface DragGeometry { readonly position: PointMm; readonly size: { readonly width: number; readonly height: number } }
 export interface CircleGeometry { readonly position: PointMm; readonly size: { readonly width: number; readonly height: number }; readonly radius: number }
-export interface CreationGuide { readonly source: PointMm; readonly target: PointMm; readonly kind: "node" | "center" }
-export interface CreationSnap { readonly point: PointMm; readonly kind: "node" | "center"; readonly node?: NodeHit; readonly address?: import("@nodra/domain").ConnectableNodeAddress }
+export interface CreationGuide { readonly source: PointMm; readonly target: PointMm; readonly kind: "node" | "center" | "intersection" }
+export interface CreationSnap { readonly point: PointMm; readonly kind: "node" | "center" | "intersection"; readonly node?: NodeHit; readonly address?: import("@nodra/domain").ConnectableNodeAddress }
 export interface SnapGuide { readonly source: PointMm; readonly target: PointMm }
 export interface SnapMoveResult { readonly delta: PointMm; readonly guide: SnapGuide | undefined }
 export type AlignmentGuideOrientation = "vertical" | "horizontal";
@@ -55,6 +55,21 @@ export function selectedPathAnchorIds(path: PathElement, keys: readonly string[]
   }))];
 }
 
+const samePoint = (first: PointMm, second: PointMm, tolerance = 0.25): boolean => Math.hypot(first.x - second.x, first.y - second.y) < tolerance;
+
+export function intersectionReferenceNodes(document: DocumentSnapshot): readonly PointMm[] {
+  const visible = new Set(document.layers.filter((layer) => layer.visible).map((layer) => layer.id));
+  const segments = document.elements.flatMap((element) => visible.has(element.layerId) ? cuttableSegments(element) : []);
+  const intersections: PointMm[] = [];
+  for (let first = 0; first < segments.length; first += 1) for (let second = first + 1; second < segments.length; second += 1) {
+    const firstSegment = segments[first]!; const secondSegment = segments[second]!;
+    if (firstSegment.elementId === secondSegment.elementId) continue;
+    const intersection = lineSegmentIntersection(firstSegment.start, firstSegment.end, secondSegment.start, secondSegment.end);
+    if (intersection && !intersections.some((point) => samePoint(point, intersection.point))) intersections.push(intersection.point);
+  }
+  return intersections;
+}
+
 export function arcReferenceCenters(path: PathElement): readonly PointMm[] {
   const anchors = new Map(path.nodes.map((node) => [node.id, node.anchor]));
   const centers = path.segments.flatMap((segment) => {
@@ -69,7 +84,7 @@ export function arcReferenceCenters(path: PathElement): readonly PointMm[] {
     const center = { x: start.x + normalStart.x * t, y: start.y + normalStart.y * t };
     return [center];
   });
-  return centers.filter((center, index) => centers.findIndex((candidate) => Math.hypot(candidate.x - center.x, candidate.y - center.y) < 0.25) === index);
+  return centers.filter((center, index) => centers.findIndex((candidate) => samePoint(candidate, center)) === index);
 }
 
 /** Derives editor-only handle guides from the path's existing geometry nodes. */
@@ -275,6 +290,7 @@ export function snapCreationPoint(document: DocumentSnapshot, point: PointMm, zo
   if (![point.x, point.y, zoom, tolerancePx].every(Number.isFinite) || zoom <= 0 || tolerancePx < 0) throw new Error("creation snap coordinates, zoom, and tolerance must be valid");
   const visible = new Set(document.layers.filter((layer) => layer.visible).map((layer) => layer.id));
   let bestNode: { readonly point: PointMm; readonly distance: number; readonly order: string; readonly node: NodeHit } | undefined;
+  let bestIntersection: { readonly point: PointMm; readonly distance: number; readonly order: string } | undefined;
   let bestCenter: { readonly point: PointMm; readonly distance: number; readonly order: string } | undefined;
   for (const element of document.elements) if (visible.has(element.layerId)) for (const [index, node] of realGeometryNodes(element).entries()) {
     const distance = Math.hypot(node.point.x - point.x, node.point.y - point.y) * zoom;
@@ -284,11 +300,16 @@ export function snapCreationPoint(document: DocumentSnapshot, point: PointMm, zo
       if (!bestCenter || distance < bestCenter.distance || distance === bestCenter.distance && candidate.order < bestCenter.order) bestCenter = candidate;
     } else if (!bestNode || distance < bestNode.distance || distance === bestNode.distance && candidate.order < bestNode.order) bestNode = candidate;
   }
+  for (const [index, node] of intersectionReferenceNodes(document).entries()) {
+    const distance = Math.hypot(node.x - point.x, node.y - point.y) * zoom;
+    if (distance <= tolerancePx && (!bestIntersection || distance < bestIntersection.distance || distance === bestIntersection.distance && `${index}` < bestIntersection.order)) bestIntersection = { point: node, distance, order: `${index}` };
+  }
   if (bestNode) {
     const target = document.elements.find((element) => element.id === bestNode!.node.elementId);
     const address = target ? connectableNodeAddress(target, bestNode!.node.nodeIndex) : undefined;
     return { point: bestNode.point, kind: "node", node: bestNode.node, ...(address ? { address } : {}) };
   }
+  if (bestIntersection) return { point: bestIntersection.point, kind: "intersection" };
   return bestCenter ? { point: bestCenter.point, kind: "center" } : undefined;
 }
 
