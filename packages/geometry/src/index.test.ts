@@ -1,11 +1,51 @@
 import { describe, expect, it } from "vitest";
-import { angularDimensionGeometry, bezierHandlePoint, boundsOf, boundsOfElements, boundsOutsidePage, closedElementToPolygon, cubicBezierBounds, cubicBezierDerivative, degreesToRadians, dimensionGeometry, dimensionKindForNodes, dimensionKindForPlacement, dimensionOffsetForAlignedPlacement, dimensionOffsetForPlacement, editableGeometryNodes, elementCenter, elementSegmentAt, elementToContour, evaluateCubicBezier, ELLIPSE_APPROXIMATION_SEGMENTS, groupCenter, groupHandlePoints, hitTest, mirrorHandleOffset, mmToScreen, pointMidpoint, radiansToDegrees, realGeometryNodes, resizeGroup, resizeHandle, rotatedLineEndpoints, rotateElements, rotationFromDrag, rotationHandlePoints, screenToMm, shapeResultContours, splitCubicBezier, validateSize, visibleBezierHandleGuides } from "./index.js";
+import { angularDimensionGeometry, bezierHandlePoint, boundsOf, closedCuttableCycles, boundsOfElements, boundsOutsidePage, closedElementToPolygon, cubicBezierBounds, cuttableSegments, cubicBezierDerivative, degreesToRadians, dimensionGeometry, dimensionKindForNodes, dimensionKindForPlacement, dimensionOffsetForAlignedPlacement, dimensionOffsetForPlacement, editableGeometryNodes, elementCenter, elementSegmentAt, elementToContour, evaluateCubicBezier, ELLIPSE_APPROXIMATION_SEGMENTS, groupCenter, groupHandlePoints, hitTest, lineSegmentIntersection, mirrorHandleOffset, splitLineSegment, splitCuttableSegments, mmToScreen, pointMidpoint, radiansToDegrees, realGeometryNodes, resizeGroup, resizeHandle, rotatedLineEndpoints, rotateElements, rotationFromDrag, rotationHandlePoints, screenToMm, shapeResultContours, splitCubicBezier, validateSize, visibleBezierHandleGuides } from "./index.js";
 import { elementId, layerId } from "@nodra/domain";
 
 const style = { stroke: "#000", strokeWidth: 0.2 };
 const rectangle = { type: "rectangle" as const, id: elementId("r"), layerId: layerId("l"), position: { x: 10, y: 20 }, size: { width: 20, height: 10 }, cornerRadius: 0, rotation: 0, style };
 
 describe("canonical millimetre geometry", () => {
+      it("finds a crossing segment intersection with stable parameters", () => {
+        expect(lineSegmentIntersection({ x: 0, y: 0 }, { x: 10, y: 10 }, { x: 0, y: 10 }, { x: 10, y: 0 })).toEqual({ point: { x: 5, y: 5 }, firstT: 0.5, secondT: 0.5 });
+      });
+
+      it("includes endpoint intersections and rejects parallel segments", () => {
+        expect(lineSegmentIntersection({ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 })).toEqual({ point: { x: 10, y: 0 }, firstT: 1, secondT: 0 });
+        expect(lineSegmentIntersection({ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 0, y: 1 }, { x: 10, y: 1 })).toBeUndefined();
+      });
+
+      it("splits a segment at sorted interior parameters without duplicating cuts", () => {
+        expect(splitLineSegment({ x: 0, y: 0 }, { x: 10, y: 0 }, [0.75, 0.25, 0.25, 0, 1])).toEqual([{ x: 0, y: 0 }, { x: 2.5, y: 0 }, { x: 7.5, y: 0 }, { x: 10, y: 0 }]);
+      });
+
+      it("splits all cuttable segments at pairwise intersections", () => {
+        const pieces = splitCuttableSegments([
+          { elementId: elementId("a"), segmentIndex: 0, start: { x: 0, y: 5 }, end: { x: 10, y: 5 } },
+          { elementId: elementId("b"), segmentIndex: 0, start: { x: 5, y: 0 }, end: { x: 5, y: 10 } },
+        ]);
+        expect(pieces).toHaveLength(4);
+        expect(pieces.filter((piece) => piece.elementId === elementId("a"))).toEqual(expect.arrayContaining([{ elementId: elementId("a"), segmentIndex: 0, start: { x: 0, y: 5 }, end: { x: 5, y: 5 } }, { elementId: elementId("a"), segmentIndex: 0, start: { x: 5, y: 5 }, end: { x: 10, y: 5 } }]));
+      });
+
+      it("detects the bounded cycle of a rectangle boundary", () => {
+        const cycles = closedCuttableCycles(cuttableSegments(rectangle));
+        expect(cycles).toHaveLength(1);
+        expect(cycles[0]?.area).toBe(200);
+      });
+
+      it("finds two bounded faces when a line splits a rectangle", () => {
+        const line = { type: "line" as const, id: elementId("divider"), layerId: layerId("l"), start: { x: 20, y: 10 }, end: { x: 20, y: 40 }, rotation: 0, style };
+        const cycles = closedCuttableCycles(splitCuttableSegments([...cuttableSegments(rectangle), ...cuttableSegments(line)]));
+        expect(cycles).toHaveLength(2);
+        expect(cycles.map((cycle) => cycle.area).sort((a, b) => a - b)).toEqual([100, 100]);
+      });
+
+      it("projects rectangles and lines as straight cuttable segments but excludes circles", () => {
+        expect(cuttableSegments(rectangle)).toHaveLength(4);
+        expect(cuttableSegments({ type: "line", id: elementId("line"), layerId: layerId("l"), start: { x: 0, y: 0 }, end: { x: 10, y: 0 }, rotation: 0, style })).toHaveLength(1);
+        expect(cuttableSegments({ type: "ellipse", id: elementId("ellipse"), layerId: layerId("l"), position: { x: 0, y: 0 }, size: { width: 10, height: 10 }, rotation: 0, style })).toEqual([]);
+      });
   it("provides shared directional Bézier handle primitives", () => {
     const anchor = { x: 10, y: 20 };
     expect(bezierHandlePoint(anchor, "out", { dx: 3, dy: -4 })).toEqual({ direction: "out", point: { x: 13, y: 16 } });

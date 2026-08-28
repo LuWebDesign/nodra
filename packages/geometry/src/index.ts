@@ -4,6 +4,103 @@ import type { ContourElement, DimensionElement, Element, ElementId, EllipseEleme
 export interface Bounds { readonly x: number; readonly y: number; readonly width: number; readonly height: number }
 export interface Viewport { readonly zoom: number; readonly panMm: PointMm }
 export interface PointPx { readonly x: number; readonly y: number }
+export interface CuttableSegment { readonly elementId: ElementId; readonly segmentIndex: number; readonly start: PointMm; readonly end: PointMm }
+
+/** Projects supported Stage 1 objects into straight, cuttable boundary segments. */
+export function cuttableSegments(element: Element): readonly CuttableSegment[] {
+  if (element.type === "line") {
+    const [start, end] = rotatedLineEndpoints(element);
+    return start && end ? [{ elementId: element.id, segmentIndex: 0, start, end }] : [];
+  }
+  if (element.type === "path") {
+        const nodes = new Map(element.nodes.map((node) => [node.id, node.anchor]));
+        return element.segments.flatMap((segment, segmentIndex) => {
+          if (segment.type !== "line") return [];
+          const start = nodes.get(segment.startNodeId); const end = nodes.get(segment.endNodeId);
+          return start && end ? [{ elementId: element.id, segmentIndex, start, end }] : [];
+        });
+      }
+      if (element.type !== "rectangle") return [];
+  const corners = rotatedCorners(element);
+  return corners.map((start, index) => ({ elementId: element.id, segmentIndex: index, start, end: corners[(index + 1) % corners.length]! }));
+}
+export interface SegmentIntersection { readonly point: PointMm; readonly firstT: number; readonly secondT: number }
+
+/** Splits a line at normalized parameters, preserving endpoints and removing duplicate cuts. */
+export interface CutSegmentPiece extends CuttableSegment { readonly start: PointMm; readonly end: PointMm }
+    export interface CutSegmentCycle { readonly points: readonly PointMm[]; readonly area: number }
+    export interface CutGraphResult { readonly cycles: readonly CutSegmentCycle[]; readonly openPieces: readonly CutSegmentPiece[] }
+
+    /** Finds bounded closed faces in a planar graph of straight cut pieces. */
+    export function closedCuttableCycles(pieces: readonly CutSegmentPiece[], epsilon = 1e-9): readonly CutSegmentCycle[] {
+      const key = (point: PointMm) => `${Math.round(point.x / epsilon)}:${Math.round(point.y / epsilon)}`;
+      const vertices = new Map<string, PointMm>(); const adjacency = new Map<string, string[]>(); const edges = new Set<string>();
+      for (const piece of pieces) {
+        const startKey = key(piece.start); const endKey = key(piece.end); if (startKey === endKey) continue;
+        vertices.set(startKey, piece.start); vertices.set(endKey, piece.end);
+        const edgeKey = [startKey, endKey].sort().join("|"); if (edges.has(edgeKey)) continue; edges.add(edgeKey);
+        adjacency.set(startKey, [...(adjacency.get(startKey) ?? []), endKey]); adjacency.set(endKey, [...(adjacency.get(endKey) ?? []), startKey]);
+      }
+      for (const [vertexKey, neighbors] of adjacency) neighbors.sort((first, second) => Math.atan2(vertices.get(first)!.y - vertices.get(vertexKey)!.y, vertices.get(first)!.x - vertices.get(vertexKey)!.x) - Math.atan2(vertices.get(second)!.y - vertices.get(vertexKey)!.y, vertices.get(second)!.x - vertices.get(vertexKey)!.x));
+      const visited = new Set<string>(); const cycles: CutSegmentCycle[] = [];
+      for (const [start, neighbors] of adjacency) for (const first of neighbors) {
+        const directed = `${start}>${first}`; if (visited.has(directed)) continue;
+        const points: PointMm[] = []; let from = start; let to = first; let guard = 0;
+        while (guard++ <= edges.size * 2) {
+          const marker = `${from}>${to}`; if (visited.has(marker)) break; visited.add(marker); points.push(vertices.get(from)!);
+          const outgoing = adjacency.get(to) ?? []; let index = outgoing.findIndex((neighbor) => neighbor === from); if (index < 0) break;
+          index = (index - 1 + outgoing.length) % outgoing.length; const next = outgoing[index]!; from = to; to = next;
+          if (from === start && to === first) {
+            const area = points.reduce((sum, point, pointIndex) => { const nextPoint = points[(pointIndex + 1) % points.length]!; return sum + point.x * nextPoint.y - nextPoint.x * point.y; }, 0) / 2;
+            if (area > epsilon) cycles.push({ points, area });
+            break;
+          }
+        }
+      }
+      return cycles;
+    }
+
+    /** Separates bounded faces from pieces that do not belong to any closed face. */
+    export function classifyCutGraph(pieces: readonly CutSegmentPiece[], epsilon = 1e-9): CutGraphResult {
+      const cycles = closedCuttableCycles(pieces, epsilon);
+      const key = (point: PointMm) => `${Math.round(point.x / epsilon)}:${Math.round(point.y / epsilon)}`;
+      const cycleEdges = new Set(cycles.flatMap((cycle) => cycle.points.map((point, index) => [key(point), key(cycle.points[(index + 1) % cycle.points.length]!)].sort().join("|"))));
+      return { cycles, openPieces: pieces.filter((piece) => !cycleEdges.has([key(piece.start), key(piece.end)].sort().join("|"))) };
+    }
+
+export function splitLineSegment(start: PointMm, end: PointMm, parameters: readonly number[], epsilon = 1e-9): readonly PointMm[] {
+  if (![start.x, start.y, end.x, end.y, epsilon, ...parameters].every(Number.isFinite) || epsilon < 0) throw new Error("segment coordinates, parameters, and epsilon must be finite");
+  const cuts = [...new Set(parameters.filter((parameter) => parameter > epsilon && parameter < 1 - epsilon).map((parameter) => Math.max(0, Math.min(1, parameter))))].sort((first, second) => first - second);
+  return [0, ...cuts, 1].map((parameter) => ({ x: start.x + (end.x - start.x) * parameter, y: start.y + (end.y - start.y) * parameter }));
+}
+
+/** Splits every straight boundary at all pairwise intersections without mutating source elements. */
+export function splitCuttableSegments(segments: readonly CuttableSegment[], epsilon = 1e-9): readonly CutSegmentPiece[] {
+  const parameters = segments.map(() => [] as number[]);
+  for (let first = 0; first < segments.length; first += 1) for (let second = first + 1; second < segments.length; second += 1) {
+    const intersection = lineSegmentIntersection(segments[first]!.start, segments[first]!.end, segments[second]!.start, segments[second]!.end, epsilon);
+    if (intersection) { parameters[first]!.push(intersection.firstT); parameters[second]!.push(intersection.secondT); }
+  }
+  return segments.flatMap((segment, index) => splitLineSegment(segment.start, segment.end, parameters[index]!, epsilon).flatMap((start, pointIndex, points) => {
+    const end = points[pointIndex + 1];
+    return end ? [{ ...segment, start, end }] : [];
+  }));
+}
+
+/** Returns the proper intersection of two finite line segments, if one exists. Endpoints count as intersections. */
+export function lineSegmentIntersection(firstStart: PointMm, firstEnd: PointMm, secondStart: PointMm, secondEnd: PointMm, epsilon = 1e-9): SegmentIntersection | undefined {
+  if (![firstStart.x, firstStart.y, firstEnd.x, firstEnd.y, secondStart.x, secondStart.y, secondEnd.x, secondEnd.y, epsilon].every(Number.isFinite) || epsilon < 0) throw new Error("segment coordinates and epsilon must be finite");
+  const ax = firstEnd.x - firstStart.x; const ay = firstEnd.y - firstStart.y;
+  const bx = secondEnd.x - secondStart.x; const by = secondEnd.y - secondStart.y;
+  const denominator = ax * by - ay * bx;
+  if (Math.abs(denominator) <= epsilon) return undefined;
+  const cx = secondStart.x - firstStart.x; const cy = secondStart.y - firstStart.y;
+  const firstT = (cx * by - cy * bx) / denominator;
+  const secondT = (cx * ay - cy * ax) / denominator;
+  if (firstT < -epsilon || firstT > 1 + epsilon || secondT < -epsilon || secondT > 1 + epsilon) return undefined;
+  const clampedFirstT = Math.max(0, Math.min(1, firstT));
+  return { point: { x: firstStart.x + ax * clampedFirstT, y: firstStart.y + ay * clampedFirstT }, firstT: clampedFirstT, secondT: Math.max(0, Math.min(1, secondT)) };
+}
 export type ResizeHandle = "nw" | "n" | "ne" | "e" | "se" | "s" | "sw" | "w";
 export type GroupHandle = ResizeHandle | "center";
 export type Direction = "north-west" | "north" | "north-east" | "west" | "center" | "east" | "south-west" | "south" | "south-east";
