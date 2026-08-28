@@ -633,7 +633,7 @@ const cutStraightComponent = (document: DocumentSnapshot, elementIdToCut: Elemen
   const elements = document.elements.filter((element) => !componentElements.has(element.id));
   const insertionIndex = firstAffected < 0 ? elements.length : document.elements.slice(0, firstAffected).filter((element) => !componentElements.has(element.id)).length;
   elements.splice(insertionIndex, 0, ...paths);
-  return replaceElements(document, elements);
+  return replaceElements(removeConnectionsFor(document, componentElements), elements);
 };
 
 export const cutLineAtPoint = (lineId: ElementId, point: PointMm): EditorCommand => ({ name: `cut-line-at:${lineId}`, apply: (document) => cutStraightComponent(document, lineId, 0, point) });

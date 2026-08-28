@@ -83,6 +83,7 @@ describe("editor core", () => {
   it("uses circle intersections to keep a trimmed rectangle corner filled and closed", () => {
     const filled = { ...rectangle, id: elementId("circle-corner-rectangle"), position: { x: 0, y: 0 }, size: { width: 20, height: 20 }, style: { ...rectangle.style, fill: "#f00" } };
     const circle: EllipseElement = { type: "ellipse", id: elementId("corner-circle"), layerId: rectangle.layerId, position: { x: -5, y: -5 }, size: { width: 10, height: 10 }, rotation: 0, style: rectangle.style };
+    const connection = { id: "corner-circle-connection", first: { elementId: circle.id, node: { kind: "named" as const, name: "center" as const } }, second: { elementId: filled.id, node: { kind: "named" as const, name: "nw" as const } } };
     const segmentWithEndpoints = (elements: readonly Element[], predicate: (start: PointMm, end: PointMm) => boolean): { readonly path: PathElement; readonly segmentIndex: number } | undefined => {
       for (const element of elements) if (element.type === "path") for (let segmentIndex = 0; segmentIndex < element.segments.length; segmentIndex += 1) {
         const nodes = new Map(element.nodes.map((node) => [node.id, node.anchor]));
@@ -91,7 +92,8 @@ describe("editor core", () => {
       }
       return undefined;
     };
-    let state = dispatch(createEditor({ ...document, elements: [filled, circle] }), cutPathSegment(circle.id, 0, { x: 3.5, y: 3.5 }));
+    let state = dispatch(createEditor({ ...document, elements: [filled, circle], connections: [connection] }), cutPathSegment(circle.id, 0, { x: 3.5, y: 3.5 }));
+    expect(state.document.connections).toEqual([]);
     const top = segmentWithEndpoints(state.document.elements, (start, end) => start.y === 0 && end.y === 0 && Math.min(start.x, end.x) === 0 && Math.max(start.x, end.x) === 5);
     expect(top).toBeDefined();
     state = top ? dispatch(state, cutPathSegment(top.path.id, top.segmentIndex, { x: 2, y: 0 })) : state;
