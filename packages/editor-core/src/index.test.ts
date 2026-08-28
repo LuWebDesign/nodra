@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createDocument, elementId, layerId, type DimensionElement, type EllipseElement, type GlyphElement, type PathElement, type RectangleElement, type SplineElement, type TextElement } from "@nodra/domain";
-import { addToSelection, appendSplineNode, beginGesture, cancelGesture, clearSelection, closePath, closeSplineElement, commitGesture, createEditor, createElement, createPathCubicNode, deleteContourNodes, deleteElement, deleteElementNodes, deletePathNodes, dispatch, duplicateElements, flipElements, insertContourNode, invalidDimensionIdsForShapeOperation, moveElement, moveElements, movePathNode, movePathHandle, openPath, previewGesture, previewGestureFromBase, redo, removeFromSelection, reorderLayer, resizeElement, resizeElementToDimensions, resizeElements, resizeElementsToDimensions, rotateElementsAroundCenter, select, selectForPointerDown, setLayerVisibility, setPathJoin, shapeOperation, splitPathSegment, toggleSelection, undo, updateContourNode, updateElement, updateElementNode, updateElementStyles, updateSplineHandle, updateSplineNode } from "./index.js";
+import { addToSelection, appendSplineNode, beginGesture, cancelGesture, clearSelection, closePath, closeSplineElement, commitGesture, createEditor, createElement, createPathCubicNode, cutPathSegment, splitPathLineAt, deleteContourNodes, deleteElement, deleteElementNodes, deletePathNodes, dispatch, duplicateElements, flipElements, insertContourNode, invalidDimensionIdsForShapeOperation, moveElement, moveElements, movePathNode, movePathHandle, openPath, previewGesture, previewGestureFromBase, redo, removeFromSelection, reorderLayer, resizeElement, resizeElementToDimensions, resizeElements, resizeElementsToDimensions, rotateElementsAroundCenter, select, selectForPointerDown, setLayerVisibility, setPathJoin, shapeOperation, splitPathSegment, toggleSelection, undo, updateContourNode, updateElement, updateElementNode, updateElementStyles, updateSplineHandle, updateSplineNode } from "./index.js";
 import { boundsOfElements } from "@nodra/geometry";
 import type { Direction } from "@nodra/geometry";
 import { appendLinePoint } from "./index.js";
@@ -15,6 +15,24 @@ const dimension: DimensionElement = { type: "dimension", id: elementId("dimensio
 const glyph: GlyphElement = { type: "glyph", id: elementId("glyph"), layerId: layerId("default"), position: { x: 0, y: 0 }, size: { width: 20, height: 20 }, glyph: "O", fillRule: "evenodd", rotation: 0, style: rectangle.style, contours: [{ nodes: [{ id: "ga", anchor: { x: 0, y: 0 }, join: "smooth" }, { id: "gb", anchor: { x: 10, y: 0 }, join: "smooth" }, { id: "gc", anchor: { x: 10, y: 10 }, join: "smooth" }, { id: "gd", anchor: { x: 0, y: 10 }, join: "smooth" }], segments: [{ type: "cubicBezier", startNodeId: "ga", endNodeId: "gb", control1: { x: 3, y: -2 }, control2: { x: 7, y: -2 } }, { type: "cubicBezier", startNodeId: "gb", endNodeId: "gc", control1: { x: 12, y: 3 }, control2: { x: 12, y: 7 } }, { type: "cubicBezier", startNodeId: "gc", endNodeId: "gd", control1: { x: 7, y: 12 }, control2: { x: 3, y: 12 } }, { type: "cubicBezier", startNodeId: "gd", endNodeId: "ga", control1: { x: -2, y: 7 }, control2: { x: -2, y: 3 } }] }] };
 
 describe("editor core", () => {
+  it("converts a zero-radius rectangle to an open path when cutting one edge", () => {
+    const state = dispatch(createEditor({ ...document, elements: [rectangle] }), cutPathSegment(rectangle.id, 0));
+    expect(state.document.elements[0]).toMatchObject({ type: "path", closed: false, segments: [{ type: "line" }, { type: "line" }, { type: "line" }] });
+  });
+  it("splits a straight path segment at an arbitrary parameter", () => {
+    const cutPath: PathElement = { ...path, nodes: [...path.nodes, { id: "c", anchor: { x: 10, y: 10 }, join: "corner" }], segments: [...path.segments, { type: "line", startNodeId: "b", endNodeId: "c" }] };
+    const state = dispatch(createEditor({ ...document, elements: [cutPath] }), splitPathLineAt(cutPath.id, 1, 0.25));
+    expect(state.document.elements[0]).toMatchObject({ type: "path", nodes: [{ id: "a" }, { id: "b" }, { anchor: { x: 10, y: 2.5 } }, { id: "c" }] });
+  });
+  it("removes a single-segment path when it is cut", () => {
+    const single: PathElement = { ...path, nodes: path.nodes.slice(0, 2), segments: [{ type: "line", startNodeId: "a", endNodeId: "b" }] };
+    expect(dispatch(createEditor({ ...document, elements: [single] }), cutPathSegment(single.id, 0)).document.elements).toEqual([]);
+  });
+  it("rejects a curved cut atomically", () => {
+    const initial = createEditor({ ...document, elements: [path] });
+    const rejected = dispatch(initial, cutPathSegment(path.id, 0, { x: 5, y: 3 }));
+    expect(rejected).toBe(initial);
+  });
   it("converts a zero-radius rectangle to an open path when cutting one edge", () => {
         const state = dispatch(createEditor({ ...document, elements: [rectangle] }), cutPathSegment(rectangle.id, 0));
         expect(state.document.elements[0]).toMatchObject({ type: "path", closed: false, segments: [{ type: "line" }, { type: "line" }, { type: "line" }] });
