@@ -22,6 +22,7 @@ describe("editable path handles", () => {
   it("shows anchors before selection and neighbouring handles after selecting an anchor", () => {
     expect(visibleEditablePathNodeIndexes(nodes, segments, [])).toEqual([0, 1, 2]);
     expect(visibleEditablePathNodeIndexes(nodes, segments, [1])).toEqual([0, 1, 2, 3, 4, 5, 6]);
+    expect(visibleEditablePathNodeIndexes(nodes, segments, [4])).toEqual([0, 1, 2, 4, 5]);
   });
 });
 

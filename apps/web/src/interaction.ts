@@ -39,8 +39,9 @@ export type FormaNodeHit = { readonly elementId: ElementId; readonly nodeIndex?:
 
 export function visibleEditablePathNodeIndexes(nodes: readonly PathGeometryNode[], segments: readonly Pick<PathSegment, "startNodeId" | "endNodeId">[], selectedNodeIndexes: readonly number[]): readonly number[] {
   const selectedAnchors = new Set(selectedNodeIndexes.flatMap((index) => nodes[index]?.kind === "anchor" ? [nodes[index]!.nodeId] : []));
+  const selectedControls = new Set(selectedNodeIndexes.flatMap((index) => nodes[index]?.kind === "control" ? [nodes[index]!.nodeId] : []));
   return nodes.flatMap((node, index) => {
-    if (node.kind === "anchor" || selectedAnchors.has(node.nodeId)) return [index];
+    if (node.kind === "anchor" || selectedAnchors.has(node.nodeId) || selectedControls.has(node.nodeId)) return [index];
     const segment = node.segmentIndex === undefined ? undefined : segments[node.segmentIndex];
     return segment && (selectedAnchors.has(segment.startNodeId) || selectedAnchors.has(segment.endNodeId)) ? [index] : [];
   });
