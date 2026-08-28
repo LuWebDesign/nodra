@@ -1,5 +1,5 @@
 import type { DocumentSnapshot, Element, ElementId, LineElement, PathElement, PathSegment, PointMm } from "@nodra/domain";
-import { boundsOf, boundsOfElements, connectableNodeAddress, contourSegmentAt, contourVertexNodes, dimensionGeometry, elementCenter, elementSegmentAt, hitTest, pathGeometryNodes, pathSegmentAt, realGeometryNodes, type Bounds, type ContourSegmentHit, type ContourVertexNode, type PathGeometryNode, type RealGeometryNode, type PathSegmentHit } from "@nodra/geometry";
+import { boundsOf, boundsOfElements, connectableNodeAddress, contourSegmentAt, contourVertexNodes, dimensionGeometry, elementCenter, elementSegmentAt, hitTest, pathGeometryNodes, cuttableSegments, splitCuttableSegments, pathSegmentAt, realGeometryNodes, type Bounds, type ContourSegmentHit, type ContourVertexNode, type PathGeometryNode, type RealGeometryNode, type PathSegmentHit } from "@nodra/geometry";
 
 export interface DragGeometry { readonly position: PointMm; readonly size: { readonly width: number; readonly height: number } }
 export interface CircleGeometry { readonly position: PointMm; readonly size: { readonly width: number; readonly height: number }; readonly radius: number }
@@ -22,6 +22,7 @@ export interface NodeHit { readonly elementId: ElementId; readonly nodeIndex: nu
 export interface DimensionLineHit { readonly elementId: ElementId; readonly line: LineElement; readonly distance: number }
 export type DimensionTarget = { readonly kind: "node"; readonly hit: NodeHit } | { readonly kind: "line"; readonly hit: DimensionLineHit };
 export interface PathNodeHit { readonly elementId: ElementId; readonly node: PathGeometryNode & { readonly ringIndex?: number } }
+    export interface CuttableSegmentHit { readonly elementId: ElementId; readonly segmentIndex: number; readonly distance: number }
 export type PathGuideDirection = "incoming" | "outgoing";
 export interface PathGuide {
   readonly elementId: ElementId;
@@ -93,7 +94,23 @@ export function pickPathNode(document: DocumentSnapshot, point: PointMm, zoom: n
   return best?.hit;
 }
 
-export function pickPathSegment(document: DocumentSnapshot, point: PointMm, zoom: number, tolerancePx = 8): PathSegmentHitResult | undefined {
+/** Picks a straight line or rectangle boundary for the Cut Segments tool. */
+    export function pickCuttableSegment(document: DocumentSnapshot, point: PointMm, zoom: number, tolerancePx = 8): CuttableSegmentHit | undefined {
+      if (![point.x, point.y, zoom, tolerancePx].every(Number.isFinite) || zoom <= 0 || tolerancePx < 0) throw new Error("cut segment coordinates, zoom, and tolerance must be valid");
+      const visible = new Set(document.layers.filter((layer) => layer.visible).map((layer) => layer.id));
+      let best: CuttableSegmentHit | undefined;
+      const sourceSegments = document.elements.flatMap((element) => visible.has(element.layerId) ? cuttableSegments(element) : []);
+      for (const segment of splitCuttableSegments(sourceSegments)) {
+        const dx = segment.end.x - segment.start.x; const dy = segment.end.y - segment.start.y; const lengthSquared = dx * dx + dy * dy;
+        if (lengthSquared <= 0) continue;
+        const t = Math.max(0, Math.min(1, ((point.x - segment.start.x) * dx + (point.y - segment.start.y) * dy) / lengthSquared));
+        const distance = Math.hypot(point.x - (segment.start.x + t * dx), point.y - (segment.start.y + t * dy));
+        if (distance * zoom <= tolerancePx && (!best || distance < best.distance)) best = { elementId: segment.elementId, segmentIndex: segment.segmentIndex, distance };
+      }
+      return best;
+    }
+
+    export function pickPathSegment(document: DocumentSnapshot, point: PointMm, zoom: number, tolerancePx = 8): PathSegmentHitResult | undefined {
   if (![point.x, point.y, zoom, tolerancePx].every(Number.isFinite) || zoom <= 0 || tolerancePx < 0) throw new Error("path segment coordinates, zoom, and tolerance must be valid");
   const visible = new Set(document.layers.filter((layer) => layer.visible).map((layer) => layer.id));
   let best: PathSegmentHitResult | undefined;
@@ -266,7 +283,7 @@ export function hasNonCollinearPoints(points: readonly PointMm[], epsilon = 1e-9
   return false;
 }
 
-export type NodeFeedbackTool = "select" | "forma" | "pen" | "spline" | "rectangle" | "ellipse" | "line" | "dimension";
+export type NodeFeedbackTool = "select" | "forma" | "pen" | "spline" | "rectangle" | "ellipse" | "line" | "cut" | "dimension";
 export type HoverNode = NodeHit | FormaNodeHit;
 
 /** Finds the node feedback target supported by a tool without changing its hit semantics. */
