@@ -1,4 +1,4 @@
-export const CURRENT_SCHEMA_VERSION = 5 as const;
+export const CURRENT_SCHEMA_VERSION = 4 as const;
 
 export type SchemaVersion = typeof CURRENT_SCHEMA_VERSION;
 export type DocumentId = string & { readonly __brand: "DocumentId" };
@@ -155,12 +155,6 @@ export interface GlyphContour { readonly nodes: readonly PathNode[]; readonly se
 /** Editable outline for one laid-out font glyph; multiple contours preserve holes. */
 export interface GlyphElement { readonly type: "glyph"; readonly id: ElementId; readonly layerId: LayerId; readonly position: PointMm; readonly size: SizeMm; readonly glyph: string; readonly contours: readonly GlyphContour[]; readonly fillRule: "evenodd"; readonly rotation: number; readonly flipX?: boolean; readonly flipY?: boolean; readonly style: VisualStyle; readonly operation?: OperationMetadata }
 export type Element = RectangleElement | EllipseElement | LineElement | DimensionElement | ContourElement | PathElement | SplineElement | TextElement | GlyphElement;
-export type ConnectableNodeAddress =
-  | { readonly kind: "named"; readonly name: "nw" | "n" | "ne" | "e" | "se" | "s" | "sw" | "w" | "center" }
-  | { readonly kind: "line"; readonly name: "start" | "end" | "center" }
-  | { readonly kind: "path" | "spline"; readonly nodeId: string; readonly handle?: "in" | "out" };
-export interface ConnectableNodeReference { readonly elementId: ElementId; readonly node: ConnectableNodeAddress }
-export interface ExplicitConnection { readonly id: string; readonly first: ConnectableNodeReference; readonly second: ConnectableNodeReference }
 export interface DocumentCapabilities { readonly spline?: 1 }
 export interface DocumentSnapshot {
   readonly schemaVersion: SchemaVersion;
@@ -172,7 +166,6 @@ export interface DocumentSnapshot {
   readonly page: SizeMm;
   readonly layers: readonly Layer[];
   readonly elements: readonly Element[];
-  readonly connections?: readonly ExplicitConnection[];
 }
 
 export interface PageSnapshot {
@@ -180,7 +173,6 @@ export interface PageSnapshot {
   readonly page: SizeMm;
   readonly layers: readonly Layer[];
   readonly elements: readonly Element[];
-  readonly connections?: readonly ExplicitConnection[];
 }
 
 export interface ProjectSnapshot {
@@ -201,11 +193,11 @@ export const pageId = (value: string): PageId => value as PageId;
 export const revision = (value: number): Revision => value as Revision;
 
 export function createDocument(id: string, layers: readonly Layer[] = []): DocumentSnapshot {
-  return { schemaVersion: CURRENT_SCHEMA_VERSION, id: documentId(id), revision: revision(0), origin: "top-left", units: "mm", page: { width: 1200, height: 900 }, layers: [...layers], elements: [], connections: [] };
+  return { schemaVersion: CURRENT_SCHEMA_VERSION, id: documentId(id), revision: revision(0), origin: "top-left", units: "mm", page: { width: 1200, height: 900 }, layers: [...layers], elements: [] };
 }
 
 export function createProject(document: DocumentSnapshot): ProjectSnapshot {
-  const page = { id: pageId("page-1"), page: document.page, layers: document.layers, elements: document.elements, connections: document.connections ?? [] };
+  const page = { id: pageId("page-1"), page: document.page, layers: document.layers, elements: document.elements };
   return { schemaVersion: CURRENT_SCHEMA_VERSION, id: document.id, revision: document.revision, origin: document.origin, units: document.units, pages: [page], activePageId: page.id };
 }
 
@@ -215,11 +207,11 @@ export function projectPage(project: ProjectSnapshot, pageIdValue = project.acti
 
 export function documentFromProject(project: ProjectSnapshot, pageIdValue = project.activePageId): DocumentSnapshot {
   const page = projectPage(project, pageIdValue);
-  return { schemaVersion: project.schemaVersion, id: project.id, revision: project.revision, origin: project.origin, units: project.units, page: page.page, layers: page.layers, elements: page.elements, connections: page.connections ?? [] };
+  return { schemaVersion: project.schemaVersion, id: project.id, revision: project.revision, origin: project.origin, units: project.units, page: page.page, layers: page.layers, elements: page.elements };
 }
 
 export function projectFromDocument(project: ProjectSnapshot, document: DocumentSnapshot): ProjectSnapshot {
-  return { ...project, revision: document.revision, pages: project.pages.map((page) => page.id === project.activePageId ? { ...page, page: document.page, layers: document.layers, elements: document.elements, connections: document.connections ?? [] } : page) };
+  return { ...project, revision: document.revision, pages: project.pages.map((page) => page.id === project.activePageId ? { ...page, page: document.page, layers: document.layers, elements: document.elements } : page) };
 }
 
 export function nextRevision(value: Revision): Revision {

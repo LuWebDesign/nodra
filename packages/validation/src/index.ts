@@ -19,13 +19,6 @@ const ellipse = z.object({ ...common, type: z.literal("ellipse"), position: poin
 const line = z.object({ ...common, type: z.literal("line"), start: point, end: point }).strict().superRefine((value, ctx) => {
   if (value.start.x === value.end.x && value.start.y === value.end.y) ctx.addIssue({ code: "custom", message: "Line endpoints must differ", path: ["end"] });
 });
-const connectableAddress = z.union([
-  z.object({ kind: z.literal("named"), name: z.enum(["nw", "n", "ne", "e", "se", "s", "sw", "w", "center"]) }).strict(),
-  z.object({ kind: z.literal("line"), name: z.enum(["start", "end", "center"]) }).strict(),
-  z.object({ kind: z.enum(["path", "spline"]), nodeId: nonEmptyId, handle: z.enum(["in", "out"]).optional() }).strict(),
-]);
-const connectionReference = z.object({ elementId: nonEmptyId, node: connectableAddress }).strict();
-const explicitConnection = z.object({ id: nonEmptyId, first: connectionReference, second: connectionReference }).strict();
 const nodeReference = z.object({ kind: z.literal("node"), elementId: nonEmptyId, nodeIndex: finite.int().nonnegative() }).strict();
 const lineReference = z.object({ kind: z.literal("line"), elementId: nonEmptyId }).strict();
 const legacyNodeReference = z.object({ elementId: nonEmptyId, nodeIndex: finite.int().nonnegative() }).strict().transform((reference) => ({ kind: "node" as const, ...reference }));
@@ -87,37 +80,7 @@ const glyph = z.object({ ...common, type: z.literal("glyph"), position: point, s
 });
 export const elementSchema = z.discriminatedUnion("type", [rectangle, ellipse, line, dimension, contour, path, splineElementSchema, textElement, glyph]);
 export const layerSchema = z.object({ id: nonEmptyId, name: z.string().min(1), visible: z.boolean(), order: finite.int().nonnegative() }).strict();
-const documentFields = { id: nonEmptyId, revision: finite.int().nonnegative(), origin: z.literal("top-left"), units: z.literal("mm"), page: size, layers: z.array(layerSchema), elements: z.array(elementSchema), connections: z.array(explicitConnection).default([]) };
-const validateConnections = (elements: readonly z.infer<typeof elementSchema>[], connections: readonly z.infer<typeof explicitConnection>[], ctx: z.RefinementCtx, path: (string | number)[] = []) => {
-  const byId = new Map(elements.map((element) => [element.id, element]));
-  const ids = new Set<string>();
-  connections.forEach((connection, index) => {
-    if (ids.has(connection.id)) ctx.addIssue({ code: "custom", message: "Connection IDs must be unique", path: [...path, index, "id"] });
-    ids.add(connection.id);
-    const refs: readonly [typeof connection.first, typeof connection.second] = [connection.first, connection.second];
-    if (refs[0].elementId === refs[1].elementId && JSON.stringify(refs[0].node) === JSON.stringify(refs[1].node)) ctx.addIssue({ code: "custom", message: "Connections must join two different nodes", path: [...path, index] });
-    refs.forEach((reference, referenceIndex) => {
-      const element = byId.get(reference.elementId);
-      const address = reference.node;
-      const valid = element && ((address.kind === "named" && (element.type === "rectangle" || element.type === "ellipse")) || (address.kind === "line" && element.type === "line") || (address.kind === "path" && element.type === "path") || (address.kind === "spline" && element.type === "spline"));
-      if (!element) ctx.addIssue({ code: "custom", message: "Connection references an unknown element", path: [...path, index, referenceIndex === 0 ? "first" : "second", "elementId"] });
-      else if (!valid) ctx.addIssue({ code: "custom", message: "Connection node address is invalid for its element", path: [...path, index, referenceIndex === 0 ? "first" : "second", "node"] });
-      if ((address.kind === "path" || address.kind === "spline") && element) {
-        const nodes = element.type === "path" || element.type === "spline" ? element.nodes : [];
-        const node = nodes.find((candidate) => candidate.id === address.nodeId);
-        if (!node) ctx.addIssue({ code: "custom", message: "Connection references an unknown node", path: [...path, index, referenceIndex === 0 ? "first" : "second", "node", "nodeId"] });
-        else if (address.handle) {
-          const hasHandle = address.kind === "spline" && element.type === "spline"
-            ? address.handle === "in" ? element.nodes.find((candidate) => candidate.id === address.nodeId)?.inHandle !== undefined : element.nodes.find((candidate) => candidate.id === address.nodeId)?.outHandle !== undefined
-            : address.kind === "path" && element.type === "path"
-              ? element.segments.some((segment) => segment.type === "cubicBezier" && (address.handle === "in" ? segment.endNodeId : segment.startNodeId) === address.nodeId)
-              : false;
-          if (!hasHandle) ctx.addIssue({ code: "custom", message: "Connection references an unknown handle", path: [...path, index, referenceIndex === 0 ? "first" : "second", "node", "handle"] });
-        }
-      }
-    });
-  });
-};
+const documentFields = { id: nonEmptyId, revision: finite.int().nonnegative(), origin: z.literal("top-left"), units: z.literal("mm"), page: size, layers: z.array(layerSchema), elements: z.array(elementSchema) };
 export const documentSchema = z.object({ schemaVersion: z.literal(CURRENT_SCHEMA_VERSION), ...documentFields, capabilities: z.object({ spline: z.literal(1).optional() }).strict().optional() }).strict().superRefine((value, ctx) => {
   const layerIds = new Set(value.layers.map((layer) => layer.id));
   const elementIds = new Set(value.elements.map((element) => element.id));
@@ -144,13 +107,12 @@ export const documentSchema = z.object({ schemaVersion: z.literal(CURRENT_SCHEMA
       }
     }
   }
-  validateConnections(value.elements, value.connections, ctx, ["connections"]);
 });
-const pageSchema = z.object({ id: nonEmptyId, page: size, layers: z.array(layerSchema), elements: z.array(elementSchema), connections: z.array(explicitConnection).default([]) }).strict();
+const pageSchema = z.object({ id: nonEmptyId, page: size, layers: z.array(layerSchema), elements: z.array(elementSchema) }).strict();
 export const projectSchema = z.object({ schemaVersion: z.literal(CURRENT_SCHEMA_VERSION), id: nonEmptyId, revision: finite.int().nonnegative(), origin: z.literal("top-left"), units: z.literal("mm"), pages: z.array(pageSchema).min(1), activePageId: nonEmptyId }).strict().superRefine((value, ctx) => {
   if (!value.pages.some((page) => page.id === value.activePageId)) ctx.addIssue({ code: "custom", message: "Active page does not exist", path: ["activePageId"] });
   const layerIds = new Set(value.pages.flatMap((page) => page.layers.map((layer) => layer.id)));
-  value.pages.forEach((page, pageIndex) => { page.elements.forEach((element, elementIndex) => { if (!layerIds.has(element.layerId)) ctx.addIssue({ code: "custom", message: "Element references an unknown layer", path: ["pages", pageIndex, "elements", elementIndex, "layerId"] }); }); validateConnections(page.elements, page.connections, ctx, ["pages", pageIndex, "connections"]); });
+  value.pages.forEach((page, pageIndex) => page.elements.forEach((element, elementIndex) => { if (!layerIds.has(element.layerId)) ctx.addIssue({ code: "custom", message: "Element references an unknown layer", path: ["pages", pageIndex, "elements", elementIndex, "layerId"] }); }));
 });
 export type ValidationIssue = { readonly path: readonly (string | number)[]; readonly message: string };
 export type ValidationResult = { readonly success: true; readonly data: DocumentSnapshot } | { readonly success: false; readonly issues: readonly ValidationIssue[]; readonly error: string };
@@ -159,9 +121,9 @@ export type JsonValue = object | boolean | number | string | null;
 export function migrateDocument(input: JsonValue): JsonValue {
   if (typeof input !== "object" || input === null || Array.isArray(input)) return input;
   const candidate = input as Record<string, unknown>;
-  if (candidate.schemaVersion === 1) return { ...candidate, schemaVersion: CURRENT_SCHEMA_VERSION, page: { width: 1200, height: 900 }, connections: [] };
-  if (candidate.schemaVersion === 2 || candidate.schemaVersion === 3 || candidate.schemaVersion === 4) {
-    return { ...candidate, schemaVersion: CURRENT_SCHEMA_VERSION, page: candidate.page ?? { width: 1200, height: 900 }, connections: candidate.connections ?? [] };
+  if (candidate.schemaVersion === 1) return { ...candidate, schemaVersion: CURRENT_SCHEMA_VERSION, page: { width: 1200, height: 900 } };
+  if (candidate.schemaVersion === 2 || candidate.schemaVersion === 3) {
+    return { ...candidate, schemaVersion: CURRENT_SCHEMA_VERSION, page: candidate.page ?? { width: 1200, height: 900 } };
   }
   return input;
 }
@@ -179,21 +141,12 @@ export function validateDocument(input: unknown): ValidationResult {
 }
 
 export function validateProject(input: unknown): { readonly success: true; readonly data: ProjectSnapshot } | { readonly success: false; readonly issues: readonly ValidationIssue[]; readonly error: string } {
-  const migrated = migrateProject(input);
-  const result = projectSchema.safeParse(migrated);
+  const result = projectSchema.safeParse(input);
   if (result.success) { // SAFETY: projectSchema validated the complete shape; branded IDs are runtime strings.
     return { success: true, data: result.data as unknown as ProjectSnapshot };
   }
   const issues = result.error.issues.map((issue) => ({ path: issue.path.filter((part): part is string | number => typeof part === "string" || typeof part === "number"), message: issue.message }));
   return { success: false, issues, error: issues.map((issue) => `${issue.path.join(".") || "project"}: ${issue.message}`).join("; ") };
-}
-
-export function migrateProject(input: unknown): unknown {
-  if (typeof input !== "object" || input === null || Array.isArray(input)) return input;
-  const candidate = input as Record<string, unknown>;
-  if (candidate.schemaVersion !== 1 && candidate.schemaVersion !== 2 && candidate.schemaVersion !== 3 && candidate.schemaVersion !== 4) return input;
-  const pages = Array.isArray(candidate.pages) ? candidate.pages.map((page) => typeof page === "object" && page !== null && !Array.isArray(page) ? { ...(page as Record<string, unknown>), connections: (page as Record<string, unknown>).connections ?? [] } : page) : candidate.pages;
-  return { ...candidate, schemaVersion: CURRENT_SCHEMA_VERSION, pages };
 }
 
 export function serializeDocument(document: DocumentSnapshot): string {

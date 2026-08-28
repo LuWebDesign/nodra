@@ -1,5 +1,5 @@
 import polygonClipping, { type MultiPolygon } from "polygon-clipping";
-import type { ConnectableNodeAddress, ContourElement, DimensionElement, Element, ElementId, EllipseElement, GlyphElement, HandleOffset, LineElement, PathCubicSegment, PathElement, PointMm, RectangleElement, SizeMm, SplineElement, SplineNode } from "@nodra/domain";
+import type { ContourElement, DimensionElement, Element, ElementId, EllipseElement, GlyphElement, HandleOffset, LineElement, PathCubicSegment, PathElement, PointMm, RectangleElement, SizeMm, SplineElement, SplineNode } from "@nodra/domain";
 
 export interface Bounds { readonly x: number; readonly y: number; readonly width: number; readonly height: number }
 export interface Viewport { readonly zoom: number; readonly panMm: PointMm }
@@ -11,18 +11,6 @@ export type ResizeCorner = Extract<ResizeHandle, "nw" | "ne" | "se" | "sw">;
 export interface ResizeGeometry { readonly position: PointMm; readonly size: SizeMm }
 export type RealGeometryNodeKind = "corner" | "edge-midpoint" | "endpoint" | "center" | "cardinal";
 export interface RealGeometryNode { readonly kind: RealGeometryNodeKind | "anchor" | "control"; readonly point: PointMm; readonly nodeId?: string; readonly segmentIndex?: number; readonly handle?: "control1" | "control2" }
-export function connectableNodeAddress(element: Element, nodeIndex: number): ConnectableNodeAddress | undefined {
-  const node = realGeometryNodes(element)[nodeIndex];
-  if (!node) return undefined;
-  if (element.type === "line") return { kind: "line", name: nodeIndex === 0 ? "start" : nodeIndex === 2 ? "end" : "center" };
-  if (element.type === "path" || element.type === "spline") return node.nodeId ? { kind: element.type, nodeId: node.nodeId, ...(node.handle === "control1" ? { handle: "out" as const } : node.handle === "control2" ? { handle: "in" as const } : {}) } : undefined;
-  const names = element.type === "rectangle" ? ["nw", "ne", "se", "sw", "center", "n", "e", "s", "w"] : ["center", "n", "e", "s", "w"];
-  const name = names[nodeIndex];
-  return name ? { kind: "named", name: name as Extract<ConnectableNodeAddress, { kind: "named" }>["name"] } : undefined;
-}
-export function connectableNode(element: Element, address: ConnectableNodeAddress): RealGeometryNode | undefined {
-  return realGeometryNodes(element).find((node, index) => JSON.stringify(connectableNodeAddress(element, index)) === JSON.stringify(address));
-}
 export interface ContourVertexNode { readonly elementId: ElementId; readonly ringIndex: number; readonly pointIndex: number; readonly point: PointMm }
 export interface ContourSegmentHit { readonly elementId: ElementId; readonly ringIndex: number; readonly segmentIndex: number; readonly distance: number }
 export const ELLIPSE_APPROXIMATION_SEGMENTS = 64;
@@ -473,7 +461,7 @@ export function realGeometryNodes(element: Element): readonly RealGeometryNode[]
   if (element.type === "dimension") return [];
   if (element.type === "line") {
     const [start, end] = rotatedLineEndpoints(element);
-    return [{ kind: "endpoint", nodeId: "start", point: start }, { kind: "center", nodeId: "center", point: elementCenter(element) }, { kind: "endpoint", nodeId: "end", point: end }];
+    return [{ kind: "endpoint", point: start }, { kind: "center", point: elementCenter(element) }, { kind: "endpoint", point: end }];
   }
   if (element.type === "contour") {
     const nodes: RealGeometryNode[] = [{ kind: "center", point: elementCenter(element) }];
@@ -497,12 +485,23 @@ export function realGeometryNodes(element: Element): readonly RealGeometryNode[]
   if (element.type === "rectangle") {
     const [nw, ne, se, sw] = rotatedCorners(element);
     return [
-      { kind: "corner", nodeId: "nw", point: nw }, { kind: "corner", nodeId: "ne", point: ne }, { kind: "corner", nodeId: "se", point: se }, { kind: "corner", nodeId: "sw", point: sw }, { kind: "center", nodeId: "center", point: center },
-      { kind: "edge-midpoint", nodeId: "n", point: transformPoint({ x: 0, y: -half.y }, center, element.rotation) }, { kind: "edge-midpoint", nodeId: "e", point: transformPoint({ x: half.x, y: 0 }, center, element.rotation) }, { kind: "edge-midpoint", nodeId: "s", point: transformPoint({ x: 0, y: half.y }, center, element.rotation) }, { kind: "edge-midpoint", nodeId: "w", point: transformPoint({ x: -half.x, y: 0 }, center, element.rotation) },
+      { kind: "corner", point: nw },
+      { kind: "corner", point: ne },
+      { kind: "corner", point: se },
+      { kind: "corner", point: sw },
+      { kind: "center", point: center },
+      { kind: "edge-midpoint", point: transformPoint({ x: 0, y: -half.y }, center, element.rotation) },
+      { kind: "edge-midpoint", point: transformPoint({ x: half.x, y: 0 }, center, element.rotation) },
+      { kind: "edge-midpoint", point: transformPoint({ x: 0, y: half.y }, center, element.rotation) },
+      { kind: "edge-midpoint", point: transformPoint({ x: -half.x, y: 0 }, center, element.rotation) },
     ];
   }
   return [
-    { kind: "center" as const, nodeId: "center", point: center }, { kind: "cardinal" as const, nodeId: "n", point: transformPoint({ x: 0, y: -half.y }, center, element.rotation) }, { kind: "cardinal" as const, nodeId: "e", point: transformPoint({ x: half.x, y: 0 }, center, element.rotation) }, { kind: "cardinal" as const, nodeId: "s", point: transformPoint({ x: 0, y: half.y }, center, element.rotation) }, { kind: "cardinal" as const, nodeId: "w", point: transformPoint({ x: -half.x, y: 0 }, center, element.rotation) },
+    { kind: "center" as const, point: center },
+    { kind: "cardinal" as const, point: transformPoint({ x: 0, y: -half.y }, center, element.rotation) },
+    { kind: "cardinal" as const, point: transformPoint({ x: half.x, y: 0 }, center, element.rotation) },
+    { kind: "cardinal" as const, point: transformPoint({ x: 0, y: half.y }, center, element.rotation) },
+    { kind: "cardinal" as const, point: transformPoint({ x: -half.x, y: 0 }, center, element.rotation) },
   ];
 }
 
@@ -589,7 +588,7 @@ export function boundsOutsidePage(element: Element, page: SizeMm): boolean {
 }
 export function groupCenter(bounds: Bounds): PointMm { return { x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2 }; }
 export function groupHandlePoints(bounds: Bounds): Readonly<Record<GroupHandle, PointMm>> { const r = bounds.x + bounds.width; const b = bounds.y + bounds.height; return { nw: { x: bounds.x, y: bounds.y }, n: { x: bounds.x + bounds.width / 2, y: bounds.y }, ne: { x: r, y: bounds.y }, e: { x: r, y: bounds.y + bounds.height / 2 }, se: { x: r, y: b }, s: { x: bounds.x + bounds.width / 2, y: b }, sw: { x: bounds.x, y: b }, w: { x: bounds.x, y: bounds.y + bounds.height / 2 }, center: groupCenter(bounds) }; }
-export function resizeGroup(elements: readonly Element[], handle: ResizeHandle, pointer: PointMm, minimumSize = 1, aspectLock = false, preserveCenter = false): readonly Element[] {
+export function resizeGroup(elements: readonly Element[], handle: ResizeHandle, pointer: PointMm, minimumSize = 1, aspectLock = false): readonly Element[] {
   const bounds = boundsOfElements(elements);
   const horizontal = handle.includes("e") || handle.includes("w");
   const vertical = handle.includes("n") || handle.includes("s");
@@ -607,8 +606,8 @@ export function resizeGroup(elements: readonly Element[], handle: ResizeHandle, 
       height = Math.max(minimumSize, bounds.height * scale);
     }
   }
-  const x = preserveCenter ? bounds.x + (bounds.width - width) / 2 : handle.includes("w") ? anchorX - width : handle.includes("e") ? anchorX : bounds.x;
-  const y = preserveCenter ? bounds.y + (bounds.height - height) / 2 : handle.includes("n") ? anchorY - height : handle.includes("s") ? anchorY : bounds.y;
+  const x = handle.includes("w") ? anchorX - width : handle.includes("e") ? anchorX : bounds.x;
+  const y = handle.includes("n") ? anchorY - height : handle.includes("s") ? anchorY : bounds.y;
   const sx = bounds.width ? width / bounds.width : 1;
   const sy = bounds.height ? height / bounds.height : 1;
   return elements.map((e) => e.type === "dimension" ? e : e.type === "line"

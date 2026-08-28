@@ -1,17 +1,17 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent, type PointerEvent, type ReactNode, type WheelEvent } from "react";
-import { createProject, elementId, layerId, pageId, projectFromDocument, revision, type DocumentSnapshot, type DimensionElement, type Element, type ElementId, type PointMm, type ProjectSnapshot, type SplineElement, type TextElement, type ExplicitConnection } from "@nodra/domain";
-import { addToSelection, appendSplineNode, beginGesture, cancelGesture, clearSelection, closePath, closeSplineElement, commitGesture, convertTextToGlyphs, createElement, createPathCubicNode, createPathNode, deleteContourNodes, deleteElement, deleteElementNodes, deletePathNodes, dispatch, duplicateElements, flipElements, insertFormaNode, invalidDimensionIdsForShapeOperation, moveElements, removeConnection, movePathHandle, movePathNode, openPath, updateSplineNode, previewGesture, previewGestureFromBase, redo, resizeElement, resizeElementToDimensions, resizeElements, resizeElementsToDimensions, rotateElement, rotateElementsAroundCenter, select, selectForPointerDown, setPathJoin, shapeOperation, splitPathSegment, undo, updateContourNode, updateElement, updateElementNode, updateElementStyles, updatePage, updateSplineHandle, type FlipAxis, type ShapeOperation } from "@nodra/editor-core";
-import { boundsOfElements, connectableNode, connectableNodeAddress, contourVertexNodes, dimensionKindForPlacement, dimensionOffsetForAlignedPlacement, dimensionOffsetForPlacement, elementCenter, editableGeometryNodes, glyphGeometryNodes, groupCenter, groupHandlePoints, pathGeometryNodes, pointMidpoint, realGeometryNodes, resizeHandle, rotatedResizeHandles, rotationFromDrag, rotationHandlePoints, visibleBezierHandleGuides, type Direction, type GroupHandle, type ResizeHandle } from "@nodra/geometry";
+import { createProject, elementId, layerId, pageId, projectFromDocument, revision, type DocumentSnapshot, type DimensionElement, type Element, type ElementId, type PointMm, type ProjectSnapshot, type SplineElement, type TextElement } from "@nodra/domain";
+import { addToSelection, appendLinePoint, appendSplineNode, beginGesture, cancelGesture, clearSelection, closePath, closeSplineElement, commitGesture, convertTextToGlyphs, createElement, createPathCubicNode, createPathNode, deleteContourNodes, deleteElement, deleteElementNodes, deletePathNodes, dispatch, duplicateElements, flipElements, insertFormaNode, invalidDimensionIdsForShapeOperation, moveElements, movePathHandle, movePathNode, openPath, updateSplineNode, previewGesture, previewGestureFromBase, redo, resizeElement, resizeElements, rotateElement, rotateElementsAroundCenter, select, selectForPointerDown, setPathJoin, shapeOperation, splitPathSegment, undo, updateContourNode, updateElement, updateElementNode, updateElementStyles, updatePage, updateSplineHandle, type FlipAxis, type ShapeOperation } from "@nodra/editor-core";
+import { boundsOfElements, contourVertexNodes, dimensionKindForPlacement, dimensionOffsetForAlignedPlacement, dimensionOffsetForPlacement, elementCenter, editableGeometryNodes, glyphGeometryNodes, groupCenter, groupHandlePoints, pathGeometryNodes, pointMidpoint, realGeometryNodes, resizeHandle, rotatedResizeHandles, rotationFromDrag, rotationHandlePoints, visibleBezierHandleGuides, type Direction, type GroupHandle, type ResizeHandle } from "@nodra/geometry";
 import { DebouncedAutosave, DexieProjectRepository, requestStoragePersistence, type FontRecord } from "@nodra/persistence";
 import { validateDesign, validateProject } from "@nodra/validation";
 import { renderSvg } from "@nodra/renderer-svg";
-import { canActivateRotation, centerPageInCanvas, clientPointToCanvas, clientPointToPage, cubicPlacementControls, formaNodeKey, hoveredSelectionCenter, isDrawingTool, marqueeSelection, movementExceedsThreshold, normalizeBounds, normalizeDrag, pagePointToCanvas, pathGuides, pickDimensionTarget, pickElement, pickFormaElement, pickFormaNode, pickFormaSegment, pickHoverNode, pickNode, pickPathNode, pickPathSegment, pointerDownIntent, visibleEditablePathNodeIndexes, screenDeltaToMm, screenPointToMm, selectedNodeAnchor, selectedPathAnchorIds, alignmentGuides, snapCreationPoint, snapMoveDelta, viewportPointToCanvas, zoomAtPoint, type AlignmentGuide, type ContourNodeHit, type DimensionTarget, type FormaNodeHit, type HoverNode, type NodeHit, type PathNodeHit, type SnapGuide, type TransformMode, type CreationSnap } from "./interaction.js";
-import { aspectSize, formatMm, geometryValue, rotationDegreesValue, rotationPatch, type GeometryField, type PropertyElement, type RotatableElement } from "./propertyBar.js";
+import { canActivateRotation, centerPageInCanvas, clientPointToCanvas, clientPointToPage, cubicPlacementControls, formaNodeKey, hoveredSelectionCenter, isDrawingTool, marqueeSelection, movementExceedsThreshold, normalizeBounds, normalizeDrag, pagePointToCanvas, pathGuides, pickDimensionTarget, pickElement, pickFormaElement, pickFormaNode, pickFormaSegment, pickHoverNode, pickNode, pickPathNode, pickPathSegment, pointerDownIntent, visibleEditablePathNodeIndexes, screenDeltaToMm, screenPointToMm, selectedNodeAnchor, selectedPathAnchorIds, alignmentGuides, snapCreationPoint, snapMoveDelta, viewportPointToCanvas, zoomAtPoint, type AlignmentGuide, type ContourNodeHit, type DimensionTarget, type FormaNodeHit, type HoverNode, type NodeHit, type PathNodeHit, type SnapGuide, type TransformMode } from "./interaction.js";
+import { aspectGeometryPatch, aspectSize, formatMm, geometryValue, rotationDegreesValue, rotationPatch, type GeometryField, type PropertyElement, type RotatableElement } from "./propertyBar.js";
 import { useDocumentStore, usePersistenceStore, useUiStore, useViewportStore, type Tool } from "./stores.js";
 import { pathJoinGuidance, pathJoinOptions } from "./pathJoins.js";
 import { textSizeFor } from "./textMetrics.js";
 import { extractTextGlyphOutlines, fontFamilyFromFileName, FontOutlineError } from "./fontOutline.js";
-import { circleGeometry, creationGuides, type CreationGuide } from "./interaction.js";
+import { circleGeometry, creationGuides, hasNonCollinearPoints, type CreationGuide } from "./interaction.js";
 
 const defaultFonts = ["Arial", "Helvetica", "Times New Roman", "Courier New", "Inter"] as const;
 const projectMirrorKey = (projectId: string) => `nodra:project-mirror:${projectId}`;
@@ -44,15 +44,6 @@ const newElement = (tool: Exclude<Tool, "select" | "dimension" | "pan" | "forma"
   : tool === "rectangle"
     ? { type: "rectangle", id: nextId, layerId: layerId(layer), ...normalizeDrag(start, end), cornerRadius: 0, rotation: 0, style: defaultStyle }
      : (() => { const geometry = circleGeometry(start, end); return { type: "ellipse" as const, id: nextId, layerId: layerId(layer), position: geometry?.position ?? start, size: geometry?.size ?? { width: 0, height: 0 }, rotation: 0, style: defaultStyle }; })();
-const creationConnections = (element: Element, snaps: readonly (CreationSnap | undefined)[], enabled: boolean): readonly ExplicitConnection[] => enabled ? snaps.flatMap((snap) => {
-  if (!snap?.node) return [];
-  const sourceNodes = realGeometryNodes(element);
-  let sourceIndex = 0; let sourceDistance = Number.POSITIVE_INFINITY;
-  sourceNodes.forEach((node, index) => { const distance = Math.hypot(node.point.x - snap.point.x, node.point.y - snap.point.y); if (distance < sourceDistance) { sourceDistance = distance; sourceIndex = index; } });
-  const sourceAddress = connectableNodeAddress(element, sourceIndex);
-  if (!sourceAddress || !snap.address || snap.node.elementId === element.id) return [];
-  return [{ id: `connection-${crypto.randomUUID()}`, first: { elementId: element.id, node: sourceAddress }, second: { elementId: snap.node.elementId, node: snap.address } }];
-}) : [];
 const splinePathData = (spline: SplineElement): string => {
   const first = spline.nodes[0];
   if (!first) return "";
@@ -99,7 +90,7 @@ type ActiveInteraction = {
   splineNodeId?: string;
   splineHandle?: "in" | "out";
 };
-type CreationDraft = { readonly tool: "rectangle" | "ellipse" | "line"; readonly points: readonly PointMm[]; readonly pointer: PointMm; readonly snaps?: readonly (CreationSnap | undefined)[]; readonly elementId?: ElementId };
+type CreationDraft = { readonly tool: "rectangle" | "ellipse" | "line"; readonly points: readonly PointMm[]; readonly pointer: PointMm; readonly elementId?: ElementId };
 
 type FormaNodeOverlay =
   | { readonly kind: "contour"; readonly key: string; readonly elementId: ElementId; readonly point: PointMm; readonly contour: ContourNodeHit }
@@ -134,10 +125,6 @@ export function App() {
   const [editModeElementIds, setEditModeElementIds] = useState<readonly ElementId[]>([]);
   const [selectedSplineNodeKey, setSelectedSplineNodeKey] = useState<string>();
   const [selectedPathSegment, setSelectedPathSegment] = useState<{ readonly elementId: ElementId; readonly segmentIndex: number }>();
-      const [selectedConnectionId, setSelectedConnectionId] = useState<string>();
-      const [penDraftSnap, setPenDraftSnap] = useState<CreationSnap>();
-      const [splineDraftSnap, setSplineDraftSnap] = useState<CreationSnap>();
-      const [explicitConnectionsEnabled, setExplicitConnectionsEnabled] = useState(false);
   const [inspectorTab, setInspectorTab] = useState<InspectorTab>("properties");
   const designValidation = useMemo(() => validateDesign(document.elements, document.page), [document.elements, document.page]);
   const [transformDirection, setTransformDirection] = useState<Direction>("center");
@@ -516,35 +503,31 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
     setTool("select");
   };
 
-  const addPenPoint = (point: PointMm, snap?: CreationSnap) => {
+  const addPenPoint = (point: PointMm) => {
     const current = editorRef.current;
     if (!penDraftPoint) {
       setPenDraftPoint(point);
-      setPenDraftSnap(snap);
       return;
     }
     const firstId = `path-node-${crypto.randomUUID()}`;
     const secondId = `path-node-${crypto.randomUUID()}`;
     const path = { type: "path" as const, id: id(), layerId: layerId(current.document.layers[0]?.id ?? "layer-1"), nodes: [{ id: firstId, anchor: penDraftPoint, join: "corner" as const }, { id: secondId, anchor: point, join: "corner" as const }], segments: [{ type: "line" as const, startNodeId: firstId, endNodeId: secondId }], closed: false, style: defaultStyle };
-    const next = dispatch(current, createElement(path, creationConnections(path, [penDraftSnap, snap], explicitConnectionsEnabled)));
+    const next = dispatch(current, createElement(path));
     setPenDraftPoint(undefined);
-    setPenDraftSnap(undefined);
     setEditorState(select(next, [path.id]));
   };
 
-  const addSplinePoint = (point: PointMm, snap?: CreationSnap) => {
+  const addSplinePoint = (point: PointMm) => {
     const current = editorRef.current;
     const active = activeSplineId ? current.document.elements.find((element): element is SplineElement => element.id === activeSplineId && element.type === "spline") : undefined;
     if (!active) {
       if (!splineDraftPoint) {
         setSplineDraftPoint(point);
-        setSplineDraftSnap(snap);
         return;
       }
       const spline: SplineElement = { type: "spline", id: id(), layerId: layerId(document.layers[0]?.id ?? "layer-1"), nodes: [{ id: `spline-node-${crypto.randomUUID()}`, anchor: splineDraftPoint, continuity: "smooth" }, { id: `spline-node-${crypto.randomUUID()}`, anchor: point, continuity: "smooth" }], closed: false, style: defaultStyle };
-      const next = dispatch(current, createElement(spline, creationConnections(spline, [splineDraftSnap, snap], explicitConnectionsEnabled)));
+      const next = dispatch(current, createElement(spline));
       setSplineDraftPoint(undefined);
-      setSplineDraftSnap(undefined);
       setEditorState(select(next, [spline.id]));
       setActiveSplineId(spline.id);
       return;
@@ -698,20 +681,19 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
     }
       const point = pointAt(event);
        const rawCreationPoint = isDrawingTool(tool) ? point : undefined;
-        const creationSnap = rawCreationPoint ? snapCreationPoint(editorRef.current.document, rawCreationPoint, zoom) : undefined;
-        const creationPointForClick = creationSnap?.point ?? rawCreationPoint;
+       const creationPointForClick = rawCreationPoint ? snapCreationPoint(editorRef.current.document, rawCreationPoint, zoom)?.point ?? rawCreationPoint : undefined;
        const inferredPoint = snapCreationPoint(editorRef.current.document, point, zoom)?.point ?? point;
       if (tool === "rectangle" || tool === "ellipse") {
         const creationPoint = creationPointForClick ?? point;
         const draft = creationDraftRef.current;
         if (!draft) {
-          const nextDraft = { tool, points: [creationPoint], pointer: creationPoint, snaps: [creationSnap] } as const;
+          const nextDraft = { tool, points: [creationPoint], pointer: creationPoint } as const;
          creationDraftRef.current = nextDraft;
          setCreationDraft(nextDraft);
        } else {
           const element = newElement(tool, editorRef.current.document.layers[0]?.id ?? "layer-1", draft.points[0]!, creationPoint, id());
           if (tool === "rectangle" || circleGeometry(draft.points[0]!, creationPoint)) {
-            const next = dispatch(editorRef.current, createElement(element, creationConnections(element, [...(draft.snaps ?? []), creationSnap], explicitConnectionsEnabled)));
+           const next = dispatch(editorRef.current, createElement(element));
            if (next !== editorRef.current) setEditorState(select(next, [element.id]));
          }
          creationDraftRef.current = undefined;
@@ -723,16 +705,28 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
         const creationPoint = creationPointForClick ?? point;
         const draft = creationDraftRef.current;
         if (!draft) {
-          const nextDraft = { tool, points: [creationPoint], pointer: creationPoint, snaps: [creationSnap] } as const;
+          const nextDraft = { tool, points: [creationPoint], pointer: creationPoint } as const;
          creationDraftRef.current = nextDraft;
          setCreationDraft(nextDraft);
        } else if (draft.points.length === 1) {
           const line = newElement("line", editorRef.current.document.layers[0]?.id ?? "layer-1", draft.points[0]!, creationPoint, id());
-          const next = dispatch(editorRef.current, createElement(line, creationConnections(line, [...(draft.snaps ?? []), creationSnap], explicitConnectionsEnabled)));
-          creationDraftRef.current = undefined;
-             setCreationDraft(undefined);
-             setEditorState(select(next, [line.id]));
-        }
+         const next = dispatch(editorRef.current, createElement(line));
+          const nextDraft = { tool, points: [...draft.points, creationPoint], pointer: creationPoint, elementId: line.id } as const;
+         creationDraftRef.current = nextDraft;
+         setCreationDraft(nextDraft);
+         setEditorState(select(next, [line.id]));
+        } else if (draft.elementId && draft.points.length >= 3 && Math.hypot(draft.points[0]!.x - creationPoint.x, draft.points[0]!.y - creationPoint.y) <= 8 / zoom && hasNonCollinearPoints(draft.points)) {
+         setEditorState(dispatch(editorRef.current, closePath(draft.elementId)));
+         creationDraftRef.current = undefined;
+         setCreationDraft(undefined);
+       } else if (draft.elementId) {
+         const existing = editorRef.current.document.elements.find((element) => element.id === draft.elementId);
+          const next = existing?.type === "line" ? dispatch(editorRef.current, appendLinePoint(draft.elementId, creationPoint)) : dispatch(editorRef.current, createPathNode(draft.elementId, { id: `path-node-${crypto.randomUUID()}`, anchor: creationPoint, join: "corner" }));
+          const nextDraft = { ...draft, points: [...draft.points, creationPoint], pointer: creationPoint };
+         creationDraftRef.current = nextDraft;
+         setCreationDraft(nextDraft);
+         setEditorState(next);
+       }
        return;
      }
      const pickedElement = tool === "forma" ? pickFormaElement(editorRef.current.document, point, zoom) : pickElement(editorRef.current.document, point, zoom);
@@ -748,7 +742,7 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
        else setTextDraft({ position: point, value: "" });
        return;
     }
-     if (tool === "spline") { addSplinePoint(inferredPoint, creationSnap); return; }
+     if (tool === "spline") { addSplinePoint(inferredPoint); return; }
     if (tool === "pen") {
       const pathNode = pickPathNode(editorRef.current.document, point, zoom);
        if (pathNode) {
@@ -777,7 +771,7 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
           event.currentTarget.setPointerCapture(event.pointerId);
           setEditorState(beginGesture(editorRef.current));
            interaction.current = { pointerId: event.pointerId, lastX: event.clientX, lastY: event.clientY, kind: "pen-place", start, placement: inferredPoint, ...(last && selectedPath ? { pathId: selectedPath.id } : {}), startClient: { x: event.clientX, y: event.clientY }, dragged: false };
-         } else addPenPoint(inferredPoint, creationSnap);
+         } else addPenPoint(inferredPoint);
       }
       return;
     }
@@ -1255,15 +1249,6 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
          }
          return null;
        }) : [];
-       const explicitConnectionOverlay = (document.connections ?? []).flatMap((connection) => {
-         const firstElement = document.elements.find((element) => element.id === connection.first.elementId);
-         const secondElement = document.elements.find((element) => element.id === connection.second.elementId);
-         const first = firstElement ? connectableNode(firstElement, connection.first.node)?.point : undefined;
-         const second = secondElement ? connectableNode(secondElement, connection.second.node)?.point : undefined;
-         if (!first || !second) return [];
-         const selected = selectedConnectionId === connection.id;
-         return [<line key={`connection-${connection.id}`} data-explicit-connection={connection.id} x1={first.x} y1={first.y} x2={second.x} y2={second.y} stroke={selected ? "#f97316" : "#7c3aed"} strokeWidth={(selected ? 2 : 1) / zoom} strokeDasharray={`${4 / zoom} ${3 / zoom}`} vectorEffect="non-scaling-stroke" pointerEvents="stroke" onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); setSelectedConnectionId(connection.id); setEditorState(select(editorRef.current, [connection.first.elementId, connection.second.elementId])); }} />];
-       });
        const alignmentGuideOverlay = alignmentGuideState.map((guide, index) => guide.orientation === "vertical"
          ? <line key={`alignment-guide-v-${index}`} data-alignment-guide="vertical" x1={guide.coordinate} y1={guide.start} x2={guide.coordinate} y2={guide.end} stroke="#1683ff" strokeWidth={0.75 / zoom} strokeDasharray={`${3 / zoom} ${3 / zoom}`} vectorEffect="non-scaling-stroke" pointerEvents="none" />
          : <line key={`alignment-guide-h-${index}`} data-alignment-guide="horizontal" x1={guide.start} y1={guide.coordinate} x2={guide.end} y2={guide.coordinate} stroke="#1683ff" strokeWidth={0.75 / zoom} strokeDasharray={`${3 / zoom} ${3 / zoom}`} vectorEffect="non-scaling-stroke" pointerEvents="none" />);
@@ -1336,28 +1321,15 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
       setDrafts((current) => ({ ...current, [key]: formatMm(geometryValue(element, field)) }));
       return;
     }
-    const clearDimensionDrafts = () => setDrafts((current) => {
-      const next = { ...current };
-      const prefix = selectedElements.length > 1 ? "group" : element.id;
-      delete next[`${prefix}:width`];
-      delete next[`${prefix}:height`];
-      return next;
-    });
+    setDrafts((current) => { const next = { ...current }; delete next[key]; return next; });
     if (selectedElements.length > 1 && selectedBounds) {
       const current = field === "x" ? selectedBounds.x : field === "y" ? selectedBounds.y : field === "width" ? selectedBounds.width : selectedBounds.height;
       if (field === "x" || field === "y") setEditorState(dispatch(editorRef.current, moveElements(selection, { x: field === "x" ? value - current : 0, y: field === "y" ? value - current : 0 })));
        else {
          const size = aspectLock ? aspectSize(selectedBounds.width, selectedBounds.height, field, value) : { width: field === "width" ? value : selectedBounds.width, height: field === "height" ? value : selectedBounds.height };
-          setEditorState(dispatch(editorRef.current, resizeElementsToDimensions(selection, size, false)));
+         setEditorState(dispatch(editorRef.current, resizeElements(selection, "se", { x: selectedBounds.x + size.width, y: selectedBounds.y + size.height }, aspectLock)));
        }
-       } else {
-         const next = field === "width" || field === "height"
-           ? dispatch(editorRef.current, resizeElementToDimensions(element.id, field, value, aspectLock))
-           : dispatch(editorRef.current, updateElement(element.id, { position: { ...element.position, [field]: value } }));
-         if (next === editorRef.current && (field === "width" || field === "height")) persist.set("failed", "No se puede redimensionar sin romper una conexión existente.");
-         setEditorState(next);
-       }
-      clearDimensionDrafts();
+     } else setEditorState(dispatch(editorRef.current, updateElement(element.id, aspectGeometryPatch(element, field, value, aspectLock))));
   };
 
   const cornerRadiusField = (element: Extract<Element, { type: "rectangle" }>) => {
@@ -1505,18 +1477,6 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
     return <div className="text-properties"><div className="text-box-fields"><label className="field"><span>Ancho caja</span><input type="number" min="1" step="0.1" value={formatMm(boxWidth)} onChange={(event) => resizeTextBox("width", Number(event.target.value))} /></label><label className="field"><span>Alto caja</span><input type="number" min="1" step="0.1" value={formatMm(boxHeight)} onChange={(event) => resizeTextBox("height", Number(event.target.value))} /></label></div><label className="field"><span>Tamaño (mm)</span><input type="number" min="1" value={selectedElement.fontSize} onChange={(event) => { const value = Number(event.target.value); if (Number.isFinite(value) && value > 0) updateTextElement(selectedElement, { fontSize: value }); }} /></label><label className="field"><span>Tipografía</span><div className="font-select-row"><select value={selectedElement.fontFamily} onChange={(event) => updateTextElement(selectedElement, { fontFamily: event.target.value })}>{availableFonts.map((font) => <option key={font} style={{ fontFamily: font }}>{font}</option>)}</select>{selectedLocalFont && <button type="button" className="font-delete-button" aria-label={`Eliminar fuente local ${selectedLocalFont.family}`} title="Eliminar fuente local" onClick={() => void deleteLocalFont(selectedLocalFont)}>×</button>}</div></label><label className="field"><span>Interlineado</span><input type="number" min="0.5" step="0.1" value={selectedElement.lineHeight} onChange={(event) => { const value = Number(event.target.value); if (Number.isFinite(value) && value > 0) updateTextElement(selectedElement, { lineHeight: value }); }} /></label><div className="text-style-buttons"><button type="button" aria-pressed={selectedElement.fontWeight === "bold"} onClick={() => updateTextElement(selectedElement, { fontWeight: selectedElement.fontWeight === "bold" ? "normal" : "bold" })}>Negrita</button><button type="button" aria-pressed={selectedElement.fontStyle === "italic"} onClick={() => updateTextElement(selectedElement, { fontStyle: selectedElement.fontStyle === "italic" ? "normal" : "italic" })}>Cursiva</button></div><label className="font-upload-button">Cargar fuente para esta familia<input type="file" accept=".ttf,.otf,.woff,.woff2,font/ttf,font/otf,font/woff,font/woff2" onChange={(event) => { const file = event.target.files?.[0]; if (file) void loadFontFile(file, selectedElement.fontFamily); event.currentTarget.value = ""; }} /></label><button type="button" aria-label="Convertir texto a curvas" title="Requiere una fuente cargada para esta familia" disabled={!fontSources[selectedElement.fontFamily]} onClick={convertSelectedText}>Convertir a curvas</button>{!fontSources[selectedElement.fontFamily] && <p className="muted">Cargue una fuente TTF, OTF, WOFF o WOFF2 para habilitar la conversión.</p>}{fontLoadError && <p className="muted">{fontLoadError}</p>}</div>;
   };
 
-  const connectionLabel = (elementId: ElementId, node: import("@nodra/domain").ConnectableNodeAddress) => {
-    const element = document.elements.find((candidate) => candidate.id === elementId);
-    const target = node.kind === "named" ? node.name : node.kind === "line" ? node.name : `${node.nodeId}${node.handle ? ` · ${node.handle}` : ""}`;
-    return `${element?.type ?? "objeto"} · ${target}`;
-  };
-  const connectionSettings = () => <section className="inspector-property-card explicit-connection-settings" aria-label="Configuración de conexiones explícitas"><label className="connection-toggle"><input type="checkbox" checked={explicitConnectionsEnabled} onChange={(event) => setExplicitConnectionsEnabled(event.target.checked)} /> Crear conexiones al confirmar snaps</label><p className="muted">El ajuste está desactivado por defecto. El snap visual sigue disponible.</p></section>;
-  const connectionInspector = () => {
-    const connections = (document.connections ?? []).filter((connection) => selection.includes(connection.first.elementId) || selection.includes(connection.second.elementId));
-    if (!connections.length) return null;
-    return <section className="inspector-property-card explicit-connections" aria-label="Conexiones explícitas"><div className="panel-title">CONEXIONES EXPLÍCITAS</div>{connections.map((connection) => <div className="explicit-connection" key={connection.id} data-explicit-connection-row={connection.id}><button type="button" className={selectedConnectionId === connection.id ? "explicit-connection-link active" : "explicit-connection-link"} onClick={() => setSelectedConnectionId(connection.id)}>{connectionLabel(connection.first.elementId, connection.first.node)} ↔ {connectionLabel(connection.second.elementId, connection.second.node)}</button><button type="button" aria-label="Eliminar conexión explícita" title="Eliminar conexión" onClick={() => { const next = dispatch(editorRef.current, removeConnection(connection.id)); if (next !== editorRef.current) { setEditorState(next); setSelectedConnectionId(undefined); } }}>×</button></div>)}</section>;
-  };
-
   const objectPropertySections = (inspector = false) => propertyElement ? <>
      <div className={inspector ? "inspector-property-card" : "property-card"} role="group" aria-label="Posición">
        {geometryInput(propertyElement, "x", "X")}{geometryInput(propertyElement, "y", "Y")}
@@ -1551,7 +1511,7 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
         <header className="canvas-header"><span>DISEÑO / SIN TÍTULO</span><span>{document.elements.length} objetos · {document.page.width} × {document.page.height} mm</span><div className="zoom-controls"><button aria-label="Alejar" onClick={() => setZoom(zoom - 0.5)}>−</button><span className="zoom-label">{Math.round(zoom * 100 / 3)}%</span><button aria-label="Acercar" onClick={() => setZoom(zoom + 0.5)}>+</button></div></header>
              <div ref={canvas} className={`${grid ? "canvas" : "canvas no-grid"}${isDrawingTool(tool) ? " drawing-tool" : ""}`} onPointerDown={onCanvasPointerDown} onPointerMove={onCanvasPointerMove} onPointerUp={(event) => finishPointer(event, false)} onPointerCancel={(event) => finishPointer(event, true)} onLostPointerCapture={cancelPointerInteraction} onPointerLeave={() => { setCursorPoint(undefined); setNodeHover(undefined); setDimensionNodeHover(undefined); }} onDoubleClick={onCanvasDoubleClick} onWheel={onWheel}>
             {rulerHorizontal}{rulerVertical}<span className="ruler-corner" aria-hidden="true" />
-            <div className="page" style={pageStyle}>{/* SAFETY: renderSvg emits allowlisted SVG from validated document data. */}<div className={`page-svg${textDraft ? " editing-text" : ""}`} dangerouslySetInnerHTML={{ __html: rendered.success ? rendered.svg : "" }} />{(explicitConnectionOverlay.length > 0 || alignmentGuideOverlay.length > 0 || splineOverlay.length > 0 || selectedEditOverlay.length > 0 || pathGuideOverlay.length > 0) && <svg data-spline-overlay-layer="true" viewBox={`0 0 ${document.page.width} ${document.page.height}`} style={{ position: "absolute", inset: 0, width: "100%", height: "100%", pointerEvents: "none", overflow: "visible", zIndex: 5 }}><defs><marker id="forma-handle-arrow" markerWidth="5" markerHeight="5" refX="4" refY="2.5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0,0 L5,2.5 L0,5 Z" fill="#1683ff" /></marker></defs>{explicitConnectionOverlay}{alignmentGuideOverlay}{selectedEditOverlay}{pathGuideOverlay}{splineOverlay}</svg>}</div>
+            <div className="page" style={pageStyle}>{/* SAFETY: renderSvg emits allowlisted SVG from validated document data. */}<div className={`page-svg${textDraft ? " editing-text" : ""}`} dangerouslySetInnerHTML={{ __html: rendered.success ? rendered.svg : "" }} />{(alignmentGuideOverlay.length > 0 || splineOverlay.length > 0 || selectedEditOverlay.length > 0 || pathGuideOverlay.length > 0) && <svg data-spline-overlay-layer="true" viewBox={`0 0 ${document.page.width} ${document.page.height}`} style={{ position: "absolute", inset: 0, width: "100%", height: "100%", pointerEvents: "none", overflow: "visible", zIndex: 5 }}><defs><marker id="forma-handle-arrow" markerWidth="5" markerHeight="5" refX="4" refY="2.5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0,0 L5,2.5 L0,5 Z" fill="#1683ff" /></marker></defs>{alignmentGuideOverlay}{selectedEditOverlay}{pathGuideOverlay}{splineOverlay}</svg>}</div>
               {textDraft && (() => {
                 const existing = textDraft.element;
                 const lines = textDraft.value.split("\n");
@@ -1579,7 +1539,7 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
            <button type="button" role="tab" aria-selected={inspectorTab === "text"} className={inspectorTab === "text" ? "active" : ""} onClick={() => setInspectorTab("text")}>Texto</button>
          </div>
          <div className="inspector-tab-content" role="tabpanel">
-                {inspectorTab === "properties" && <>{selectedElements.length === 0 ? <section className="inspector-card"><div className="panel-title">PÁGINA</div><div className="preset-row"><button onClick={() => setPage(1200, 900)}>Horizontal</button><button onClick={() => setPage(900, 1200)}>Vertical</button></div><div className="fields"><Field label="W" value={document.page.width} onChange={(value) => setPage(value, document.page.height)} /><Field label="H" value={document.page.height} onChange={(value) => setPage(document.page.width, value)} /></div><label className="grid-toggle"><input type="checkbox" checked={grid} onChange={(event) => setGrid(event.target.checked)} /> Mostrar cuadrícula del espacio de trabajo</label></section> : <section className="inspector-card inspector-object-card"><div className="panel-title">OBJETO</div>{propertyElement ? <div className="inspector-object-properties">{objectPropertySections(true)}</div> : <><div className="selected-type">{selectedElement?.type === "contour" ? "CONTORNO" : selectedElement?.type === "path" ? "TRAZADO" : selectedElement?.type === "spline" ? "SPLINE" : "LÍNEA"}</div><p className="muted">{selectedElement?.type === "contour" ? "Los contornos conservan su geometría real; las dimensiones no están disponibles." : selectedElement?.type === "path" ? "Los trazados conservan sus nodos y segmentos." : selectedElement?.type === "spline" ? "Las splines conservan sus nodos y handles relativos." : "Las líneas no tienen dimensiones rectangulares."}</p>{selectedElement && isRotatableElement(selectedElement) && rotationField(selectedElement)}</>}</section>}{connectionSettings()}{connectionInspector()}{pathClosureControls}{splineClosureControls}{pathJoinControls}{pathSegmentControls}</>}
+                {inspectorTab === "properties" && <>{selectedElements.length === 0 ? <section className="inspector-card"><div className="panel-title">PÁGINA</div><div className="preset-row"><button onClick={() => setPage(1200, 900)}>Horizontal</button><button onClick={() => setPage(900, 1200)}>Vertical</button></div><div className="fields"><Field label="W" value={document.page.width} onChange={(value) => setPage(value, document.page.height)} /><Field label="H" value={document.page.height} onChange={(value) => setPage(document.page.width, value)} /></div><label className="grid-toggle"><input type="checkbox" checked={grid} onChange={(event) => setGrid(event.target.checked)} /> Mostrar cuadrícula del espacio de trabajo</label></section> : <section className="inspector-card inspector-object-card"><div className="panel-title">OBJETO</div>{propertyElement ? <div className="inspector-object-properties">{objectPropertySections(true)}</div> : <><div className="selected-type">{selectedElement?.type === "contour" ? "CONTORNO" : selectedElement?.type === "path" ? "TRAZADO" : selectedElement?.type === "spline" ? "SPLINE" : "LÍNEA"}</div><p className="muted">{selectedElement?.type === "contour" ? "Los contornos conservan su geometría real; las dimensiones no están disponibles." : selectedElement?.type === "path" ? "Los trazados conservan sus nodos y segmentos." : selectedElement?.type === "spline" ? "Las splines conservan sus nodos y handles relativos." : "Las líneas no tienen dimensiones rectangulares."}</p>{selectedElement && isRotatableElement(selectedElement) && rotationField(selectedElement)}</>}</section>}{pathClosureControls}{splineClosureControls}{pathJoinControls}{pathSegmentControls}</>}
               {inspectorTab === "transform" && transformControls()}
             {inspectorTab === "text" && <section className="inspector-card"><div className="panel-title">TEXTO</div>{textPropertyPanel()}</section>}
          </div>

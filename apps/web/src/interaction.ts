@@ -1,10 +1,10 @@
 import type { DocumentSnapshot, Element, ElementId, LineElement, PathElement, PathSegment, PointMm } from "@nodra/domain";
-import { boundsOf, boundsOfElements, connectableNodeAddress, contourSegmentAt, contourVertexNodes, dimensionGeometry, elementCenter, elementSegmentAt, hitTest, pathGeometryNodes, pathSegmentAt, realGeometryNodes, type Bounds, type ContourSegmentHit, type ContourVertexNode, type PathGeometryNode, type RealGeometryNode, type PathSegmentHit } from "@nodra/geometry";
+import { boundsOf, boundsOfElements, contourSegmentAt, contourVertexNodes, dimensionGeometry, elementCenter, elementSegmentAt, hitTest, pathGeometryNodes, pathSegmentAt, realGeometryNodes, type Bounds, type ContourSegmentHit, type ContourVertexNode, type PathGeometryNode, type RealGeometryNode, type PathSegmentHit } from "@nodra/geometry";
 
 export interface DragGeometry { readonly position: PointMm; readonly size: { readonly width: number; readonly height: number } }
 export interface CircleGeometry { readonly position: PointMm; readonly size: { readonly width: number; readonly height: number }; readonly radius: number }
 export interface CreationGuide { readonly source: PointMm; readonly target: PointMm; readonly kind: "node" | "center" }
-export interface CreationSnap { readonly point: PointMm; readonly kind: "node" | "center"; readonly node?: NodeHit; readonly address?: import("@nodra/domain").ConnectableNodeAddress }
+export interface CreationSnap { readonly point: PointMm; readonly kind: "node" | "center" }
 export interface SnapGuide { readonly source: PointMm; readonly target: PointMm }
 export interface SnapMoveResult { readonly delta: PointMm; readonly guide: SnapGuide | undefined }
 export type AlignmentGuideOrientation = "vertical" | "horizontal";
@@ -233,22 +233,18 @@ export function circleGeometry(center: PointMm, pointer: PointMm): CircleGeometr
 export function snapCreationPoint(document: DocumentSnapshot, point: PointMm, zoom: number, tolerancePx = 8): CreationSnap | undefined {
   if (![point.x, point.y, zoom, tolerancePx].every(Number.isFinite) || zoom <= 0 || tolerancePx < 0) throw new Error("creation snap coordinates, zoom, and tolerance must be valid");
   const visible = new Set(document.layers.filter((layer) => layer.visible).map((layer) => layer.id));
-  let bestNode: { readonly point: PointMm; readonly distance: number; readonly order: string; readonly node: NodeHit } | undefined;
+  let bestNode: { readonly point: PointMm; readonly distance: number; readonly order: string } | undefined;
   let bestCenter: { readonly point: PointMm; readonly distance: number; readonly order: string } | undefined;
   for (const element of document.elements) if (visible.has(element.layerId)) for (const [index, node] of realGeometryNodes(element).entries()) {
     const distance = Math.hypot(node.point.x - point.x, node.point.y - point.y) * zoom;
     if (distance > tolerancePx) continue;
-    const candidate = { point: node.point, distance, order: `${element.id}:${index}`, node: { elementId: element.id, nodeIndex: index, node } };
+    const candidate = { point: node.point, distance, order: `${element.id}:${index}` };
     if (node.kind === "center") {
       if (!bestCenter || distance < bestCenter.distance || distance === bestCenter.distance && candidate.order < bestCenter.order) bestCenter = candidate;
     } else if (!bestNode || distance < bestNode.distance || distance === bestNode.distance && candidate.order < bestNode.order) bestNode = candidate;
   }
-  if (bestNode) {
-    const target = document.elements.find((element) => element.id === bestNode!.node.elementId);
-    const address = target ? connectableNodeAddress(target, bestNode!.node.nodeIndex) : undefined;
-    return { point: bestNode.point, kind: "node", node: bestNode.node, ...(address ? { address } : {}) };
-  }
-  return bestCenter ? { point: bestCenter.point, kind: "center" } : undefined;
+  const best = bestNode ?? bestCenter;
+  return best ? { point: best.point, kind: best === bestNode ? "node" : "center" } : undefined;
 }
 
 /** Finds visual-only creation guides. The returned target never changes the requested point. */

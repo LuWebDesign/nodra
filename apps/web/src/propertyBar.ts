@@ -15,18 +15,6 @@ export function geometryPatch(element: PropertyElement, field: GeometryField, va
   return field === "x" ? { position: { ...element.position, x: value }, size: element.size } : field === "y" ? { position: { ...element.position, y: value }, size: element.size } : field === "width" ? { position: element.position, size: { ...element.size, width: value } } : { position: element.position, size: { ...element.size, height: value } };
 }
 
-export function centeredGeometryPatch(element: PropertyElement, field: GeometryField, value: number, aspectLock: boolean): Pick<PropertyElement, "position" | "size"> {
-  const patch = aspectGeometryPatch(element, field, value, aspectLock);
-  if (field !== "width" && field !== "height") return patch;
-  return {
-    position: {
-      x: element.position.x + (element.size.width - patch.size.width) / 2,
-      y: element.position.y + (element.size.height - patch.size.height) / 2,
-    },
-    size: patch.size,
-  };
-}
-
 export function aspectGeometryPatch(element: PropertyElement, field: GeometryField, value: number, aspectLock: boolean): Pick<PropertyElement, "position" | "size"> {
   if (!aspectLock || (field !== "width" && field !== "height")) return geometryPatch(element, field, value);
   return { position: element.position, size: aspectSize(element.size.width, element.size.height, field, value) };

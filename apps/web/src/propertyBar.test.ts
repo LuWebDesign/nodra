@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { elementId, layerId, type RectangleElement } from "@nodra/domain";
-import { aspectGeometryPatch, aspectSize, centeredGeometryPatch, cornerRadiusPatch, cornerRadiusValue, geometryPatch, geometryValue, rotationDegreesValue, rotationPatch } from "./propertyBar.js";
+import { aspectGeometryPatch, aspectSize, cornerRadiusPatch, cornerRadiusValue, geometryPatch, geometryValue, rotationDegreesValue, rotationPatch } from "./propertyBar.js";
 
 const rectangle: RectangleElement = { type: "rectangle", id: elementId("r"), layerId: layerId("l"), position: { x: 2, y: 3 }, size: { width: 20, height: 10 }, cornerRadius: 1.5, rotation: 0, style: { stroke: "#000", strokeWidth: 1 } };
 
@@ -14,16 +14,6 @@ describe("property bar helpers", () => {
     expect(aspectGeometryPatch(rectangle, "width", 40, true)).toEqual({ position: rectangle.position, size: { width: 40, height: 20 } });
     expect(aspectGeometryPatch(rectangle, "height", 20, true)).toEqual({ position: rectangle.position, size: { width: 40, height: 20 } });
     expect(aspectGeometryPatch(rectangle, "width", 40, false)).toEqual(geometryPatch(rectangle, "width", 40));
-  });
-
-  it("resizes a single object around its center", () => {
-    expect(centeredGeometryPatch(rectangle, "width", 30, false)).toEqual({ position: { x: -3, y: 3 }, size: { width: 30, height: 10 } });
-    expect(centeredGeometryPatch(rectangle, "height", 20, false)).toEqual({ position: { x: 2, y: -2 }, size: { width: 20, height: 20 } });
-  });
-
-  it("keeps the center fixed for proportional single-object edits", () => {
-    expect(centeredGeometryPatch(rectangle, "width", 40, true)).toEqual({ position: { x: -8, y: -2 }, size: { width: 40, height: 20 } });
-    expect(centeredGeometryPatch(rectangle, "height", 20, true)).toEqual({ position: { x: -8, y: -2 }, size: { width: 40, height: 20 } });
   });
 
   it("derives proportional group dimensions from either edited dimension", () => {

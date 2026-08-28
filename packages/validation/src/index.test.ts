@@ -26,11 +26,11 @@ describe("native document validation", () => {
     const result = validateDocument(oldDocument);
     expect(result.success).toBe(true);
     if (result.success) expect(result.data.page).toEqual({ width: 1200, height: 900 });
-    expect(migrateDocument(oldDocument)).toMatchObject({ schemaVersion: 5, page: { width: 1200, height: 900 }, connections: [] });
+    expect(migrateDocument(oldDocument)).toMatchObject({ schemaVersion: 4, page: { width: 1200, height: 900 } });
   });
   it("validates a project with stable page ids, including duplicate sizes", () => {
     const document = createDocument("doc-1", []);
-    const project = { ...({ schemaVersion: 5, id: document.id, revision: document.revision, origin: document.origin, units: document.units } as const), pages: [{ id: "page-a", page: document.page, layers: [], elements: [] }, { id: "page-b", page: document.page, layers: [], elements: [] }], activePageId: "page-b" };
+    const project = { ...({ schemaVersion: 4, id: document.id, revision: document.revision, origin: document.origin, units: document.units } as const), pages: [{ id: "page-a", page: document.page, layers: [], elements: [] }, { id: "page-b", page: document.page, layers: [], elements: [] }], activePageId: "page-b" };
     expect(validateProject(project).success).toBe(true);
   });
   it("validates annotation dimensions and rejects broken references", () => {
@@ -55,30 +55,6 @@ describe("native document validation", () => {
   it("rejects non-finite and non-positive page dimensions", () => {
     const result = validateDocument({ ...createDocument("doc-1"), page: { width: 0, height: Number.NaN } });
     expect(result.success).toBe(false);
-  });
-  it("round-trips explicit connections and rejects dangling or self connections", () => {
-    const base = createDocument("connections", [{ id: layerId("layer-1"), name: "Design", visible: true, order: 0 }]);
-    const first = { type: "rectangle" as const, id: "first", layerId: "layer-1", position: { x: 0, y: 0 }, size: { width: 10, height: 10 }, cornerRadius: 0, rotation: 0, style: { stroke: "#000", strokeWidth: 1 } };
-    const second = { ...first, id: "second", position: { x: 10, y: 0 } };
-    const connection = { id: "join", first: { elementId: "first", node: { kind: "named" as const, name: "e" as const } }, second: { elementId: "second", node: { kind: "named" as const, name: "w" as const } } };
-    const valid = validateDocument({ ...base, elements: [first, second], connections: [connection] });
-    expect(valid.success).toBe(true);
-    if (valid.success) expect(parseDocument(serializeDocument(valid.data)).success).toBe(true);
-    expect(validateDocument({ ...base, elements: [first], connections: [connection] }).success).toBe(false);
-    expect(validateDocument({ ...base, elements: [first, second], connections: [{ ...connection, second: connection.first }] }).success).toBe(false);
-  });
-  it("rejects path and spline connection handles that are not present on the referenced node", () => {
-    const base = createDocument("handles", [{ id: layerId("layer-1"), name: "Design", visible: true, order: 0 }]);
-    const path = { type: "path" as const, id: "path", layerId: "layer-1", nodes: [{ id: "a", anchor: { x: 0, y: 0 }, join: "smooth" as const }, { id: "b", anchor: { x: 10, y: 0 }, join: "smooth" as const }], segments: [{ type: "cubicBezier" as const, startNodeId: "a", endNodeId: "b", control1: { x: 3, y: 0 }, control2: { x: 7, y: 0 } }], closed: false, style: { stroke: "#000", strokeWidth: 1 } };
-    const spline = { type: "spline" as const, id: "spline", layerId: "layer-1", nodes: [{ id: "a", anchor: { x: 20, y: 0 }, continuity: "smooth" as const, outHandle: { dx: 3, dy: 0 } }, { id: "b", anchor: { x: 30, y: 0 }, continuity: "smooth" as const, inHandle: { dx: -3, dy: 0 } }], closed: false, style: { stroke: "#000", strokeWidth: 1 } };
-    const other = { type: "rectangle" as const, id: "other", layerId: "layer-1", position: { x: 40, y: 0 }, size: { width: 10, height: 10 }, cornerRadius: 0, rotation: 0, style: { stroke: "#000", strokeWidth: 1 } };
-    const connection = (first: { elementId: string; node: { kind: "path" | "spline"; nodeId: string; handle?: "in" | "out" } }) => ({ id: `${first.elementId}-${first.node.nodeId}-${first.node.handle ?? "anchor"}`, first, second: { elementId: "other", node: { kind: "named" as const, name: "w" as const } } });
-    expect(validateDocument({ ...base, elements: [path, other], connections: [connection({ elementId: "path", node: { kind: "path", nodeId: "a", handle: "in" } })] }).success).toBe(false);
-    expect(validateDocument({ ...base, elements: [path, other], connections: [connection({ elementId: "path", node: { kind: "path", nodeId: "b", handle: "out" } })] }).success).toBe(false);
-    expect(validateDocument({ ...base, elements: [spline, other], connections: [connection({ elementId: "spline", node: { kind: "spline", nodeId: "a", handle: "in" } })] }).success).toBe(false);
-    expect(validateDocument({ ...base, elements: [spline, other], connections: [connection({ elementId: "spline", node: { kind: "spline", nodeId: "b", handle: "out" } })] }).success).toBe(false);
-    expect(validateDocument({ ...base, elements: [path, spline, other], connections: [connection({ elementId: "path", node: { kind: "path", nodeId: "a", handle: "out" } }), connection({ elementId: "spline", node: { kind: "spline", nodeId: "b", handle: "in" } })] }).success).toBe(true);
-    expect(validateDocument({ ...base, elements: [path, spline, other], connections: [connection({ elementId: "path", node: { kind: "path", nodeId: "a" } }), connection({ elementId: "spline", node: { kind: "spline", nodeId: "a" } })] }).success).toBe(true);
   });
   it("defaults legacy rectangle radii and rejects negative radii", () => {
     const legacy = { ...createDocument("doc-1", [{ id: layerId("layer-1"), name: "Design", visible: true, order: 0 }]), elements: [{ type: "rectangle", id: "r", layerId: "layer-1", position: { x: 0, y: 0 }, size: { width: 10, height: 10 }, rotation: 0, style: { stroke: "#000", strokeWidth: 1 } }] };
