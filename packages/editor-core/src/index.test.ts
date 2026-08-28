@@ -55,6 +55,31 @@ describe("editor core", () => {
     expect(cut.undo).toHaveLength(1);
     expect(redo(undo(cut)).document).toEqual(cut.document);
   });
+  it("removes both coincident shared edges when cutting a previously split face", () => {
+    const filled = { ...rectangle, id: elementId("filled-shared"), style: { ...rectangle.style, fill: "#f00" } };
+    const divider = { type: "line" as const, id: elementId("divider-shared"), layerId: rectangle.layerId, start: { x: 6, y: -2 }, end: { x: 6, y: 12 }, rotation: 0, style: rectangle.style };
+    const firstCut = dispatch(createEditor({ ...document, elements: [filled, divider] }), cutLineAtPoint(divider.id, { x: 6, y: -1 }));
+    const face = firstCut.document.elements.find((element) => element.type === "path" && element.closed && element.segments.some((segment) => {
+      const nodes = new Map(element.nodes.map((node) => [node.id, node.anchor]));
+      const start = nodes.get(segment.startNodeId); const end = nodes.get(segment.endNodeId);
+      return start?.x === 6 && end?.x === 6 && Math.min(start.y, end.y) === 2 && Math.max(start.y, end.y) === 7;
+    }));
+    expect(face?.type).toBe("path");
+    const sharedSegment = face?.type === "path" ? face.segments.findIndex((segment) => {
+      const nodes = new Map(face.nodes.map((node) => [node.id, node.anchor]));
+      const start = nodes.get(segment.startNodeId); const end = nodes.get(segment.endNodeId);
+      return start?.x === 6 && end?.x === 6 && Math.min(start.y, end.y) === 2 && Math.max(start.y, end.y) === 7;
+    }) : -1;
+    const secondCut = face?.type === "path" ? dispatch(firstCut, cutPathSegment(face.id, sharedSegment)) : firstCut;
+    const sharedEdges = secondCut.document.elements.flatMap((element) => element.type === "path" ? element.segments.flatMap((segment) => {
+      const nodes = new Map(element.nodes.map((node) => [node.id, node.anchor]));
+      const start = nodes.get(segment.startNodeId); const end = nodes.get(segment.endNodeId);
+      return start?.x === 6 && end?.x === 6 && Math.min(start.y, end.y) === 2 && Math.max(start.y, end.y) === 7 ? [segment] : [];
+    }) : []);
+    expect(secondCut).not.toBe(firstCut);
+    expect(sharedEdges).toHaveLength(0);
+    expect(secondCut.undo).toHaveLength(2);
+  });
   it("cuts a rotated rectangle without changing an unrelated element", () => {
     const rotated = { ...rectangle, id: elementId("rotated"), rotation: Math.PI / 4, style: { ...rectangle.style, fill: "#0f0" } };
     const unrelated = { ...rectangle, id: elementId("unrelated"), position: { x: 100, y: 100 } };

@@ -22,7 +22,7 @@ export interface NodeHit { readonly elementId: ElementId; readonly nodeIndex: nu
 export interface DimensionLineHit { readonly elementId: ElementId; readonly line: LineElement; readonly distance: number }
 export type DimensionTarget = { readonly kind: "node"; readonly hit: NodeHit } | { readonly kind: "line"; readonly hit: DimensionLineHit };
 export interface PathNodeHit { readonly elementId: ElementId; readonly node: PathGeometryNode & { readonly ringIndex?: number } }
-    export interface CuttableSegmentHit { readonly elementId: ElementId; readonly segmentIndex: number; readonly distance: number }
+    export interface CuttableSegmentHit { readonly elementId: ElementId; readonly segmentIndex: number; readonly distance: number; readonly start: PointMm; readonly end: PointMm }
 export type PathGuideDirection = "incoming" | "outgoing";
 export interface PathGuide {
   readonly elementId: ElementId;
@@ -105,7 +105,7 @@ export function pickPathNode(document: DocumentSnapshot, point: PointMm, zoom: n
         if (lengthSquared <= 0) continue;
         const t = Math.max(0, Math.min(1, ((point.x - segment.start.x) * dx + (point.y - segment.start.y) * dy) / lengthSquared));
         const distance = Math.hypot(point.x - (segment.start.x + t * dx), point.y - (segment.start.y + t * dy));
-        if (distance * zoom <= tolerancePx && (!best || distance < best.distance)) best = { elementId: segment.elementId, segmentIndex: segment.segmentIndex, distance };
+        if (distance * zoom <= tolerancePx && (!best || distance < best.distance)) best = { elementId: segment.elementId, segmentIndex: segment.segmentIndex, distance, start: segment.start, end: segment.end };
       }
       return best;
     }
