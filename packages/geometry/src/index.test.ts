@@ -266,7 +266,7 @@ describe("canonical millimetre geometry", () => {
     expect(boundsOf(line)).toEqual({ x: 5, y: -5, width: 0, height: 10 });
     expect(hitTest(line, { x: 5, y: 4 }, 0.01)).toBe(true);
     expect(hitTest(line, { x: 9, y: 0 }, 0.01)).toBe(false);
-    expect(realGeometryNodes(line)).toEqual([{ kind: "endpoint", point: start }, { kind: "center", point: { x: 5, y: 0 } }, { kind: "endpoint", point: end }]);
+    expect(realGeometryNodes(line)).toEqual([{ kind: "endpoint", nodeId: "start", point: start }, { kind: "center", nodeId: "center", point: { x: 5, y: 0 } }, { kind: "endpoint", nodeId: "end", point: end }]);
   });
   it("computes nine group handles and scales a group from one atomic geometry result", () => {
     const second = { ...rectangle, id: elementId("r2"), position: { x: 40, y: 30 }, size: { width: 10, height: 10 } };
