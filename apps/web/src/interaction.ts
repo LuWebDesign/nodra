@@ -55,6 +55,23 @@ export function selectedPathAnchorIds(path: PathElement, keys: readonly string[]
   }))];
 }
 
+export function arcReferenceCenters(path: PathElement): readonly PointMm[] {
+  const anchors = new Map(path.nodes.map((node) => [node.id, node.anchor]));
+  const centers = path.segments.flatMap((segment) => {
+    if (segment.type !== "cubicBezier") return [];
+    const start = anchors.get(segment.startNodeId); const end = anchors.get(segment.endNodeId);
+    if (!start || !end) return [];
+    const tangentStart = { x: segment.control1.x - start.x, y: segment.control1.y - start.y }; const tangentEnd = { x: end.x - segment.control2.x, y: end.y - segment.control2.y };
+    const normalStart = { x: -tangentStart.y, y: tangentStart.x }; const normalEnd = { x: -tangentEnd.y, y: tangentEnd.x };
+    const denom = normalStart.x * normalEnd.y - normalStart.y * normalEnd.x;
+    if (Math.abs(denom) < 1e-9) return [];
+    const delta = { x: end.x - start.x, y: end.y - start.y }; const t = (delta.x * normalEnd.y - delta.y * normalEnd.x) / denom;
+    const center = { x: start.x + normalStart.x * t, y: start.y + normalStart.y * t };
+    return [center];
+  });
+  return centers.filter((center, index) => centers.findIndex((candidate) => Math.hypot(candidate.x - center.x, candidate.y - center.y) < 0.25) === index);
+}
+
 /** Derives editor-only handle guides from the path's existing geometry nodes. */
 export function pathGuides(path: PathElement): readonly PathGuide[] {
   const nodes = pathGeometryNodes(path);

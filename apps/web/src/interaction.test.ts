@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createDocument, elementId, layerId, type DocumentSnapshot } from "@nodra/domain";
 import { validateDocument } from "@nodra/validation";
-import { canActivateRotation, circleGeometry, centerPageInCanvas, clientPointToCanvas, clientPointToPage, creationGuides, hasNonCollinearPoints, hoveredSelectionCenter, INITIAL_ZOOM, isDrawingTool, marqueeSelection, MAX_ZOOM, MIN_ZOOM, movementExceedsThreshold, normalizeBounds, normalizeDrag, pagePointToScreen, screenDeltaToMm, screenPointToMm, viewportPointToCanvas, containsBounds, elementsContainedBy, pickDimensionTarget, pickElement, pickFormaElement, pickFormaNode, pickFormaSegment, pickHoverNode, pickCuttableSegment, pickNode, pointerDownIntent, selectedNodeAnchor, selectionCenter, selectionFrame, snapCreationPoint, snapMoveDelta, visibleEditablePathNodeIndexes, zoomAtPoint } from "./interaction.js";
+import { arcReferenceCenters, canActivateRotation, circleGeometry, centerPageInCanvas, clientPointToCanvas, clientPointToPage, creationGuides, hasNonCollinearPoints, hoveredSelectionCenter, INITIAL_ZOOM, isDrawingTool, marqueeSelection, MAX_ZOOM, MIN_ZOOM, movementExceedsThreshold, normalizeBounds, normalizeDrag, pagePointToScreen, screenDeltaToMm, screenPointToMm, viewportPointToCanvas, containsBounds, elementsContainedBy, pickDimensionTarget, pickElement, pickFormaElement, pickFormaNode, pickFormaSegment, pickHoverNode, pickCuttableSegment, pickNode, pointerDownIntent, selectedNodeAnchor, selectionCenter, selectionFrame, snapCreationPoint, snapMoveDelta, visibleEditablePathNodeIndexes, zoomAtPoint } from "./interaction.js";
 import { geometryPatch, geometryValue } from "./propertyBar.js";
 import { dimensionKindForNodes, dimensionOffsetForPlacement, pointMidpoint } from "@nodra/geometry";
 
@@ -23,6 +23,10 @@ describe("editable path handles", () => {
     expect(visibleEditablePathNodeIndexes(nodes, segments, [])).toEqual([0, 1, 2]);
     expect(visibleEditablePathNodeIndexes(nodes, segments, [1])).toEqual([0, 1, 2, 3, 4, 5, 6]);
     expect(visibleEditablePathNodeIndexes(nodes, segments, [4])).toEqual([0, 1, 2, 4, 5]);
+  });
+  it("derives a stable reference center from circular arc controls", () => {
+    const k = 4 / 3 * Math.tan(Math.PI / 8);
+    expect(arcReferenceCenters({ type: "path", id: elementId("arc-path"), layerId: layerId("arc-layer"), nodes: [{ id: "a", anchor: { x: 10, y: 0 }, join: "symmetric" }, { id: "b", anchor: { x: 0, y: 10 }, join: "symmetric" }], segments: [{ type: "cubicBezier", startNodeId: "a", endNodeId: "b", control1: { x: 10, y: k * 10 }, control2: { x: k * 10, y: 10 } }], closed: false, style: { stroke: "#000", strokeWidth: 1 } })).toEqual([{ x: expect.closeTo(0), y: expect.closeTo(0) }]);
   });
 });
 

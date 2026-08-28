@@ -97,6 +97,7 @@ describe("editor core", () => {
     const curvedPieces = state.document.elements.filter((element) => element.type === "path" && element.segments.some((segment) => segment.type === "cubicBezier"));
     expect(curvedPieces.length).toBeGreaterThan(0);
     expect(Math.max(...curvedPieces.map((element) => element.type === "path" ? element.nodes.length : 0))).toBeLessThan(12);
+    expect(curvedPieces.some((element) => element.type === "path" && element.nodes.some((node) => node.join === "symmetric"))).toBe(true);
     const top = segmentWithEndpoints(state.document.elements, (start, end) => start.y === 0 && end.y === 0 && Math.min(start.x, end.x) === 0 && Math.max(start.x, end.x) === 5);
     expect(top).toBeDefined();
     state = top ? dispatch(state, cutPathSegment(top.path.id, top.segmentIndex, { x: 2, y: 0 })) : state;

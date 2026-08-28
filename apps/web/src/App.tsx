@@ -5,7 +5,7 @@ import { boundsOfElements, connectableNodeAddress, contourVertexNodes, dimension
 import { DebouncedAutosave, DexieProjectRepository, requestStoragePersistence, type FontRecord } from "@nodra/persistence";
 import { validateDesign, validateProject } from "@nodra/validation";
 import { renderSvg } from "@nodra/renderer-svg";
-import { canActivateRotation, centerPageInCanvas, clientPointToCanvas, clientPointToPage, cubicPlacementControls, formaNodeKey, hoveredSelectionCenter, isDrawingTool, marqueeSelection, movementExceedsThreshold, normalizeBounds, normalizeDrag, pagePointToCanvas, pathGuides, pickDimensionTarget, pickElement, pickFormaElement, pickFormaNode, pickFormaSegment, pickHoverNode, pickCuttableSegment, pickNode, pickPathNode, pickPathSegment, pointerDownIntent, visibleEditablePathNodeIndexes, screenDeltaToMm, screenPointToMm, selectedNodeAnchor, selectedPathAnchorIds, alignmentGuides, snapCreationPoint, snapMoveDelta, viewportPointToCanvas, zoomAtPoint, type AlignmentGuide, type ContourNodeHit, type CuttableSegmentHit, type DimensionTarget, type FormaNodeHit, type HoverNode, type NodeHit, type PathNodeHit, type SnapGuide, type TransformMode, type CreationSnap } from "./interaction.js";
+import { arcReferenceCenters, canActivateRotation, centerPageInCanvas, clientPointToCanvas, clientPointToPage, cubicPlacementControls, formaNodeKey, hoveredSelectionCenter, isDrawingTool, marqueeSelection, movementExceedsThreshold, normalizeBounds, normalizeDrag, pagePointToCanvas, pathGuides, pickDimensionTarget, pickElement, pickFormaElement, pickFormaNode, pickFormaSegment, pickHoverNode, pickCuttableSegment, pickNode, pickPathNode, pickPathSegment, pointerDownIntent, visibleEditablePathNodeIndexes, screenDeltaToMm, screenPointToMm, selectedNodeAnchor, selectedPathAnchorIds, alignmentGuides, snapCreationPoint, snapMoveDelta, viewportPointToCanvas, zoomAtPoint, type AlignmentGuide, type ContourNodeHit, type CuttableSegmentHit, type DimensionTarget, type FormaNodeHit, type HoverNode, type NodeHit, type PathNodeHit, type SnapGuide, type TransformMode, type CreationSnap } from "./interaction.js";
 import { aspectSize, formatMm, geometryValue, rotationDegreesValue, rotationPatch, type GeometryField, type PropertyElement, type RotatableElement } from "./propertyBar.js";
 import { useDocumentStore, usePersistenceStore, useUiStore, useViewportStore, type Tool } from "./stores.js";
 import { pathJoinGuidance, pathJoinOptions } from "./pathJoins.js";
@@ -1276,7 +1276,7 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
              if (!end) return value;
              return `${value}${segment.type === "cubicBezier" ? ` C ${segment.control1.x} ${segment.control1.y} ${segment.control2.x} ${segment.control2.y} ${end.x} ${end.y}` : ` L ${end.x} ${end.y}`}`;
            }, `M ${first.x} ${first.y}`) + (element.closed ? " Z" : "");
-           return <path key={`edit-${element.id}`} d={d} fill="none" stroke="#1683ff" strokeWidth={1 / zoom} pointerEvents="none" />;
+           return <g key={`edit-${element.id}`}><path d={d} fill="none" stroke="#1683ff" strokeWidth={1 / zoom} pointerEvents="none" />{arcReferenceCenters(element).map((center, index) => <g key={`arc-center-${index}`} className="arc-reference-center" aria-label="Centro de arco"><line x1={center.x - 3 / zoom} y1={center.y} x2={center.x + 3 / zoom} y2={center.y} /><line x1={center.x} y1={center.y - 3 / zoom} x2={center.x} y2={center.y + 3 / zoom} /></g>)}</g>;
          }
          return null;
        }) : [];

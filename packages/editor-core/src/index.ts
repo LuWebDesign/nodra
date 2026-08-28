@@ -634,12 +634,12 @@ const cutStraightComponent = (document: DocumentSnapshot, elementIdToCut: Elemen
   };
   const makePath = (pieces: readonly CutPieceGraph[], closed: boolean, index: number, styleSource: Element): PathElement => {
     const id = nextElementId(index === 0 ? elementIdToCut : `${elementIdToCut}:cut:${index}`); const nodes: PathNode[] = []; const segments: PathSegment[] = [];
-    const appendNode = (anchor: PointMm) => { const existing = nodes.at(-1); if (existing && key(existing.anchor) === key(anchor)) return existing.id; const node = { id: `${id}:node:${nodes.length}`, anchor, join: "corner" as const }; nodes.push(node); return node.id; };
+    const appendNode = (anchor: PointMm, join: PathJoin = "corner") => { const existing = nodes.at(-1); if (existing && key(existing.anchor) === key(anchor)) { if (join !== "corner" && existing.join === "corner") nodes[nodes.length - 1] = { ...existing, join }; return existing.id; } const node = { id: `${id}:node:${nodes.length}`, anchor, join }; nodes.push(node); return node.id; };
     for (let pieceIndex = 0; pieceIndex < pieces.length;) {
       const first = pieces[pieceIndex]!; let lastIndex = pieceIndex;
       const sourcePathSegment = first.source.type === "path" ? first.source.segments[first.piece.segmentIndex] : undefined;
       while (lastIndex + 1 < pieces.length && (first.source.type === "ellipse" || sourcePathSegment?.type === "cubicBezier") && pieces[lastIndex + 1]!.piece.elementId === first.piece.elementId && pieces[lastIndex + 1]!.piece.segmentIndex === first.piece.segmentIndex) lastIndex += 1;
-      const last = pieces[lastIndex]!; const startNodeId = appendNode(first.piece.start); const endNodeId = appendNode(last.piece.end);
+      const last = pieces[lastIndex]!; const keepsCurve = first.source.type === "ellipse" || sourcePathSegment?.type === "cubicBezier"; const startNodeId = appendNode(first.piece.start, keepsCurve ? "symmetric" : "corner"); const endNodeId = appendNode(last.piece.end, keepsCurve ? "symmetric" : "corner");
       segments.push(first.source.type === "ellipse" ? { type: "cubicBezier", startNodeId, endNodeId, ...ellipseCubic(first.source, first.piece.start, last.piece.end) } : sourcePathSegment?.type === "cubicBezier" ? { type: "cubicBezier", startNodeId, endNodeId, control1: sourcePathSegment.control1, control2: sourcePathSegment.control2 } : { type: "line", startNodeId, endNodeId });
       pieceIndex = lastIndex + 1;
     }
