@@ -10,6 +10,7 @@ import {
   type OperationMetadata,
   type PathElement,
   type PathSegment,
+  type PathNode,
   type PathJoin,
   type GlyphElement,
   type SplineElement,
@@ -597,8 +598,8 @@ const cutPointDistance = (piece: CutPieceGraph, point: PointMm | undefined): num
 /** Rebuilds only the straight planar component containing the selected edge. */
 const cutStraightComponent = (document: DocumentSnapshot, elementIdToCut: ElementId, segmentIndex: number, point?: PointMm): CommandResult => {
   const selectedElement = document.elements.find((element) => element.id === elementIdToCut);
-  if (!selectedElement || (selectedElement.type !== "line" && selectedElement.type !== "rectangle" && selectedElement.type !== "path")) return { success: false, error: "Only straight lines, rectangle edges, and line paths can be cut" };
-  if (selectedElement.type === "path" && selectedElement.segments.some((segment) => segment.type !== "line")) return { success: false, error: "Bezier paths are not supported by Cut Segments" };
+  if (!selectedElement || (selectedElement.type !== "line" && selectedElement.type !== "rectangle" && selectedElement.type !== "ellipse" && selectedElement.type !== "path")) return { success: false, error: "Only straight lines, ellipse arcs, rectangle edges, and line paths can be cut" };
+  if (selectedElement.type === "path" && selectedElement.segments[segmentIndex]?.type !== "line") return { success: false, error: "Only straight path segments can be cut" };
   const sources = document.elements.flatMap((element): CutPieceGraph[] => cuttableSegments(element).map((piece) => ({ piece, source: element })));
   const split = splitCuttableSegments(sources.map(({ piece }) => piece));
   const graph = split.map((piece) => ({ piece, source: document.elements.find((element) => element.id === piece.elementId)! }));
@@ -611,7 +612,9 @@ const cutStraightComponent = (document: DocumentSnapshot, elementIdToCut: Elemen
   const edgeKey = (start: PointMm, end: PointMm) => [key(start), key(end)].sort().join("|");
   const component = [...connected];
   const selectedEdge = edgeKey(selected.piece.start, selected.piece.end);
-  const remaining = component.filter(({ piece }) => edgeKey(piece.start, piece.end) !== selectedEdge);
+  const remaining = component.filter(({ piece, source }) => selected.source.type === "ellipse" && source.type === "ellipse"
+    ? !(piece.elementId === selected.piece.elementId && piece.segmentIndex === selected.piece.segmentIndex)
+    : edgeKey(piece.start, piece.end) !== selectedEdge);
   const componentElements = new Set(component.map(({ piece }) => piece.elementId));
   const result = classifyCutGraph(remaining.map(({ piece }) => piece));
   const cycleEdges = new Set(result.cycles.flatMap((cycle) => cycle.points.map((start, index) => edgeKey(start, cycle.points[(index + 1) % cycle.points.length]!))));
@@ -621,17 +624,40 @@ const cutStraightComponent = (document: DocumentSnapshot, elementIdToCut: Elemen
   const usedElementIds = new Set(document.elements.filter((element) => !componentElements.has(element.id)).map((element) => element.id));
   const nextElementId = (base: string): ElementId => { let candidate = base; let suffix = 1; while (usedElementIds.has(elementId(candidate))) candidate = `${base}:${suffix++}`; const id = elementId(candidate); usedElementIds.add(id); return id; };
   const sourceFor = (pieces: readonly CutPieceGraph[]) => pieces[0]?.source ?? selected.source;
-  const makePath = (pieces: readonly CutPieceGraph[], closed: boolean, index: number, styleSource: Element): PathElement => {
-    const id = nextElementId(index === 0 ? elementIdToCut : `${elementIdToCut}:cut:${index}`); const nodes = pieces.flatMap((piece, pieceIndex) => pieceIndex === 0 ? [{ id: `${id}:node:0`, anchor: piece.piece.start, join: "corner" as const }, { id: `${id}:node:1`, anchor: piece.piece.end, join: "corner" as const }] : [{ id: `${id}:node:${pieceIndex + 1}`, anchor: piece.piece.end, join: "corner" as const }]);
-    return { type: "path", id, layerId: styleSource.layerId, nodes, segments: nodes.map((node, nodeIndex) => ({ type: "line" as const, startNodeId: node.id, endNodeId: nodes[closed ? (nodeIndex + 1) % nodes.length : nodeIndex + 1]?.id })).filter((segment): segment is { type: "line"; startNodeId: string; endNodeId: string } => segment.endNodeId !== undefined), closed, style: closed ? styleSource.style : Object.fromEntries(Object.entries(styleSource.style).filter(([name]) => name !== "fill")) as typeof styleSource.style, ...("operation" in styleSource && styleSource.operation ? { operation: styleSource.operation } : {}) };
+  const ellipseCubic = (ellipse: Extract<Element, { type: "ellipse" }>, start: PointMm, end: PointMm): Pick<Extract<PathSegment, { type: "cubicBezier" }>, "control1" | "control2"> => {
+    const center = elementCenter(ellipse); const rx = ellipse.size.width / 2; const ry = ellipse.size.height / 2; const cos = Math.cos(-ellipse.rotation); const sin = Math.sin(-ellipse.rotation);
+    const localAngle = (pointValue: PointMm) => { const dx = pointValue.x - center.x; const dy = pointValue.y - center.y; return Math.atan2((dx * sin + dy * cos) / ry, (dx * cos - dy * sin) / rx); };
+    const tangent = (angle: number): PointMm => transformPoint({ x: -rx * Math.sin(angle), y: ry * Math.cos(angle) }, { x: 0, y: 0 }, ellipse.rotation);
+    const a0 = localAngle(start); const a1 = localAngle(end); let delta = a1 - a0; while (delta <= -Math.PI) delta += Math.PI * 2; while (delta > Math.PI) delta -= Math.PI * 2;
+    const k = 4 / 3 * Math.tan(delta / 4); const t0 = tangent(a0); const t1 = tangent(a1);
+    return { control1: { x: start.x + t0.x * k, y: start.y + t0.y * k }, control2: { x: end.x - t1.x * k, y: end.y - t1.y * k } };
   };
-  for (const cycle of result.cycles) { const source = component.find(({ source }) => source.type === "rectangle")?.source ?? selected.source; paths.push(makePath(cycle.points.map((point, index) => ({ piece: { elementId: elementIdToCut, segmentIndex: index, start: point, end: cycle.points[(index + 1) % cycle.points.length]! }, source })), true, paths.length, source)); }
-  while (usedOpen.size < open.length) { const seed = open.find((candidate) => !usedOpen.has(candidate)); if (!seed) break; const chain: CutPieceGraph[] = [seed]; usedOpen.add(seed); let end = seed.piece.end; for (;;) { const next = open.find((candidate) => !usedOpen.has(candidate) && (key(candidate.piece.start) === key(end) || key(candidate.piece.end) === key(end))); if (!next) break; usedOpen.add(next); if (key(next.piece.end) === key(end)) chain.push({ ...next, piece: { ...next.piece, start: next.piece.end, end: next.piece.start } }); else chain.push(next); end = chain.at(-1)!.piece.end; } paths.push(makePath(chain, false, paths.length, sourceFor(chain))); }
+  const makePath = (pieces: readonly CutPieceGraph[], closed: boolean, index: number, styleSource: Element): PathElement => {
+    const id = nextElementId(index === 0 ? elementIdToCut : `${elementIdToCut}:cut:${index}`); const nodes: PathNode[] = []; const segments: PathSegment[] = [];
+    const appendNode = (anchor: PointMm) => { const existing = nodes.at(-1); if (existing && key(existing.anchor) === key(anchor)) return existing.id; const node = { id: `${id}:node:${nodes.length}`, anchor, join: "corner" as const }; nodes.push(node); return node.id; };
+    for (let pieceIndex = 0; pieceIndex < pieces.length;) {
+      const first = pieces[pieceIndex]!; let lastIndex = pieceIndex;
+      const sourcePathSegment = first.source.type === "path" ? first.source.segments[first.piece.segmentIndex] : undefined;
+      while (lastIndex + 1 < pieces.length && (first.source.type === "ellipse" || sourcePathSegment?.type === "cubicBezier") && pieces[lastIndex + 1]!.piece.elementId === first.piece.elementId && pieces[lastIndex + 1]!.piece.segmentIndex === first.piece.segmentIndex) lastIndex += 1;
+      const last = pieces[lastIndex]!; const startNodeId = appendNode(first.piece.start); const endNodeId = appendNode(last.piece.end);
+      segments.push(first.source.type === "ellipse" ? { type: "cubicBezier", startNodeId, endNodeId, ...ellipseCubic(first.source, first.piece.start, last.piece.end) } : sourcePathSegment?.type === "cubicBezier" ? { type: "cubicBezier", startNodeId, endNodeId, control1: sourcePathSegment.control1, control2: sourcePathSegment.control2 } : { type: "line", startNodeId, endNodeId });
+      pieceIndex = lastIndex + 1;
+    }
+    if (closed && segments.length && nodes.length > 1 && key(nodes[0]!.anchor) === key(nodes.at(-1)!.anchor)) { nodes.pop(); const last = segments.at(-1)!; segments[segments.length - 1] = { ...last, endNodeId: nodes[0]!.id } as PathSegment; }
+    return { type: "path", id, layerId: styleSource.layerId, nodes, segments, closed, style: closed ? styleSource.style : Object.fromEntries(Object.entries(styleSource.style).filter(([name]) => name !== "fill")) as typeof styleSource.style, ...("operation" in styleSource && styleSource.operation ? { operation: styleSource.operation } : {}) };
+  };
+  const cyclePieces = (points: readonly PointMm[]): CutPieceGraph[] => points.map((start, index) => {
+    const end = points[(index + 1) % points.length]!; const match = remaining.find(({ piece }) => edgeKey(piece.start, piece.end) === edgeKey(start, end))!;
+    return key(match.piece.start) === key(start) ? match : { ...match, piece: { ...match.piece, start: match.piece.end, end: match.piece.start } };
+  });
+  const keepPath = (path: PathElement) => path.nodes.length >= 2 && path.segments.length >= 1 && (!path.closed && path.segments.length === path.nodes.length - 1 || path.closed && path.segments.length === path.nodes.length);
+  for (const cycle of result.cycles) { const pieces = cyclePieces(cycle.points); const source = pieces.find(({ source }) => source.type === "rectangle")?.source ?? selected.source; const path = makePath(pieces, true, paths.length, source); if (keepPath(path)) paths.push(path); }
+  while (usedOpen.size < open.length) { const seed = open.find((candidate) => !usedOpen.has(candidate)); if (!seed) break; const chain: CutPieceGraph[] = [seed]; usedOpen.add(seed); let end = seed.piece.end; for (;;) { const next = open.find((candidate) => !usedOpen.has(candidate) && (key(candidate.piece.start) === key(end) || key(candidate.piece.end) === key(end))); if (!next) break; usedOpen.add(next); if (key(next.piece.end) === key(end)) chain.push({ ...next, piece: { ...next.piece, start: next.piece.end, end: next.piece.start } }); else chain.push(next); end = chain.at(-1)!.piece.end; } const path = makePath(chain, false, paths.length, sourceFor(chain)); if (keepPath(path)) paths.push(path); }
   const firstAffected = document.elements.findIndex((element) => componentElements.has(element.id));
   const elements = document.elements.filter((element) => !componentElements.has(element.id));
   const insertionIndex = firstAffected < 0 ? elements.length : document.elements.slice(0, firstAffected).filter((element) => !componentElements.has(element.id)).length;
   elements.splice(insertionIndex, 0, ...paths);
-  return replaceElements(document, elements);
+  return replaceElements(removeConnectionsFor(document, componentElements), elements);
 };
 
 export const cutLineAtPoint = (lineId: ElementId, point: PointMm): EditorCommand => ({ name: `cut-line-at:${lineId}`, apply: (document) => cutStraightComponent(document, lineId, 0, point) });
@@ -639,8 +665,8 @@ export const cutPathSegment = (pathId: ElementId, segmentIndex: number, point?: 
   const path = pathAt(document, pathId); const segment = path?.segments[segmentIndex];
   // Curved geometry is not part of the planar cut graph, but an existing mixed
   // path must not lose its untouched Bézier segments when a line edge is removed.
-  if (path?.segments.some((candidate) => candidate.type === "cubicBezier")) {
-    if (!segment || segment.type !== "line" || path.closed) return { success: false, error: "Only open straight path segments can be cut beside Bézier geometry" };
+  if (path?.segments.some((candidate) => candidate.type === "cubicBezier") && !path.closed) {
+    if (!segment || segment.type !== "line") return { success: false, error: "Only open straight path segments can be cut beside Bézier geometry" };
     const ranges = [[0, segmentIndex], [segmentIndex + 1, path.segments.length]] as const;
     const pieces = ranges.filter(([start, end]) => end > start).map(([start, end], index): PathElement => {
       const segments = path.segments.slice(start, end); const used = new Set(segments.flatMap((candidate) => [candidate.startNodeId, candidate.endNodeId]));

@@ -409,6 +409,18 @@ describe("drag geometry", () => {
     expect(hit).toMatchObject({ elementId: line.id, segmentIndex: 0, start: { x: 0, y: 0 }, end: { x: 10, y: 0 } });
   });
 
+  it("returns full ellipse quadrant points for cut hover feedback", () => {
+    const layer = { id: layerId("cut-ellipse-hover"), name: "Cut ellipse hover", visible: true, order: 0 };
+    const document = createDocument("cut-ellipse-hover", [layer]);
+    const circle = { type: "ellipse" as const, id: elementId("cut-hover-circle"), layerId: layer.id, position: { x: -5, y: -5 }, size: { width: 10, height: 10 }, rotation: 0, style: { stroke: "#000", strokeWidth: 1 } };
+    const hit = pickCuttableSegment({ ...document, elements: [circle] }, { x: 3.5, y: 3.5 }, 1);
+    expect(hit).toMatchObject({ elementId: circle.id, segmentIndex: 0 });
+    expect(hit?.points?.length).toBeGreaterThan(2);
+    expect(hit?.start).toEqual({ x: 5, y: 0 });
+    expect(hit?.end.x).toBeCloseTo(0);
+    expect(hit?.end.y).toBeCloseTo(5);
+  });
+
   it("uses the minimal tool-specific node feedback targets", () => {
     const layer = { id: layerId("hover-feedback"), name: "Hover feedback", visible: true, order: 0 };
     const document = createDocument("hover-feedback", [layer]);

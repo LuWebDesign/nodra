@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { angularDimensionGeometry, bezierHandlePoint, boundsOf, boundsOfElements, boundsOutsidePage, connectableNode, connectableNodeAddress, closedElementToPolygon, cubicBezierBounds, cubicBezierDerivative, degreesToRadians, dimensionGeometry, dimensionKindForNodes, dimensionKindForPlacement, dimensionOffsetForAlignedPlacement, dimensionOffsetForPlacement, editableGeometryNodes, elementCenter, elementSegmentAt, elementToContour, evaluateCubicBezier, ELLIPSE_APPROXIMATION_SEGMENTS, groupCenter, groupHandlePoints, hitTest, mirrorHandleOffset, mmToScreen, pointMidpoint, radiansToDegrees, realGeometryNodes, resizeGroup, resizeHandle, rotatedLineEndpoints, rotateElements, rotationFromDrag, rotationHandlePoints, screenToMm, shapeResultContours, splitCubicBezier, validateSize, visibleBezierHandleGuides } from "./index.js";
+import { angularDimensionGeometry, bezierHandlePoint, boundsOf, boundsOfElements, boundsOutsidePage, connectableNode, connectableNodeAddress, closedElementToPolygon, cubicBezierBounds, cuttableSegments, cubicBezierDerivative, degreesToRadians, dimensionGeometry, dimensionKindForNodes, dimensionKindForPlacement, dimensionOffsetForAlignedPlacement, dimensionOffsetForPlacement, editableGeometryNodes, elementCenter, elementSegmentAt, elementToContour, evaluateCubicBezier, ELLIPSE_APPROXIMATION_SEGMENTS, groupCenter, groupHandlePoints, hitTest, mirrorHandleOffset, mmToScreen, pointMidpoint, radiansToDegrees, realGeometryNodes, resizeGroup, resizeHandle, rotatedLineEndpoints, rotateElements, rotationFromDrag, rotationHandlePoints, screenToMm, shapeResultContours, splitCubicBezier, splitCuttableSegments, validateSize, visibleBezierHandleGuides } from "./index.js";
 import { elementId, layerId } from "@nodra/domain";
 
 const style = { stroke: "#000", strokeWidth: 0.2 };
@@ -56,6 +56,17 @@ describe("canonical millimetre geometry", () => {
     expect(elementToContour(rectangle).contours[0]?.points).toHaveLength(5);
     expect(elementSegmentAt(rectangle, { x: 20, y: 20 }, 0.1)).toMatchObject({ elementId: rectangle.id, segmentIndex: 0 });
     expect(rectangle.type).toBe("rectangle");
+  });
+  it("projects ellipse quadrants as cuttable segments that split at line intersections", () => {
+    const circle = { type: "ellipse" as const, id: elementId("cut-circle"), layerId: layerId("l"), position: { x: -5, y: -5 }, size: { width: 10, height: 10 }, rotation: 0, style };
+    const top = { elementId: elementId("top"), segmentIndex: 0, start: { x: 0, y: 0 }, end: { x: 10, y: 0 } };
+    const left = { elementId: elementId("left"), segmentIndex: 0, start: { x: 0, y: 0 }, end: { x: 0, y: 10 } };
+    const segments = cuttableSegments(circle);
+    const split = splitCuttableSegments([...segments, top, left]);
+    expect(segments).toHaveLength(ELLIPSE_APPROXIMATION_SEGMENTS);
+    expect(new Set(segments.map((segment) => segment.segmentIndex))).toEqual(new Set([0, 1, 2, 3]));
+    expect(split.some((segment) => segment.start.x === 5 && segment.start.y === 0 || segment.end.x === 5 && segment.end.y === 0)).toBe(true);
+    expect(split.some((segment) => segment.start.x === 0 && segment.start.y === 5 || segment.end.x === 0 && segment.end.y === 5)).toBe(true);
   });
   it("does not pick a contour segment at a vertex within the segment tolerance", () => {
     const contour = { type: "contour" as const, id: elementId("segment-vertex"), layerId: layerId("l"), position: { x: 10, y: 20 }, size: { width: 20, height: 10 }, contours: [{ points: [{ x: 10, y: 20 }, { x: 30, y: 20 }, { x: 30, y: 30 }, { x: 10, y: 20 }] }], fillRule: "evenodd" as const, rotation: 0, style };

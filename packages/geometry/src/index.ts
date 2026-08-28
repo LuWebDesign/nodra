@@ -15,11 +15,21 @@ export function cuttableSegments(element: Element): readonly CuttableSegment[] {
   if (element.type === "path") {
         const nodes = new Map(element.nodes.map((node) => [node.id, node.anchor]));
         return element.segments.flatMap((segment, segmentIndex) => {
-          if (segment.type !== "line") return [];
           const start = nodes.get(segment.startNodeId); const end = nodes.get(segment.endNodeId);
-          return start && end ? [{ elementId: element.id, segmentIndex, start, end }] : [];
+          if (!start || !end) return [];
+          if (segment.type === "line") return [{ elementId: element.id, segmentIndex, start, end }];
+          const points = flattenCubicBezier({ p0: start, p1: segment.control1, p2: segment.control2, p3: end }, 0.25);
+          return points.flatMap((point, pointIndex) => {
+            const next = points[pointIndex + 1];
+            return next ? [{ elementId: element.id, segmentIndex, start: point, end: next }] : [];
+          });
         });
       }
+  if (element.type === "ellipse") {
+    const points = primitivePolygon(element).slice(0, -1).map(([x, y]) => ({ x, y }));
+    const quadrantSize = ELLIPSE_APPROXIMATION_SEGMENTS / 4;
+    return points.map((start, index) => ({ elementId: element.id, segmentIndex: Math.floor(index / quadrantSize), start, end: points[(index + 1) % points.length]! }));
+  }
       if (element.type !== "rectangle" || element.cornerRadius !== 0 || (element.cornerRadii !== undefined && Object.values(element.cornerRadii).some((radius) => radius !== 0))) return [];
   const corners = rotatedCorners(element);
   return corners.map((start, index) => ({ elementId: element.id, segmentIndex: index, start, end: corners[(index + 1) % corners.length]! }));
