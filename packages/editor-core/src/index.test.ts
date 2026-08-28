@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createDocument, elementId, layerId, type DimensionElement, type EllipseElement, type GlyphElement, type PathElement, type RectangleElement, type SplineElement, type TextElement } from "@nodra/domain";
-import { addToSelection, appendSplineNode, beginGesture, cancelGesture, clearSelection, closePath, closeSplineElement, commitGesture, createEditor, createElement, createPathCubicNode, cutPathSegment, splitPathLineAt, deleteContourNodes, deleteElement, deleteElementNodes, deletePathNodes, dispatch, duplicateElements, flipElements, insertContourNode, invalidDimensionIdsForShapeOperation, moveElement, moveElements, movePathNode, movePathHandle, openPath, previewGesture, previewGestureFromBase, redo, removeFromSelection, reorderLayer, resizeElement, resizeElementToDimensions, resizeElements, resizeElementsToDimensions, rotateElementsAroundCenter, select, selectForPointerDown, setLayerVisibility, setPathJoin, shapeOperation, splitPathSegment, toggleSelection, undo, updateContourNode, updateElement, updateElementNode, updateElementStyles, updateSplineHandle, updateSplineNode } from "./index.js";
+import { addToSelection, appendSplineNode, beginGesture, cancelGesture, clearSelection, closePath, closeSplineElement, commitGesture, createEditor, createElement, createPathCubicNode, cutLineAtPoint, cutPathSegment, splitPathLineAt, deleteContourNodes, deleteElement, deleteElementNodes, deletePathNodes, dispatch, duplicateElements, flipElements, insertContourNode, invalidDimensionIdsForShapeOperation, moveElement, moveElements, movePathNode, movePathHandle, openPath, previewGesture, previewGestureFromBase, redo, removeFromSelection, reorderLayer, resizeElement, resizeElementToDimensions, resizeElements, resizeElementsToDimensions, rotateElementsAroundCenter, select, selectForPointerDown, setLayerVisibility, setPathJoin, shapeOperation, splitPathSegment, toggleSelection, undo, updateContourNode, updateElement, updateElementNode, updateElementStyles, updateSplineHandle, updateSplineNode } from "./index.js";
 import { boundsOfElements } from "@nodra/geometry";
 import type { Direction } from "@nodra/geometry";
 import { appendLinePoint } from "./index.js";
@@ -40,6 +40,28 @@ describe("editor core", () => {
     const perCornerInitial = createEditor({ ...document, elements: [perCorner] });
     expect(dispatch(roundedInitial, cutPathSegment(rounded.id, 0))).toBe(roundedInitial);
     expect(dispatch(perCornerInitial, cutPathSegment(perCorner.id, 0))).toBe(perCornerInitial);
+  });
+  it("reconstructs a line-through-rectangle cut into filled faces and open remnants", () => {
+    const filled = { ...rectangle, id: elementId("filled"), style: { ...rectangle.style, fill: "#f00" } };
+    const divider = { type: "line" as const, id: elementId("divider"), layerId: rectangle.layerId, start: { x: 6, y: -2 }, end: { x: 6, y: 12 }, rotation: 0, style: rectangle.style };
+    const initial = createEditor({ ...document, elements: [filled, divider] });
+    const cut = dispatch(initial, cutLineAtPoint(divider.id, { x: 6, y: -1 }));
+    expect(cut.document.elements.filter((element) => element.type === "path" && element.closed)).toHaveLength(2);
+    expect(cut.document.elements.filter((element) => element.type === "path" && element.closed).every((element) => element.type === "path" && element.style.fill === "#f00")).toBe(true);
+    expect(cut.document.elements.filter((element) => element.type === "path" && !element.closed)).toHaveLength(1);
+    const interiorCut = dispatch(initial, cutLineAtPoint(divider.id, { x: 6, y: 5 }));
+    expect(interiorCut.document.elements.filter((element) => element.type === "path" && element.closed)).toHaveLength(1);
+    expect(interiorCut.document.elements.filter((element) => element.type === "path" && !element.closed)).toHaveLength(2);
+    expect(cut.undo).toHaveLength(1);
+    expect(redo(undo(cut)).document).toEqual(cut.document);
+  });
+  it("cuts a rotated rectangle without changing an unrelated element", () => {
+    const rotated = { ...rectangle, id: elementId("rotated"), rotation: Math.PI / 4, style: { ...rectangle.style, fill: "#0f0" } };
+    const unrelated = { ...rectangle, id: elementId("unrelated"), position: { x: 100, y: 100 } };
+    const initial = createEditor({ ...document, elements: [rotated, unrelated] });
+    const cut = dispatch(initial, cutPathSegment(rotated.id, 0, { x: 5.5, y: -0.5 }));
+    expect(cut.document.elements.find((element) => element.id === unrelated.id)).toMatchObject(unrelated);
+    expect(cut.document.elements.some((element) => element.id === rotated.id && element.type === "path" && !element.closed)).toBe(true);
   });
   it("converts a zero-radius rectangle to an open path when cutting one edge", () => {
         const state = dispatch(createEditor({ ...document, elements: [rectangle] }), cutPathSegment(rectangle.id, 0));
