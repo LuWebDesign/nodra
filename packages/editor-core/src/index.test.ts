@@ -274,10 +274,9 @@ describe("editor core", () => {
     expect(dispatch(state, deleteContourNodes(contour.id, [{ ringIndex: 0, pointIndex: 0 }, { ringIndex: 0, pointIndex: 1 }]))).toBe(state);
   });
 
-  it("converts a primitive before deleting a Forma node", () => {
-    const state = dispatch(createEditor({ ...document, elements: [rectangle] }), deleteElementNodes(rectangle.id, [0]));
-    expect(state.document.elements[0]?.type).toBe("contour");
-    expect(state.document.elements[0]?.type === "contour" ? state.document.elements[0].contours[0]?.points : []).toHaveLength(4);
+  it("rejects deleting primitive Forma nodes without flattening them", () => {
+    const state = createEditor({ ...document, elements: [rectangle] });
+    expect(dispatch(state, deleteElementNodes(rectangle.id, [0]))).toBe(state);
   });
 
   it("deletes a glyph anchor without flattening its Bézier handles", () => {

@@ -885,8 +885,8 @@ export const deleteElementNodes = (id: ElementId, nodeIndexes: readonly number[]
       const glyph = deleteGlyphAnchorNodes(current, indexes);
       return glyph ? replaceElements(document, document.elements.map((element) => element.id === id ? glyph : element)) : { success: false, error: "No se puede eliminar: el glifo debe conservar al menos tres anclas por contorno" };
     }
-    if (current.type !== "contour" && indexes.some((index) => realGeometryNodes(current)[index]?.kind === "center")) return { success: false, error: "El centro no es un nodo de contorno eliminable" };
-    const contour = current.type === "contour" ? current : elementToContour(current);
+    if (current.type !== "contour") return { success: false, error: "Sólo se pueden eliminar nodos de contornos, trazados y glifos" };
+    const contour = current;
     const remove = new Set(indexes);
     const points = contour.contours.map((ring) => {
       const vertices = ring.points.slice(0, -1);

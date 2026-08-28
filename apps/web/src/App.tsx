@@ -1131,7 +1131,10 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
           const contourAddresses = selectedFormaNodeKeys.flatMap((key) => { const match = key.match(new RegExp(`^${element.id}:c:(\\d+):(\\d+)$`)); return match ? [{ ringIndex: Number(match[1]), pointIndex: Number(match[2]) }] : []; });
           const primitiveIndexes = selectedFormaNodeKeys.flatMap((key) => { const match = key.match(new RegExp(`^${element.id}:p:(\\d+)$`)); return match ? [Number(match[1])] : []; });
           if (contourAddresses.length) next = dispatch(next, deleteContourNodes(element.id, contourAddresses));
-          if (primitiveIndexes.length) next = dispatch(next, deleteElementNodes(element.id, primitiveIndexes));
+          if (primitiveIndexes.length && element.type === "path") {
+            const nodeIds = selectedPathAnchorIds(element, selectedFormaNodeKeys);
+            if (nodeIds.length) next = dispatch(next, deletePathNodes(element.id, nodeIds));
+          } else if (primitiveIndexes.length) next = dispatch(next, deleteElementNodes(element.id, primitiveIndexes));
         }
         setSelectedFormaNodeKeys([]); setEditorState(next);
       } else if (selection.length && event.key === "Delete" && !(selectedFormaNodeKeys.length && selectedElements.some((element) => element.type === "path"))) {
