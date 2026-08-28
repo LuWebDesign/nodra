@@ -240,7 +240,7 @@ describe("click creation geometry", () => {
     const layer = { id: layerId("creation-snap-priority"), name: "Snap priority", visible: true, order: 0 };
     const rectangle = { type: "rectangle" as const, id: elementId("creation-snap-rectangle"), layerId: layer.id, position: { x: 10, y: 10 }, size: { width: 20, height: 20 }, cornerRadius: 0, rotation: 0, style: { stroke: "#000", strokeWidth: 1 } };
     const document = { ...createDocument("creation-snap-priority", [layer]), elements: [rectangle] };
-    expect(snapCreationPoint(document, { x: 11, y: 11 }, 1, 8)).toEqual({ point: { x: 10, y: 10 }, kind: "node" });
+    expect(snapCreationPoint(document, { x: 11, y: 11 }, 1, 8)).toMatchObject({ point: { x: 10, y: 10 }, kind: "node", address: { kind: "named", name: "nw" } });
     expect(snapCreationPoint(document, { x: 20.5, y: 20 }, 1, 8)).toEqual({ point: { x: 20, y: 20 }, kind: "center" });
   });
 

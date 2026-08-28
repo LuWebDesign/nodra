@@ -13,6 +13,8 @@ import {
   type PathJoin,
   type GlyphElement,
   type SplineElement,
+  type ConnectableNodeAddress,
+  type ExplicitConnection,
   elementId,
   nextRevision,
   revision,
@@ -45,13 +47,14 @@ const result = (document: DocumentSnapshot): CommandResult => {
   return checked.success ? { success: true, document: checked.data } : { success: false, error: checked.error };
 };
 const replaceElements = (document: DocumentSnapshot, elements: readonly Element[]): CommandResult => result(withElements(document, elements));
+const removeConnectionsFor = (document: DocumentSnapshot, ids: ReadonlySet<ElementId>): DocumentSnapshot => ({ ...document, connections: (document.connections ?? []).filter((connection) => !ids.has(connection.first.elementId) && !ids.has(connection.second.elementId)) });
 const elementIndex = (document: DocumentSnapshot, id: ElementId): number => document.elements.findIndex((element) => element.id === id);
 
-export const createElement = (element: Element): EditorCommand => ({
+export const createElement = (element: Element, connections: readonly ExplicitConnection[] = []): EditorCommand => ({
   name: `create:${element.type}`,
   apply: (document) => document.elements.some((current) => current.id === element.id)
     ? { success: false, error: `Element already exists: ${element.id}` }
-    : replaceElements(document, [...document.elements, { ...element }]),
+     : replaceElements({ ...document, connections: [...(document.connections ?? []), ...connections] }, [...document.elements, { ...element }]),
 });
 
 /** Extends a native two-endpoint line into an editable open path. */
@@ -87,14 +90,23 @@ export const convertTextToGlyphs = (textId: ElementId, outlines: readonly GlyphO
     if (glyphs.some((glyph) => existing.has(glyph.id)) || new Set(glyphs.map((glyph) => glyph.id)).size !== glyphs.length) return { success: false, error: "Generated glyph IDs collide with the document" };
     const index = document.elements.findIndex((element) => element.id === text.id);
     const elements = [...document.elements]; elements.splice(index, 1, ...glyphs);
-    return replaceElements(document, elements);
+    return replaceElements(removeConnectionsFor(document, new Set([text.id])), elements);
+  },
+});
+
+export const removeConnection = (id: string): EditorCommand => ({
+  name: `remove-connection:${id}`,
+  apply: (document) => {
+    const connections = document.connections ?? [];
+    if (!connections.some((connection) => connection.id === id)) return { success: false, error: `Connection not found: ${id}` };
+    return replaceElements({ ...document, connections: connections.filter((connection) => connection.id !== id) }, document.elements);
   },
 });
 
 export const deleteElement = (id: ElementId): EditorCommand => ({
   name: `delete:${id}`,
   apply: (document) => document.elements.some((element) => element.id === id)
-    ? replaceElements(document, document.elements.filter((element) => element.id !== id))
+    ? replaceElements(removeConnectionsFor(document, new Set([id])), document.elements.filter((element) => element.id !== id))
     : { success: false, error: `Element not found: ${id}` },
 });
 
@@ -147,9 +159,61 @@ export const moveElements = (ids: readonly ElementId[], delta: PointMm): EditorC
   },
 });
 export const resizeElements = (ids: readonly ElementId[], handle: "nw" | "n" | "ne" | "e" | "se" | "s" | "sw" | "w", pointer: PointMm, aspectLock = false): EditorCommand => ({ name: `resize-group:${ids.join(",")}`, apply: (document) => { const selected = new Set(ids); const elements = document.elements.filter((e) => selected.has(e.id)); if (!elements.length || elements.length !== selected.size) return { success: false, error: "Invalid group selection" }; const next = resizeGroup(elements, handle, pointer, 1, aspectLock); return replaceElements(document, document.elements.map((e) => next.find((n) => n.id === e.id) ?? e)); } });
+export const resizeElementsToDimensions = (ids: readonly ElementId[], size: SizeMm, aspectLock = false): EditorCommand => ({ name: `resize-group-centered:${ids.join(",")}`, apply: (document) => {
+  const selected = new Set(ids);
+  const elements = document.elements.filter((element) => selected.has(element.id));
+  if (!elements.length || elements.length !== selected.size) return { success: false, error: "Invalid group selection" };
+  const bounds = boundsOfElements(elements);
+  const target = aspectLock
+    ? (size.width / size.height >= bounds.width / bounds.height ? { width: size.width, height: size.width * bounds.height / bounds.width } : { width: size.height * bounds.width / bounds.height, height: size.height })
+    : size;
+  if (![target.width, target.height].every(Number.isFinite) || target.width <= 0 || target.height <= 0) return { success: false, error: "Group dimensions must be positive" };
+  const next = resizeGroup(elements, "se", { x: bounds.x + target.width, y: bounds.y + target.height }, 1, false, true);
+  return replaceElements(document, document.elements.map((element) => next.find((candidate) => candidate.id === element.id) ?? element));
+} });
 export const rotateElementsAroundCenter = (ids: readonly ElementId[], delta: number): EditorCommand => ({ name: `rotate-group:${ids.join(",")}`, apply: (document) => { const selected = new Set(ids); const elements = document.elements.filter((e) => selected.has(e.id)); if (!elements.length || elements.length !== selected.size) return { success: false, error: "Invalid group selection" }; const next = rotateElements(elements, groupCenter(boundsOfElements(elements)), delta); return replaceElements(document, document.elements.map((e) => next.find((n) => n.id === e.id) ?? e)); } });
 
 export const resizeElement = (id: ElementId, position: PointMm, size: SizeMm): EditorCommand => updateElement(id, { position, size });
+const connectedSide = (document: DocumentSnapshot, id: ElementId, axis: "x" | "y"): { leftOrTop: boolean; rightOrBottom: boolean } => {
+  const result = { leftOrTop: false, rightOrBottom: false };
+  const sides = (address: ConnectableNodeAddress): readonly ("left" | "right" | "top" | "bottom")[] => {
+    if (address.kind !== "named") return [];
+    if (address.name === "nw") return ["left", "top"];
+    if (address.name === "ne") return ["right", "top"];
+    if (address.name === "se") return ["right", "bottom"];
+    if (address.name === "sw") return ["left", "bottom"];
+    if (address.name === "w") return ["left"];
+    if (address.name === "e") return ["right"];
+    if (address.name === "n") return ["top"];
+    if (address.name === "s") return ["bottom"];
+    return [];
+  };
+  for (const connection of document.connections ?? []) for (const reference of [connection.first, connection.second]) if (reference.elementId === id) {
+    for (const value of sides(reference.node)) {
+      if (value === (axis === "x" ? "left" : "top")) result.leftOrTop = true;
+      if (value === (axis === "x" ? "right" : "bottom")) result.rightOrBottom = true;
+    }
+  }
+  return result;
+};
+/** Inspector resize: a connected side is fixed; otherwise the dimension is resized around its center. */
+export const resizeElementToDimensions = (id: ElementId, field: "width" | "height", value: number, aspectLock = false): EditorCommand => ({
+  name: `resize-property:${id}:${field}`,
+  apply: (document) => {
+    const element = document.elements.find((candidate): candidate is Extract<Element, { type: "rectangle" | "ellipse" }> => candidate.id === id && (candidate.type === "rectangle" || candidate.type === "ellipse"));
+    if (!element || !Number.isFinite(value) || value <= 0) return { success: false, error: "Dimensions must be positive" };
+    const target = aspectLock ? (field === "width" ? { width: value, height: value * element.size.height / element.size.width } : { width: value * element.size.width / element.size.height, height: value }) : { ...element.size, [field]: value };
+    if (![target.width, target.height].every((candidate) => Number.isFinite(candidate) && candidate > 0)) return { success: false, error: "Dimensions must be positive" };
+    const horizontal = connectedSide(document, id, "x");
+    const vertical = connectedSide(document, id, "y");
+    if (field === "width" && horizontal.leftOrTop && horizontal.rightOrBottom) return { success: false, error: "Width resize would break both horizontal connections" };
+    if (field === "height" && vertical.leftOrTop && vertical.rightOrBottom) return { success: false, error: "Height resize would break both vertical connections" };
+    const x = horizontal.leftOrTop ? element.position.x : horizontal.rightOrBottom ? element.position.x + element.size.width - target.width : element.position.x + (element.size.width - target.width) / 2;
+    const y = vertical.leftOrTop ? element.position.y : vertical.rightOrBottom ? element.position.y + element.size.height - target.height : element.position.y + (element.size.height - target.height) / 2;
+    if (x === element.position.x && y === element.position.y && target.width === element.size.width && target.height === element.size.height) return { success: true, document };
+    return replaceElements(document, document.elements.map((candidate) => candidate.id === id ? { ...candidate, position: { x, y }, size: target } : candidate));
+  },
+});
 export const rotateElement = (id: ElementId, rotation: number): EditorCommand => ({ name: `rotate:${id}`, apply: (document) => {
   const current = document.elements.find((element) => element.id === id);
   if (!current) return { success: false, error: `Element not found: ${id}` };
@@ -364,7 +428,7 @@ export const shapeOperation = (ids: readonly ElementId[], operation: ShapeOperat
     const firstIndex = Math.min(...geometry.map((element) => elementIndex(document, element.id)));
     const elements = document.elements.filter((element) => !removed.has(element.id) && !invalidDimensions.has(element.id));
     elements.splice(firstIndex, 0, resultElement);
-    return replaceElements(document, elements);
+    return replaceElements(removeConnectionsFor(document, new Set([...removed, ...invalidDimensions])), elements);
   },
 });
 export const createPath = (path: PathElement): EditorCommand => createElement(path);
