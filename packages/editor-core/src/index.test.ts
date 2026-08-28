@@ -33,6 +33,14 @@ describe("editor core", () => {
     const rejected = dispatch(initial, cutPathSegment(path.id, 0, { x: 5, y: 3 }));
     expect(rejected).toBe(initial);
   });
+  it("rejects rectangles with corner radii atomically", () => {
+    const rounded = { ...rectangle, cornerRadius: 2 };
+    const perCorner = { ...rectangle, id: elementId("per-corner"), cornerRadii: { topLeft: 0, topRight: 2, bottomRight: 0, bottomLeft: 0 } };
+    const roundedInitial = createEditor({ ...document, elements: [rounded] });
+    const perCornerInitial = createEditor({ ...document, elements: [perCorner] });
+    expect(dispatch(roundedInitial, cutPathSegment(rounded.id, 0))).toBe(roundedInitial);
+    expect(dispatch(perCornerInitial, cutPathSegment(perCorner.id, 0))).toBe(perCornerInitial);
+  });
   it("converts a zero-radius rectangle to an open path when cutting one edge", () => {
         const state = dispatch(createEditor({ ...document, elements: [rectangle] }), cutPathSegment(rectangle.id, 0));
         expect(state.document.elements[0]).toMatchObject({ type: "path", closed: false, segments: [{ type: "line" }, { type: "line" }, { type: "line" }] });

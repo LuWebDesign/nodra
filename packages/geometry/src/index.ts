@@ -20,7 +20,7 @@ export function cuttableSegments(element: Element): readonly CuttableSegment[] {
           return start && end ? [{ elementId: element.id, segmentIndex, start, end }] : [];
         });
       }
-      if (element.type !== "rectangle") return [];
+      if (element.type !== "rectangle" || element.cornerRadius !== 0 || (element.cornerRadii !== undefined && Object.values(element.cornerRadii).some((radius) => radius !== 0))) return [];
   const corners = rotatedCorners(element);
   return corners.map((start, index) => ({ elementId: element.id, segmentIndex: index, start, end: corners[(index + 1) % corners.length]! }));
 }
