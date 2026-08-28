@@ -402,7 +402,7 @@ test("creates nested rectangle and circle objects with click gestures", async ({
   await expect(page.locator('.page-svg svg ellipse[data-element-id]')).toHaveCount(1);
 });
 
-test("continues a click line and closes a valid non-collinear path", async ({ page }) => {
+test("creates independent click lines after a confirmed snap", async ({ page }) => {
   await page.goto("/");
   const bounds = await page.locator(".page").boundingBox();
   expect(bounds).not.toBeNull();
@@ -412,11 +412,10 @@ test("continues a click line and closes a valid non-collinear path", async ({ pa
   const third = { x: second.x, y: second.y + 70 };
   await page.mouse.click(first.x, first.y);
   await page.mouse.click(second.x, second.y);
-  await page.mouse.move(third.x, third.y);
-  await expect(page.locator(".creation-pending-overlay")).toBeVisible();
+  await expect(page.locator('.page-svg svg line[data-element-id]')).toHaveCount(1);
   await page.mouse.click(third.x, third.y);
-  await page.mouse.click(first.x, first.y);
-  await expect(page.locator('.page-svg svg path[data-element-id]')).toHaveAttribute("d", /Z/);
+  await page.mouse.click(third.x + 80, third.y);
+  await expect(page.locator('.page-svg svg line[data-element-id]')).toHaveCount(2);
 });
 
 test("shows node hover feedback while keeping the system cursor as an arrow", async ({ page }) => {
