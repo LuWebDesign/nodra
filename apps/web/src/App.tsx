@@ -754,15 +754,15 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
        return;
     }
      if (tool === "cut") {
-        const hit = pickCuttableSegment(editorRef.current.document, point, zoom);
+        const hit = cutSegmentHover ?? pickCuttableSegment(editorRef.current.document, point, zoom);
         const element = hit ? editorRef.current.document.elements.find((candidate) => candidate.id === hit.elementId) : undefined;
         const segment = element?.type === "path" ? element.segments[hit?.segmentIndex ?? -1] : undefined;
         if (hit && element?.type === "line") {
               const next = dispatch(editorRef.current, cutLineAtPoint(hit.elementId, point));
-              if (next !== editorRef.current) setEditorState(select(next, next.document.elements.filter((candidate) => candidate.type === "path" && (candidate.id === hit.elementId || candidate.id.startsWith(`${hit.elementId}:piece:`))).map((candidate) => candidate.id)));
+              if (next !== editorRef.current) { setCutSegmentHover(undefined); setEditorState(select(next, next.document.elements.filter((candidate) => candidate.type === "path" && (candidate.id === hit.elementId || candidate.id.startsWith(`${hit.elementId}:piece:`))).map((candidate) => candidate.id))); }
             } else if (hit && (element?.type === "rectangle" || element?.type === "ellipse" || segment?.type === "line")) {
           const next = dispatch(editorRef.current, cutPathSegment(hit.elementId, hit.segmentIndex, point));
-          if (next !== editorRef.current) setEditorState(select(next, [hit.elementId]));
+          if (next !== editorRef.current) { setCutSegmentHover(undefined); setEditorState(select(next, [hit.elementId])); }
         }
         return;
       }
