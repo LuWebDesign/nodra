@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createDocument, elementId, layerId, type DimensionElement, type EllipseElement, type GlyphElement, type PathElement, type RectangleElement, type SplineElement, type TextElement } from "@nodra/domain";
+import { createDocument, elementId, layerId, type DimensionElement, type Element, type EllipseElement, type GlyphElement, type PathElement, type PointMm, type RectangleElement, type SplineElement, type TextElement } from "@nodra/domain";
 import { addToSelection, appendSplineNode, beginGesture, cancelGesture, clearSelection, closePath, closeSplineElement, commitGesture, createEditor, createElement, createPathCubicNode, cutLineAtPoint, cutPathSegment, splitPathLineAt, deleteContourNodes, deleteElement, deleteElementNodes, deletePathNodes, dispatch, duplicateElements, flipElements, insertContourNode, invalidDimensionIdsForShapeOperation, moveElement, moveElements, movePathNode, movePathHandle, openPath, previewGesture, previewGestureFromBase, redo, removeFromSelection, reorderLayer, resizeElement, resizeElementToDimensions, resizeElements, resizeElementsToDimensions, rotateElementsAroundCenter, select, selectForPointerDown, setLayerVisibility, setPathJoin, shapeOperation, splitPathSegment, toggleSelection, undo, updateContourNode, updateElement, updateElementNode, updateElementStyles, updateSplineHandle, updateSplineNode } from "./index.js";
 import { boundsOfElements } from "@nodra/geometry";
 import type { Direction } from "@nodra/geometry";
@@ -79,6 +79,30 @@ describe("editor core", () => {
     expect(secondCut).not.toBe(firstCut);
     expect(sharedEdges).toHaveLength(0);
     expect(secondCut.undo).toHaveLength(2);
+  });
+  it("uses circle intersections to keep a trimmed rectangle corner filled and closed", () => {
+    const filled = { ...rectangle, id: elementId("circle-corner-rectangle"), position: { x: 0, y: 0 }, size: { width: 20, height: 20 }, style: { ...rectangle.style, fill: "#f00" } };
+    const circle: EllipseElement = { type: "ellipse", id: elementId("corner-circle"), layerId: rectangle.layerId, position: { x: -5, y: -5 }, size: { width: 10, height: 10 }, rotation: 0, style: rectangle.style };
+    const segmentWithEndpoints = (elements: readonly Element[], predicate: (start: PointMm, end: PointMm) => boolean): { readonly path: PathElement; readonly segmentIndex: number } | undefined => {
+      for (const element of elements) if (element.type === "path") for (let segmentIndex = 0; segmentIndex < element.segments.length; segmentIndex += 1) {
+        const nodes = new Map(element.nodes.map((node) => [node.id, node.anchor]));
+        const segment = element.segments[segmentIndex]!; const start = nodes.get(segment.startNodeId); const end = nodes.get(segment.endNodeId);
+        if (start && end && predicate(start, end)) return { path: element, segmentIndex };
+      }
+      return undefined;
+    };
+    let state = dispatch(createEditor({ ...document, elements: [filled, circle] }), cutPathSegment(circle.id, 0, { x: 3.5, y: 3.5 }));
+    const top = segmentWithEndpoints(state.document.elements, (start, end) => start.y === 0 && end.y === 0 && Math.min(start.x, end.x) === 0 && Math.max(start.x, end.x) === 5);
+    expect(top).toBeDefined();
+    state = top ? dispatch(state, cutPathSegment(top.path.id, top.segmentIndex, { x: 2, y: 0 })) : state;
+    const left = segmentWithEndpoints(state.document.elements, (start, end) => start.x === 0 && end.x === 0 && Math.min(start.y, end.y) === 0 && Math.max(start.y, end.y) === 5);
+    expect(left).toBeDefined();
+    state = left ? dispatch(state, cutPathSegment(left.path.id, left.segmentIndex, { x: 0, y: 2 })) : state;
+    const closedFilled = state.document.elements.filter((element) => element.type === "path" && element.closed && element.style.fill === "#f00");
+    expect(closedFilled).toHaveLength(1);
+    expect(closedFilled[0]?.type === "path" ? closedFilled[0].nodes.some((node) => node.anchor.x === 5 && node.anchor.y === 0) : false).toBe(true);
+    expect(closedFilled[0]?.type === "path" ? closedFilled[0].nodes.some((node) => node.anchor.x === 0 && node.anchor.y === 5) : false).toBe(true);
+    expect(state.undo).toHaveLength(3);
   });
   it("cuts a rotated rectangle without changing an unrelated element", () => {
     const rotated = { ...rectangle, id: elementId("rotated"), rotation: Math.PI / 4, style: { ...rectangle.style, fill: "#0f0" } };

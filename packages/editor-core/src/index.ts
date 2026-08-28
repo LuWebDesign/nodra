@@ -597,7 +597,7 @@ const cutPointDistance = (piece: CutPieceGraph, point: PointMm | undefined): num
 /** Rebuilds only the straight planar component containing the selected edge. */
 const cutStraightComponent = (document: DocumentSnapshot, elementIdToCut: ElementId, segmentIndex: number, point?: PointMm): CommandResult => {
   const selectedElement = document.elements.find((element) => element.id === elementIdToCut);
-  if (!selectedElement || (selectedElement.type !== "line" && selectedElement.type !== "rectangle" && selectedElement.type !== "path")) return { success: false, error: "Only straight lines, rectangle edges, and line paths can be cut" };
+  if (!selectedElement || (selectedElement.type !== "line" && selectedElement.type !== "rectangle" && selectedElement.type !== "ellipse" && selectedElement.type !== "path")) return { success: false, error: "Only straight lines, ellipse arcs, rectangle edges, and line paths can be cut" };
   if (selectedElement.type === "path" && selectedElement.segments.some((segment) => segment.type !== "line")) return { success: false, error: "Bezier paths are not supported by Cut Segments" };
   const sources = document.elements.flatMap((element): CutPieceGraph[] => cuttableSegments(element).map((piece) => ({ piece, source: element })));
   const split = splitCuttableSegments(sources.map(({ piece }) => piece));
@@ -611,7 +611,9 @@ const cutStraightComponent = (document: DocumentSnapshot, elementIdToCut: Elemen
   const edgeKey = (start: PointMm, end: PointMm) => [key(start), key(end)].sort().join("|");
   const component = [...connected];
   const selectedEdge = edgeKey(selected.piece.start, selected.piece.end);
-  const remaining = component.filter(({ piece }) => edgeKey(piece.start, piece.end) !== selectedEdge);
+  const remaining = component.filter(({ piece, source }) => selected.source.type === "ellipse" && source.type === "ellipse"
+    ? !(piece.elementId === selected.piece.elementId && piece.segmentIndex === selected.piece.segmentIndex)
+    : edgeKey(piece.start, piece.end) !== selectedEdge);
   const componentElements = new Set(component.map(({ piece }) => piece.elementId));
   const result = classifyCutGraph(remaining.map(({ piece }) => piece));
   const cycleEdges = new Set(result.cycles.flatMap((cycle) => cycle.points.map((start, index) => edgeKey(start, cycle.points[(index + 1) % cycle.points.length]!))));
