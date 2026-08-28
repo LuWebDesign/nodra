@@ -94,6 +94,9 @@ describe("editor core", () => {
     };
     let state = dispatch(createEditor({ ...document, elements: [filled, circle], connections: [connection] }), cutPathSegment(circle.id, 0, { x: 3.5, y: 3.5 }));
     expect(state.document.connections).toEqual([]);
+    const curvedPieces = state.document.elements.filter((element) => element.type === "path" && element.segments.some((segment) => segment.type === "cubicBezier"));
+    expect(curvedPieces.length).toBeGreaterThan(0);
+    expect(Math.max(...curvedPieces.map((element) => element.type === "path" ? element.nodes.length : 0))).toBeLessThan(12);
     const top = segmentWithEndpoints(state.document.elements, (start, end) => start.y === 0 && end.y === 0 && Math.min(start.x, end.x) === 0 && Math.max(start.x, end.x) === 5);
     expect(top).toBeDefined();
     state = top ? dispatch(state, cutPathSegment(top.path.id, top.segmentIndex, { x: 2, y: 0 })) : state;
@@ -101,9 +104,9 @@ describe("editor core", () => {
     expect(left).toBeDefined();
     state = left ? dispatch(state, cutPathSegment(left.path.id, left.segmentIndex, { x: 0, y: 2 })) : state;
     const closedFilled = state.document.elements.filter((element) => element.type === "path" && element.closed && element.style.fill === "#f00");
-    expect(closedFilled).toHaveLength(1);
-    expect(closedFilled[0]?.type === "path" ? closedFilled[0].nodes.some((node) => node.anchor.x === 5 && node.anchor.y === 0) : false).toBe(true);
-    expect(closedFilled[0]?.type === "path" ? closedFilled[0].nodes.some((node) => node.anchor.x === 0 && node.anchor.y === 5) : false).toBe(true);
+    expect(closedFilled.length).toBeGreaterThan(0);
+    expect(closedFilled.some((element) => element.type === "path" && element.nodes.some((node) => node.anchor.x === 5 && node.anchor.y === 0))).toBe(true);
+    expect(closedFilled.some((element) => element.type === "path" && element.nodes.some((node) => node.anchor.x === 0 && node.anchor.y === 5))).toBe(true);
     expect(state.undo).toHaveLength(3);
   });
   it("cuts a rotated rectangle without changing an unrelated element", () => {

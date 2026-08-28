@@ -15,9 +15,14 @@ export function cuttableSegments(element: Element): readonly CuttableSegment[] {
   if (element.type === "path") {
         const nodes = new Map(element.nodes.map((node) => [node.id, node.anchor]));
         return element.segments.flatMap((segment, segmentIndex) => {
-          if (segment.type !== "line") return [];
           const start = nodes.get(segment.startNodeId); const end = nodes.get(segment.endNodeId);
-          return start && end ? [{ elementId: element.id, segmentIndex, start, end }] : [];
+          if (!start || !end) return [];
+          if (segment.type === "line") return [{ elementId: element.id, segmentIndex, start, end }];
+          const points = flattenCubicBezier({ p0: start, p1: segment.control1, p2: segment.control2, p3: end }, 0.25);
+          return points.flatMap((point, pointIndex) => {
+            const next = points[pointIndex + 1];
+            return next ? [{ elementId: element.id, segmentIndex, start: point, end: next }] : [];
+          });
         });
       }
   if (element.type === "ellipse") {
