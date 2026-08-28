@@ -21,7 +21,7 @@ This matrix records current behavior implemented by `apps/web/src/App.tsx` and `
 
 ## Connections and inspector dimensions
 
-- Explicit persisted connections are created only when a drawing click is confirmed on a snap target; hover feedback never persists a connection. Connection management/removal is not implemented and is future/unsupported.
+- Explicit persisted connections are disabled by default; when enabled from the selected object's Properties inspector, they are created only when a drawing click is confirmed on a snap target. Hover feedback never persists a connection. Connection management/removal is not implemented and is future/unsupported.
 - Stable connection addresses cover named rectangle/ellipse anchors (`nw`, `n`, `ne`, `e`, `se`, `s`, `sw`, `w`, `center`), line anchors (`start`, `end`, `center`), and path/spline node anchors and available handles.
 - Document/project persistence uses schema version 5. Migration defaults missing `connections` to `[]`; validation rejects unknown elements, nodes, handles, self-connections, and duplicate connection IDs.
 - Inspector Width/Height edits preserve the object/selection center when no relevant connection exists. A connected left/right/top/bottom side anchors that side; a corner address anchors both axes. Aspect lock preserves proportions while respecting connected anchors. Opposite connected sides reject a resize that would break both.

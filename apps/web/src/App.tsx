@@ -44,7 +44,7 @@ const newElement = (tool: Exclude<Tool, "select" | "dimension" | "pan" | "forma"
   : tool === "rectangle"
     ? { type: "rectangle", id: nextId, layerId: layerId(layer), ...normalizeDrag(start, end), cornerRadius: 0, rotation: 0, style: defaultStyle }
      : (() => { const geometry = circleGeometry(start, end); return { type: "ellipse" as const, id: nextId, layerId: layerId(layer), position: geometry?.position ?? start, size: geometry?.size ?? { width: 0, height: 0 }, rotation: 0, style: defaultStyle }; })();
-const creationConnections = (element: Element, snaps: readonly (CreationSnap | undefined)[]): readonly ExplicitConnection[] => snaps.flatMap((snap) => {
+const creationConnections = (element: Element, snaps: readonly (CreationSnap | undefined)[], enabled: boolean): readonly ExplicitConnection[] => enabled ? snaps.flatMap((snap) => {
   if (!snap?.node) return [];
   const sourceNodes = realGeometryNodes(element);
   let sourceIndex = 0; let sourceDistance = Number.POSITIVE_INFINITY;
@@ -52,7 +52,7 @@ const creationConnections = (element: Element, snaps: readonly (CreationSnap | u
   const sourceAddress = connectableNodeAddress(element, sourceIndex);
   if (!sourceAddress || !snap.address || snap.node.elementId === element.id) return [];
   return [{ id: `connection-${crypto.randomUUID()}`, first: { elementId: element.id, node: sourceAddress }, second: { elementId: snap.node.elementId, node: snap.address } }];
-});
+}) : [];
 const splinePathData = (spline: SplineElement): string => {
   const first = spline.nodes[0];
   if (!first) return "";
@@ -137,6 +137,7 @@ export function App() {
       const [selectedConnectionId, setSelectedConnectionId] = useState<string>();
       const [penDraftSnap, setPenDraftSnap] = useState<CreationSnap>();
       const [splineDraftSnap, setSplineDraftSnap] = useState<CreationSnap>();
+      const [explicitConnectionsEnabled, setExplicitConnectionsEnabled] = useState(false);
   const [inspectorTab, setInspectorTab] = useState<InspectorTab>("properties");
   const designValidation = useMemo(() => validateDesign(document.elements, document.page), [document.elements, document.page]);
   const [transformDirection, setTransformDirection] = useState<Direction>("center");
@@ -525,7 +526,7 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
     const firstId = `path-node-${crypto.randomUUID()}`;
     const secondId = `path-node-${crypto.randomUUID()}`;
     const path = { type: "path" as const, id: id(), layerId: layerId(current.document.layers[0]?.id ?? "layer-1"), nodes: [{ id: firstId, anchor: penDraftPoint, join: "corner" as const }, { id: secondId, anchor: point, join: "corner" as const }], segments: [{ type: "line" as const, startNodeId: firstId, endNodeId: secondId }], closed: false, style: defaultStyle };
-    const next = dispatch(current, createElement(path, creationConnections(path, [penDraftSnap, snap])));
+    const next = dispatch(current, createElement(path, creationConnections(path, [penDraftSnap, snap], explicitConnectionsEnabled)));
     setPenDraftPoint(undefined);
     setPenDraftSnap(undefined);
     setEditorState(select(next, [path.id]));
@@ -541,7 +542,7 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
         return;
       }
       const spline: SplineElement = { type: "spline", id: id(), layerId: layerId(document.layers[0]?.id ?? "layer-1"), nodes: [{ id: `spline-node-${crypto.randomUUID()}`, anchor: splineDraftPoint, continuity: "smooth" }, { id: `spline-node-${crypto.randomUUID()}`, anchor: point, continuity: "smooth" }], closed: false, style: defaultStyle };
-      const next = dispatch(current, createElement(spline, creationConnections(spline, [splineDraftSnap, snap])));
+      const next = dispatch(current, createElement(spline, creationConnections(spline, [splineDraftSnap, snap], explicitConnectionsEnabled)));
       setSplineDraftPoint(undefined);
       setSplineDraftSnap(undefined);
       setEditorState(select(next, [spline.id]));
@@ -710,7 +711,7 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
        } else {
           const element = newElement(tool, editorRef.current.document.layers[0]?.id ?? "layer-1", draft.points[0]!, creationPoint, id());
           if (tool === "rectangle" || circleGeometry(draft.points[0]!, creationPoint)) {
-            const next = dispatch(editorRef.current, createElement(element, creationConnections(element, [...(draft.snaps ?? []), creationSnap])));
+            const next = dispatch(editorRef.current, createElement(element, creationConnections(element, [...(draft.snaps ?? []), creationSnap], explicitConnectionsEnabled)));
            if (next !== editorRef.current) setEditorState(select(next, [element.id]));
          }
          creationDraftRef.current = undefined;
@@ -727,7 +728,7 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
          setCreationDraft(nextDraft);
        } else if (draft.points.length === 1) {
           const line = newElement("line", editorRef.current.document.layers[0]?.id ?? "layer-1", draft.points[0]!, creationPoint, id());
-          const next = dispatch(editorRef.current, createElement(line, creationConnections(line, [...(draft.snaps ?? []), creationSnap])));
+          const next = dispatch(editorRef.current, createElement(line, creationConnections(line, [...(draft.snaps ?? []), creationSnap], explicitConnectionsEnabled)));
           creationDraftRef.current = undefined;
              setCreationDraft(undefined);
              setEditorState(select(next, [line.id]));
@@ -1509,6 +1510,7 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
     const target = node.kind === "named" ? node.name : node.kind === "line" ? node.name : `${node.nodeId}${node.handle ? ` · ${node.handle}` : ""}`;
     return `${element?.type ?? "objeto"} · ${target}`;
   };
+  const connectionSettings = () => <section className="inspector-property-card explicit-connection-settings" aria-label="Configuración de conexiones explícitas"><label className="connection-toggle"><input type="checkbox" checked={explicitConnectionsEnabled} onChange={(event) => setExplicitConnectionsEnabled(event.target.checked)} /> Crear conexiones al confirmar snaps</label><p className="muted">El ajuste está desactivado por defecto. El snap visual sigue disponible.</p></section>;
   const connectionInspector = () => {
     const connections = (document.connections ?? []).filter((connection) => selection.includes(connection.first.elementId) || selection.includes(connection.second.elementId));
     if (!connections.length) return null;
@@ -1577,7 +1579,7 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
            <button type="button" role="tab" aria-selected={inspectorTab === "text"} className={inspectorTab === "text" ? "active" : ""} onClick={() => setInspectorTab("text")}>Texto</button>
          </div>
          <div className="inspector-tab-content" role="tabpanel">
-                {inspectorTab === "properties" && <>{selectedElements.length === 0 ? <section className="inspector-card"><div className="panel-title">PÁGINA</div><div className="preset-row"><button onClick={() => setPage(1200, 900)}>Horizontal</button><button onClick={() => setPage(900, 1200)}>Vertical</button></div><div className="fields"><Field label="W" value={document.page.width} onChange={(value) => setPage(value, document.page.height)} /><Field label="H" value={document.page.height} onChange={(value) => setPage(document.page.width, value)} /></div><label className="grid-toggle"><input type="checkbox" checked={grid} onChange={(event) => setGrid(event.target.checked)} /> Mostrar cuadrícula del espacio de trabajo</label></section> : <section className="inspector-card inspector-object-card"><div className="panel-title">OBJETO</div>{propertyElement ? <div className="inspector-object-properties">{objectPropertySections(true)}</div> : <><div className="selected-type">{selectedElement?.type === "contour" ? "CONTORNO" : selectedElement?.type === "path" ? "TRAZADO" : selectedElement?.type === "spline" ? "SPLINE" : "LÍNEA"}</div><p className="muted">{selectedElement?.type === "contour" ? "Los contornos conservan su geometría real; las dimensiones no están disponibles." : selectedElement?.type === "path" ? "Los trazados conservan sus nodos y segmentos." : selectedElement?.type === "spline" ? "Las splines conservan sus nodos y handles relativos." : "Las líneas no tienen dimensiones rectangulares."}</p>{selectedElement && isRotatableElement(selectedElement) && rotationField(selectedElement)}</>}</section>}{connectionInspector()}{pathClosureControls}{splineClosureControls}{pathJoinControls}{pathSegmentControls}</>}
+                {inspectorTab === "properties" && <>{selectedElements.length === 0 ? <section className="inspector-card"><div className="panel-title">PÁGINA</div><div className="preset-row"><button onClick={() => setPage(1200, 900)}>Horizontal</button><button onClick={() => setPage(900, 1200)}>Vertical</button></div><div className="fields"><Field label="W" value={document.page.width} onChange={(value) => setPage(value, document.page.height)} /><Field label="H" value={document.page.height} onChange={(value) => setPage(document.page.width, value)} /></div><label className="grid-toggle"><input type="checkbox" checked={grid} onChange={(event) => setGrid(event.target.checked)} /> Mostrar cuadrícula del espacio de trabajo</label></section> : <section className="inspector-card inspector-object-card"><div className="panel-title">OBJETO</div>{propertyElement ? <div className="inspector-object-properties">{objectPropertySections(true)}</div> : <><div className="selected-type">{selectedElement?.type === "contour" ? "CONTORNO" : selectedElement?.type === "path" ? "TRAZADO" : selectedElement?.type === "spline" ? "SPLINE" : "LÍNEA"}</div><p className="muted">{selectedElement?.type === "contour" ? "Los contornos conservan su geometría real; las dimensiones no están disponibles." : selectedElement?.type === "path" ? "Los trazados conservan sus nodos y segmentos." : selectedElement?.type === "spline" ? "Las splines conservan sus nodos y handles relativos." : "Las líneas no tienen dimensiones rectangulares."}</p>{selectedElement && isRotatableElement(selectedElement) && rotationField(selectedElement)}</>}</section>}{connectionSettings()}{connectionInspector()}{pathClosureControls}{splineClosureControls}{pathJoinControls}{pathSegmentControls}</>}
               {inspectorTab === "transform" && transformControls()}
             {inspectorTab === "text" && <section className="inspector-card"><div className="panel-title">TEXTO</div>{textPropertyPanel()}</section>}
          </div>

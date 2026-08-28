@@ -349,6 +349,7 @@ test("persists a confirmed node snap and anchors inspector width to the connecte
   const original = await page.locator(".page-svg svg rect").first().boundingBox();
   expect(original).not.toBeNull();
   await page.getByRole("button", { name: "Rectángulo" }).click();
+  await page.getByLabel("Crear conexiones al confirmar snaps").check();
   await page.mouse.click(original!.x + original!.width, original!.y + original!.height / 2);
   await page.mouse.click(original!.x + original!.width + 60, original!.y + original!.height / 2 + 40);
   await expect(page.locator(".page-svg svg rect")).toHaveCount(2);

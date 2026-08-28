@@ -1,6 +1,6 @@
 # Explicit node connections
 
-Nodra persists confirmed creation snaps as connections between stable element/node addresses. Hovering a node only displays inference feedback; it never changes the document.
+Nodra can persist confirmed creation snaps as connections between stable element/node addresses. This option is disabled by default and can be enabled from the selected object's Properties inspector. Hovering a node only displays inference feedback; it never changes the document.
 
 Inspector width and height edits honor a connected side on the selected rectangle or ellipse. A left/top connection keeps that coordinate fixed, a right/bottom connection keeps the opposite coordinate fixed, and the other side moves. With no relevant connection, the existing centered resize behavior remains. Aspect lock applies the proportional dimension before applying the same anchor policy.
 
