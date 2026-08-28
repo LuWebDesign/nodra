@@ -22,7 +22,7 @@ export interface NodeHit { readonly elementId: ElementId; readonly nodeIndex: nu
 export interface DimensionLineHit { readonly elementId: ElementId; readonly line: LineElement; readonly distance: number }
 export type DimensionTarget = { readonly kind: "node"; readonly hit: NodeHit } | { readonly kind: "line"; readonly hit: DimensionLineHit };
 export interface PathNodeHit { readonly elementId: ElementId; readonly node: PathGeometryNode & { readonly ringIndex?: number } }
-    export interface CuttableSegmentHit { readonly elementId: ElementId; readonly segmentIndex: number; readonly distance: number; readonly start: PointMm; readonly end: PointMm }
+    export interface CuttableSegmentHit { readonly elementId: ElementId; readonly segmentIndex: number; readonly distance: number; readonly start: PointMm; readonly end: PointMm; readonly points?: readonly PointMm[] }
 export type PathGuideDirection = "incoming" | "outgoing";
 export interface PathGuide {
   readonly elementId: ElementId;
@@ -100,12 +100,18 @@ export function pickPathNode(document: DocumentSnapshot, point: PointMm, zoom: n
       const visible = new Set(document.layers.filter((layer) => layer.visible).map((layer) => layer.id));
       let best: CuttableSegmentHit | undefined;
       const sourceSegments = document.elements.flatMap((element) => visible.has(element.layerId) ? cuttableSegments(element) : []);
-      for (const segment of splitCuttableSegments(sourceSegments)) {
+      const splitSegments = splitCuttableSegments(sourceSegments);
+      for (const segment of splitSegments) {
         const dx = segment.end.x - segment.start.x; const dy = segment.end.y - segment.start.y; const lengthSquared = dx * dx + dy * dy;
         if (lengthSquared <= 0) continue;
         const t = Math.max(0, Math.min(1, ((point.x - segment.start.x) * dx + (point.y - segment.start.y) * dy) / lengthSquared));
         const distance = Math.hypot(point.x - (segment.start.x + t * dx), point.y - (segment.start.y + t * dy));
-        if (distance * zoom <= tolerancePx && (!best || distance < best.distance)) best = { elementId: segment.elementId, segmentIndex: segment.segmentIndex, distance, start: segment.start, end: segment.end };
+        if (distance * zoom <= tolerancePx && (!best || distance < best.distance)) {
+          const element = document.elements.find((candidate) => candidate.id === segment.elementId);
+          const arcPieces = element?.type === "ellipse" ? splitSegments.filter((candidate) => candidate.elementId === segment.elementId && candidate.segmentIndex === segment.segmentIndex) : undefined;
+          const points = arcPieces ? [arcPieces[0]!.start, ...arcPieces.map((piece) => piece.end)] : undefined;
+          best = { elementId: segment.elementId, segmentIndex: segment.segmentIndex, distance, start: points?.[0] ?? segment.start, end: points?.at(-1) ?? segment.end, ...(points ? { points } : {}) };
+        }
       }
       return best;
     }
