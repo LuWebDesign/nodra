@@ -608,11 +608,12 @@ const cutStraightComponent = (document: DocumentSnapshot, elementIdToCut: Elemen
   const key = (pointValue: PointMm) => `${Math.round(pointValue.x / 1e-8)}:${Math.round(pointValue.y / 1e-8)}`;
   const connected = new Set<CutPieceGraph>([selected]); let changed = true;
   while (changed) { changed = false; for (const candidate of graph) if (!connected.has(candidate) && [...connected].some(({ piece }) => [piece.start, piece.end].some((end) => [candidate.piece.start, candidate.piece.end].some((start) => key(end) === key(start))))) { connected.add(candidate); changed = true; } }
-  const component = [...connected]; const removed = component.find(({ piece }) => piece === selected.piece);
-  const remaining = component.filter((candidate) => candidate !== removed);
+  const edgeKey = (start: PointMm, end: PointMm) => [key(start), key(end)].sort().join("|");
+  const component = [...connected];
+  const selectedEdge = edgeKey(selected.piece.start, selected.piece.end);
+  const remaining = component.filter(({ piece }) => edgeKey(piece.start, piece.end) !== selectedEdge);
   const componentElements = new Set(component.map(({ piece }) => piece.elementId));
   const result = classifyCutGraph(remaining.map(({ piece }) => piece));
-  const edgeKey = (start: PointMm, end: PointMm) => [key(start), key(end)].sort().join("|");
   const cycleEdges = new Set(result.cycles.flatMap((cycle) => cycle.points.map((start, index) => edgeKey(start, cycle.points[(index + 1) % cycle.points.length]!))));
   const open = remaining.filter(({ piece }) => !cycleEdges.has(edgeKey(piece.start, piece.end)));
   const paths: PathElement[] = [];
