@@ -14,6 +14,7 @@ import {
   type PathJoin,
   type GlyphElement,
   type SplineElement,
+  type SketchElement,
   type ConnectableNodeAddress,
   type ExplicitConnection,
   elementId,
@@ -56,6 +57,39 @@ export const createElement = (element: Element, connections: readonly ExplicitCo
   apply: (document) => document.elements.some((current) => current.id === element.id)
     ? { success: false, error: `Element already exists: ${element.id}` }
      : replaceElements({ ...document, connections: [...(document.connections ?? []), ...connections] }, [...document.elements, { ...element }]),
+});
+
+const sketchNodeId = (): string => `sketch-node-${crypto.randomUUID()}`;
+const sketchEdgeId = (): string => `sketch-edge-${crypto.randomUUID()}`;
+export const createSketchLine = (sketchId: ElementId, layer: LayerId, style: VisualStyle, start: PointMm, end: PointMm): SketchElement => {
+  const startNodeId = sketchNodeId(); const endNodeId = sketchNodeId();
+  return { type: "sketch", id: sketchId, layerId: layer, nodes: [{ id: startNodeId, point: start }, { id: endNodeId, point: end }], edges: [{ id: sketchEdgeId(), startNodeId, endNodeId }], style };
+};
+export const appendSketchEdge = (sketchId: ElementId, fromNodeId: string, point: PointMm, toNodeId?: string): EditorCommand => ({
+  name: `sketch-create-edge:${sketchId}`,
+  apply: (document) => {
+    const sketch = document.elements.find((element): element is SketchElement => element.id === sketchId && element.type === "sketch");
+    if (!sketch) return { success: false, error: "Sketch not found" };
+    if (!sketch.nodes.some((node) => node.id === fromNodeId)) return { success: false, error: "Sketch start node not found" };
+    const existingTarget = toNodeId ? sketch.nodes.find((node) => node.id === toNodeId) : undefined;
+    const endNodeId = existingTarget?.id ?? sketchNodeId();
+    if (endNodeId === fromNodeId) return { success: false, error: "Sketch edge endpoints must differ" };
+    const duplicate = sketch.edges.some((edge) => (edge.startNodeId === fromNodeId && edge.endNodeId === endNodeId) || (edge.startNodeId === endNodeId && edge.endNodeId === fromNodeId));
+    if (duplicate) return { success: false, error: "Sketch edge already exists" };
+    const next: SketchElement = { ...sketch, nodes: existingTarget ? sketch.nodes : [...sketch.nodes, { id: endNodeId, point }], edges: [...sketch.edges, { id: sketchEdgeId(), startNodeId: fromNodeId, endNodeId }] };
+    return replaceElements(document, document.elements.map((element) => element.id === sketchId ? next : element));
+  },
+});
+export const cutSketchEdge = (sketchId: ElementId, segmentIndex: number): EditorCommand => ({
+  name: `sketch-cut-edge:${sketchId}:${segmentIndex}`,
+  apply: (document) => {
+    const sketch = document.elements.find((element): element is SketchElement => element.id === sketchId && element.type === "sketch");
+    if (!sketch) return { success: false, error: "Sketch not found" };
+    if (!Number.isInteger(segmentIndex) || segmentIndex < 0 || segmentIndex >= sketch.edges.length) return { success: false, error: "Sketch edge not found" };
+    const edges = sketch.edges.filter((_, index) => index !== segmentIndex);
+    if (edges.length === 0) return replaceElements(document, document.elements.filter((element) => element.id !== sketchId));
+    return replaceElements(document, document.elements.map((element) => element.id === sketchId ? { ...sketch, edges } : element));
+  },
 });
 
 /** Extends a native two-endpoint line into an editable open path. */
@@ -125,6 +159,7 @@ export const moveElement = (id: ElementId, delta: PointMm): EditorCommand => ({
     if (element.type === "glyph") return replaceElements(document, document.elements.map((current) => current.id === id && current.type === "glyph" ? translateGlyph(current, delta) : current));
     if (element.type === "text") return replaceElements(document, document.elements.map((current) => current.id === id && current.type === "text" ? { ...current, position: { x: current.position.x + delta.x, y: current.position.y + delta.y } } : current));
     if (element.type === "spline") return replaceElements(document, document.elements.map((current) => current.id === id && current.type === "spline" ? { ...current, nodes: current.nodes.map((node) => ({ ...node, anchor: { x: node.anchor.x + delta.x, y: node.anchor.y + delta.y } })) } : current));
+    if (element.type === "sketch") return replaceElements(document, document.elements.map((current) => current.id === id && current.type === "sketch" ? { ...current, nodes: current.nodes.map((node) => ({ ...node, point: { x: node.point.x + delta.x, y: node.point.y + delta.y } })) } : current));
     return replaceElements(document, document.elements.map((current) => current.id === id && (current.type === "rectangle" || current.type === "ellipse") ? { ...current, position: { x: current.position.x + delta.x, y: current.position.y + delta.y } } : current));
   },
 });
@@ -145,6 +180,7 @@ export const moveElements = (ids: readonly ElementId[], delta: PointMm): EditorC
       if (element.type === "glyph") return translateGlyph(element, delta);
       if (element.type === "text") return { ...element, position: { x: element.position.x + delta.x, y: element.position.y + delta.y } };
       if (element.type === "spline") return { ...element, nodes: element.nodes.map((node) => ({ ...node, anchor: { x: node.anchor.x + delta.x, y: node.anchor.y + delta.y } })) };
+      if (element.type === "sketch") return { ...element, nodes: element.nodes.map((node) => ({ ...node, point: { x: node.point.x + delta.x, y: node.point.y + delta.y } })) };
       if (element.type === "rectangle" || element.type === "ellipse") return { ...element, position: { x: element.position.x + delta.x, y: element.position.y + delta.y } };
       return element;
     }));
@@ -925,6 +961,7 @@ const translateElement = (element: Element, delta: PointMm, id: ElementId): Elem
   if (element.type === "path") return { ...translatePath(element, delta), id };
   if (element.type === "glyph") return { ...translateGlyph(element, delta), id };
   if (element.type === "spline") return { ...element, id, nodes: element.nodes.map((node) => ({ ...node, anchor: { x: node.anchor.x + delta.x, y: node.anchor.y + delta.y } })) };
+  if (element.type === "sketch") return { ...element, id, nodes: element.nodes.map((node) => ({ ...node, point: { x: node.point.x + delta.x, y: node.point.y + delta.y } })) };
   return { ...element, id, position: { x: element.position.x + delta.x, y: element.position.y + delta.y } };
 };
 
@@ -971,6 +1008,7 @@ export const flipElements = (ids: readonly ElementId[], axis: FlipAxis): EditorC
         return { ...element, position: { x: reflectedCenter.x - element.size.width / 2, y: reflectedCenter.y - element.size.height / 2 }, contours: element.contours.map((contour) => ({ ...contour, nodes: contour.nodes.map((node) => ({ ...node, anchor: reflect(node.anchor) })), segments: contour.segments.map((segment) => segment.type === "cubicBezier" ? { ...segment, control1: reflect(segment.control1), control2: reflect(segment.control2) } : segment) })) };
       }
       if (element.type === "spline") return { ...element, nodes: element.nodes.map((node) => ({ ...node, anchor: horizontal ? { x: center.x * 2 - node.anchor.x, y: node.anchor.y } : { x: node.anchor.x, y: center.y * 2 - node.anchor.y }, ...(node.inHandle ? { inHandle: horizontal ? { dx: -node.inHandle.dx, dy: node.inHandle.dy } : { dx: node.inHandle.dx, dy: -node.inHandle.dy } } : {}), ...(node.outHandle ? { outHandle: horizontal ? { dx: -node.outHandle.dx, dy: node.outHandle.dy } : { dx: node.outHandle.dx, dy: -node.outHandle.dy } } : {}) })) };
+      if (element.type === "sketch") return { ...element, nodes: element.nodes.map((node) => ({ ...node, point: horizontal ? { x: center.x * 2 - node.point.x, y: node.point.y } : { x: node.point.x, y: center.y * 2 - node.point.y } })) };
       if (element.type === "text") return { ...element, position: horizontal ? { x: center.x * 2 - element.position.x - element.size.width, y: element.position.y } : { x: element.position.x, y: center.y * 2 - element.position.y - element.size.height }, rotation: -element.rotation };
       const moved = element.type === "line"
         ? { ...element, start: { x: element.start.x + delta.x, y: element.start.y + delta.y }, end: { x: element.end.x + delta.x, y: element.end.y + delta.y } }

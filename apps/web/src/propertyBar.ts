@@ -3,7 +3,7 @@ import { degreesToRadians, radiansToDegrees } from "@nodra/geometry";
 
 export type GeometryField = "x" | "y" | "width" | "height";
 export type PropertyElement = Extract<Element, { type: "rectangle" | "ellipse" }>;
-export type RotatableElement = Exclude<Element, Extract<Element, { type: "dimension" | "path" | "spline" }>>;
+export type RotatableElement = Exclude<Element, Extract<Element, { type: "dimension" | "path" | "spline" | "sketch" }>>;
 
 export const formatMm = (value: number) => Number.isFinite(value) ? value.toFixed(3).replace(/\.?0+$/, "") : "";
 
