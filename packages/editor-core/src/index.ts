@@ -621,6 +621,36 @@ const cutEllipseEntityOnly = (document: DocumentSnapshot, elementIdToCut: Elemen
   return replaceElements(removeConnectionsFor(document, new Set([ellipse.id])), document.elements.map((element) => element.id === ellipse.id ? path : element));
 };
 
+const cutBoundaryEntityOnly = (document: DocumentSnapshot, selectedElement: Extract<Element, { type: "rectangle" }>, segmentIndex: number, point?: PointMm): CommandResult => {
+  const sourceSegments = cuttableSegments(selectedElement);
+  const splitPieces = sourceSegments.flatMap((segment) => {
+    const parameters = [0, 1];
+    for (const other of document.elements.flatMap((element) => element.id !== selectedElement.id ? cuttableSegments(element) : [])) {
+      const intersection = lineSegmentIntersection(segment.start, segment.end, other.start, other.end);
+      if (intersection) parameters.push(intersection.firstT);
+    }
+    return splitLineSegment(segment.start, segment.end, parameters).flatMap((start, index, points) => {
+      const end = points[index + 1];
+      return end ? [{ ...segment, start, end }] : [];
+    });
+  });
+  const candidates = splitPieces.filter((piece) => piece.segmentIndex === segmentIndex);
+  const removed = candidates.reduce<typeof candidates[number] | undefined>((best, candidate) => !best || cutPointDistance({ piece: candidate, source: selectedElement }, point) < cutPointDistance({ piece: best, source: selectedElement }, point) ? candidate : best, undefined);
+  if (!removed) return { success: false, error: "The selected segment is not cuttable" };
+  const removedIndex = splitPieces.indexOf(removed);
+  const ordered = [...splitPieces.slice(removedIndex + 1), ...splitPieces.slice(0, removedIndex)].filter((piece) => piece !== removed);
+  if (!ordered.length) return replaceElements(removeConnectionsFor(document, new Set([selectedElement.id])), document.elements.filter((element) => element.id !== selectedElement.id));
+  const nodes: PathNode[] = [];
+  const segments: PathSegment[] = [];
+  const appendNode = (anchor: PointMm) => { const existing = nodes.at(-1); if (existing && Math.hypot(existing.anchor.x - anchor.x, existing.anchor.y - anchor.y) < 1e-8) return existing.id; const node = { id: `${selectedElement.id}:node:${nodes.length}`, anchor, join: "corner" as const }; nodes.push(node); return node.id; };
+  for (const piece of ordered) {
+    const startNodeId = appendNode(piece.start); const endNodeId = appendNode(piece.end);
+    if (startNodeId !== endNodeId) segments.push({ type: "line", startNodeId, endNodeId });
+  }
+  const path: PathElement = { type: "path", id: selectedElement.id, layerId: selectedElement.layerId, nodes, segments, closed: false, style: Object.fromEntries(Object.entries(selectedElement.style).filter(([name]) => name !== "fill")) as typeof selectedElement.style, ...(selectedElement.operation ? { operation: selectedElement.operation } : {}) };
+  return replaceElements(removeConnectionsFor(document, new Set([selectedElement.id])), document.elements.map((element) => element.id === selectedElement.id ? path : element));
+};
+
 const cutLineEntityOnly = (document: DocumentSnapshot, elementIdToCut: ElementId, point?: PointMm): CommandResult => {
   const line = document.elements.find((element): element is Extract<Element, { type: "line" }> => element.id === elementIdToCut && element.type === "line");
   if (!line) return { success: false, error: "Line not found" };
@@ -660,6 +690,7 @@ const cutStraightComponent = (document: DocumentSnapshot, elementIdToCut: Elemen
   if (!selectedElement || (selectedElement.type !== "line" && selectedElement.type !== "rectangle" && selectedElement.type !== "ellipse" && selectedElement.type !== "path")) return { success: false, error: "Only straight lines, ellipse arcs, rectangle edges, and line paths can be cut" };
   if (selectedElement.type === "line") return cutLineEntityOnly(document, elementIdToCut, point);
   if (selectedElement.type === "ellipse") return cutEllipseEntityOnly(document, elementIdToCut, segmentIndex);
+  if (selectedElement.type === "rectangle") return cutBoundaryEntityOnly(document, selectedElement, segmentIndex, point);
   if (selectedElement.type === "path" && selectedElement.segments[segmentIndex]?.type !== "line") return { success: false, error: "Only straight path segments can be cut" };
   const sources = document.elements.flatMap((element): CutPieceGraph[] => cuttableSegments(element).map((piece) => ({ piece, source: element })));
   const split = splitCuttableSegments(sources.map(({ piece }) => piece));
@@ -734,13 +765,7 @@ const cutPathEntityOnly = (document: DocumentSnapshot, path: PathElement, segmen
 
 export const cutPathSegment = (pathId: ElementId, segmentIndex: number, point?: PointMm): EditorCommand => ({ name: `cut-segment:${pathId}:${segmentIndex}`, apply: (document) => {
   const path = pathAt(document, pathId); const segment = path?.segments[segmentIndex];
-  if (path && segment?.type === "cubicBezier") return cutPathEntityOnly(document, path, segmentIndex);
-  // Curved geometry is not part of the planar cut graph, but an existing mixed
-  // path must not lose its untouched Bézier segments when a line edge is removed.
-  if (path?.segments.some((candidate) => candidate.type === "cubicBezier") && !path.closed) {
-    if (!segment || segment.type !== "line") return { success: false, error: "Only open straight path segments can be cut beside Bézier geometry" };
-    return cutPathEntityOnly(document, path, segmentIndex);
-  }
+  if (path) return segment ? cutPathEntityOnly(document, path, segmentIndex) : { success: false, error: "Path segment not found" };
   return cutStraightComponent(document, pathId, segmentIndex, point);
 } });
 
