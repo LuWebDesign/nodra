@@ -437,7 +437,10 @@ test("reuses an existing sketch node when continuing the same line", async ({ pa
   await page.mouse.click(third.x, third.y);
   const sketch = page.locator('.page-svg svg g[data-element-id]').first();
   await expect(sketch).toHaveCount(1);
-  await expect(sketch.locator("line")).toHaveCount(3);
+  const lines = sketch.locator("line");
+  await expect(lines).toHaveCount(2);
+  const starts = await lines.evaluateAll((elements) => elements.map((line) => [line.getAttribute("x1"), line.getAttribute("y1")]));
+  expect(starts[0]).toEqual(starts[1]);
 });
 
 test("continues drawing from a closed sketch", async ({ page }) => {

@@ -821,7 +821,7 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
           if (!dimensionDraft) { setDimensionDraft({ phase: "first", first: dimensionTarget }); return; }
           if (dimensionDraft.phase === "first") {
             if (dimensionDraft.first.kind === "node" && dimensionTarget.kind === "node" && dimensionDraft.first.hit.elementId === dimensionTarget.hit.elementId && dimensionDraft.first.hit.nodeIndex === dimensionTarget.hit.nodeIndex) return;
-            if (dimensionDraft.first.kind === "line" && dimensionTarget.kind === "line" && dimensionDraft.first.hit.elementId === dimensionTarget.hit.elementId) return;
+            if (dimensionDraft.first.kind === "line" && dimensionTarget.kind === "line" && dimensionDraft.first.hit.elementId === dimensionTarget.hit.elementId && (dimensionDraft.first.hit.edgeIndex ?? 0) === (dimensionTarget.hit.edgeIndex ?? 0)) return;
             if (dimensionDraft.first.kind !== dimensionTarget.kind) return;
             setDimensionDraft({ phase: "placement", first: dimensionDraft.first, second: dimensionTarget });
            setDimensionNodeHover(undefined);
