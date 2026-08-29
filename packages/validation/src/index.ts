@@ -22,19 +22,19 @@ const line = z.object({ ...common, type: z.literal("line"), start: point, end: p
 const connectableAddress = z.union([
   z.object({ kind: z.literal("named"), name: z.enum(["nw", "n", "ne", "e", "se", "s", "sw", "w", "center"]) }).strict(),
   z.object({ kind: z.literal("line"), name: z.enum(["start", "end", "center"]) }).strict(),
-  z.object({ kind: z.enum(["path", "spline"]), nodeId: nonEmptyId, handle: z.enum(["in", "out"]).optional() }).strict(),
+  z.object({ kind: z.enum(["path", "spline", "sketch"]), nodeId: nonEmptyId, handle: z.enum(["in", "out"]).optional() }).strict(),
 ]);
 const connectionReference = z.object({ elementId: nonEmptyId, node: connectableAddress }).strict();
 const explicitConnection = z.object({ id: nonEmptyId, first: connectionReference, second: connectionReference }).strict();
 const nodeReference = z.object({ kind: z.literal("node"), elementId: nonEmptyId, nodeIndex: finite.int().nonnegative() }).strict();
-const lineReference = z.object({ kind: z.literal("line"), elementId: nonEmptyId }).strict();
+const lineReference = z.object({ kind: z.literal("line"), elementId: nonEmptyId, edgeIndex: finite.int().nonnegative().optional() }).strict();
 const legacyNodeReference = z.object({ elementId: nonEmptyId, nodeIndex: finite.int().nonnegative() }).strict().transform((reference) => ({ kind: "node" as const, ...reference }));
 const dimensionReference = z.union([z.discriminatedUnion("kind", [nodeReference, lineReference]), legacyNodeReference]);
 const dimension = z.object({ id: nonEmptyId, layerId: nonEmptyId, type: z.literal("dimension"), kind: z.enum(["aligned", "horizontal", "vertical", "angular"]), references: z.tuple([dimensionReference, dimensionReference]), offset: point, precision: finite.int().min(0).max(6), units: z.literal("mm"), rotation: z.literal(0), style }).strict().superRefine((value, ctx) => {
   const [first, second] = value.references;
   if (value.kind === "angular") {
     if (first.kind !== "line" || second.kind !== "line") ctx.addIssue({ code: "custom", message: "Angular dimensions require line references", path: ["references"] });
-    if (first.elementId === second.elementId) ctx.addIssue({ code: "custom", message: "Angular dimension lines must differ", path: ["references"] });
+     if (first.kind === "line" && second.kind === "line" && first.elementId === second.elementId && (first.edgeIndex ?? 0) === (second.edgeIndex ?? 0)) ctx.addIssue({ code: "custom", message: "Angular dimension lines must differ", path: ["references"] });
   } else {
     if (first.kind !== "node" || second.kind !== "node") ctx.addIssue({ code: "custom", message: "Linear dimensions require node references", path: ["references"] });
     if (first.kind === "node" && second.kind === "node" && first.elementId === second.elementId && first.nodeIndex === second.nodeIndex) ctx.addIssue({ code: "custom", message: "Dimension references must differ", path: ["references"] });
@@ -45,6 +45,18 @@ const contour = z.object({ ...common, type: z.literal("contour"), position: poin
     const first = ring.points[0];
     const last = ring.points.at(-1);
     if (!first || !last || first.x !== last.x || first.y !== last.y) ctx.addIssue({ code: "custom", message: "Contour rings must be closed", path: ["contours", index, "points"] });
+  });
+});
+const sketchNode = z.object({ id: nonEmptyId, point }).strict();
+const sketchEdge = z.object({ id: nonEmptyId, startNodeId: nonEmptyId, endNodeId: nonEmptyId }).strict();
+const sketch = z.object({ id: nonEmptyId, layerId: nonEmptyId, type: z.literal("sketch"), nodes: z.array(sketchNode).min(2), edges: z.array(sketchEdge).min(1), style, operation: operation.optional() }).strict().superRefine((value, ctx) => {
+  const nodeIds = value.nodes.map((node) => node.id); const edgeIds = value.edges.map((edge) => edge.id);
+  if (new Set(nodeIds).size !== nodeIds.length) ctx.addIssue({ code: "custom", message: "Sketch node IDs must be unique", path: ["nodes"] });
+  if (new Set(edgeIds).size !== edgeIds.length) ctx.addIssue({ code: "custom", message: "Sketch edge IDs must be unique", path: ["edges"] });
+  const known = new Set(nodeIds);
+  value.edges.forEach((edge, index) => {
+    if (!known.has(edge.startNodeId) || !known.has(edge.endNodeId)) ctx.addIssue({ code: "custom", message: "Sketch edge references an unknown node", path: ["edges", index] });
+    if (edge.startNodeId === edge.endNodeId) ctx.addIssue({ code: "custom", message: "Sketch edge endpoints must differ", path: ["edges", index] });
   });
 });
 const pathNode = z.object({ id: nonEmptyId, anchor: point, join: z.enum(["corner", "smooth", "symmetric"]) }).strict();
@@ -85,7 +97,7 @@ const glyph = z.object({ ...common, type: z.literal("glyph"), position: point, s
   const ids = value.contours.flatMap((contour) => contour.nodes.map((node) => node.id));
   if (new Set(ids).size !== ids.length) ctx.addIssue({ code: "custom", message: "Glyph node IDs must be unique across contours", path: ["contours"] });
 });
-export const elementSchema = z.discriminatedUnion("type", [rectangle, ellipse, line, dimension, contour, path, splineElementSchema, textElement, glyph]);
+export const elementSchema = z.discriminatedUnion("type", [rectangle, ellipse, line, sketch, dimension, contour, path, splineElementSchema, textElement, glyph]);
 export const layerSchema = z.object({ id: nonEmptyId, name: z.string().min(1), visible: z.boolean(), order: finite.int().nonnegative() }).strict();
 const documentFields = { id: nonEmptyId, revision: finite.int().nonnegative(), origin: z.literal("top-left"), units: z.literal("mm"), page: size, layers: z.array(layerSchema), elements: z.array(elementSchema), connections: z.array(explicitConnection).default([]) };
 const validateConnections = (elements: readonly z.infer<typeof elementSchema>[], connections: readonly z.infer<typeof explicitConnection>[], ctx: z.RefinementCtx, path: (string | number)[] = []) => {
@@ -99,11 +111,11 @@ const validateConnections = (elements: readonly z.infer<typeof elementSchema>[],
     refs.forEach((reference, referenceIndex) => {
       const element = byId.get(reference.elementId);
       const address = reference.node;
-      const valid = element && ((address.kind === "named" && (element.type === "rectangle" || element.type === "ellipse")) || (address.kind === "line" && element.type === "line") || (address.kind === "path" && element.type === "path") || (address.kind === "spline" && element.type === "spline"));
+      const valid = element && ((address.kind === "named" && (element.type === "rectangle" || element.type === "ellipse")) || (address.kind === "line" && element.type === "line") || (address.kind === "path" && element.type === "path") || (address.kind === "spline" && element.type === "spline") || (address.kind === "sketch" && element.type === "sketch"));
       if (!element) ctx.addIssue({ code: "custom", message: "Connection references an unknown element", path: [...path, index, referenceIndex === 0 ? "first" : "second", "elementId"] });
       else if (!valid) ctx.addIssue({ code: "custom", message: "Connection node address is invalid for its element", path: [...path, index, referenceIndex === 0 ? "first" : "second", "node"] });
-      if ((address.kind === "path" || address.kind === "spline") && element) {
-        const nodes = element.type === "path" || element.type === "spline" ? element.nodes : [];
+      if ((address.kind === "path" || address.kind === "spline" || address.kind === "sketch") && element) {
+        const nodes = element.type === "path" || element.type === "spline" ? element.nodes : element.type === "sketch" ? element.nodes : [];
         const node = nodes.find((candidate) => candidate.id === address.nodeId);
         if (!node) ctx.addIssue({ code: "custom", message: "Connection references an unknown node", path: [...path, index, referenceIndex === 0 ? "first" : "second", "node", "nodeId"] });
         else if (address.handle) {
@@ -126,21 +138,35 @@ export const documentSchema = z.object({ schemaVersion: z.literal(CURRENT_SCHEMA
     if (element.type === "dimension") for (const [referenceIndex, reference] of element.references.entries()) {
       const target = value.elements.find((candidate) => candidate.id === reference.elementId);
       if (!elementIds.has(reference.elementId)) ctx.addIssue({ code: "custom", message: "Dimension references an unknown element", path: ["elements", index, "references", referenceIndex, "elementId"] });
-      else if (reference.kind === "line") {
-        if (target?.type !== "line") ctx.addIssue({ code: "custom", message: "Line dimension references require line elements", path: ["elements", index, "references", referenceIndex] });
-        else if (target.start.x === target.end.x && target.start.y === target.end.y) ctx.addIssue({ code: "custom", message: "Dimension line references must not be degenerate", path: ["elements", index, "references", referenceIndex] });
+       else if (reference.kind === "line") {
+         const validSketchEdge = target?.type === "sketch" && (reference.edgeIndex ?? 0) < target.edges.length;
+         if (target?.type !== "line" && !validSketchEdge) ctx.addIssue({ code: "custom", message: "Line dimension references require line or sketch-edge elements", path: ["elements", index, "references", referenceIndex] });
+         else if (target.type === "line" && target.start.x === target.end.x && target.start.y === target.end.y) ctx.addIssue({ code: "custom", message: "Dimension line references must not be degenerate", path: ["elements", index, "references", referenceIndex] });
+         else if (target?.type === "sketch") {
+           const edge = target.edges[reference.edgeIndex ?? 0]; const nodes = new Map(target.nodes.map((node) => [node.id, node.point]));
+           const start = edge ? nodes.get(edge.startNodeId) : undefined; const end = edge ? nodes.get(edge.endNodeId) : undefined;
+           if (!start || !end || (start.x === end.x && start.y === end.y)) ctx.addIssue({ code: "custom", message: "Dimension sketch-edge references must not be degenerate", path: ["elements", index, "references", referenceIndex] });
+         }
       } else {
-        const nodeCount = target?.type === "line" ? 3 : target?.type === "rectangle" ? 9 : target?.type === "ellipse" || target?.type === "text" ? 5 : target?.type === "contour" ? target.contours.reduce((count, contour) => count + Math.max(0, contour.points.length - 1) * 2, 0) : target?.type === "path" ? target.nodes.length + target.segments.filter((segment) => segment.type === "cubicBezier").length * 2 : target?.type === "spline" ? target.nodes.length + target.nodes.filter((node) => node.inHandle || node.outHandle).length : target?.type === "glyph" ? target.contours.reduce((count, contour) => count + contour.nodes.length + contour.segments.filter((segment) => segment.type === "cubicBezier").length * 2, 0) : undefined;
+        const nodeCount = target?.type === "line" ? 3 : target?.type === "sketch" ? target.nodes.length : target?.type === "rectangle" ? 9 : target?.type === "ellipse" || target?.type === "text" ? 5 : target?.type === "contour" ? target.contours.reduce((count, contour) => count + Math.max(0, contour.points.length - 1) * 2, 0) : target?.type === "path" ? target.nodes.length + target.segments.filter((segment) => segment.type === "cubicBezier").length * 2 : target?.type === "spline" ? target.nodes.length + target.nodes.filter((node) => node.inHandle || node.outHandle).length : target?.type === "glyph" ? target.contours.reduce((count, contour) => count + contour.nodes.length + contour.segments.filter((segment) => segment.type === "cubicBezier").length * 2, 0) : undefined;
         if (nodeCount === undefined || reference.nodeIndex >= nodeCount) ctx.addIssue({ code: "custom", message: "Dimension node reference is out of range", path: ["elements", index, "references", referenceIndex, "nodeIndex"] });
       }
     }
     if (element.type === "dimension" && element.kind === "angular" && element.references.every((reference) => reference.kind === "line")) {
       const first = value.elements.find((candidate) => candidate.id === element.references[0].elementId);
       const second = value.elements.find((candidate) => candidate.id === element.references[1].elementId);
-      if (first?.type === "line" && second?.type === "line") {
-        const points = visualLineEndpoints(first); const otherPoints = visualLineEndpoints(second);
-        const connected = points.some((point) => otherPoints.some((other) => Math.hypot(point.x - other.x, point.y - other.y) <= 1e-6));
-        if (!connected) ctx.addIssue({ code: "custom", message: "Angular dimension lines must share a visual endpoint", path: ["elements", index, "references"] });
+       const endpoints = (element: (typeof value.elements)[number] | undefined, reference: { readonly kind?: string; readonly edgeIndex?: number | undefined }): readonly [PointMm, PointMm] | undefined => {
+         if (reference.kind !== "line") return undefined;
+         if (element?.type === "line") return visualLineEndpoints(element);
+         if (element?.type !== "sketch") return undefined;
+         const edge = element.edges[reference.edgeIndex ?? 0]; const nodes = new Map(element.nodes.map((node) => [node.id, node.point]));
+         const start = edge ? nodes.get(edge.startNodeId) : undefined; const end = edge ? nodes.get(edge.endNodeId) : undefined;
+         return start && end ? [start, end] : undefined;
+       };
+       const points = endpoints(first, element.references[0]); const otherPoints = endpoints(second, element.references[1]);
+       if (points && otherPoints) {
+         const connected = points.some((point) => otherPoints.some((other) => Math.hypot(point.x - other.x, point.y - other.y) <= 1e-6));
+         if (!connected) ctx.addIssue({ code: "custom", message: "Angular dimension lines must share a visual endpoint", path: ["elements", index, "references"] });
       }
     }
   }
@@ -219,6 +245,7 @@ const elementPoints = (element: Element): readonly PointMm[] => {
     case "line": return [element.start, element.end];
     case "path": return element.nodes.map((node) => node.anchor);
     case "spline": return element.nodes.map((node) => node.anchor);
+    case "sketch": return element.nodes.map((node) => node.point);
     case "contour": return element.contours.flatMap((contour) => contour.points);
     case "dimension": return [];
     default: return [element.position, { x: element.position.x + element.size.width, y: element.position.y + element.size.height }];

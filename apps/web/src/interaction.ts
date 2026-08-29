@@ -19,7 +19,7 @@ export interface AlignmentGuide {
   readonly target: PointMm;
 }
 export interface NodeHit { readonly elementId: ElementId; readonly nodeIndex: number; readonly node: RealGeometryNode }
-export interface DimensionLineHit { readonly elementId: ElementId; readonly line: LineElement; readonly distance: number }
+export interface DimensionLineHit { readonly elementId: ElementId; readonly line: LineElement; readonly distance: number; readonly edgeIndex?: number }
 export type DimensionTarget = { readonly kind: "node"; readonly hit: NodeHit } | { readonly kind: "line"; readonly hit: DimensionLineHit };
 export interface PathNodeHit { readonly elementId: ElementId; readonly node: PathGeometryNode & { readonly ringIndex?: number } }
     export interface CuttableSegmentHit { readonly elementId: ElementId; readonly segmentIndex: number; readonly distance: number; readonly start: PointMm; readonly end: PointMm; readonly points?: readonly PointMm[] }
@@ -298,14 +298,21 @@ export function pickHoverNode(document: DocumentSnapshot, point: PointMm, zoom: 
   return pickNode(document, point, zoom, tolerancePx);
 }
 
-/** Picks endpoints first, then the body of a visible native line. */
+/** Picks endpoints first, then the body of a visible native line or sketch edge. */
 export function pickDimensionTarget(document: DocumentSnapshot, point: PointMm, zoom: number, tolerancePx = 8): DimensionTarget | undefined {
   const node = pickNode(document, point, zoom, tolerancePx);
   const nodeElement = node ? document.elements.find((element) => element.id === node.elementId) : undefined;
   if (node && !(nodeElement?.type === "line" && node.node.kind === "center")) return { kind: "node", hit: node };
   const visible = new Set(document.layers.filter((layer) => layer.visible).map((layer) => layer.id));
   let best: DimensionLineHit | undefined;
-  for (const line of document.elements.filter((element): element is LineElement => element.type === "line" && visible.has(element.layerId))) {
+  const candidates = document.elements.flatMap((element): readonly DimensionLineHit[] => {
+    if (element.type === "line" && visible.has(element.layerId)) return [{ elementId: element.id, line: element, distance: Number.POSITIVE_INFINITY }];
+    if (element.type !== "sketch" || !visible.has(element.layerId)) return [];
+    const nodes = new Map(element.nodes.map((item) => [item.id, item.point]));
+    return element.edges.flatMap((edge, edgeIndex) => { const start = nodes.get(edge.startNodeId); const end = nodes.get(edge.endNodeId); return start && end ? [{ elementId: element.id, line: { type: "line", id: element.id, layerId: element.layerId, start, end, rotation: 0, style: element.style }, distance: Number.POSITIVE_INFINITY, edgeIndex }] : []; });
+  });
+  for (const candidate of candidates) {
+    const { line } = candidate;
     const [start, end] = realGeometryNodes(line).filter((node): node is RealGeometryNode => node.kind === "endpoint").map((node) => node.point);
     if (!start || !end) continue;
     const dx = end.x - start.x; const dy = end.y - start.y; const lengthSquared = dx * dx + dy * dy;
@@ -313,7 +320,7 @@ export function pickDimensionTarget(document: DocumentSnapshot, point: PointMm, 
     const t = Math.max(0, Math.min(1, ((point.x - start.x) * dx + (point.y - start.y) * dy) / lengthSquared));
     if (t <= 0 || t >= 1) continue;
     const distance = Math.hypot(point.x - (start.x + t * dx), point.y - (start.y + t * dy));
-    if (distance * zoom <= tolerancePx && (!best || distance < best.distance || distance === best.distance && line.id < best.elementId)) best = { elementId: line.id, line, distance };
+    if (distance * zoom <= tolerancePx && (!best || distance < best.distance || distance === best.distance && `${line.id}:${candidate.edgeIndex ?? -1}` < `${best.elementId}:${best.edgeIndex ?? -1}`)) best = { ...candidate, distance };
   }
   return best ? { kind: "line", hit: best } : undefined;
 }

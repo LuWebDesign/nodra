@@ -1,11 +1,27 @@
 import { describe, expect, it } from "vitest";
-import { angularDimensionGeometry, bezierHandlePoint, boundsOf, boundsOfElements, boundsOutsidePage, connectableNode, connectableNodeAddress, closedElementToPolygon, cubicBezierBounds, cuttableSegments, cubicBezierDerivative, degreesToRadians, dimensionGeometry, dimensionKindForNodes, dimensionKindForPlacement, dimensionOffsetForAlignedPlacement, dimensionOffsetForPlacement, editableGeometryNodes, elementCenter, elementSegmentAt, elementToContour, evaluateCubicBezier, ELLIPSE_APPROXIMATION_SEGMENTS, groupCenter, groupHandlePoints, hitTest, mirrorHandleOffset, mmToScreen, pointMidpoint, radiansToDegrees, realGeometryNodes, resizeGroup, resizeHandle, rotatedLineEndpoints, rotateElements, rotationFromDrag, rotationHandlePoints, screenToMm, shapeResultContours, splitCubicBezier, splitCuttableSegments, validateSize, visibleBezierHandleGuides } from "./index.js";
+import { angularDimensionGeometry, bezierHandlePoint, boundsOf, boundsOfElements, boundsOutsidePage, connectableNode, connectableNodeAddress, closedElementToPolygon, cubicBezierBounds, cuttableSegments, cubicBezierDerivative, degreesToRadians, dimensionGeometry, dimensionKindForNodes, dimensionKindForPlacement, dimensionOffsetForAlignedPlacement, dimensionOffsetForPlacement, editableGeometryNodes, elementCenter, elementSegmentAt, elementToContour, evaluateCubicBezier, ELLIPSE_APPROXIMATION_SEGMENTS, groupCenter, groupHandlePoints, hitTest, mirrorHandleOffset, mmToScreen, pointMidpoint, radiansToDegrees, realGeometryNodes, resizeGroup, resizeHandle, rotatedLineEndpoints, rotateElements, rotationFromDrag, rotationHandlePoints, screenToMm, shapeResultContours, sketchClosedContours, splitCubicBezier, splitCuttableSegments, validateSize, visibleBezierHandleGuides } from "./index.js";
 import { elementId, layerId } from "@nodra/domain";
 
 const style = { stroke: "#000", strokeWidth: 0.2 };
 const rectangle = { type: "rectangle" as const, id: elementId("r"), layerId: layerId("l"), position: { x: 10, y: 20 }, size: { width: 20, height: 10 }, cornerRadius: 0, rotation: 0, style };
 
 describe("canonical millimetre geometry", () => {
+  it("exposes sketch nodes, edge hit testing, and bounds", () => {
+    const sketch = { type: "sketch" as const, id: elementId("sketch"), layerId: layerId("l"), nodes: [{ id: "a", point: { x: 0, y: 0 } }, { id: "b", point: { x: 10, y: 0 } }, { id: "c", point: { x: 10, y: 10 } }], edges: [{ id: "ab", startNodeId: "a", endNodeId: "b" }, { id: "bc", startNodeId: "b", endNodeId: "c" }], style };
+    expect(realGeometryNodes(sketch).map((node) => node.nodeId)).toEqual(["a", "b", "c"]);
+    expect(connectableNodeAddress(sketch, 1)).toEqual({ kind: "sketch", nodeId: "b" });
+    expect(boundsOf(sketch)).toEqual({ x: 0, y: 0, width: 10, height: 10 });
+    expect(hitTest(sketch, { x: 5, y: 0.1 }, 0.2)).toBe(true);
+    expect(elementSegmentAt(sketch, { x: 10, y: 5 }, 0.2)).toMatchObject({ segmentIndex: 1 });
+    expect(sketchClosedContours({ ...sketch, edges: [...sketch.edges, { id: "ca", startNodeId: "c", endNodeId: "a" }] })).toHaveLength(1);
+    expect(hitTest({ ...sketch, edges: [...sketch.edges, { id: "ca", startNodeId: "c", endNodeId: "a" }] }, { x: 8, y: 2 }, 0.1)).toBe(true);
+  });
+  it("returns bounded faces instead of every simple cycle", () => {
+    const square = { type: "sketch" as const, id: elementId("square"), layerId: layerId("l"), nodes: [{ id: "a", point: { x: 0, y: 0 } }, { id: "b", point: { x: 10, y: 0 } }, { id: "c", point: { x: 10, y: 10 } }, { id: "d", point: { x: 0, y: 10 } }], edges: [{ id: "ab", startNodeId: "a", endNodeId: "b" }, { id: "bc", startNodeId: "b", endNodeId: "c" }, { id: "cd", startNodeId: "c", endNodeId: "d" }, { id: "da", startNodeId: "d", endNodeId: "a" }], style };
+    expect(sketchClosedContours(square)).toHaveLength(1);
+    expect(sketchClosedContours({ ...square, id: elementId("diagonal"), edges: [...square.edges, { id: "ac", startNodeId: "a", endNodeId: "c" }] })).toHaveLength(2);
+    expect(sketchClosedContours({ ...square, id: elementId("open"), edges: square.edges.slice(0, 2) })).toHaveLength(0);
+  });
   it("provides shared directional Bézier handle primitives", () => {
     const anchor = { x: 10, y: 20 };
     expect(bezierHandlePoint(anchor, "out", { dx: 3, dy: -4 })).toEqual({ direction: "out", point: { x: 13, y: 16 } });

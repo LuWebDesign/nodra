@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent, type PointerEvent, type ReactNode, type WheelEvent } from "react";
 import { createProject, elementId, layerId, pageId, projectFromDocument, revision, type DocumentSnapshot, type DimensionElement, type Element, type ElementId, type PointMm, type ProjectSnapshot, type SplineElement, type TextElement, type ExplicitConnection } from "@nodra/domain";
-import { addToSelection, appendLinePoint, appendSplineNode, beginGesture, cancelGesture, clearSelection, closePath, cutLineAtPoint, cutPathSegment, closeSplineElement, commitGesture, convertTextToGlyphs, createElement, createPathCubicNode, createPathNode, deleteContourNodes, deleteElement, deleteElementNodes, deletePathNodes, dispatch, duplicateElements, flipElements, insertFormaNode, invalidDimensionIdsForShapeOperation, moveElements, movePathHandle, movePathNode, openPath, updateSplineNode, previewGesture, previewGestureFromBase, redo, resizeElement, resizeElementToDimensions, resizeElements, resizeElementsToDimensions, rotateElement, rotateElementsAroundCenter, select, selectForPointerDown, setPathJoin, shapeOperation, splitPathSegment, undo, updateContourNode, updateElement, updateElementNode, updateElementStyles, updatePage, updateSplineHandle, type FlipAxis, type ShapeOperation } from "@nodra/editor-core";
+import { addToSelection, appendSketchEdge, appendSplineNode, beginGesture, cancelGesture, clearSelection, closePath, cutLineAtPoint, cutPathSegment, cutSketchEdge, closeSplineElement, commitGesture, convertTextToGlyphs, createElement, createPathCubicNode, createPathNode, createSketchLine, deleteContourNodes, deleteElement, deleteElementNodes, deletePathNodes, dispatch, duplicateElements, flipElements, insertFormaNode, invalidDimensionIdsForShapeOperation, moveElements, movePathHandle, movePathNode, openPath, updateSplineNode, previewGesture, previewGestureFromBase, redo, resizeElement, resizeElementToDimensions, resizeElements, resizeElementsToDimensions, rotateElement, rotateElementsAroundCenter, select, selectForPointerDown, setPathJoin, shapeOperation, splitPathSegment, undo, updateContourNode, updateElement, updateElementNode, updateElementStyles, updatePage, updateSplineHandle, type FlipAxis, type ShapeOperation } from "@nodra/editor-core";
 import { boundsOfElements, connectableNodeAddress, contourVertexNodes, dimensionKindForPlacement, dimensionOffsetForAlignedPlacement, dimensionOffsetForPlacement, elementCenter, editableGeometryNodes, glyphGeometryNodes, groupCenter, groupHandlePoints, pathGeometryNodes, pointMidpoint, realGeometryNodes, resizeHandle, rotatedResizeHandles, rotationFromDrag, rotationHandlePoints, visibleBezierHandleGuides, type Direction, type GroupHandle, type ResizeHandle } from "@nodra/geometry";
 import { DebouncedAutosave, DexieProjectRepository, requestStoragePersistence, type FontRecord } from "@nodra/persistence";
 import { validateDesign, validateProject } from "@nodra/validation";
@@ -11,7 +11,7 @@ import { useDocumentStore, usePersistenceStore, useUiStore, useViewportStore, ty
 import { pathJoinGuidance, pathJoinOptions } from "./pathJoins.js";
 import { textSizeFor } from "./textMetrics.js";
 import { extractTextGlyphOutlines, fontFamilyFromFileName, FontOutlineError } from "./fontOutline.js";
-import { circleGeometry, creationGuides, hasNonCollinearPoints, type CreationGuide } from "./interaction.js";
+import { circleGeometry, creationGuides, type CreationGuide } from "./interaction.js";
 
 const defaultFonts = ["Arial", "Helvetica", "Times New Roman", "Courier New", "Inter"] as const;
 const projectMirrorKey = (projectId: string) => `nodra:project-mirror:${projectId}`;
@@ -29,7 +29,7 @@ const saveProjectMirror = (project: ProjectSnapshot): void => {
 const defaultStyle = { stroke: "#000000", strokeWidth: 1 };
 const defaultClosedFill = "rgba(101,217,255,0.22)";
 const isPropertyElement = (element: Element): element is PropertyElement => element.type === "rectangle" || element.type === "ellipse";
-const isRotatableElement = (element: Element): element is RotatableElement => element.type !== "dimension" && element.type !== "path" && element.type !== "spline";
+const isRotatableElement = (element: Element): element is RotatableElement => element.type !== "dimension" && element.type !== "path" && element.type !== "spline" && element.type !== "sketch";
 const palette = [
   { name: "Negro", color: "#111827" }, { name: "Rojo", color: "#ef4444" }, { name: "Naranja", color: "#f59e0b" },
   { name: "Verde", color: "#22c55e" }, { name: "Azul", color: "#3b82f6" }, { name: "Violeta", color: "#a855f7" },
@@ -38,7 +38,7 @@ const palette = [
 ] as const;
 const id = () => elementId(`element-${crypto.randomUUID()}`);
 const newDimension = (layer: string, first: NodeHit, second: NodeHit, placement: PointMm): DimensionElement => { const midpoint = pointMidpoint(first.node.point, second.node.point); const kind = dimensionKindForPlacement(first.node.point, second.node.point, placement); return { type: "dimension", id: id(), layerId: layerId(layer), kind, references: [{ kind: "node", elementId: first.elementId, nodeIndex: first.nodeIndex }, { kind: "node", elementId: second.elementId, nodeIndex: second.nodeIndex }], offset: kind === "aligned" ? dimensionOffsetForAlignedPlacement(first.node.point, second.node.point, placement) : dimensionOffsetForPlacement(kind, midpoint, placement), precision: 2, units: "mm", rotation: 0, style: { stroke: "#2563eb", strokeWidth: 0.45 } }; };
-const newAngularDimension = (layer: string, first: Extract<DimensionTarget, { kind: "line" }>, second: Extract<DimensionTarget, { kind: "line" }>, placement: PointMm): DimensionElement => ({ type: "dimension", id: id(), layerId: layerId(layer), kind: "angular", references: [{ kind: "line", elementId: first.hit.elementId }, { kind: "line", elementId: second.hit.elementId }], offset: { x: placement.x - first.hit.line.start.x, y: placement.y - first.hit.line.start.y }, precision: 2, units: "mm", rotation: 0, style: { stroke: "#2563eb", strokeWidth: 0.45 } });
+const newAngularDimension = (layer: string, first: Extract<DimensionTarget, { kind: "line" }>, second: Extract<DimensionTarget, { kind: "line" }>, placement: PointMm): DimensionElement => ({ type: "dimension", id: id(), layerId: layerId(layer), kind: "angular", references: [{ kind: "line", elementId: first.hit.elementId, ...(first.hit.edgeIndex !== undefined ? { edgeIndex: first.hit.edgeIndex } : {}) }, { kind: "line", elementId: second.hit.elementId, ...(second.hit.edgeIndex !== undefined ? { edgeIndex: second.hit.edgeIndex } : {}) }], offset: { x: placement.x - first.hit.line.start.x, y: placement.y - first.hit.line.start.y }, precision: 2, units: "mm", rotation: 0, style: { stroke: "#2563eb", strokeWidth: 0.45 } });
 const newElement = (tool: Exclude<Tool, "select" | "dimension" | "pan" | "forma" | "pen" | "spline" | "text">, layer: string, start: PointMm, end: PointMm, nextId = id()): Element => tool === "line"
   ? { type: "line", id: nextId, layerId: layerId(layer), start, end, rotation: 0, style: defaultStyle }
   : tool === "rectangle"
@@ -99,7 +99,7 @@ type ActiveInteraction = {
   splineNodeId?: string;
   splineHandle?: "in" | "out";
 };
-type CreationDraft = { readonly tool: "rectangle" | "ellipse" | "line"; readonly points: readonly PointMm[]; readonly pointer: PointMm; readonly snaps?: readonly (CreationSnap | undefined)[]; readonly elementId?: ElementId };
+type CreationDraft = { readonly tool: "rectangle" | "ellipse" | "line"; readonly points: readonly PointMm[]; readonly pointer: PointMm; readonly snaps?: readonly (CreationSnap | undefined)[]; readonly elementId?: ElementId; readonly currentNodeId?: string };
 
 type FormaNodeOverlay =
   | { readonly kind: "contour"; readonly key: string; readonly elementId: ElementId; readonly point: PointMm; readonly contour: ContourNodeHit }
@@ -715,28 +715,27 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
       if (tool === "line") {
         const creationPoint = creationPointForClick ?? point;
         const draft = creationDraftRef.current;
+        const snappedSketchNode = creationSnap?.address?.kind === "sketch" && creationSnap.node ? { elementId: creationSnap.node.elementId, nodeId: creationSnap.address.nodeId } : undefined;
         if (!draft) {
-          const nextDraft = { tool, points: [creationPoint], pointer: creationPoint, snaps: [creationSnap] } as const;
+          const nextDraft = { tool, points: [creationPoint], pointer: creationPoint, snaps: [creationSnap], ...(snappedSketchNode ? { elementId: snappedSketchNode.elementId, currentNodeId: snappedSketchNode.nodeId } : {}) } as const;
          creationDraftRef.current = nextDraft;
          setCreationDraft(nextDraft);
-       } else if (draft.points.length === 1) {
-          const line = newElement("line", editorRef.current.document.layers[0]?.id ?? "layer-1", draft.points[0]!, creationPoint, id());
-          const next = dispatch(editorRef.current, createElement(line, creationConnections(line, [...(draft.snaps ?? []), creationSnap])));
-          const nextDraft = { tool, points: [...draft.points, creationPoint], pointer: creationPoint, elementId: line.id } as const;
+       } else if (draft.points.length === 1 && !draft.elementId) {
+          const sketch = createSketchLine(id(), layerId(editorRef.current.document.layers[0]?.id ?? "layer-1"), defaultStyle, draft.points[0]!, creationPoint);
+          const next = dispatch(editorRef.current, createElement(sketch, creationConnections(sketch, [...(draft.snaps ?? []), creationSnap])));
+          const nextDraft = { tool, points: [...draft.points, creationPoint], pointer: creationPoint, elementId: sketch.id, currentNodeId: sketch.nodes[1]!.id } as const;
          creationDraftRef.current = nextDraft;
          setCreationDraft(nextDraft);
-         setEditorState(select(next, [line.id]));
-        } else if (draft.elementId && draft.points.length >= 3 && Math.hypot(draft.points[0]!.x - creationPoint.x, draft.points[0]!.y - creationPoint.y) <= 8 / zoom && hasNonCollinearPoints(draft.points)) {
-         setEditorState(dispatch(editorRef.current, closePath(draft.elementId)));
-         creationDraftRef.current = undefined;
-         setCreationDraft(undefined);
-       } else if (draft.elementId) {
-         const existing = editorRef.current.document.elements.find((element) => element.id === draft.elementId);
-          const next = existing?.type === "line" ? dispatch(editorRef.current, appendLinePoint(draft.elementId, creationPoint)) : dispatch(editorRef.current, createPathNode(draft.elementId, { id: `path-node-${crypto.randomUUID()}`, anchor: creationPoint, join: "corner" }));
-          const nextDraft = { ...draft, points: [...draft.points, creationPoint], pointer: creationPoint };
+         setEditorState(select(next, [sketch.id]));
+       } else if (draft.elementId && draft.currentNodeId) {
+          const targetNodeId = snappedSketchNode?.elementId === draft.elementId ? snappedSketchNode.nodeId : undefined;
+          const next = dispatch(editorRef.current, appendSketchEdge(draft.elementId, draft.currentNodeId, creationPoint, targetNodeId));
+          const sketch = next.document.elements.find((element): element is Extract<Element, { type: "sketch" }> => element.id === draft.elementId && element.type === "sketch");
+          const currentNodeId = targetNodeId ?? sketch?.nodes.find((node) => node.point.x === creationPoint.x && node.point.y === creationPoint.y)?.id ?? draft.currentNodeId;
+          const nextDraft = { ...draft, points: [...draft.points, creationPoint], pointer: creationPoint, currentNodeId };
          creationDraftRef.current = nextDraft;
          setCreationDraft(nextDraft);
-         setEditorState(next);
+         setEditorState(select(next, [draft.elementId]));
        }
        return;
      }
@@ -760,6 +759,9 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
         if (hit && element?.type === "line") {
               const next = dispatch(editorRef.current, cutLineAtPoint(hit.elementId, point));
               if (next !== editorRef.current) setEditorState(select(next, next.document.elements.filter((candidate) => candidate.type === "path" && (candidate.id === hit.elementId || candidate.id.startsWith(`${hit.elementId}:piece:`))).map((candidate) => candidate.id)));
+            } else if (hit && element?.type === "sketch") {
+          const next = dispatch(editorRef.current, cutSketchEdge(hit.elementId, hit.segmentIndex));
+          if (next !== editorRef.current) setEditorState(select(next, next.document.elements.some((candidate) => candidate.id === hit.elementId) ? [hit.elementId] : []));
             } else if (hit && (element?.type === "rectangle" || element?.type === "ellipse" || segment?.type === "line")) {
           const next = dispatch(editorRef.current, cutPathSegment(hit.elementId, hit.segmentIndex, point));
           if (next !== editorRef.current) setEditorState(select(next, [hit.elementId]));
@@ -819,7 +821,7 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
           if (!dimensionDraft) { setDimensionDraft({ phase: "first", first: dimensionTarget }); return; }
           if (dimensionDraft.phase === "first") {
             if (dimensionDraft.first.kind === "node" && dimensionTarget.kind === "node" && dimensionDraft.first.hit.elementId === dimensionTarget.hit.elementId && dimensionDraft.first.hit.nodeIndex === dimensionTarget.hit.nodeIndex) return;
-            if (dimensionDraft.first.kind === "line" && dimensionTarget.kind === "line" && dimensionDraft.first.hit.elementId === dimensionTarget.hit.elementId) return;
+            if (dimensionDraft.first.kind === "line" && dimensionTarget.kind === "line" && dimensionDraft.first.hit.elementId === dimensionTarget.hit.elementId && (dimensionDraft.first.hit.edgeIndex ?? 0) === (dimensionTarget.hit.edgeIndex ?? 0)) return;
             if (dimensionDraft.first.kind !== dimensionTarget.kind) return;
             setDimensionDraft({ phase: "placement", first: dimensionDraft.first, second: dimensionTarget });
            setDimensionNodeHover(undefined);

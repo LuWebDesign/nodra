@@ -1,5 +1,5 @@
 import polygonClipping, { type MultiPolygon } from "polygon-clipping";
-import type { ConnectableNodeAddress, ContourElement, DimensionElement, Element, ElementId, EllipseElement, GlyphElement, HandleOffset, LineElement, PathCubicSegment, PathElement, PointMm, RectangleElement, SizeMm, SplineElement, SplineNode } from "@nodra/domain";
+import type { ConnectableNodeAddress, ContourElement, DimensionElement, Element, ElementId, EllipseElement, GlyphElement, HandleOffset, LineElement, PathCubicSegment, PathElement, PointMm, RectangleElement, SizeMm, SketchElement, SplineElement, SplineNode } from "@nodra/domain";
 
 export interface Bounds { readonly x: number; readonly y: number; readonly width: number; readonly height: number }
 export interface Viewport { readonly zoom: number; readonly panMm: PointMm }
@@ -11,6 +11,13 @@ export function cuttableSegments(element: Element): readonly CuttableSegment[] {
   if (element.type === "line") {
     const [start, end] = rotatedLineEndpoints(element);
     return start && end ? [{ elementId: element.id, segmentIndex: 0, start, end }] : [];
+  }
+  if (element.type === "sketch") {
+    const nodes = new Map(element.nodes.map((node) => [node.id, node.point]));
+    return element.edges.flatMap((edge, segmentIndex) => {
+      const start = nodes.get(edge.startNodeId); const end = nodes.get(edge.endNodeId);
+      return start && end ? [{ elementId: element.id, segmentIndex, start, end }] : [];
+    });
   }
   if (element.type === "path") {
         const nodes = new Map(element.nodes.map((node) => [node.id, node.anchor]));
@@ -123,6 +130,7 @@ export function connectableNodeAddress(element: Element, nodeIndex: number): Con
   if (!node) return undefined;
   if (element.type === "line") return { kind: "line", name: nodeIndex === 0 ? "start" : nodeIndex === 2 ? "end" : "center" };
   if (element.type === "path" || element.type === "spline") return node.nodeId ? { kind: element.type, nodeId: node.nodeId, ...(node.handle === "control1" ? { handle: "out" as const } : node.handle === "control2" ? { handle: "in" as const } : {}) } : undefined;
+  if (element.type === "sketch") return node.nodeId ? { kind: "sketch", nodeId: node.nodeId } : undefined;
   const names = element.type === "rectangle" ? ["nw", "ne", "se", "sw", "center", "n", "e", "s", "w"] : ["center", "n", "e", "s", "w"];
   const name = names[nodeIndex];
   return name ? { kind: "named", name: name as Extract<ConnectableNodeAddress, { kind: "named" }>["name"] } : undefined;
@@ -173,7 +181,17 @@ export const dimensionOffsetForAlignedPlacement = (start: PointMm, end: PointMm,
   return { x: -(end.y - start.y) / length * signed, y: (end.x - start.x) / length * signed };
 };
 const nodeReference = (reference: DimensionElement["references"][number]): reference is Extract<DimensionElement["references"][number], { nodeIndex: number }> => "nodeIndex" in reference;
-const lineAt = (reference: DimensionElement["references"][number], elements: readonly Element[]) => "kind" in reference && reference.kind === "line" ? elements.find((candidate): candidate is LineElement => candidate.id === reference.elementId && candidate.type === "line") : undefined;
+const lineAt = (reference: DimensionElement["references"][number], elements: readonly Element[]): LineElement | undefined => {
+  if (!("kind" in reference) || reference.kind !== "line") return undefined;
+  const element = elements.find((candidate) => candidate.id === reference.elementId);
+  if (element?.type === "line") return element;
+  if (element?.type !== "sketch") return undefined;
+  const edge = element.edges[reference.edgeIndex ?? 0];
+  const nodes = new Map(element.nodes.map((node) => [node.id, node.point]));
+  const start = edge ? nodes.get(edge.startNodeId) : undefined;
+  const end = edge ? nodes.get(edge.endNodeId) : undefined;
+  return start && end ? { type: "line", id: element.id, layerId: element.layerId, start, end, rotation: 0, style: element.style } : undefined;
+};
 export function angularDimensionGeometry(element: DimensionElement, elements: readonly Element[]): AngularDimensionGeometry | undefined {
   if (element.kind !== "angular" || !element.references.every((reference) => "kind" in reference && reference.kind === "line")) return undefined;
   const first = lineAt(element.references[0], elements); const second = lineAt(element.references[1], elements); if (!first || !second) return undefined;
@@ -275,6 +293,16 @@ export function pathBounds(path: PathElement): Bounds {
   return { x, y, width: right - x, height: bottom - y };
 }
 const glyphPath = (glyph: GlyphElement, contour: GlyphElement["contours"][number]): PathElement => ({ type: "path", id: glyph.id, layerId: glyph.layerId, nodes: contour.nodes, segments: contour.segments, closed: true, style: glyph.style });
+const sketchNodeMap = (sketch: SketchElement): ReadonlyMap<string, PointMm> => new Map(sketch.nodes.map((node) => [node.id, node.point]));
+const sketchSegments = (sketch: SketchElement): readonly [PointMm, PointMm][] => { const nodes = sketchNodeMap(sketch); return sketch.edges.flatMap((edge) => { const start = nodes.get(edge.startNodeId); const end = nodes.get(edge.endNodeId); return start && end ? [[start, end] as [PointMm, PointMm]] : []; }); };
+export function sketchClosedContours(sketch: SketchElement): readonly (readonly PointMm[])[] {
+  const pieces = sketch.edges.flatMap((edge, segmentIndex) => {
+    const nodes = sketchNodeMap(sketch);
+    const start = nodes.get(edge.startNodeId); const end = nodes.get(edge.endNodeId);
+    return start && end ? [{ elementId: sketch.id, segmentIndex, start, end }] : [];
+  });
+  return closedCuttableCycles(pieces).map((cycle) => [...cycle.points, cycle.points[0]!]);
+}
 export function glyphBounds(glyph: GlyphElement): Bounds {
   const values = glyph.contours.map((contour) => pathBounds(glyphPath(glyph, contour)));
   const x = Math.min(...values.map((value) => value.x)); const y = Math.min(...values.map((value) => value.y));
@@ -371,6 +399,7 @@ export function elementCenter(element: Element): PointMm {
     : element.type === "contour" ? groupCenter(contourBounds(element))
     : element.type === "path" ? groupCenter(pathBounds(element))
     : element.type === "spline" ? groupCenter(splineBounds(element))
+    : element.type === "sketch" ? groupCenter(boundsOf(element))
     : element.type === "glyph" ? groupCenter(glyphBounds(element))
     : { x: element.position.x + element.size.width * (element.type === "text" ? element.scaleX ?? 1 : 1) / 2, y: element.position.y + element.size.height * (element.type === "text" ? element.scaleY ?? 1 : 1) / 2 };
 }
@@ -401,6 +430,7 @@ export function contourVertexNodes(element: ContourElement): readonly ContourVer
 export function elementToContour(element: Element): ContourElement {
   const contours = element.type === "line"
     ? [{ points: [element.start, element.end, element.start] }]
+    : element.type === "sketch" ? (sketchClosedContours(element).length ? sketchClosedContours(element).map((points) => ({ points })) : sketchSegments(element).map(([start, end]) => ({ points: [start, end, start] })))
     : element.type === "spline" ? [{ points: splinePoints(element) }]
     : element.type === "glyph" ? element.contours.map((contour) => ({ points: flattenPath(glyphPath(element, contour)) }))
     : contoursFromMultiPolygon(closedElementToPolygon(element));
@@ -417,6 +447,7 @@ export function elementSegmentAt(element: Element, point: PointMm, toleranceMm =
     const distance = contourSegmentDistance(point, start, end);
     return distance <= toleranceMm ? { elementId: element.id, ringIndex: 0, segmentIndex: 0, distance } : undefined;
   }
+  if (element.type === "sketch") return sketchSegments(element).reduce<ContourSegmentHit | undefined>((best, [start, end], segmentIndex) => { const distance = contourSegmentDistance(point, start, end); return distance <= toleranceMm && (!best || distance < best.distance) ? { elementId: element.id, ringIndex: 0, segmentIndex, distance } : best; }, undefined);
   const projected = elementToContour(element);
   return contourSegmentAt(projected, point, toleranceMm);
 }
@@ -484,6 +515,7 @@ function primitivePolygon(element: RectangleElement | EllipseElement): [number, 
 
 export function closedElementToPolygon(element: Element): MultiPolygon {
   if (element.type === "line" || element.type === "dimension" || element.type === "text") throw new Error("Shape operations require closed objects");
+  if (element.type === "sketch") { const contours = sketchClosedContours(element); if (!contours.length) throw new Error("Shape operations require closed objects"); return [contours.map((contour) => contour.map((point) => [point.x, point.y] as [number, number]))]; }
   if (element.type === "path") { if (!element.closed) throw new Error("Shape operations require closed objects"); return [[flattenPath(element, 0.01).map((point) => [point.x, point.y] as [number, number])]]; }
   if (element.type === "spline") { if (!element.closed) throw new Error("Shape operations require closed objects"); return [[splinePoints(element, 0.01).map((point) => [point.x, point.y] as [number, number])]]; }
   if (element.type === "glyph") return [element.contours.map((contour) => flattenPath(glyphPath(element, contour), 0.01).map((point) => [point.x, point.y] as [number, number]))];
@@ -497,7 +529,7 @@ export function contoursFromMultiPolygon(polygons: MultiPolygon): ContourElement
 
 export type ShapeOperation = "union" | "difference";
 export function shapeResultContours(operation: ShapeOperation, elements: readonly Element[]): ContourElement["contours"] {
-  if (!elements.length || elements.some((element) => element.type === "line" || element.type === "dimension" || element.type === "text")) throw new Error("Shape operations require closed objects");
+  if (!elements.length || elements.some((element) => element.type === "line" || element.type === "dimension" || element.type === "text" || (element.type === "sketch" && sketchClosedContours(element).length === 0))) throw new Error("Shape operations require closed objects");
   const polygons = elements.map(closedElementToPolygon);
   const result = operation === "difference" ? polygonClipping.difference(polygons[0]!, ...polygons.slice(1)) : polygonClipping.union(polygons[0]!, ...polygons.slice(1));
   return contoursFromMultiPolygon(result);
@@ -534,7 +566,7 @@ export function rotationHandlePoints(element: Element, offsetMm: number): readon
     const bounds = pathBounds(element);
     return rotationHandlePoints({ type: "rectangle", id: element.id, layerId: element.layerId, position: { x: bounds.x, y: bounds.y }, size: { width: Math.max(bounds.width, 1), height: Math.max(bounds.height, 1) }, cornerRadius: 0, rotation: 0, style: element.style }, offsetMm);
   }
-  if (element.type === "spline" || element.type === "text") {
+  if (element.type === "spline" || element.type === "sketch" || element.type === "text") {
     const bounds = boundsOf(element);
     return rotationHandlePoints({ type: "rectangle", id: element.id, layerId: element.layerId, position: { x: bounds.x, y: bounds.y }, size: { width: Math.max(bounds.width, 1), height: Math.max(bounds.height, 1) }, cornerRadius: 0, rotation: 0, style: element.style }, offsetMm);
   }
@@ -597,6 +629,7 @@ export function realGeometryNodes(element: Element): readonly RealGeometryNode[]
     return nodes;
   }
   if (element.type === "path") return pathGeometryNodes(element);
+  if (element.type === "sketch") return element.nodes.map((node) => ({ kind: "anchor" as const, nodeId: node.id, point: node.point }));
   if (element.type === "glyph") return glyphGeometryNodes(element);
   if (element.type === "spline") return element.nodes.flatMap((node) => [{ kind: "anchor" as const, nodeId: node.id, point: node.anchor }, ...(node.inHandle ? [{ kind: "control" as const, nodeId: node.id, point: resolveHandle(node.anchor, node.inHandle), handle: "control2" as const }] : []), ...(node.outHandle ? [{ kind: "control" as const, nodeId: node.id, point: resolveHandle(node.anchor, node.outHandle), handle: "control1" as const }] : [])]);
   const half = { x: element.size.width / 2, y: element.size.height / 2 };
@@ -681,6 +714,7 @@ export function boundsOf(element: Element): Bounds {
   }
   if (element.type === "contour") return contourBounds(element);
   if (element.type === "path") return pathBounds(element);
+  if (element.type === "sketch") { const points = element.nodes.map((node) => node.point); const xs = points.map((point) => point.x); const ys = points.map((point) => point.y); return { x: Math.min(...xs), y: Math.min(...ys), width: Math.max(...xs) - Math.min(...xs), height: Math.max(...ys) - Math.min(...ys) }; }
   if (element.type === "spline") return splineBounds(element);
   if (element.type === "glyph") return glyphBounds(element);
   if (element.type === "text") return { x: element.position.x, y: element.position.y, width: element.size.width * (element.scaleX ?? 1), height: element.size.height * (element.scaleY ?? 1) };
@@ -720,6 +754,7 @@ export function resizeGroup(elements: readonly Element[], handle: ResizeHandle, 
   const sy = bounds.height ? height / bounds.height : 1;
   return elements.map((e) => e.type === "dimension" ? e : e.type === "line"
     ? { ...e, start: { x: x + (e.start.x - bounds.x) * sx, y: y + (e.start.y - bounds.y) * sy }, end: { x: x + (e.end.x - bounds.x) * sx, y: y + (e.end.y - bounds.y) * sy } }
+    : e.type === "sketch" ? { ...e, nodes: e.nodes.map((node) => ({ ...node, point: { x: x + (node.point.x - bounds.x) * sx, y: y + (node.point.y - bounds.y) * sy } })) }
     : e.type === "contour"
       ? contourWithPoints(e, e.contours.map((contour) => contour.points.map((point) => ({ x: x + (point.x - bounds.x) * sx, y: y + (point.y - bounds.y) * sy }))))
       : e.type === "path"
@@ -746,6 +781,7 @@ export function rotateElements(elements: readonly Element[], center: PointMm, de
   });
   return elements.map((element) => element.type === "dimension" ? element : element.type === "line"
     ? { ...element, start: rotatePoint(element.start), end: rotatePoint(element.end) }
+    : element.type === "sketch" ? { ...element, nodes: element.nodes.map((node) => ({ ...node, point: rotatePoint(node.point) })) }
     : element.type === "contour"
       ? contourWithPoints(element, element.contours.map((contour) => contour.points.map(rotatePoint)))
       : element.type === "path"
@@ -777,6 +813,7 @@ export function hitTest(element: Element, point: PointMm, toleranceMm = 0): bool
   if (element.type === "contour") {
     return element.contours.reduce((inside, contour) => inside !== pointInRing(point, contour.points.map((value) => [value.x, value.y] as [number, number])), false);
   }
+  if (element.type === "sketch") return sketchSegments(element).some(([start, end]) => lineDistanceToSegment(point, start, end) <= toleranceMm) || sketchClosedContours(element).reduce((inside, contour) => inside !== pointInRing(point, contour.map((value) => [value.x, value.y] as [number, number])), false);
   if (element.type === "path") return pathHitTest(element, point, toleranceMm);
   if (element.type === "glyph") return element.contours.reduce((inside, contour) => inside !== pathHitTest(glyphPath(element, contour), point, toleranceMm), false);
       if (element.type === "spline") {

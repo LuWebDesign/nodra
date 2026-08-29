@@ -416,7 +416,58 @@ test("continues a click line and closes a valid non-collinear path", async ({ pa
   await expect(page.locator(".creation-pending-overlay")).toBeVisible();
   await page.mouse.click(third.x, third.y);
   await page.mouse.click(first.x, first.y);
-  await expect(page.locator('.page-svg svg path[data-element-id]')).toHaveAttribute("d", /Z/);
+  const sketch = page.locator('.page-svg svg g[data-element-id]').first();
+  await expect(sketch).toHaveCount(1);
+  await expect(sketch.locator('path[fill-rule="evenodd"]')).toHaveAttribute("d", /Z/);
+  await expect(sketch.locator("line")).toHaveCount(3);
+});
+
+test("reuses an existing sketch node when continuing the same line", async ({ page }) => {
+  await page.goto("/");
+  const bounds = await page.locator(".page").boundingBox();
+  expect(bounds).not.toBeNull();
+  await page.getByRole("button", { name: "Línea" }).click();
+  const first = { x: bounds!.x + 120, y: bounds!.y + 120 };
+  const second = { x: first.x + 90, y: first.y };
+  const third = { x: second.x, y: second.y + 70 };
+  await page.mouse.click(first.x, first.y);
+  await page.mouse.click(second.x, second.y);
+  await page.mouse.move(first.x, first.y);
+  await page.mouse.click(first.x, first.y);
+  await page.mouse.click(third.x, third.y);
+  const sketch = page.locator('.page-svg svg g[data-element-id]').first();
+  await expect(sketch).toHaveCount(1);
+  const lines = sketch.locator("line");
+  await expect(lines).toHaveCount(2);
+  const starts = await lines.evaluateAll((elements) => elements.map((line) => [line.getAttribute("x1"), line.getAttribute("y1")]));
+  expect(starts[0]).toEqual(starts[1]);
+});
+
+test("continues drawing from a closed sketch", async ({ page }) => {
+  await page.goto("/");
+  const bounds = await page.locator(".page").boundingBox();
+  expect(bounds).not.toBeNull();
+  await page.getByRole("button", { name: "Línea" }).click();
+  const first = { x: bounds!.x + 120, y: bounds!.y + 120 };
+  const second = { x: first.x + 80, y: first.y };
+  const third = { x: second.x, y: second.y + 60 };
+  const fourth = { x: first.x - 50, y: first.y + 60 };
+  for (const point of [first, second, third, first, fourth]) await page.mouse.click(point.x, point.y);
+  const sketch = page.locator('.page-svg svg g[data-element-id]').first();
+  await expect(sketch).toHaveCount(1);
+  await expect(sketch.locator("line")).toHaveCount(4);
+});
+
+test("recognizes and fills a closed sketch", async ({ page }) => {
+  await page.goto("/");
+  const bounds = await page.locator(".page").boundingBox();
+  expect(bounds).not.toBeNull();
+  await page.getByRole("button", { name: "Línea" }).click();
+  const points = [{ x: bounds!.x + 140, y: bounds!.y + 140 }, { x: bounds!.x + 240, y: bounds!.y + 140 }, { x: bounds!.x + 240, y: bounds!.y + 220 }, { x: bounds!.x + 140, y: bounds!.y + 220 }];
+  for (const point of [...points, points[0]!]) await page.mouse.click(point.x, point.y);
+  const sketch = page.locator('.page-svg svg g[data-element-id]').first();
+  await expect(sketch.locator('path[fill-rule="evenodd"]')).toHaveAttribute("fill", /.+/);
+  await expect(sketch.locator('path[fill-rule="evenodd"]')).toHaveAttribute("d", /Z/);
 });
 
 test("shows node hover feedback while keeping the system cursor as an arrow", async ({ page }) => {

@@ -1,5 +1,5 @@
 import { CURRENT_SCHEMA_VERSION, type Element, type PathElement, type SplineElement } from "@nodra/domain";
-import { dimensionGeometry, mmToScreen, type Viewport } from "@nodra/geometry";
+import { dimensionGeometry, mmToScreen, sketchClosedContours, type Viewport } from "@nodra/geometry";
 import { validateDocument } from "@nodra/validation";
 
 const MAX_ISSUES = 8;
@@ -36,7 +36,7 @@ const DEFAULT_CLOSED_FILL = "rgba(101,217,255,0.22)";
 
 function visualAttributes(element: Element): string {
   if (element.type === "dimension") return `stroke="${escapeAttribute(element.style.stroke)}" stroke-width="${number(element.style.strokeWidth)}" fill="none"`;
-  const closed = element.type === "path" || element.type === "spline" ? element.closed : element.type !== "line";
+  const closed = element.type === "path" || element.type === "spline" ? element.closed : element.type !== "line" && element.type !== "sketch";
   const fill = closed ? escapeAttribute(element.style.fill ?? DEFAULT_CLOSED_FILL) : "none";
   return `stroke="${escapeAttribute(element.style.stroke)}" stroke-width="${number(element.style.strokeWidth)}" fill="${fill}"`;
 }
@@ -71,6 +71,14 @@ function renderElement(element: Element, viewport: Viewport): string {
     const width = element.size.width * viewport.zoom;
     const height = element.size.height * viewport.zoom;
     return `<ellipse data-element-id="${escapeAttribute(element.id)}" cx="${number(position.x + width / 2)}" cy="${number(position.y + height / 2)}" rx="${number(width / 2)}" ry="${number(height / 2)}" transform="${transform(element, position.x + width / 2, position.y + height / 2)}" ${visualAttributes(element)} />`;
+  }
+  if (element.type === "sketch") {
+    const nodes = new Map(element.nodes.map((node) => [node.id, screen(node.point)]));
+    const fill = escapeAttribute(element.style.fill ?? DEFAULT_CLOSED_FILL);
+    const contours = sketchClosedContours(element).map((contour) => contour.map((point, index) => { const current = screen(point); return `${index === 0 ? "M" : "L"}${number(current.x)} ${number(current.y)}`; }).join(" ") + " Z").join(" ");
+    const faces = contours ? `<path data-sketch-fill="true" d="${escapeAttribute(contours)}" fill="${fill}" stroke="none" fill-rule="evenodd" />` : "";
+    const lines = element.edges.map((edge) => { const start = nodes.get(edge.startNodeId); const end = nodes.get(edge.endNodeId); return start && end ? `<line x1="${number(start.x)}" y1="${number(start.y)}" x2="${number(end.x)}" y2="${number(end.y)}" />` : ""; }).join("");
+    return `<g data-element-id="${escapeAttribute(element.id)}" ${visualAttributes(element)}>${faces}${lines}</g>`;
   }
   if (element.type === "contour") {
     const path = element.contours.map((contour) => contour.points.map((point, index) => {
@@ -157,7 +165,7 @@ export function renderSvg(document: unknown, viewport: unknown): RenderResult {
   const checked = validateDocument(document);
   if (!checked.success) {
     const candidate = typeof document === "object" && document !== null ? document as { schemaVersion?: unknown; elements?: unknown } : undefined;
-        const unsupported = !SUPPORTED_SCHEMA_VERSIONS.has(candidate?.schemaVersion as number) || (Array.isArray(candidate?.elements) && candidate.elements.some((element) => typeof element === "object" && element !== null && !["rectangle", "ellipse", "line", "dimension", "contour", "path", "spline", "text", "glyph"].includes((element as { type?: unknown }).type as string)));
+         const unsupported = !SUPPORTED_SCHEMA_VERSIONS.has(candidate?.schemaVersion as number) || (Array.isArray(candidate?.elements) && candidate.elements.some((element) => typeof element === "object" && element !== null && !["rectangle", "ellipse", "line", "sketch", "dimension", "contour", "path", "spline", "text", "glyph"].includes((element as { type?: unknown }).type as string)));
     return { success: false, reason: unsupported ? "unsupported" : "invalid", error: checked.error.slice(0, 512), issues: checked.issues.slice(0, MAX_ISSUES).map((issue) => `${issue.path.join(".") || "document"}: ${issue.message}`) };
   }
   const checkedViewport = viewportResult(viewport);

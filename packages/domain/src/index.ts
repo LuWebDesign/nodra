@@ -75,10 +75,13 @@ export interface LineElement {
   readonly style: VisualStyle;
   readonly operation?: OperationMetadata;
 }
+export interface SketchNode { readonly id: string; readonly point: PointMm }
+export interface SketchEdge { readonly id: string; readonly startNodeId: string; readonly endNodeId: string }
+export interface SketchElement { readonly type: "sketch"; readonly id: ElementId; readonly layerId: LayerId; readonly nodes: readonly SketchNode[]; readonly edges: readonly SketchEdge[]; readonly style: VisualStyle; readonly operation?: OperationMetadata }
 export type DimensionKind = "aligned" | "horizontal" | "vertical" | "angular";
 export type DimensionReference =
   | { readonly kind: "node"; readonly elementId: ElementId; readonly nodeIndex: number }
-  | { readonly kind: "line"; readonly elementId: ElementId }
+  | { readonly kind: "line"; readonly elementId: ElementId; readonly edgeIndex?: number }
   /** Legacy node references are accepted at the boundary and normalized by validation. */
   | { readonly elementId: ElementId; readonly nodeIndex: number };
 export interface DimensionElement {
@@ -154,11 +157,11 @@ export interface TextElement { readonly type: "text"; readonly id: ElementId; re
 export interface GlyphContour { readonly nodes: readonly PathNode[]; readonly segments: readonly PathSegment[] }
 /** Editable outline for one laid-out font glyph; multiple contours preserve holes. */
 export interface GlyphElement { readonly type: "glyph"; readonly id: ElementId; readonly layerId: LayerId; readonly position: PointMm; readonly size: SizeMm; readonly glyph: string; readonly contours: readonly GlyphContour[]; readonly fillRule: "evenodd"; readonly rotation: number; readonly flipX?: boolean; readonly flipY?: boolean; readonly style: VisualStyle; readonly operation?: OperationMetadata }
-export type Element = RectangleElement | EllipseElement | LineElement | DimensionElement | ContourElement | PathElement | SplineElement | TextElement | GlyphElement;
+export type Element = RectangleElement | EllipseElement | LineElement | SketchElement | DimensionElement | ContourElement | PathElement | SplineElement | TextElement | GlyphElement;
 export type ConnectableNodeAddress =
   | { readonly kind: "named"; readonly name: "nw" | "n" | "ne" | "e" | "se" | "s" | "sw" | "w" | "center" }
   | { readonly kind: "line"; readonly name: "start" | "end" | "center" }
-  | { readonly kind: "path" | "spline"; readonly nodeId: string; readonly handle?: "in" | "out" };
+  | { readonly kind: "path" | "spline" | "sketch"; readonly nodeId: string; readonly handle?: "in" | "out" };
 export interface ConnectableNodeReference { readonly elementId: ElementId; readonly node: ConnectableNodeAddress }
 export interface ExplicitConnection { readonly id: string; readonly first: ConnectableNodeReference; readonly second: ConnectableNodeReference }
 export interface DocumentCapabilities { readonly spline?: 1 }
