@@ -609,7 +609,7 @@ const cutEllipseEntityOnly = (document: DocumentSnapshot, elementIdToCut: Elemen
   if (!ellipse) return { success: false, error: "Ellipse not found" };
   const pieces = cuttableSegments(ellipse);
   if (!pieces.some((piece) => piece.segmentIndex === segmentIndex)) return { success: false, error: "Ellipse arc not found" };
-  const groups = [...new Map(pieces.filter((piece) => piece.segmentIndex !== segmentIndex).map((piece) => [piece.segmentIndex, pieces.filter((candidate) => candidate.segmentIndex === piece.segmentIndex)]))].map(([, group]) => group);
+  const groups = [1, 2, 3].map((offset) => pieces.filter((piece) => piece.segmentIndex === (segmentIndex + offset) % 4)).filter((group) => group.length > 0);
   if (!groups.length) return replaceElements(removeConnectionsFor(document, new Set([ellipse.id])), document.elements.filter((element) => element.id !== ellipse.id));
   const id = ellipse.id; const nodes: PathNode[] = []; const segments: PathSegment[] = [];
   const appendNode = (anchor: PointMm) => { const existing = nodes.at(-1); if (existing && Math.hypot(existing.anchor.x - anchor.x, existing.anchor.y - anchor.y) < 1e-8) return existing.id; const node = { id: `${id}:node:${nodes.length}`, anchor, join: "symmetric" as const }; nodes.push(node); return node.id; };

@@ -78,6 +78,18 @@ describe("editor core", () => {
     expect(remaining?.type === "path" ? remaining.nodes.length : 0).toBeLessThan(5);
     expect(state.undo).toHaveLength(2);
   });
+  it("keeps ellipse arc remnants ordered after cutting any quadrant", () => {
+    const circle: EllipseElement = { type: "ellipse", id: elementId("ordered-circle"), layerId: rectangle.layerId, position: { x: 0, y: 0 }, size: { width: 20, height: 20 }, rotation: 0, style: rectangle.style };
+    for (const segmentIndex of [0, 1, 2, 3]) {
+      const state = dispatch(createEditor({ ...document, elements: [circle] }), cutPathSegment(circle.id, segmentIndex));
+      const result = state.document.elements[0];
+      expect(result?.type).toBe("path");
+      if (result?.type === "path") {
+        expect(result.segments).toHaveLength(3);
+        for (let index = 1; index < result.segments.length; index += 1) expect(result.segments[index]!.startNodeId).toBe(result.segments[index - 1]!.endNodeId);
+      }
+    }
+  });
   it("does not propagate a cut through objects that only touch direct targets", () => {
     const first = { ...rectangle, id: elementId("direct-cut-rectangle"), position: { x: 0, y: 0 }, size: { width: 10, height: 10 }, style: { ...rectangle.style, fill: "#f00" } };
     const touching = { ...rectangle, id: elementId("touching-neighbor"), position: { x: 10, y: 0 }, size: { width: 10, height: 10 }, style: { ...rectangle.style, fill: "#0f0" } };
