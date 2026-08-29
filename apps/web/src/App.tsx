@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent, type PointerEvent, type ReactNode, type WheelEvent } from "react";
 import { createProject, elementId, layerId, pageId, projectFromDocument, revision, type DocumentSnapshot, type DimensionElement, type Element, type ElementId, type PointMm, type ProjectSnapshot, type SplineElement, type TextElement, type ExplicitConnection } from "@nodra/domain";
-import { addToSelection, appendLinePoint, appendSplineNode, beginGesture, cancelGesture, clearSelection, closePath, cutLineAtPoint, cutPathSegment, closeSplineElement, commitGesture, convertTextToGlyphs, createElement, createPathCubicNode, createPathNode, deleteContourNodes, deleteElement, deleteElementNodes, deletePathNodes, dispatch, duplicateElements, flipElements, insertFormaNode, invalidDimensionIdsForShapeOperation, moveElements, movePathHandle, movePathNode, openPath, updateSplineNode, previewGesture, previewGestureFromBase, redo, resizeElement, resizeElementToDimensions, resizeElements, resizeElementsToDimensions, rotateElement, rotateElementsAroundCenter, select, selectForPointerDown, setPathJoin, shapeOperation, splitPathSegment, undo, updateContourNode, updateElement, updateElementNode, updateElementStyles, updatePage, updateSplineHandle, type FlipAxis, type ShapeOperation } from "@nodra/editor-core";
+import { addToSelection, appendLinePoint, appendSplineNode, beginGesture, cancelGesture, clearSelection, closePath, cutLineAtPoint, cutPathSegment, closeSplineElement, commitGesture, convertTextToGlyphs, createElement, createPathCubicNode, createPathNode, deleteContourNodes, deleteElement, deleteElementNodes, deletePathNodes, dispatch, duplicateElements, flipElements, insertFormaNode, invalidDimensionIdsForShapeOperation, moveElements, movePathHandle, movePathNode, openPath, updateSplineNode, previewGesture, previewGestureFromBase, redo, reversePath, resizeElement, resizeElementToDimensions, resizeElements, resizeElementsToDimensions, rotateElement, rotateElementsAroundCenter, select, selectForPointerDown, setPathJoin, shapeOperation, splitPathSegment, undo, updateContourNode, updateElement, updateElementNode, updateElementStyles, updatePage, updateSplineHandle, type FlipAxis, type ShapeOperation } from "@nodra/editor-core";
 import { boundsOfElements, connectableNodeAddress, contourVertexNodes, dimensionKindForPlacement, dimensionOffsetForAlignedPlacement, dimensionOffsetForPlacement, elementCenter, editableGeometryNodes, glyphGeometryNodes, groupCenter, groupHandlePoints, pathGeometryNodes, pointMidpoint, realGeometryNodes, resizeHandle, rotatedResizeHandles, rotationFromDrag, rotationHandlePoints, visibleBezierHandleGuides, type Direction, type GroupHandle, type ResizeHandle } from "@nodra/geometry";
 import { DebouncedAutosave, DexieProjectRepository, requestStoragePersistence, type FontRecord } from "@nodra/persistence";
 import { validateDesign, validateProject } from "@nodra/validation";
@@ -716,9 +716,21 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
         const creationPoint = creationPointForClick ?? point;
         const draft = creationDraftRef.current;
         if (!draft) {
-          const nextDraft = { tool, points: [creationPoint], pointer: creationPoint, snaps: [creationSnap] } as const;
-         creationDraftRef.current = nextDraft;
-         setCreationDraft(nextDraft);
+          const selectedPath = editorRef.current.selection.length === 1 ? editorRef.current.document.elements.find((element) => element.id === editorRef.current.selection[0] && element.type === "path") : undefined;
+          const first = selectedPath?.type === "path" && !selectedPath.closed ? selectedPath.nodes[0] : undefined;
+          const last = selectedPath?.type === "path" && !selectedPath.closed ? selectedPath.nodes.at(-1) : undefined;
+          const endpoint = first && Math.hypot(first.anchor.x - creationPoint.x, first.anchor.y - creationPoint.y) <= 8 / zoom ? first : last && Math.hypot(last.anchor.x - creationPoint.x, last.anchor.y - creationPoint.y) <= 8 / zoom ? last : undefined;
+          if (selectedPath?.type === "path" && endpoint) {
+            const next = endpoint === first ? dispatch(editorRef.current, reversePath(selectedPath.id)) : editorRef.current;
+            const nextDraft = { tool, points: [endpoint.anchor], pointer: endpoint.anchor, elementId: selectedPath.id } as const;
+            creationDraftRef.current = nextDraft;
+            setCreationDraft(nextDraft);
+            setEditorState(select(next, [selectedPath.id]));
+          } else {
+            const nextDraft = { tool, points: [creationPoint], pointer: creationPoint, snaps: [creationSnap] } as const;
+            creationDraftRef.current = nextDraft;
+            setCreationDraft(nextDraft);
+          }
        } else if (draft.points.length === 1) {
           const line = newElement("line", editorRef.current.document.layers[0]?.id ?? "layer-1", draft.points[0]!, creationPoint, id());
           const next = dispatch(editorRef.current, createElement(line, creationConnections(line, [...(draft.snaps ?? []), creationSnap])));
@@ -726,7 +738,7 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
          creationDraftRef.current = nextDraft;
          setCreationDraft(nextDraft);
          setEditorState(select(next, [line.id]));
-        } else if (draft.elementId && draft.points.length >= 3 && Math.hypot(draft.points[0]!.x - creationPoint.x, draft.points[0]!.y - creationPoint.y) <= 8 / zoom && hasNonCollinearPoints(draft.points)) {
+        } else if (draft.elementId && draft.points.length >= 3 && (() => { const existing = editorRef.current.document.elements.find((element) => element.id === draft.elementId && element.type === "path"); const closeTarget = existing?.type === "path" ? existing.nodes[0]?.anchor : draft.points[0]; return closeTarget && Math.hypot(closeTarget.x - creationPoint.x, closeTarget.y - creationPoint.y) <= 8 / zoom; })() && hasNonCollinearPoints(draft.points)) {
          setEditorState(dispatch(editorRef.current, closePath(draft.elementId)));
          creationDraftRef.current = undefined;
          setCreationDraft(undefined);
