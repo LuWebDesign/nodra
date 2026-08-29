@@ -41,44 +41,25 @@ describe("editor core", () => {
     expect(dispatch(roundedInitial, cutPathSegment(rounded.id, 0))).toBe(roundedInitial);
     expect(dispatch(perCornerInitial, cutPathSegment(perCorner.id, 0))).toBe(perCornerInitial);
   });
-  it("reconstructs a line-through-rectangle cut into filled faces and open remnants", () => {
+  it("trims only the selected line at object intersections", () => {
     const filled = { ...rectangle, id: elementId("filled"), style: { ...rectangle.style, fill: "#f00" } };
     const divider = { type: "line" as const, id: elementId("divider"), layerId: rectangle.layerId, start: { x: 6, y: -2 }, end: { x: 6, y: 12 }, rotation: 0, style: rectangle.style };
     const initial = createEditor({ ...document, elements: [filled, divider] });
     const cut = dispatch(initial, cutLineAtPoint(divider.id, { x: 6, y: -1 }));
-    expect(cut.document.elements.filter((element) => element.type === "path" && element.closed)).toHaveLength(2);
-    expect(cut.document.elements.filter((element) => element.type === "path" && element.closed).every((element) => element.type === "path" && element.style.fill === "#f00")).toBe(true);
-    expect(cut.document.elements.filter((element) => element.type === "path" && !element.closed)).toHaveLength(1);
+    expect(cut.document.elements.find((element) => element.id === filled.id)).toMatchObject(filled);
+    expect(cut.document.elements.filter((element) => element.type === "line")).toHaveLength(1);
     const interiorCut = dispatch(initial, cutLineAtPoint(divider.id, { x: 6, y: 5 }));
-    expect(interiorCut.document.elements.filter((element) => element.type === "path" && element.closed)).toHaveLength(1);
-    expect(interiorCut.document.elements.filter((element) => element.type === "path" && !element.closed)).toHaveLength(2);
+    expect(interiorCut.document.elements.find((element) => element.id === filled.id)).toMatchObject(filled);
+    expect(interiorCut.document.elements.filter((element) => element.type === "line")).toHaveLength(2);
     expect(cut.undo).toHaveLength(1);
     expect(redo(undo(cut)).document).toEqual(cut.document);
   });
-  it("removes both coincident shared edges when cutting a previously split face", () => {
+  it("keeps directly touched shapes unchanged when trimming a native line", () => {
     const filled = { ...rectangle, id: elementId("filled-shared"), style: { ...rectangle.style, fill: "#f00" } };
     const divider = { type: "line" as const, id: elementId("divider-shared"), layerId: rectangle.layerId, start: { x: 6, y: -2 }, end: { x: 6, y: 12 }, rotation: 0, style: rectangle.style };
-    const firstCut = dispatch(createEditor({ ...document, elements: [filled, divider] }), cutLineAtPoint(divider.id, { x: 6, y: -1 }));
-    const face = firstCut.document.elements.find((element) => element.type === "path" && element.closed && element.segments.some((segment) => {
-      const nodes = new Map(element.nodes.map((node) => [node.id, node.anchor]));
-      const start = nodes.get(segment.startNodeId); const end = nodes.get(segment.endNodeId);
-      return start?.x === 6 && end?.x === 6 && Math.min(start.y, end.y) === 2 && Math.max(start.y, end.y) === 7;
-    }));
-    expect(face?.type).toBe("path");
-    const sharedSegment = face?.type === "path" ? face.segments.findIndex((segment) => {
-      const nodes = new Map(face.nodes.map((node) => [node.id, node.anchor]));
-      const start = nodes.get(segment.startNodeId); const end = nodes.get(segment.endNodeId);
-      return start?.x === 6 && end?.x === 6 && Math.min(start.y, end.y) === 2 && Math.max(start.y, end.y) === 7;
-    }) : -1;
-    const secondCut = face?.type === "path" ? dispatch(firstCut, cutPathSegment(face.id, sharedSegment)) : firstCut;
-    const sharedEdges = secondCut.document.elements.flatMap((element) => element.type === "path" ? element.segments.flatMap((segment) => {
-      const nodes = new Map(element.nodes.map((node) => [node.id, node.anchor]));
-      const start = nodes.get(segment.startNodeId); const end = nodes.get(segment.endNodeId);
-      return start?.x === 6 && end?.x === 6 && Math.min(start.y, end.y) === 2 && Math.max(start.y, end.y) === 7 ? [segment] : [];
-    }) : []);
-    expect(secondCut).not.toBe(firstCut);
-    expect(sharedEdges).toHaveLength(0);
-    expect(secondCut.undo).toHaveLength(2);
+    const state = dispatch(createEditor({ ...document, elements: [filled, divider] }), cutLineAtPoint(divider.id, { x: 6, y: 5 }));
+    expect(state.document.elements.find((element) => element.id === filled.id)).toMatchObject(filled);
+    expect(state.document.elements.filter((element) => element.type === "line")).toHaveLength(2);
   });
   it("uses circle intersections to keep a trimmed rectangle corner filled and closed", () => {
     const filled = { ...rectangle, id: elementId("circle-corner-rectangle"), position: { x: 0, y: 0 }, size: { width: 20, height: 20 }, style: { ...rectangle.style, fill: "#f00" } };

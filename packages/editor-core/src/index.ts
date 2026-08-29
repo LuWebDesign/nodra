@@ -22,7 +22,7 @@ import {
   withElements,
 } from "@nodra/domain";
 import { validateDocument } from "@nodra/validation";
-import { boundsOfElements, contourWithPoints, directionVector, elementCenter, elementToContour, glyphGeometryNodes, groupCenter, mirrorHandleOffset, realGeometryNodes, resizeGroup, rotateElements, shapeResultContours, transformPoint, splitCuttableSegments, classifyCutGraph, cuttableSegments, type Direction } from "@nodra/geometry";
+import { boundsOfElements, contourWithPoints, directionVector, elementCenter, elementToContour, glyphGeometryNodes, groupCenter, lineSegmentIntersection, mirrorHandleOffset, realGeometryNodes, resizeGroup, rotateElements, shapeResultContours, splitLineSegment, transformPoint, splitCuttableSegments, classifyCutGraph, cuttableSegments, type Direction } from "@nodra/geometry";
 import { insertSplineNode, moveSplineHandle as moveSplineHandleData, moveSplineNode as moveSplineNodeData } from "./spline.js";
 
 export * from "./spline.js";
@@ -595,10 +595,44 @@ const cutPointDistance = (piece: CutPieceGraph, point: PointMm | undefined): num
   return Math.hypot(point.x - (piece.piece.start.x + t * dx), point.y - (piece.piece.start.y + t * dy));
 };
 
+const cutLineEntityOnly = (document: DocumentSnapshot, elementIdToCut: ElementId, point?: PointMm): CommandResult => {
+  const line = document.elements.find((element): element is Extract<Element, { type: "line" }> => element.id === elementIdToCut && element.type === "line");
+  if (!line) return { success: false, error: "Line not found" };
+  const selected = cuttableSegments(line)[0];
+  if (!selected) return { success: false, error: "The selected line is not cuttable" };
+  const parameters = [0, 1];
+  for (const segment of document.elements.flatMap((element) => element.id !== line.id ? cuttableSegments(element) : [])) {
+    const intersection = lineSegmentIntersection(selected.start, selected.end, segment.start, segment.end);
+    if (intersection) parameters.push(intersection.firstT);
+  }
+  const key = (pointValue: PointMm) => `${Math.round(pointValue.x / 1e-8)}:${Math.round(pointValue.y / 1e-8)}`;
+  const points = splitLineSegment(selected.start, selected.end, parameters);
+  const pieces = points.flatMap((start, index) => {
+    const end = points[index + 1];
+    return end ? [{ start, end }] : [];
+  });
+  const removed = pieces.reduce<(typeof pieces)[number] | undefined>((best, candidate) => !best || cutPointDistance({ piece: { ...selected, ...candidate }, source: line }, point) < cutPointDistance({ piece: { ...selected, ...best }, source: line }, point) ? candidate : best, undefined);
+  const remaining = pieces.filter((piece) => piece !== removed);
+  const chains = remaining.reduce<Array<{ start: PointMm; end: PointMm }>>((values, piece) => {
+    const previous = values.at(-1);
+    if (previous && key(previous.end) === key(piece.start)) values[values.length - 1] = { start: previous.start, end: piece.end };
+    else values.push(piece);
+    return values;
+  }, []);
+  const used = new Set(document.elements.map((element) => element.id)); used.delete(line.id);
+  const nextId = (index: number): ElementId => { let candidate = index === 0 ? line.id : elementId(`${line.id}:cut:${index}`); let suffix = 1; while (used.has(candidate)) candidate = elementId(`${line.id}:cut:${index}:${suffix++}`); used.add(candidate); return candidate; };
+  const replacements = chains.map((piece, index): Extract<Element, { type: "line" }> => ({ ...line, id: nextId(index), start: piece.start, end: piece.end, rotation: 0 }));
+  const elements = document.elements.filter((element) => element.id !== line.id);
+  const insertionIndex = document.elements.findIndex((element) => element.id === line.id);
+  elements.splice(insertionIndex < 0 ? elements.length : insertionIndex, 0, ...replacements);
+  return replaceElements(removeConnectionsFor(document, new Set([line.id])), elements);
+};
+
 /** Rebuilds only the straight planar component containing the selected edge. */
 const cutStraightComponent = (document: DocumentSnapshot, elementIdToCut: ElementId, segmentIndex: number, point?: PointMm): CommandResult => {
   const selectedElement = document.elements.find((element) => element.id === elementIdToCut);
   if (!selectedElement || (selectedElement.type !== "line" && selectedElement.type !== "rectangle" && selectedElement.type !== "ellipse" && selectedElement.type !== "path")) return { success: false, error: "Only straight lines, ellipse arcs, rectangle edges, and line paths can be cut" };
+  if (selectedElement.type === "line") return cutLineEntityOnly(document, elementIdToCut, point);
   if (selectedElement.type === "path" && selectedElement.segments[segmentIndex]?.type !== "line") return { success: false, error: "Only straight path segments can be cut" };
   const sources = document.elements.flatMap((element): CutPieceGraph[] => cuttableSegments(element).map((piece) => ({ piece, source: element })));
   const split = splitCuttableSegments(sources.map(({ piece }) => piece));
