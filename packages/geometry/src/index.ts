@@ -285,6 +285,37 @@ export function pathBounds(path: PathElement): Bounds {
 const glyphPath = (glyph: GlyphElement, contour: GlyphElement["contours"][number]): PathElement => ({ type: "path", id: glyph.id, layerId: glyph.layerId, nodes: contour.nodes, segments: contour.segments, closed: true, style: glyph.style });
 const sketchNodeMap = (sketch: SketchElement): ReadonlyMap<string, PointMm> => new Map(sketch.nodes.map((node) => [node.id, node.point]));
 const sketchSegments = (sketch: SketchElement): readonly [PointMm, PointMm][] => { const nodes = sketchNodeMap(sketch); return sketch.edges.flatMap((edge) => { const start = nodes.get(edge.startNodeId); const end = nodes.get(edge.endNodeId); return start && end ? [[start, end] as [PointMm, PointMm]] : []; }); };
+export function sketchClosedContours(sketch: SketchElement): readonly (readonly PointMm[])[] {
+  const indexById = new Map(sketch.nodes.map((node, index) => [node.id, index]));
+  const adjacency = new Map<string, string[]>();
+  for (const edge of sketch.edges) {
+    if (!indexById.has(edge.startNodeId) || !indexById.has(edge.endNodeId)) continue;
+    adjacency.set(edge.startNodeId, [...(adjacency.get(edge.startNodeId) ?? []), edge.endNodeId]);
+    adjacency.set(edge.endNodeId, [...(adjacency.get(edge.endNodeId) ?? []), edge.startNodeId]);
+  }
+  const seen = new Set<string>();
+  const cycles: string[][] = [];
+  const canonical = (cycle: readonly string[]): string => {
+    const forward = cycle.join("|");
+    const reverse = [cycle[0]!, ...cycle.slice(1).reverse()].join("|");
+    return forward < reverse ? forward : reverse;
+  };
+  for (const start of sketch.nodes) {
+    const startIndex = indexById.get(start.id)!;
+    const visit = (current: string, path: readonly string[]): void => {
+      for (const next of adjacency.get(current) ?? []) {
+        const nextIndex = indexById.get(next)!;
+        if (next === start.id && path.length >= 3) {
+          const key = canonical(path);
+          if (!seen.has(key)) { seen.add(key); cycles.push([...path]); }
+        } else if (nextIndex >= startIndex && !path.includes(next)) visit(next, [...path, next]);
+      }
+    };
+    visit(start.id, [start.id]);
+  }
+  const nodes = sketchNodeMap(sketch);
+  return cycles.map((cycle) => [...cycle.map((nodeId) => nodes.get(nodeId)!), nodes.get(cycle[0]!)!]);
+}
 export function glyphBounds(glyph: GlyphElement): Bounds {
   const values = glyph.contours.map((contour) => pathBounds(glyphPath(glyph, contour)));
   const x = Math.min(...values.map((value) => value.x)); const y = Math.min(...values.map((value) => value.y));
@@ -412,7 +443,7 @@ export function contourVertexNodes(element: ContourElement): readonly ContourVer
 export function elementToContour(element: Element): ContourElement {
   const contours = element.type === "line"
     ? [{ points: [element.start, element.end, element.start] }]
-    : element.type === "sketch" ? sketchSegments(element).map(([start, end]) => ({ points: [start, end, start] }))
+    : element.type === "sketch" ? (sketchClosedContours(element).length ? sketchClosedContours(element).map((points) => ({ points })) : sketchSegments(element).map(([start, end]) => ({ points: [start, end, start] })))
     : element.type === "spline" ? [{ points: splinePoints(element) }]
     : element.type === "glyph" ? element.contours.map((contour) => ({ points: flattenPath(glyphPath(element, contour)) }))
     : contoursFromMultiPolygon(closedElementToPolygon(element));
@@ -496,7 +527,8 @@ function primitivePolygon(element: RectangleElement | EllipseElement): [number, 
 }
 
 export function closedElementToPolygon(element: Element): MultiPolygon {
-  if (element.type === "line" || element.type === "sketch" || element.type === "dimension" || element.type === "text") throw new Error("Shape operations require closed objects");
+  if (element.type === "line" || element.type === "dimension" || element.type === "text") throw new Error("Shape operations require closed objects");
+  if (element.type === "sketch") { const contours = sketchClosedContours(element); if (!contours.length) throw new Error("Shape operations require closed objects"); return [contours.map((contour) => contour.map((point) => [point.x, point.y] as [number, number]))]; }
   if (element.type === "path") { if (!element.closed) throw new Error("Shape operations require closed objects"); return [[flattenPath(element, 0.01).map((point) => [point.x, point.y] as [number, number])]]; }
   if (element.type === "spline") { if (!element.closed) throw new Error("Shape operations require closed objects"); return [[splinePoints(element, 0.01).map((point) => [point.x, point.y] as [number, number])]]; }
   if (element.type === "glyph") return [element.contours.map((contour) => flattenPath(glyphPath(element, contour), 0.01).map((point) => [point.x, point.y] as [number, number]))];
@@ -510,7 +542,7 @@ export function contoursFromMultiPolygon(polygons: MultiPolygon): ContourElement
 
 export type ShapeOperation = "union" | "difference";
 export function shapeResultContours(operation: ShapeOperation, elements: readonly Element[]): ContourElement["contours"] {
-  if (!elements.length || elements.some((element) => element.type === "line" || element.type === "sketch" || element.type === "dimension" || element.type === "text")) throw new Error("Shape operations require closed objects");
+  if (!elements.length || elements.some((element) => element.type === "line" || element.type === "dimension" || element.type === "text" || (element.type === "sketch" && sketchClosedContours(element).length === 0))) throw new Error("Shape operations require closed objects");
   const polygons = elements.map(closedElementToPolygon);
   const result = operation === "difference" ? polygonClipping.difference(polygons[0]!, ...polygons.slice(1)) : polygonClipping.union(polygons[0]!, ...polygons.slice(1));
   return contoursFromMultiPolygon(result);
@@ -794,7 +826,7 @@ export function hitTest(element: Element, point: PointMm, toleranceMm = 0): bool
   if (element.type === "contour") {
     return element.contours.reduce((inside, contour) => inside !== pointInRing(point, contour.points.map((value) => [value.x, value.y] as [number, number])), false);
   }
-  if (element.type === "sketch") return sketchSegments(element).some(([start, end]) => lineDistanceToSegment(point, start, end) <= toleranceMm);
+  if (element.type === "sketch") return sketchSegments(element).some(([start, end]) => lineDistanceToSegment(point, start, end) <= toleranceMm) || sketchClosedContours(element).reduce((inside, contour) => inside !== pointInRing(point, contour.map((value) => [value.x, value.y] as [number, number])), false);
   if (element.type === "path") return pathHitTest(element, point, toleranceMm);
   if (element.type === "glyph") return element.contours.reduce((inside, contour) => inside !== pathHitTest(glyphPath(element, contour), point, toleranceMm), false);
       if (element.type === "spline") {

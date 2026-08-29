@@ -1,5 +1,5 @@
 import { CURRENT_SCHEMA_VERSION, type Element, type PathElement, type SplineElement } from "@nodra/domain";
-import { dimensionGeometry, mmToScreen, type Viewport } from "@nodra/geometry";
+import { dimensionGeometry, mmToScreen, sketchClosedContours, type Viewport } from "@nodra/geometry";
 import { validateDocument } from "@nodra/validation";
 
 const MAX_ISSUES = 8;
@@ -74,8 +74,11 @@ function renderElement(element: Element, viewport: Viewport): string {
   }
   if (element.type === "sketch") {
     const nodes = new Map(element.nodes.map((node) => [node.id, screen(node.point)]));
+    const fill = escapeAttribute(element.style.fill ?? DEFAULT_CLOSED_FILL);
+    const contours = sketchClosedContours(element).map((contour) => contour.map((point, index) => { const current = screen(point); return `${index === 0 ? "M" : "L"}${number(current.x)} ${number(current.y)}`; }).join(" ") + " Z").join(" ");
+    const faces = contours ? `<path d="${escapeAttribute(contours)}" fill="${fill}" stroke="none" fill-rule="evenodd" />` : "";
     const lines = element.edges.map((edge) => { const start = nodes.get(edge.startNodeId); const end = nodes.get(edge.endNodeId); return start && end ? `<line x1="${number(start.x)}" y1="${number(start.y)}" x2="${number(end.x)}" y2="${number(end.y)}" />` : ""; }).join("");
-    return `<g data-element-id="${escapeAttribute(element.id)}" ${visualAttributes(element)}>${lines}</g>`;
+    return `<g data-element-id="${escapeAttribute(element.id)}" ${visualAttributes(element)}>${faces}${lines}</g>`;
   }
   if (element.type === "contour") {
     const path = element.contours.map((contour) => contour.points.map((point, index) => {
