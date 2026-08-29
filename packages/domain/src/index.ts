@@ -81,7 +81,7 @@ export interface SketchElement { readonly type: "sketch"; readonly id: ElementId
 export type DimensionKind = "aligned" | "horizontal" | "vertical" | "angular";
 export type DimensionReference =
   | { readonly kind: "node"; readonly elementId: ElementId; readonly nodeIndex: number }
-  | { readonly kind: "line"; readonly elementId: ElementId }
+  | { readonly kind: "line"; readonly elementId: ElementId; readonly edgeIndex?: number }
   /** Legacy node references are accepted at the boundary and normalized by validation. */
   | { readonly elementId: ElementId; readonly nodeIndex: number };
 export interface DimensionElement {

@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { CURRENT_SCHEMA_VERSION, type DocumentSnapshot, type Element, type PointMm, type ProjectSnapshot, type SizeMm } from "@nodra/domain";
+import { CURRENT_SCHEMA_VERSION, type DimensionReference, type DocumentSnapshot, type Element, type PointMm, type ProjectSnapshot, type SizeMm } from "@nodra/domain";
 
 const finite = z.number().finite();
 const nonEmptyId = z.string().min(1);
@@ -27,14 +27,14 @@ const connectableAddress = z.union([
 const connectionReference = z.object({ elementId: nonEmptyId, node: connectableAddress }).strict();
 const explicitConnection = z.object({ id: nonEmptyId, first: connectionReference, second: connectionReference }).strict();
 const nodeReference = z.object({ kind: z.literal("node"), elementId: nonEmptyId, nodeIndex: finite.int().nonnegative() }).strict();
-const lineReference = z.object({ kind: z.literal("line"), elementId: nonEmptyId }).strict();
+const lineReference = z.object({ kind: z.literal("line"), elementId: nonEmptyId, edgeIndex: finite.int().nonnegative().optional() }).strict();
 const legacyNodeReference = z.object({ elementId: nonEmptyId, nodeIndex: finite.int().nonnegative() }).strict().transform((reference) => ({ kind: "node" as const, ...reference }));
 const dimensionReference = z.union([z.discriminatedUnion("kind", [nodeReference, lineReference]), legacyNodeReference]);
 const dimension = z.object({ id: nonEmptyId, layerId: nonEmptyId, type: z.literal("dimension"), kind: z.enum(["aligned", "horizontal", "vertical", "angular"]), references: z.tuple([dimensionReference, dimensionReference]), offset: point, precision: finite.int().min(0).max(6), units: z.literal("mm"), rotation: z.literal(0), style }).strict().superRefine((value, ctx) => {
   const [first, second] = value.references;
   if (value.kind === "angular") {
     if (first.kind !== "line" || second.kind !== "line") ctx.addIssue({ code: "custom", message: "Angular dimensions require line references", path: ["references"] });
-    if (first.elementId === second.elementId) ctx.addIssue({ code: "custom", message: "Angular dimension lines must differ", path: ["references"] });
+     if (first.kind === "line" && second.kind === "line" && first.elementId === second.elementId && (first.edgeIndex ?? 0) === (second.edgeIndex ?? 0)) ctx.addIssue({ code: "custom", message: "Angular dimension lines must differ", path: ["references"] });
   } else {
     if (first.kind !== "node" || second.kind !== "node") ctx.addIssue({ code: "custom", message: "Linear dimensions require node references", path: ["references"] });
     if (first.kind === "node" && second.kind === "node" && first.elementId === second.elementId && first.nodeIndex === second.nodeIndex) ctx.addIssue({ code: "custom", message: "Dimension references must differ", path: ["references"] });
@@ -138,9 +138,15 @@ export const documentSchema = z.object({ schemaVersion: z.literal(CURRENT_SCHEMA
     if (element.type === "dimension") for (const [referenceIndex, reference] of element.references.entries()) {
       const target = value.elements.find((candidate) => candidate.id === reference.elementId);
       if (!elementIds.has(reference.elementId)) ctx.addIssue({ code: "custom", message: "Dimension references an unknown element", path: ["elements", index, "references", referenceIndex, "elementId"] });
-      else if (reference.kind === "line") {
-        if (target?.type !== "line") ctx.addIssue({ code: "custom", message: "Line dimension references require line elements", path: ["elements", index, "references", referenceIndex] });
-        else if (target.start.x === target.end.x && target.start.y === target.end.y) ctx.addIssue({ code: "custom", message: "Dimension line references must not be degenerate", path: ["elements", index, "references", referenceIndex] });
+       else if (reference.kind === "line") {
+         const validSketchEdge = target?.type === "sketch" && (reference.edgeIndex ?? 0) < target.edges.length;
+         if (target?.type !== "line" && !validSketchEdge) ctx.addIssue({ code: "custom", message: "Line dimension references require line or sketch-edge elements", path: ["elements", index, "references", referenceIndex] });
+         else if (target.type === "line" && target.start.x === target.end.x && target.start.y === target.end.y) ctx.addIssue({ code: "custom", message: "Dimension line references must not be degenerate", path: ["elements", index, "references", referenceIndex] });
+         else if (target?.type === "sketch") {
+           const edge = target.edges[reference.edgeIndex ?? 0]; const nodes = new Map(target.nodes.map((node) => [node.id, node.point]));
+           const start = edge ? nodes.get(edge.startNodeId) : undefined; const end = edge ? nodes.get(edge.endNodeId) : undefined;
+           if (!start || !end || (start.x === end.x && start.y === end.y)) ctx.addIssue({ code: "custom", message: "Dimension sketch-edge references must not be degenerate", path: ["elements", index, "references", referenceIndex] });
+         }
       } else {
         const nodeCount = target?.type === "line" ? 3 : target?.type === "sketch" ? target.nodes.length : target?.type === "rectangle" ? 9 : target?.type === "ellipse" || target?.type === "text" ? 5 : target?.type === "contour" ? target.contours.reduce((count, contour) => count + Math.max(0, contour.points.length - 1) * 2, 0) : target?.type === "path" ? target.nodes.length + target.segments.filter((segment) => segment.type === "cubicBezier").length * 2 : target?.type === "spline" ? target.nodes.length + target.nodes.filter((node) => node.inHandle || node.outHandle).length : target?.type === "glyph" ? target.contours.reduce((count, contour) => count + contour.nodes.length + contour.segments.filter((segment) => segment.type === "cubicBezier").length * 2, 0) : undefined;
         if (nodeCount === undefined || reference.nodeIndex >= nodeCount) ctx.addIssue({ code: "custom", message: "Dimension node reference is out of range", path: ["elements", index, "references", referenceIndex, "nodeIndex"] });
@@ -149,10 +155,18 @@ export const documentSchema = z.object({ schemaVersion: z.literal(CURRENT_SCHEMA
     if (element.type === "dimension" && element.kind === "angular" && element.references.every((reference) => reference.kind === "line")) {
       const first = value.elements.find((candidate) => candidate.id === element.references[0].elementId);
       const second = value.elements.find((candidate) => candidate.id === element.references[1].elementId);
-      if (first?.type === "line" && second?.type === "line") {
-        const points = visualLineEndpoints(first); const otherPoints = visualLineEndpoints(second);
-        const connected = points.some((point) => otherPoints.some((other) => Math.hypot(point.x - other.x, point.y - other.y) <= 1e-6));
-        if (!connected) ctx.addIssue({ code: "custom", message: "Angular dimension lines must share a visual endpoint", path: ["elements", index, "references"] });
+       const endpoints = (element: (typeof value.elements)[number] | undefined, reference: { readonly kind?: string; readonly edgeIndex?: number | undefined }): readonly [PointMm, PointMm] | undefined => {
+         if (reference.kind !== "line") return undefined;
+         if (element?.type === "line") return visualLineEndpoints(element);
+         if (element?.type !== "sketch") return undefined;
+         const edge = element.edges[reference.edgeIndex ?? 0]; const nodes = new Map(element.nodes.map((node) => [node.id, node.point]));
+         const start = edge ? nodes.get(edge.startNodeId) : undefined; const end = edge ? nodes.get(edge.endNodeId) : undefined;
+         return start && end ? [start, end] : undefined;
+       };
+       const points = endpoints(first, element.references[0]); const otherPoints = endpoints(second, element.references[1]);
+       if (points && otherPoints) {
+         const connected = points.some((point) => otherPoints.some((other) => Math.hypot(point.x - other.x, point.y - other.y) <= 1e-6));
+         if (!connected) ctx.addIssue({ code: "custom", message: "Angular dimension lines must share a visual endpoint", path: ["elements", index, "references"] });
       }
     }
   }

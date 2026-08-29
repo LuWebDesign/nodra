@@ -16,6 +16,12 @@ describe("canonical millimetre geometry", () => {
     expect(sketchClosedContours({ ...sketch, edges: [...sketch.edges, { id: "ca", startNodeId: "c", endNodeId: "a" }] })).toHaveLength(1);
     expect(hitTest({ ...sketch, edges: [...sketch.edges, { id: "ca", startNodeId: "c", endNodeId: "a" }] }, { x: 8, y: 2 }, 0.1)).toBe(true);
   });
+  it("returns bounded faces instead of every simple cycle", () => {
+    const square = { type: "sketch" as const, id: elementId("square"), layerId: layerId("l"), nodes: [{ id: "a", point: { x: 0, y: 0 } }, { id: "b", point: { x: 10, y: 0 } }, { id: "c", point: { x: 10, y: 10 } }, { id: "d", point: { x: 0, y: 10 } }], edges: [{ id: "ab", startNodeId: "a", endNodeId: "b" }, { id: "bc", startNodeId: "b", endNodeId: "c" }, { id: "cd", startNodeId: "c", endNodeId: "d" }, { id: "da", startNodeId: "d", endNodeId: "a" }], style };
+    expect(sketchClosedContours(square)).toHaveLength(1);
+    expect(sketchClosedContours({ ...square, id: elementId("diagonal"), edges: [...square.edges, { id: "ac", startNodeId: "a", endNodeId: "c" }] })).toHaveLength(2);
+    expect(sketchClosedContours({ ...square, id: elementId("open"), edges: square.edges.slice(0, 2) })).toHaveLength(0);
+  });
   it("provides shared directional Bézier handle primitives", () => {
     const anchor = { x: 10, y: 20 };
     expect(bezierHandlePoint(anchor, "out", { dx: 3, dy: -4 })).toEqual({ direction: "out", point: { x: 13, y: 16 } });

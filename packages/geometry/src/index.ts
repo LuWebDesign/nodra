@@ -181,7 +181,17 @@ export const dimensionOffsetForAlignedPlacement = (start: PointMm, end: PointMm,
   return { x: -(end.y - start.y) / length * signed, y: (end.x - start.x) / length * signed };
 };
 const nodeReference = (reference: DimensionElement["references"][number]): reference is Extract<DimensionElement["references"][number], { nodeIndex: number }> => "nodeIndex" in reference;
-const lineAt = (reference: DimensionElement["references"][number], elements: readonly Element[]) => "kind" in reference && reference.kind === "line" ? elements.find((candidate): candidate is LineElement => candidate.id === reference.elementId && candidate.type === "line") : undefined;
+const lineAt = (reference: DimensionElement["references"][number], elements: readonly Element[]): LineElement | undefined => {
+  if (!("kind" in reference) || reference.kind !== "line") return undefined;
+  const element = elements.find((candidate) => candidate.id === reference.elementId);
+  if (element?.type === "line") return element;
+  if (element?.type !== "sketch") return undefined;
+  const edge = element.edges[reference.edgeIndex ?? 0];
+  const nodes = new Map(element.nodes.map((node) => [node.id, node.point]));
+  const start = edge ? nodes.get(edge.startNodeId) : undefined;
+  const end = edge ? nodes.get(edge.endNodeId) : undefined;
+  return start && end ? { type: "line", id: element.id, layerId: element.layerId, start, end, rotation: 0, style: element.style } : undefined;
+};
 export function angularDimensionGeometry(element: DimensionElement, elements: readonly Element[]): AngularDimensionGeometry | undefined {
   if (element.kind !== "angular" || !element.references.every((reference) => "kind" in reference && reference.kind === "line")) return undefined;
   const first = lineAt(element.references[0], elements); const second = lineAt(element.references[1], elements); if (!first || !second) return undefined;
@@ -286,35 +296,12 @@ const glyphPath = (glyph: GlyphElement, contour: GlyphElement["contours"][number
 const sketchNodeMap = (sketch: SketchElement): ReadonlyMap<string, PointMm> => new Map(sketch.nodes.map((node) => [node.id, node.point]));
 const sketchSegments = (sketch: SketchElement): readonly [PointMm, PointMm][] => { const nodes = sketchNodeMap(sketch); return sketch.edges.flatMap((edge) => { const start = nodes.get(edge.startNodeId); const end = nodes.get(edge.endNodeId); return start && end ? [[start, end] as [PointMm, PointMm]] : []; }); };
 export function sketchClosedContours(sketch: SketchElement): readonly (readonly PointMm[])[] {
-  const indexById = new Map(sketch.nodes.map((node, index) => [node.id, index]));
-  const adjacency = new Map<string, string[]>();
-  for (const edge of sketch.edges) {
-    if (!indexById.has(edge.startNodeId) || !indexById.has(edge.endNodeId)) continue;
-    adjacency.set(edge.startNodeId, [...(adjacency.get(edge.startNodeId) ?? []), edge.endNodeId]);
-    adjacency.set(edge.endNodeId, [...(adjacency.get(edge.endNodeId) ?? []), edge.startNodeId]);
-  }
-  const seen = new Set<string>();
-  const cycles: string[][] = [];
-  const canonical = (cycle: readonly string[]): string => {
-    const forward = cycle.join("|");
-    const reverse = [cycle[0]!, ...cycle.slice(1).reverse()].join("|");
-    return forward < reverse ? forward : reverse;
-  };
-  for (const start of sketch.nodes) {
-    const startIndex = indexById.get(start.id)!;
-    const visit = (current: string, path: readonly string[]): void => {
-      for (const next of adjacency.get(current) ?? []) {
-        const nextIndex = indexById.get(next)!;
-        if (next === start.id && path.length >= 3) {
-          const key = canonical(path);
-          if (!seen.has(key)) { seen.add(key); cycles.push([...path]); }
-        } else if (nextIndex >= startIndex && !path.includes(next)) visit(next, [...path, next]);
-      }
-    };
-    visit(start.id, [start.id]);
-  }
-  const nodes = sketchNodeMap(sketch);
-  return cycles.map((cycle) => [...cycle.map((nodeId) => nodes.get(nodeId)!), nodes.get(cycle[0]!)!]);
+  const pieces = sketch.edges.flatMap((edge, segmentIndex) => {
+    const nodes = sketchNodeMap(sketch);
+    const start = nodes.get(edge.startNodeId); const end = nodes.get(edge.endNodeId);
+    return start && end ? [{ elementId: sketch.id, segmentIndex, start, end }] : [];
+  });
+  return closedCuttableCycles(pieces).map((cycle) => [...cycle.points, cycle.points[0]!]);
 }
 export function glyphBounds(glyph: GlyphElement): Bounds {
   const values = glyph.contours.map((contour) => pathBounds(glyphPath(glyph, contour)));

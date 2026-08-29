@@ -52,6 +52,13 @@ describe("native document validation", () => {
     if (legacy.success) expect(legacy.data.elements[1]).toMatchObject({ references: [{ kind: "node" }, { kind: "node" }] });
     expect(validateDocument({ ...base, elements: [first, { ...angular, references: [{ kind: "line", elementId: "first" }, { kind: "line", elementId: "missing" }] } as typeof angular] }).success).toBe(false);
   });
+  it("validates angular references to connected sketch edges", () => {
+    const base = createDocument("sketch-angular-doc", [{ id: layerId("layer-1"), name: "Design", visible: true, order: 0 }]);
+    const first = { type: "sketch" as const, id: "first-sketch", layerId: "layer-1", nodes: [{ id: "a", point: { x: 20, y: 20 } }, { id: "b", point: { x: 60, y: 20 } }], edges: [{ id: "ab", startNodeId: "a", endNodeId: "b" }], style: { stroke: "#000", strokeWidth: 1 } };
+    const second = { type: "sketch" as const, id: "second-sketch", layerId: "layer-1", nodes: [{ id: "c", point: { x: 20, y: 20 } }, { id: "d", point: { x: 20, y: 60 } }], edges: [{ id: "cd", startNodeId: "c", endNodeId: "d" }], style: { stroke: "#000", strokeWidth: 1 } };
+    const angular = { type: "dimension" as const, id: "sketch-angular", layerId: "layer-1", kind: "angular" as const, references: [{ kind: "line" as const, elementId: first.id, edgeIndex: 0 }, { kind: "line" as const, elementId: second.id, edgeIndex: 0 }] as const, offset: { x: 10, y: 10 }, precision: 2, units: "mm" as const, rotation: 0 as const, style: { stroke: "#2563eb", strokeWidth: 0.45 } };
+    expect(validateDocument({ ...base, elements: [first, second, angular] }).success).toBe(true);
+  });
   it("rejects non-finite and non-positive page dimensions", () => {
     const result = validateDocument({ ...createDocument("doc-1"), page: { width: 0, height: Number.NaN } });
     expect(result.success).toBe(false);
