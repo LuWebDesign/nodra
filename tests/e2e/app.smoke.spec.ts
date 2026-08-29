@@ -431,8 +431,13 @@ test("shows node hover feedback while keeping the system cursor as an arrow", as
   await expect(feedback).toBeVisible();
   const feedbackBounds = await feedback.boundingBox();
   expect(feedbackBounds).not.toBeNull();
-  await expect(feedback).toHaveCSS("width", "4.5px");
-  await expect(feedback).toHaveCSS("height", "4.5px");
+  const initialFeedbackSize = await feedback.evaluate((element) => {
+    const styles = getComputedStyle(element);
+    return { width: Number.parseFloat(styles.width), height: Number.parseFloat(styles.height) };
+  });
+  const cssPixelsPerMillimeter = 96 / 25.4;
+  expect(initialFeedbackSize.width).toBeCloseTo(3 * cssPixelsPerMillimeter, 1);
+  expect(initialFeedbackSize.height).toBeCloseTo(3 * cssPixelsPerMillimeter, 1);
   await expect(feedback).toHaveCSS("background-color", "rgb(245, 158, 11)");
   await expect(feedback).toHaveCSS("border-top-width", "1px");
   await expect(feedback).toHaveCSS("border-top-color", "rgb(17, 24, 39)");
@@ -444,8 +449,11 @@ test("shows node hover feedback while keeping the system cursor as an arrow", as
   const zoomedBounds = await rectangle.boundingBox();
   expect(zoomedBounds).not.toBeNull();
   await page.mouse.move(zoomedBounds!.x, zoomedBounds!.y);
-  await expect(feedback).toHaveCSS("width", "7.5px");
-  await expect(feedback).toHaveCSS("height", "7.5px");
+  const zoomedFeedbackSize = await feedback.evaluate((element) => {
+    const styles = getComputedStyle(element);
+    return { width: Number.parseFloat(styles.width), height: Number.parseFloat(styles.height) };
+  });
+  expect(zoomedFeedbackSize).toEqual(initialFeedbackSize);
   await page.mouse.move(zoomedBounds!.x + zoomedBounds!.width + 80, zoomedBounds!.y + zoomedBounds!.height + 80);
   await expect(feedback).toHaveCount(0);
 });
