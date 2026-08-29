@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createDocument, elementId, layerId, type DimensionElement, type Element, type EllipseElement, type GlyphElement, type PathElement, type PointMm, type RectangleElement, type SplineElement, type TextElement } from "@nodra/domain";
+import { createDocument, elementId, layerId, type DimensionElement, type EllipseElement, type GlyphElement, type PathElement, type RectangleElement, type SplineElement, type TextElement } from "@nodra/domain";
 import { addToSelection, appendSplineNode, beginGesture, cancelGesture, clearSelection, closePath, closeSplineElement, commitGesture, createEditor, createElement, createPathCubicNode, cutLineAtPoint, cutPathSegment, splitPathLineAt, deleteContourNodes, deleteElement, deleteElementNodes, deletePathNodes, dispatch, duplicateElements, flipElements, insertContourNode, invalidDimensionIdsForShapeOperation, moveElement, moveElements, movePathNode, movePathHandle, openPath, previewGesture, previewGestureFromBase, redo, removeFromSelection, reorderLayer, resizeElement, resizeElementToDimensions, resizeElements, resizeElementsToDimensions, rotateElementsAroundCenter, select, selectForPointerDown, setLayerVisibility, setPathJoin, shapeOperation, splitPathSegment, toggleSelection, undo, updateContourNode, updateElement, updateElementNode, updateElementStyles, updateSplineHandle, updateSplineNode } from "./index.js";
 import { boundsOfElements } from "@nodra/geometry";
 import type { Direction } from "@nodra/geometry";
@@ -28,10 +28,10 @@ describe("editor core", () => {
     const single: PathElement = { ...path, nodes: path.nodes.slice(0, 2), segments: [{ type: "line", startNodeId: "a", endNodeId: "b" }] };
     expect(dispatch(createEditor({ ...document, elements: [single] }), cutPathSegment(single.id, 0)).document.elements).toEqual([]);
   });
-  it("rejects a curved cut atomically", () => {
-    const initial = createEditor({ ...document, elements: [path] });
-    const rejected = dispatch(initial, cutPathSegment(path.id, 0, { x: 5, y: 3 }));
-    expect(rejected).toBe(initial);
+  it("cuts a curved path segment without flattening the remaining arcs", () => {
+    const curved: PathElement = { ...path, nodes: [...path.nodes, { id: "c", anchor: { x: 20, y: 0 }, join: "symmetric" }], segments: [...path.segments, { type: "cubicBezier", startNodeId: "b", endNodeId: "c", control1: { x: 12, y: 4 }, control2: { x: 18, y: 4 } }] };
+    const state = dispatch(createEditor({ ...document, elements: [curved] }), cutPathSegment(curved.id, 0, { x: 5, y: 3 }));
+    expect(state.document.elements).toMatchObject([{ type: "path", nodes: [{ id: "b" }, { id: "c" }], segments: [{ type: "cubicBezier" }] }]);
   });
   it("rejects rectangles with corner radii atomically", () => {
     const rounded = { ...rectangle, cornerRadius: 2 };
@@ -61,35 +61,22 @@ describe("editor core", () => {
     expect(state.document.elements.find((element) => element.id === filled.id)).toMatchObject(filled);
     expect(state.document.elements.filter((element) => element.type === "line")).toHaveLength(2);
   });
-  it("uses circle intersections to keep a trimmed rectangle corner filled and closed", () => {
+  it("cuts circle arcs without flattening or modifying connected rectangles", () => {
     const filled = { ...rectangle, id: elementId("circle-corner-rectangle"), position: { x: 0, y: 0 }, size: { width: 20, height: 20 }, style: { ...rectangle.style, fill: "#f00" } };
     const circle: EllipseElement = { type: "ellipse", id: elementId("corner-circle"), layerId: rectangle.layerId, position: { x: -5, y: -5 }, size: { width: 10, height: 10 }, rotation: 0, style: rectangle.style };
     const connection = { id: "corner-circle-connection", first: { elementId: circle.id, node: { kind: "named" as const, name: "center" as const } }, second: { elementId: filled.id, node: { kind: "named" as const, name: "nw" as const } } };
-    const segmentWithEndpoints = (elements: readonly Element[], predicate: (start: PointMm, end: PointMm) => boolean): { readonly path: PathElement; readonly segmentIndex: number } | undefined => {
-      for (const element of elements) if (element.type === "path") for (let segmentIndex = 0; segmentIndex < element.segments.length; segmentIndex += 1) {
-        const nodes = new Map(element.nodes.map((node) => [node.id, node.anchor]));
-        const segment = element.segments[segmentIndex]!; const start = nodes.get(segment.startNodeId); const end = nodes.get(segment.endNodeId);
-        if (start && end && predicate(start, end)) return { path: element, segmentIndex };
-      }
-      return undefined;
-    };
     let state = dispatch(createEditor({ ...document, elements: [filled, circle], connections: [connection] }), cutPathSegment(circle.id, 0, { x: 3.5, y: 3.5 }));
     expect(state.document.connections).toEqual([]);
-    const curvedPieces = state.document.elements.filter((element) => element.type === "path" && element.segments.some((segment) => segment.type === "cubicBezier"));
-    expect(curvedPieces.length).toBeGreaterThan(0);
-    expect(Math.max(...curvedPieces.map((element) => element.type === "path" ? element.nodes.length : 0))).toBeLessThan(12);
-    expect(curvedPieces.some((element) => element.type === "path" && element.nodes.some((node) => node.join === "symmetric"))).toBe(true);
-    const top = segmentWithEndpoints(state.document.elements, (start, end) => start.y === 0 && end.y === 0 && Math.min(start.x, end.x) === 0 && Math.max(start.x, end.x) === 5);
-    expect(top).toBeDefined();
-    state = top ? dispatch(state, cutPathSegment(top.path.id, top.segmentIndex, { x: 2, y: 0 })) : state;
-    const left = segmentWithEndpoints(state.document.elements, (start, end) => start.x === 0 && end.x === 0 && Math.min(start.y, end.y) === 0 && Math.max(start.y, end.y) === 5);
-    expect(left).toBeDefined();
-    state = left ? dispatch(state, cutPathSegment(left.path.id, left.segmentIndex, { x: 0, y: 2 })) : state;
-    const closedFilled = state.document.elements.filter((element) => element.type === "path" && element.closed && element.style.fill === "#f00");
-    expect(closedFilled.length).toBeGreaterThan(0);
-    expect(closedFilled.some((element) => element.type === "path" && element.nodes.some((node) => node.anchor.x === 5 && node.anchor.y === 0))).toBe(true);
-    expect(closedFilled.some((element) => element.type === "path" && element.nodes.some((node) => node.anchor.x === 0 && node.anchor.y === 5))).toBe(true);
-    expect(state.undo).toHaveLength(3);
+    expect(state.document.elements.find((element) => element.id === filled.id)).toMatchObject(filled);
+    const circlePath = state.document.elements.find((element) => element.id === circle.id);
+    expect(circlePath).toMatchObject({ type: "path", closed: false });
+    expect(circlePath?.type === "path" ? circlePath.segments.every((segment) => segment.type === "cubicBezier") : false).toBe(true);
+    expect(circlePath?.type === "path" ? circlePath.nodes.length : 0).toBeLessThan(6);
+    state = circlePath?.type === "path" ? dispatch(state, cutPathSegment(circlePath.id, 0, { x: -3, y: 4 })) : state;
+    const remaining = state.document.elements.find((element) => element.id === circle.id);
+    expect(remaining?.type === "path" ? remaining.segments.every((segment) => segment.type === "cubicBezier") : false).toBe(true);
+    expect(remaining?.type === "path" ? remaining.nodes.length : 0).toBeLessThan(5);
+    expect(state.undo).toHaveLength(2);
   });
   it("does not propagate a cut through objects that only touch direct targets", () => {
     const first = { ...rectangle, id: elementId("direct-cut-rectangle"), position: { x: 0, y: 0 }, size: { width: 10, height: 10 }, style: { ...rectangle.style, fill: "#f00" } };

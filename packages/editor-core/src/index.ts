@@ -595,6 +595,32 @@ const cutPointDistance = (piece: CutPieceGraph, point: PointMm | undefined): num
   return Math.hypot(point.x - (piece.piece.start.x + t * dx), point.y - (piece.piece.start.y + t * dy));
 };
 
+const ellipseCubic = (ellipse: Extract<Element, { type: "ellipse" }>, start: PointMm, end: PointMm): Pick<Extract<PathSegment, { type: "cubicBezier" }>, "control1" | "control2"> => {
+  const center = elementCenter(ellipse); const rx = ellipse.size.width / 2; const ry = ellipse.size.height / 2; const cos = Math.cos(-ellipse.rotation); const sin = Math.sin(-ellipse.rotation);
+  const localAngle = (pointValue: PointMm) => { const dx = pointValue.x - center.x; const dy = pointValue.y - center.y; return Math.atan2((dx * sin + dy * cos) / ry, (dx * cos - dy * sin) / rx); };
+  const tangent = (angle: number): PointMm => transformPoint({ x: -rx * Math.sin(angle), y: ry * Math.cos(angle) }, { x: 0, y: 0 }, ellipse.rotation);
+  const a0 = localAngle(start); const a1 = localAngle(end); let delta = a1 - a0; while (delta <= -Math.PI) delta += Math.PI * 2; while (delta > Math.PI) delta -= Math.PI * 2;
+  const k = 4 / 3 * Math.tan(delta / 4); const t0 = tangent(a0); const t1 = tangent(a1);
+  return { control1: { x: start.x + t0.x * k, y: start.y + t0.y * k }, control2: { x: end.x - t1.x * k, y: end.y - t1.y * k } };
+};
+
+const cutEllipseEntityOnly = (document: DocumentSnapshot, elementIdToCut: ElementId, segmentIndex: number): CommandResult => {
+  const ellipse = document.elements.find((element): element is Extract<Element, { type: "ellipse" }> => element.id === elementIdToCut && element.type === "ellipse");
+  if (!ellipse) return { success: false, error: "Ellipse not found" };
+  const pieces = cuttableSegments(ellipse);
+  if (!pieces.some((piece) => piece.segmentIndex === segmentIndex)) return { success: false, error: "Ellipse arc not found" };
+  const groups = [...new Map(pieces.filter((piece) => piece.segmentIndex !== segmentIndex).map((piece) => [piece.segmentIndex, pieces.filter((candidate) => candidate.segmentIndex === piece.segmentIndex)]))].map(([, group]) => group);
+  if (!groups.length) return replaceElements(removeConnectionsFor(document, new Set([ellipse.id])), document.elements.filter((element) => element.id !== ellipse.id));
+  const id = ellipse.id; const nodes: PathNode[] = []; const segments: PathSegment[] = [];
+  const appendNode = (anchor: PointMm) => { const existing = nodes.at(-1); if (existing && Math.hypot(existing.anchor.x - anchor.x, existing.anchor.y - anchor.y) < 1e-8) return existing.id; const node = { id: `${id}:node:${nodes.length}`, anchor, join: "symmetric" as const }; nodes.push(node); return node.id; };
+  for (const group of groups) {
+    const start = group[0]!.start; const end = group.at(-1)!.end; const startNodeId = appendNode(start); const endNodeId = appendNode(end);
+    segments.push({ type: "cubicBezier", startNodeId, endNodeId, ...ellipseCubic(ellipse, start, end) });
+  }
+  const path: PathElement = { type: "path", id, layerId: ellipse.layerId, nodes, segments, closed: false, style: Object.fromEntries(Object.entries(ellipse.style).filter(([name]) => name !== "fill")) as typeof ellipse.style, ...(ellipse.operation ? { operation: ellipse.operation } : {}) };
+  return replaceElements(removeConnectionsFor(document, new Set([ellipse.id])), document.elements.map((element) => element.id === ellipse.id ? path : element));
+};
+
 const cutLineEntityOnly = (document: DocumentSnapshot, elementIdToCut: ElementId, point?: PointMm): CommandResult => {
   const line = document.elements.find((element): element is Extract<Element, { type: "line" }> => element.id === elementIdToCut && element.type === "line");
   if (!line) return { success: false, error: "Line not found" };
@@ -633,6 +659,7 @@ const cutStraightComponent = (document: DocumentSnapshot, elementIdToCut: Elemen
   const selectedElement = document.elements.find((element) => element.id === elementIdToCut);
   if (!selectedElement || (selectedElement.type !== "line" && selectedElement.type !== "rectangle" && selectedElement.type !== "ellipse" && selectedElement.type !== "path")) return { success: false, error: "Only straight lines, ellipse arcs, rectangle edges, and line paths can be cut" };
   if (selectedElement.type === "line") return cutLineEntityOnly(document, elementIdToCut, point);
+  if (selectedElement.type === "ellipse") return cutEllipseEntityOnly(document, elementIdToCut, segmentIndex);
   if (selectedElement.type === "path" && selectedElement.segments[segmentIndex]?.type !== "line") return { success: false, error: "Only straight path segments can be cut" };
   const sources = document.elements.flatMap((element): CutPieceGraph[] => cuttableSegments(element).map((piece) => ({ piece, source: element })));
   const split = splitCuttableSegments(sources.map(({ piece }) => piece));
@@ -661,14 +688,6 @@ const cutStraightComponent = (document: DocumentSnapshot, elementIdToCut: Elemen
   const usedElementIds = new Set(document.elements.filter((element) => !componentElements.has(element.id)).map((element) => element.id));
   const nextElementId = (base: string): ElementId => { let candidate = base; let suffix = 1; while (usedElementIds.has(elementId(candidate))) candidate = `${base}:${suffix++}`; const id = elementId(candidate); usedElementIds.add(id); return id; };
   const sourceFor = (pieces: readonly CutPieceGraph[]) => pieces[0]?.source ?? selected.source;
-  const ellipseCubic = (ellipse: Extract<Element, { type: "ellipse" }>, start: PointMm, end: PointMm): Pick<Extract<PathSegment, { type: "cubicBezier" }>, "control1" | "control2"> => {
-    const center = elementCenter(ellipse); const rx = ellipse.size.width / 2; const ry = ellipse.size.height / 2; const cos = Math.cos(-ellipse.rotation); const sin = Math.sin(-ellipse.rotation);
-    const localAngle = (pointValue: PointMm) => { const dx = pointValue.x - center.x; const dy = pointValue.y - center.y; return Math.atan2((dx * sin + dy * cos) / ry, (dx * cos - dy * sin) / rx); };
-    const tangent = (angle: number): PointMm => transformPoint({ x: -rx * Math.sin(angle), y: ry * Math.cos(angle) }, { x: 0, y: 0 }, ellipse.rotation);
-    const a0 = localAngle(start); const a1 = localAngle(end); let delta = a1 - a0; while (delta <= -Math.PI) delta += Math.PI * 2; while (delta > Math.PI) delta -= Math.PI * 2;
-    const k = 4 / 3 * Math.tan(delta / 4); const t0 = tangent(a0); const t1 = tangent(a1);
-    return { control1: { x: start.x + t0.x * k, y: start.y + t0.y * k }, control2: { x: end.x - t1.x * k, y: end.y - t1.y * k } };
-  };
   const makePath = (pieces: readonly CutPieceGraph[], closed: boolean, index: number, styleSource: Element): PathElement => {
     const id = nextElementId(index === 0 ? elementIdToCut : `${elementIdToCut}:cut:${index}`); const nodes: PathNode[] = []; const segments: PathSegment[] = [];
     const appendNode = (anchor: PointMm, join: PathJoin = "corner") => { const existing = nodes.at(-1); if (existing && key(existing.anchor) === key(anchor)) { if (join !== "corner" && existing.join === "corner") nodes[nodes.length - 1] = { ...existing, join }; return existing.id; } const node = { id: `${id}:node:${nodes.length}`, anchor, join }; nodes.push(node); return node.id; };
@@ -698,18 +717,29 @@ const cutStraightComponent = (document: DocumentSnapshot, elementIdToCut: Elemen
 };
 
 export const cutLineAtPoint = (lineId: ElementId, point: PointMm): EditorCommand => ({ name: `cut-line-at:${lineId}`, apply: (document) => cutStraightComponent(document, lineId, 0, point) });
+const cutPathEntityOnly = (document: DocumentSnapshot, path: PathElement, segmentIndex: number): CommandResult => {
+  const segment = path.segments[segmentIndex];
+  if (!segment) return { success: false, error: "Path segment not found" };
+  const pathPiece = (segments: readonly PathSegment[], index: number, nodes = path.nodes.filter((node) => new Set(segments.flatMap((candidate) => [candidate.startNodeId, candidate.endNodeId])).has(node.id))): PathElement => ({ ...path, id: index === 0 ? path.id : elementId(`${path.id}:piece:${index}`), nodes, segments, closed: false });
+  const pieces = path.closed
+    ? (() => {
+      const segments = [...path.segments.slice(segmentIndex + 1), ...path.segments.slice(0, segmentIndex)];
+      if (!segments.length) return [];
+      const orderedNodes = [segments[0]!.startNodeId, ...segments.map((candidate) => candidate.endNodeId)].map((id) => path.nodes.find((node) => node.id === id)).filter((node): node is PathNode => node !== undefined);
+      return [pathPiece(segments, 0, orderedNodes)];
+    })()
+    : ([[0, segmentIndex], [segmentIndex + 1, path.segments.length]] as const).filter(([start, end]) => end > start).map(([start, end], index) => pathPiece(path.segments.slice(start, end), index));
+  return replaceElements(document, document.elements.flatMap((element) => element.id === path.id ? pieces : [element]));
+};
+
 export const cutPathSegment = (pathId: ElementId, segmentIndex: number, point?: PointMm): EditorCommand => ({ name: `cut-segment:${pathId}:${segmentIndex}`, apply: (document) => {
   const path = pathAt(document, pathId); const segment = path?.segments[segmentIndex];
+  if (path && segment?.type === "cubicBezier") return cutPathEntityOnly(document, path, segmentIndex);
   // Curved geometry is not part of the planar cut graph, but an existing mixed
   // path must not lose its untouched Bézier segments when a line edge is removed.
   if (path?.segments.some((candidate) => candidate.type === "cubicBezier") && !path.closed) {
     if (!segment || segment.type !== "line") return { success: false, error: "Only open straight path segments can be cut beside Bézier geometry" };
-    const ranges = [[0, segmentIndex], [segmentIndex + 1, path.segments.length]] as const;
-    const pieces = ranges.filter(([start, end]) => end > start).map(([start, end], index): PathElement => {
-      const segments = path.segments.slice(start, end); const used = new Set(segments.flatMap((candidate) => [candidate.startNodeId, candidate.endNodeId]));
-      return { ...path, id: index === 0 ? path.id : elementId(`${path.id}:piece:${index}`), nodes: path.nodes.filter((node) => used.has(node.id)), segments, closed: false };
-    });
-    return replaceElements(document, document.elements.flatMap((element) => element.id === path.id ? pieces : [element]));
+    return cutPathEntityOnly(document, path, segmentIndex);
   }
   return cutStraightComponent(document, pathId, segmentIndex, point);
 } });
