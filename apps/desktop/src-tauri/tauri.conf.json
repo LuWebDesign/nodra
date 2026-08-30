@@ -9,6 +9,15 @@
     "beforeBuildCommand": "corepack pnpm --filter @nodra/desktop build",
     "frontendDist": "../dist"
   },
+  "plugins": {
+    "updater": {
+      "pubkey": "${TAURI_UPDATER_PUBLIC_KEY}",
+      "endpoints": ["https://github.com/LuWebDesign/nodra/releases/latest/download/latest.json"],
+      "windows": {
+        "installMode": "passive"
+      }
+    }
+  },
   "app": {
     "windows": [
       {
