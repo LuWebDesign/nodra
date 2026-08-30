@@ -4,6 +4,7 @@ import { boundsOf, boundsOfElements, connectableNodeAddress, contourSegmentAt, c
 export interface DragGeometry { readonly position: PointMm; readonly size: { readonly width: number; readonly height: number } }
 export interface CircleGeometry { readonly position: PointMm; readonly size: { readonly width: number; readonly height: number }; readonly radius: number }
 export interface CreationGuide { readonly source: PointMm; readonly target: PointMm; readonly kind: "node" | "center" }
+export interface DirectionalGuide { readonly source: PointMm; readonly target: PointMm; readonly angle: number; readonly snappedPoint: PointMm }
 export interface CreationSnap { readonly point: PointMm; readonly kind: "node" | "center"; readonly node?: NodeHit; readonly address?: import("@nodra/domain").ConnectableNodeAddress }
 export interface SnapGuide { readonly source: PointMm; readonly target: PointMm }
 export interface SnapMoveResult { readonly delta: PointMm; readonly guide: SnapGuide | undefined }
@@ -278,6 +279,18 @@ export function snapCreationPoint(document: DocumentSnapshot, point: PointMm, zo
 export function creationGuides(document: DocumentSnapshot, point: PointMm, zoom: number, tolerancePx = 8): readonly CreationGuide[] {
   const snap = snapCreationPoint(document, point, zoom, tolerancePx);
   return snap ? [{ source: point, target: snap.point, kind: snap.kind }] : [];
+}
+
+/** Snaps a line endpoint to the nearest configured angular increment. */
+export function directionalGuide(source: PointMm, pointer: PointMm, angleIncrementDegrees = 15): DirectionalGuide | undefined {
+  if (![source.x, source.y, pointer.x, pointer.y, angleIncrementDegrees].every(Number.isFinite) || angleIncrementDegrees <= 0 || angleIncrementDegrees > 180) throw new Error("direction guide coordinates and angle must be valid");
+  const dx = pointer.x - source.x; const dy = pointer.y - source.y; const distance = Math.hypot(dx, dy);
+  if (distance === 0) return undefined;
+  const increment = angleIncrementDegrees * Math.PI / 180;
+  const rawAngle = Math.atan2(dy, dx);
+  const angle = Math.round(rawAngle / increment) * increment;
+  const snappedPoint = { x: source.x + Math.cos(angle) * distance, y: source.y + Math.sin(angle) * distance };
+  return { source, target: snappedPoint, angle: angle * 180 / Math.PI, snappedPoint };
 }
 
 export function hasNonCollinearPoints(points: readonly PointMm[], epsilon = 1e-9): boolean {

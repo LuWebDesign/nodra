@@ -186,6 +186,11 @@ export interface PageSnapshot {
   readonly connections?: readonly ExplicitConnection[];
 }
 
+export interface ProjectPreferences {
+  readonly lineGuidesEnabled: boolean;
+  readonly lineGuideAngle: 15;
+}
+
 export interface ProjectSnapshot {
   readonly schemaVersion: SchemaVersion;
   readonly id: DocumentId;
@@ -193,6 +198,7 @@ export interface ProjectSnapshot {
   readonly origin: "top-left";
   readonly units: "mm";
   readonly capabilities?: DocumentCapabilities;
+  readonly preferences: ProjectPreferences;
   readonly pages: readonly PageSnapshot[];
   readonly activePageId: PageId;
 }
@@ -209,7 +215,7 @@ export function createDocument(id: string, layers: readonly Layer[] = []): Docum
 
 export function createProject(document: DocumentSnapshot): ProjectSnapshot {
   const page = { id: pageId("page-1"), page: document.page, layers: document.layers, elements: document.elements, connections: document.connections ?? [] };
-  return { schemaVersion: CURRENT_SCHEMA_VERSION, id: document.id, revision: document.revision, origin: document.origin, units: document.units, pages: [page], activePageId: page.id };
+  return { schemaVersion: CURRENT_SCHEMA_VERSION, id: document.id, revision: document.revision, origin: document.origin, units: document.units, preferences: { lineGuidesEnabled: true, lineGuideAngle: 15 }, pages: [page], activePageId: page.id };
 }
 
 export function projectPage(project: ProjectSnapshot, pageIdValue = project.activePageId): PageSnapshot {

@@ -11,7 +11,7 @@ import { useDocumentStore, usePersistenceStore, useUiStore, useViewportStore, ty
 import { pathJoinGuidance, pathJoinOptions } from "./pathJoins.js";
 import { textSizeFor } from "./textMetrics.js";
 import { extractTextGlyphOutlines, fontFamilyFromFileName, FontOutlineError } from "./fontOutline.js";
-import { circleGeometry, creationGuides, type CreationGuide } from "./interaction.js";
+import { circleGeometry, creationGuides, directionalGuide, type CreationGuide, type DirectionalGuide } from "./interaction.js";
 
 const defaultFonts = ["Arial", "Helvetica", "Times New Roman", "Courier New", "Inter"] as const;
 const projectMirrorKey = (projectId: string) => `nodra:project-mirror:${projectId}`;
@@ -112,13 +112,14 @@ const toolCursorLabels: Record<Tool, string> = { select: "Seleccion", forma: "Fo
 
 export function App() {
   const { mode, tool, setMode, setTool } = useUiStore();
-  const { editor, project, setEditor, setProject } = useDocumentStore();
+  const { editor, project, setEditor, setProject, setProjectPreferences } = useDocumentStore();
   const document = editor.document;
   const selection = editor.selection;
   const { zoom, panMm, setZoom, setPanMm } = useViewportStore();
   const persist = usePersistenceStore();
   const [online, setOnline] = useState(navigator.onLine);
   const [grid, setGrid] = useState(false);
+const [directionalGuideState, setDirectionalGuideState = useState<DirectionalGuide>();
   const [marquee, setMarquee] = useState<{ start: PointMm; end: PointMm }>();
   const [snapGuide, setSnapGuide] = useState<SnapGuide>();
   const [alignmentGuideState, setAlignmentGuideState] = useState<readonly AlignmentGuide[]>([]);
@@ -677,7 +678,7 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
      setCenterHover(undefined);
        setCursorPoint(canvasPointAt(event));
        setDocumentCursorPoint(pointAt(event));
-       if (isDrawingTool(tool)) setCreationPoint(pointAt(event));
+       if (isDrawingTool(tool)) { const pointer = pointAt(event); const draft = creationDraftRef.current; const direction = project.preferences.lineGuidesEnabled && tool === "line" && draft?.points.length ? directionalGuide(draft.points.at(-1)!, pointer, project.preferences.lineGuideAngle) : undefined; setDirectionalGuideState(direction); setCreationPoint(direction?.snappedPoint ?? pointer); }
      setSnapGuide(undefined);
      setAlignmentGuideState([]);
      if (tool !== "forma") setEditModeElementIds([]);
@@ -692,7 +693,10 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
       const point = pointAt(event);
        const rawCreationPoint = isDrawingTool(tool) ? point : undefined;
         const creationSnap = rawCreationPoint ? snapCreationPoint(editorRef.current.document, rawCreationPoint, zoom) : undefined;
-        const creationPointForClick = creationSnap?.point ?? rawCreationPoint;
+            const draftForDirection = creationDraftRef.current;
+            const direction = project.preferences.lineGuidesEnabled && tool === "line" && draftForDirection?.points.length ? directionalGuide(draftForDirection.points.at(-1)!, rawCreationPoint!, project.preferences.lineGuideAngle) : undefined;
+            const creationPointForClick = creationSnap?.point ?? direction?.snappedPoint ?? rawCreationPoint;
+            setDirectionalGuideState(direction);
        const inferredPoint = snapCreationPoint(editorRef.current.document, point, zoom)?.point ?? point;
       if (tool === "rectangle" || tool === "ellipse") {
         const creationPoint = creationPointForClick ?? point;
@@ -1248,7 +1252,7 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
       const circle = creationDraft.tool === "ellipse" ? circleGeometry(creationDraft.points[0]!, pointer) : undefined;
       const shape = rectangle ? <rect x={rectangle.position.x} y={rectangle.position.y} width={rectangle.size.width} height={rectangle.size.height} /> : circle ? <circle cx={creationDraft.points[0]!.x} cy={creationDraft.points[0]!.y} r={circle.radius} /> : undefined;
        const guides: readonly CreationGuide[] = creationGuides(document, pointer, zoom);
-       return <svg className="creation-pending-overlay" viewBox={`0 0 ${document.page.width} ${document.page.height}`} style={{ left: pageStyle.left + 1, top: pageStyle.top + 1, width: document.page.width * zoom, height: document.page.height * zoom, right: "auto", bottom: "auto" }} aria-label="Vista previa de creación"><g className="creation-preview-shape">{shape}</g><line className="creation-preview-radius" x1={start.x} y1={start.y} x2={pointer.x} y2={pointer.y} />{guides.map((guide, index) => <line key={index} className={`creation-guide creation-guide-${guide.kind}`} x1={guide.source.x} y1={guide.source.y} x2={guide.target.x} y2={guide.target.y} />)}</svg>;
+       return <svg className="creation-pending-overlay" viewBox={`0 0 ${document.page.width} ${document.page.height}`} style={{ left: pageStyle.left + 1, top: pageStyle.top + 1, width: document.page.width * zoom, height: document.page.height * zoom, right: "auto", bottom: "auto" }} aria-label="Vista previa de creación"><g className="creation-preview-shape">{shape}</g><line className="creation-preview-radius" x1={start.x} y1={start.y} x2={pointer.x} y2={pointer.y} />{directionalGuideState && creationDraft.tool === "line" && <><line className="directional-guide" x1={directionalGuideState.source.x} y1={directionalGuideState.source.y} x2={directionalGuideState.target.x} y2={directionalGuideState.target.y} /><text className="directional-guide-label" x={directionalGuideState.target.x + 8 / zoom} y={directionalGuideState.target.y - 8 / zoom}>{Math.round(Math.abs(directionalGuideState.angle))}°</text></>}{guides.map((guide, index) => <line key={index} className={`creation-guide creation-guide-${guide.kind}`} x1={guide.source.x} y1={guide.source.y} x2={guide.target.x} y2={guide.target.y} />)}</svg>;
     })() : undefined;
    const dimensionHoverStyle = dimensionNodeHover && tool === "dimension" ? (() => { const point = pagePointToCanvas(dimensionNodeHover.node.point, zoom, panMm); return { left: point.x, top: point.y }; })() : undefined;
   const rulerMajorStep = [1, 5, 10, 25, 50, 100, 250, 500].find((step) => step * zoom >= 50) ?? 1000;
@@ -1581,7 +1585,7 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
            <button type="button" role="tab" aria-selected={inspectorTab === "text"} className={inspectorTab === "text" ? "active" : ""} onClick={() => setInspectorTab("text")}>Texto</button>
          </div>
          <div className="inspector-tab-content" role="tabpanel">
-                {inspectorTab === "properties" && <>{selectedElements.length === 0 ? <section className="inspector-card"><div className="panel-title">PÁGINA</div><div className="preset-row"><button onClick={() => setPage(1200, 900)}>Horizontal</button><button onClick={() => setPage(900, 1200)}>Vertical</button></div><div className="fields"><Field label="W" value={document.page.width} onChange={(value) => setPage(value, document.page.height)} /><Field label="H" value={document.page.height} onChange={(value) => setPage(document.page.width, value)} /></div><label className="grid-toggle"><input type="checkbox" checked={grid} onChange={(event) => setGrid(event.target.checked)} /> Mostrar cuadrícula del espacio de trabajo</label></section> : <section className="inspector-card inspector-object-card"><div className="panel-title">OBJETO</div>{propertyElement ? <div className="inspector-object-properties">{objectPropertySections(true)}</div> : <><div className="selected-type">{selectedElement?.type === "contour" ? "CONTORNO" : selectedElement?.type === "path" ? "TRAZADO" : selectedElement?.type === "spline" ? "SPLINE" : "LÍNEA"}</div><p className="muted">{selectedElement?.type === "contour" ? "Los contornos conservan su geometría real; las dimensiones no están disponibles." : selectedElement?.type === "path" ? "Los trazados conservan sus nodos y segmentos." : selectedElement?.type === "spline" ? "Las splines conservan sus nodos y handles relativos." : "Las líneas no tienen dimensiones rectangulares."}</p>{selectedElement && isRotatableElement(selectedElement) && rotationField(selectedElement)}</>}</section>}{pathClosureControls}{splineClosureControls}{pathJoinControls}{pathSegmentControls}</>}
+                {inspectorTab === "properties" && <>{selectedElements.length === 0 ? <section className="inspector-card"><div className="panel-title">PÁGINA</div><div className="preset-row"><button onClick={() => setPage(1200, 900)}>Horizontal</button><button onClick={() => setPage(900, 1200)}>Vertical</button></div><div className="fields"><Field label="W" value={document.page.width} onChange={(value) => setPage(value, document.page.height)} /><Field label="H" value={document.page.height} onChange={(value) => setPage(document.page.width, value)} /></div><label className="grid-toggle"><input type="checkbox" checked={grid} onChange={(event) => setGrid(event.target.checked)} /> Mostrar cuadrícula del espacio de trabajo</label><label className="grid-toggle"><input type="checkbox" checked={project.preferences.lineGuidesEnabled} onChange={(event) => setProjectPreferences({ ...project.preferences, lineGuidesEnabled: event.target.checked })} /> Guías angulares de línea (15°)</label></section> : <section className="inspector-card inspector-object-card"><div className="panel-title">OBJETO</div>{propertyElement ? <div className="inspector-object-properties">{objectPropertySections(true)}</div> : <><div className="selected-type">{selectedElement?.type === "contour" ? "CONTORNO" : selectedElement?.type === "path" ? "TRAZADO" : selectedElement?.type === "spline" ? "SPLINE" : "LÍNEA"}</div><p className="muted">{selectedElement?.type === "contour" ? "Los contornos conservan su geometría real; las dimensiones no están disponibles." : selectedElement?.type === "path" ? "Los trazados conservan sus nodos y segmentos." : selectedElement?.type === "spline" ? "Las splines conservan sus nodos y handles relativos." : "Las líneas no tienen dimensiones rectangulares."}</p>{selectedElement && isRotatableElement(selectedElement) && rotationField(selectedElement)}</>}</section>}{pathClosureControls}{splineClosureControls}{pathJoinControls}{pathSegmentControls}</>}
               {inspectorTab === "transform" && transformControls()}
             {inspectorTab === "text" && <section className="inspector-card"><div className="panel-title">TEXTO</div>{textPropertyPanel()}</section>}
          </div>
