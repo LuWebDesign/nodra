@@ -947,7 +947,10 @@ export const updateElementNode = (id: ElementId, nodeIndex: number, point: Point
     }
     if (current.type === "sketch") {
       if (!node.nodeId) return { success: false, error: "Sketch node not found" };
-      return replaceElements(document, document.elements.map((element) => element.id === id && element.type === "sketch" ? { ...element, nodes: element.nodes.map((candidate) => candidate.id === node.nodeId ? { ...candidate, point } : candidate) } : element));
+      const candidate = { ...current, nodes: current.nodes.map((sketchNode) => sketchNode.id === node.nodeId ? { ...sketchNode, point } : sketchNode) };
+          const solved = solveSketchConstraints(candidate);
+          if (solved.status === "conflict" || solved.status === "overdefined") return { success: false, error: `Sketch constraints are ${solved.status}` };
+          return replaceElements(document, document.elements.map((element) => element.id === id ? solved.sketch : element));
     }
     if (current.type === "path") {
       if (!node.nodeId) return { success: false, error: "Path node not found" };
@@ -1008,6 +1011,17 @@ export const deleteElementNodes = (id: ElementId, nodeIndexes: readonly number[]
     if (!current) return { success: false, error: `Element not found: ${id}` };
     const indexes = [...new Set(nodeIndexes)].sort((a, b) => b - a);
     if (!indexes.length) return { success: false, error: "No Forma nodes selected" };
+    if (current.type === "sketch") {
+      const nodes = realGeometryNodes(current);
+      const nodeIds = new Set(indexes.flatMap((index) => nodes[index]?.nodeId ? [nodes[index]!.nodeId] : []));
+      if (nodeIds.size !== indexes.length) return { success: false, error: "Sketch node not found" };
+      const keptNodes = current.nodes.filter((node) => !nodeIds.has(node.id));
+      const keptEdges = current.edges.filter((edge) => !nodeIds.has(edge.startNodeId) && !nodeIds.has(edge.endNodeId));
+      if (keptNodes.length < 2 || keptEdges.length < 1) return { success: false, error: "A sketch must retain at least two nodes and one edge" };
+      const constraints = current.constraints?.filter((constraint) => !constraint.references.some((reference) => nodeIds.has(reference.nodeId)));
+      const next = { ...current, nodes: keptNodes, edges: keptEdges, ...(constraints ? { constraints } : {}) };
+      return replaceElements(document, document.elements.map((element) => element.id === id ? next : element));
+    }
     if (current.type === "glyph") {
       const glyph = deleteGlyphAnchorNodes(current, indexes);
       return glyph ? replaceElements(document, document.elements.map((element) => element.id === id ? glyph : element)) : { success: false, error: "No se puede eliminar: el glifo debe conservar al menos tres anclas por contorno" };

@@ -49,6 +49,19 @@ describe("editor core", () => {
         expect(redo(undo(removed)).document).toEqual(removed.document);
       });
 
+      it("deletes sketch nodes with their attached constraints while preserving the sketch model", () => {
+        const baseSketch = createSketchLine(elementId("delete-constraint-sketch"), layerId("default"), rectangle.style, { x: 0, y: 0 }, { x: 10, y: 0 });
+            const sketch = { ...baseSketch, nodes: [...baseSketch.nodes, { id: "third", point: { x: 10, y: 10 } }], edges: [...baseSketch.edges, { id: "second-third", startNodeId: baseSketch.nodes[1]!.id, endNodeId: "third" }] };
+        const [first, second] = sketch.nodes;
+        if (!first || !second) throw new Error("Expected sketch nodes");
+        const constrained = { ...sketch, constraints: [{ id: "fixed", kind: "fixed" as const, references: [{ elementId: sketch.id, nodeId: first.id }] as const }] };
+        const initial = createEditor({ ...document, elements: [constrained] });
+        const updated = dispatch(initial, deleteElementNodes(sketch.id, [0]));
+        expect(updated.document.elements[0]).toMatchObject({ type: "sketch", nodes: [{ id: second.id }, { id: "third" }], edges: [{ id: "second-third" }] });
+        expect((updated.document.elements[0] as SketchElement).constraints).toEqual([]);
+        expect(undo(updated).document).toEqual(initial.document);
+      });
+
       it("creates sketch edges by reusing shared nodes", () => {
     const sketch = createSketchLine(elementId("sketch"), layerId("default"), rectangle.style, { x: 0, y: 0 }, { x: 10, y: 0 });
     const initial = createEditor({ ...document, elements: [sketch] });
@@ -335,7 +348,15 @@ describe("editor core", () => {
     }
     expect(state.undo).toHaveLength(1);
   });
-  it("moves a primitive Forma node through a validated command", () => {
+  it("re-solves sketch constraints after moving a node", () => {
+     const sketch = createSketchLine(elementId("move-constrained"), layerId("default"), rectangle.style, { x: 0, y: 0 }, { x: 10, y: 4 });
+     const first = sketch.nodes[0]!; const second = sketch.nodes[1]!;
+     const constrained = { ...sketch, constraints: [{ id: "horizontal", kind: "horizontal" as const, references: [{ elementId: sketch.id, nodeId: first.id }, { elementId: sketch.id, nodeId: second.id }] as const }] };
+     const state = dispatch(createEditor({ ...document, elements: [constrained] }), updateElementNode(sketch.id, 1, { x: 20, y: 15 }));
+     expect((state.document.elements[0] as SketchElement).nodes[1]?.point).toEqual({ x: 20, y: 0 });
+     expect(state.undo).toHaveLength(1);
+   });
+   it("moves a primitive Forma node through a validated command", () => {
     const state = dispatch(createEditor({ ...document, elements: [rectangle] }), updateElementNode(rectangle.id, 0, { x: 2, y: 3 }));
     expect(state.document.elements[0]).toMatchObject({ type: "rectangle", position: { x: 2, y: 3 }, size: { width: 10, height: 5 } });
     expect(state.undo).toHaveLength(1);
