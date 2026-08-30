@@ -135,7 +135,7 @@ export const convertTextToGlyphs = (textId: ElementId, outlines: readonly GlyphO
 export const deleteElement = (id: ElementId): EditorCommand => ({
   name: `delete:${id}`,
   apply: (document) => document.elements.some((element) => element.id === id)
-    ? replaceElements(removeConnectionsFor(document, new Set([id])), document.elements.filter((element) => element.id !== id))
+    ? replaceElements(removeConnectionsFor(document, new Set([id])), document.elements.filter((element) => element.id !== id && !(element.type === "dimension" && element.references.some((reference) => reference.elementId === id))))
     : { success: false, error: `Element not found: ${id}` },
 });
 
