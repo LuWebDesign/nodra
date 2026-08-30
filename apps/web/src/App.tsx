@@ -895,7 +895,8 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
            return;
          }
        }
-      const hit = formaNodeHit?.elementId ?? pathSegmentHit?.elementId ?? nodeHit?.elementId ?? pickElement(editorRef.current.document, point, zoom);
+          const domDimensionId = (event.target as unknown as globalThis.Element).closest("[data-dimension]")?.getAttribute("data-element-id") as ElementId | null;
+          const hit = domDimensionId ?? formaNodeHit?.elementId ?? pathSegmentHit?.elementId ?? nodeHit?.elementId ?? pickElement(editorRef.current.document, point, zoom);
     if (isDrawingTool(tool) && pointerDownIntent(tool, hit) === "draw") {
       event.currentTarget.setPointerCapture(event.pointerId);
       setEditorState(beginGesture(editorRef.current));
@@ -903,6 +904,15 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
       return;
     }
     if (hit) {
+      const hitElement = editorRef.current.document.elements.find((element): element is DimensionElement => element.id === hit && element.type === "dimension");
+      if (tool === "select" && hitElement) {
+        const value = dimensionGeometry(hitElement, editorRef.current.document.elements)?.value;
+        if (value !== undefined) {
+          setEditorState(select(editorRef.current, [hitElement.id]));
+          setDimensionEditDraft({ id: hitElement.id, value: value.toFixed(2), position: pagePointToCanvas(point, zoom, panMm) });
+          return;
+        }
+      }
       const next = selectForPointerDown(editorRef.current, hit, event.shiftKey);
       setEditorState(next);
       if (!next.selection.includes(hit)) return;
