@@ -424,6 +424,93 @@ test("continues a click line and closes a valid non-collinear path", async ({ pa
   await expect(sketch.locator("line")).toHaveCount(3);
 });
 
+test("keeps a path selected after creating a dimension", async ({ page }) => {
+  await page.goto("/");
+  const bounds = await page.locator(".page").boundingBox();
+  expect(bounds).not.toBeNull();
+  const start = { x: bounds!.x + 120, y: bounds!.y + 180 };
+  const end = { x: start.x + 160, y: start.y };
+  await page.getByRole("button", { name: "Pluma" }).click();
+  await page.mouse.click(start.x, start.y);
+  await page.mouse.click(end.x, end.y);
+  await page.getByRole("button", { name: "Cota" }).click();
+  await page.mouse.click(start.x, start.y);
+  await page.mouse.click(end.x, end.y);
+  await page.mouse.click((start.x + end.x) / 2, start.y - 35);
+  await expect(page.locator('[data-dimension="horizontal"]')).toHaveCount(1);
+  await page.getByRole("button", { name: "Forma" }).click();
+  await page.mouse.click((start.x + end.x) / 2, start.y);
+  await expect(page.getByRole("button", { name: "Dividir segmento del trazado en el punto medio" })).toBeEnabled();
+  await page.getByRole("button", { name: "Dividir segmento del trazado en el punto medio" }).click();
+  await expect(page.locator('[data-dimension="horizontal"]')).toHaveCount(1);
+});
+
+test("cancels a sketch relationship preview without committing it", async ({ page }) => {
+  await page.goto("/");
+  const bounds = await page.locator(".page").boundingBox();
+  expect(bounds).not.toBeNull();
+  const first = { x: bounds!.x + 120, y: bounds!.y + 120 };
+  const second = { x: first.x + 90, y: first.y };
+  const third = { x: second.x, y: second.y + 70 };
+  await page.getByRole("button", { name: "Línea" }).click();
+  for (const point of [first, second, third]) await page.mouse.click(point.x, point.y);
+  await page.getByRole("button", { name: "Forma" }).click();
+  await page.mouse.click((first.x + second.x) / 2, first.y);
+  const nodes = page.locator(".contour-node");
+  await expect(nodes).toHaveCount(3);
+  await nodes.nth(0).click();
+  await nodes.nth(1).click({ modifiers: ["Shift"] });
+  await page.locator(".constraint-buttons").getByRole("button", { name: "Horizontal", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Cancelar" })).toBeVisible();
+  await page.getByRole("button", { name: "Cancelar" }).click();
+  await expect(page.getByRole("button", { name: "Confirmar relación" })).toHaveCount(0);
+});
+test("edits an explicit sketch distance relationship", async ({ page }) => {
+  await page.goto("/");
+  const bounds = await page.locator(".page").boundingBox();
+  expect(bounds).not.toBeNull();
+  const first = { x: bounds!.x + 120, y: bounds!.y + 120 };
+  const second = { x: first.x + 90, y: first.y };
+  const third = { x: second.x, y: second.y + 70 };
+  await page.getByRole("button", { name: "Línea" }).click();
+  for (const point of [first, second, third]) await page.mouse.click(point.x, point.y);
+  await page.getByRole("button", { name: "Forma" }).click();
+  await page.mouse.click((first.x + second.x) / 2, first.y);
+  const nodes = page.locator(".contour-node");
+  await expect(nodes).toHaveCount(3);
+  await nodes.nth(0).click();
+  await nodes.nth(1).click({ modifiers: ["Shift"] });
+  await page.locator(".constraint-buttons").getByRole("button", { name: "Distancia H", exact: true }).click();
+  await page.getByRole("spinbutton").fill("120");
+  await page.getByRole("button", { name: "Confirmar", exact: true }).click();
+  await page.getByRole("button", { name: "Confirmar relación" }).click();
+  const value = page.locator('input[aria-label^="Valor "]').first();
+  await expect(value).toHaveValue("120");
+  await value.fill("140");
+  await page.locator(".inspector").getByRole("button", { name: "Guardar", exact: true }).click();
+  await expect(value).toHaveValue("140");
+});
+
+test("creates and confirms an explicit sketch relationship", async ({ page }) => {
+  await page.goto("/");
+  const bounds = await page.locator(".page").boundingBox();
+  expect(bounds).not.toBeNull();
+  const first = { x: bounds!.x + 120, y: bounds!.y + 120 };
+  const second = { x: first.x + 90, y: first.y };
+  const third = { x: second.x, y: second.y + 70 };
+  await page.getByRole("button", { name: "Línea" }).click();
+  for (const point of [first, second, third]) await page.mouse.click(point.x, point.y);
+  await page.getByRole("button", { name: "Forma" }).click();
+  await page.mouse.click((first.x + second.x) / 2, first.y);
+  const nodes = page.locator(".contour-node");
+  await expect(nodes).toHaveCount(3);
+  await nodes.nth(0).click();
+  await nodes.nth(1).click({ modifiers: ["Shift"] });
+  await page.locator(".constraint-buttons").getByRole("button", { name: "Horizontal", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Confirmar relación" })).toBeVisible();
+  await page.getByRole("button", { name: "Confirmar relación" }).click();
+  await expect(page.getByText("Horizontal", { exact: false }).last()).toBeVisible();
+});
 test("reuses an existing sketch node when continuing the same line", async ({ page }) => {
   await page.goto("/");
   const bounds = await page.locator(".page").boundingBox();
@@ -791,7 +878,7 @@ test("shows millimetre coordinate rulers around the workspace", async ({ page })
 test("exposes real contour vertices in Forma and edits one vertex", async ({ page }) => {
   await page.goto("/");
   await drawRectangle(page);
-  const first = await page.locator(".page-svg svg rect").first().boundingBox();
+  const first = await page.locator(".page-svg svg rect[data-element-id]").first().boundingBox();
   expect(first).not.toBeNull();
   await page.getByRole("button", { name: "Rectángulo" }).click();
   const secondStart = { x: first!.x + first!.width / 2, y: first!.y + first!.height / 2 };
@@ -800,15 +887,15 @@ test("exposes real contour vertices in Forma and edits one vertex", async ({ pag
   await page.mouse.move(secondEnd.x, secondEnd.y);
   await expect(page.locator(".creation-pending-overlay")).toBeVisible();
   await page.mouse.click(secondEnd.x, secondEnd.y);
-  await expect(page.locator(".page-svg svg rect")).toHaveCount(2);
+  await expect(page.locator(".page-svg svg rect[data-element-id]")).toHaveCount(2);
 
   await page.getByRole("button", { name: "Seleccion" }).click();
-  const rectangles = page.locator(".page-svg svg rect");
+  const rectangles = page.locator(".page-svg svg rect[data-element-id]");
   await expect(rectangles).toHaveCount(2);
+  await expect.poll(() => rectangles.nth(0).boundingBox()).not.toBeNull();
+  await expect.poll(() => rectangles.nth(1).boundingBox()).not.toBeNull();
   const firstRectangle = await rectangles.nth(0).boundingBox();
   const secondRectangle = await rectangles.nth(1).boundingBox();
-  expect(firstRectangle).not.toBeNull();
-  expect(secondRectangle).not.toBeNull();
   await page.mouse.click(firstRectangle!.x + 4, firstRectangle!.y + 4);
   await page.keyboard.down("Shift");
   await page.mouse.click(secondRectangle!.x + secondRectangle!.width / 2, secondRectangle!.y + secondRectangle!.height / 2);
@@ -841,7 +928,7 @@ test("recovers the latest local revision after reload", async ({ page }) => {
   await page.waitForTimeout(1000);
   await page.reload();
 
-  await expect(page.locator(".page-svg svg rect")).toHaveCount(1);
+  await expect(page.locator(".page-svg svg rect[data-element-id]")).toHaveCount(1);
   await expect(page.getByText("Revisión local recuperada")).toBeVisible();
 });
 
@@ -849,13 +936,13 @@ test("keeps a deleted object deleted after reload", async ({ page }) => {
   await page.goto("/");
   await drawRectangle(page);
   await page.getByRole("button", { name: "Seleccion" }).click();
-  const rect = await page.locator(".page-svg svg rect").first().boundingBox();
+  const rect = await page.locator(".page-svg svg rect[data-element-id]").first().boundingBox();
   expect(rect).not.toBeNull();
   await page.mouse.click(rect!.x + rect!.width / 2, rect!.y + rect!.height / 2);
   await page.keyboard.press("Delete");
-  await expect(page.locator(".page-svg svg rect")).toHaveCount(0);
+  await expect(page.locator(".page-svg svg rect[data-element-id]")).toHaveCount(0);
   await page.reload();
-  await expect(page.locator(".page-svg svg rect")).toHaveCount(0);
+  await expect(page.locator(".page-svg svg rect[data-element-id]")).toHaveCount(0);
 });
 
 test("shows offline status while editing remains available", async ({ page, context }) => {
