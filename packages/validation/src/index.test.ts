@@ -28,7 +28,13 @@ describe("native document validation", () => {
     if (result.success) expect(result.data.page).toEqual({ width: 1200, height: 900 });
     expect(migrateDocument(oldDocument)).toMatchObject({ schemaVersion: 5, page: { width: 1200, height: 900 }, connections: [] });
   });
-  it("validates a project with stable page ids, including duplicate sizes", () => {
+  it("migrates legacy sketches with no constraints without changing their geometry", () => {
+        const legacy = { ...createDocument("legacy-sketch", [{ id: layerId("layer-1"), name: "Design", visible: true, order: 0 }]), schemaVersion: 4 as const, elements: [{ type: "sketch" as const, id: "sketch", layerId: "layer-1", nodes: [{ id: "a", point: { x: 1, y: 2 } }, { id: "b", point: { x: 8, y: 2 } }], edges: [{ id: "ab", startNodeId: "a", endNodeId: "b" }], style: { stroke: "#000", strokeWidth: 1 } }] };
+        const result = validateDocument(legacy);
+        expect(result.success).toBe(true);
+        if (result.success) expect(result.data.elements[0]).toMatchObject({ type: "sketch", nodes: legacy.elements[0]!.nodes, constraints: [] });
+      });
+      it("validates a project with stable page ids, including duplicate sizes", () => {
     const document = createDocument("doc-1", []);
     const project = { ...({ schemaVersion: 5, id: document.id, revision: document.revision, origin: document.origin, units: document.units } as const), pages: [{ id: "page-a", page: document.page, layers: [], elements: [] }, { id: "page-b", page: document.page, layers: [], elements: [] }], activePageId: "page-b" };
     expect(validateProject(project).success).toBe(true);

@@ -587,7 +587,8 @@ export function pickElement(document: DocumentSnapshot, point: PointMm, zoom: nu
     if (!visible.has(element.layerId)) return false;
     if (element.type !== "dimension") return hitTest(element, point, tolerance);
     const geometry = dimensionGeometry(element, document.elements);
-    return Boolean(geometry && (distanceToSegment(point, geometry.lineStart, geometry.lineEnd) <= tolerance || Math.hypot(point.x - geometry.text.x, point.y - geometry.text.y) <= Math.max(tolerance, 8) || Math.hypot(point.x - geometry.text.x, point.y - (geometry.text.y - 8)) <= Math.max(tolerance, 8)));
+        const dimensionTolerance = Math.max(tolerance, 12);
+    return Boolean(geometry && (distanceToSegment(point, geometry.lineStart, geometry.lineEnd) <= dimensionTolerance || Math.hypot(point.x - geometry.text.x, point.y - geometry.text.y) <= dimensionTolerance || Math.hypot(point.x - geometry.text.x, point.y - (geometry.text.y - 8)) <= dimensionTolerance));
   })?.id;
 }
 

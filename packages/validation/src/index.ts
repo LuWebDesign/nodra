@@ -189,12 +189,22 @@ export type ValidationIssue = { readonly path: readonly (string | number)[]; rea
 export type ValidationResult = { readonly success: true; readonly data: DocumentSnapshot } | { readonly success: false; readonly issues: readonly ValidationIssue[]; readonly error: string };
 
 export type JsonValue = object | boolean | number | string | null;
+const migrateLegacyElements = (elements: unknown): unknown => Array.isArray(elements) ? elements.map((element) => {
+  if (typeof element !== "object" || element === null || Array.isArray(element)) return element;
+  const candidate = element as Record<string, unknown>;
+  return candidate.type === "sketch" && candidate.constraints === undefined ? { ...candidate, constraints: [] } : element;
+}) : elements;
+const migrateLegacyPages = (pages: unknown): unknown => Array.isArray(pages) ? pages.map((page) => {
+  if (typeof page !== "object" || page === null || Array.isArray(page)) return page;
+  const candidate = page as Record<string, unknown>;
+  return { ...candidate, elements: migrateLegacyElements(candidate.elements), connections: candidate.connections ?? [] };
+}) : pages;
 export function migrateDocument(input: JsonValue): JsonValue {
   if (typeof input !== "object" || input === null || Array.isArray(input)) return input;
   const candidate = input as Record<string, unknown>;
-  if (candidate.schemaVersion === 1) return { ...candidate, schemaVersion: CURRENT_SCHEMA_VERSION, page: { width: 1200, height: 900 }, connections: [] };
+  if (candidate.schemaVersion === 1) return { ...candidate, schemaVersion: CURRENT_SCHEMA_VERSION, page: { width: 1200, height: 900 }, elements: migrateLegacyElements(candidate.elements), connections: [] };
   if (candidate.schemaVersion === 2 || candidate.schemaVersion === 3 || candidate.schemaVersion === 4) {
-    return { ...candidate, schemaVersion: CURRENT_SCHEMA_VERSION, page: candidate.page ?? { width: 1200, height: 900 }, connections: candidate.connections ?? [] };
+    return { ...candidate, schemaVersion: CURRENT_SCHEMA_VERSION, page: candidate.page ?? { width: 1200, height: 900 }, elements: migrateLegacyElements(candidate.elements), connections: candidate.connections ?? [] };
   }
   return input;
 }
@@ -225,7 +235,7 @@ export function migrateProject(input: unknown): unknown {
   if (typeof input !== "object" || input === null || Array.isArray(input)) return input;
   const candidate = input as Record<string, unknown>;
   if (candidate.schemaVersion !== 1 && candidate.schemaVersion !== 2 && candidate.schemaVersion !== 3 && candidate.schemaVersion !== 4) return input;
-  const pages = Array.isArray(candidate.pages) ? candidate.pages.map((page) => typeof page === "object" && page !== null && !Array.isArray(page) ? { ...(page as Record<string, unknown>), connections: (page as Record<string, unknown>).connections ?? [] } : page) : candidate.pages;
+  const pages = migrateLegacyPages(candidate.pages);
   return { ...candidate, schemaVersion: CURRENT_SCHEMA_VERSION, pages };
 }
 

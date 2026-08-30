@@ -12,7 +12,18 @@ describe("canonical millimetre geometry", () => {
     expect(result.status).toBe("underdefined");
     expect(result.sketch.nodes[1]?.point).toEqual({ x: 20, y: 0 });
   });
-  it("exposes sketch nodes, edge hit testing, and bounds", () => {
+  it("rejects ambiguous zero-axis distances and detects reversed duplicates", () => {
+        const sketch = { type: "sketch" as const, id: elementId("solver-safety"), layerId: layerId("l"), nodes: [{ id: "a", point: { x: 0, y: 0 } }, { id: "b", point: { x: 0, y: 5 } }], edges: [{ id: "ab", startNodeId: "a", endNodeId: "b" }], constraints: [{ id: "distance", kind: "distance-horizontal" as const, references: [{ elementId: elementId("solver-safety"), nodeId: "a" }, { elementId: elementId("solver-safety"), nodeId: "b" }] as const, value: 10 }, { id: "h1", kind: "horizontal" as const, references: [{ elementId: elementId("solver-safety"), nodeId: "a" }, { elementId: elementId("solver-safety"), nodeId: "b" }] as const }, { id: "h2", kind: "horizontal" as const, references: [{ elementId: elementId("solver-safety"), nodeId: "b" }, { elementId: elementId("solver-safety"), nodeId: "a" }] as const }], style };
+        const result = solveSketchConstraints(sketch);
+        expect(result.status).toBe("conflict");
+        expect(result.conflicts).toEqual(["distance", "h2"]);
+        expect(result.sketch.nodes[1]?.point).toEqual({ x: 0, y: 0 });
+      });
+      it("reports fully constrained sketches as defined using independent degrees of freedom", () => {
+        const sketch = { type: "sketch" as const, id: elementId("defined"), layerId: layerId("l"), nodes: [{ id: "a", point: { x: 3, y: 4 } }, { id: "b", point: { x: 8, y: 9 } }], edges: [{ id: "ab", startNodeId: "a", endNodeId: "b" }], constraints: [{ id: "fa", kind: "fixed" as const, references: [{ elementId: elementId("defined"), nodeId: "a" }] as const }, { id: "fb", kind: "fixed" as const, references: [{ elementId: elementId("defined"), nodeId: "b" }] as const }], style };
+        expect(solveSketchConstraints(sketch).status).toBe("defined");
+      });
+      it("exposes sketch nodes, edge hit testing, and bounds", () => {
     const sketch = { type: "sketch" as const, id: elementId("sketch"), layerId: layerId("l"), nodes: [{ id: "a", point: { x: 0, y: 0 } }, { id: "b", point: { x: 10, y: 0 } }, { id: "c", point: { x: 10, y: 10 } }], edges: [{ id: "ab", startNodeId: "a", endNodeId: "b" }, { id: "bc", startNodeId: "b", endNodeId: "c" }], style };
     expect(realGeometryNodes(sketch).map((node) => node.nodeId)).toEqual(["a", "b", "c"]);
     expect(connectableNodeAddress(sketch, 1)).toEqual({ kind: "sketch", nodeId: "b" });

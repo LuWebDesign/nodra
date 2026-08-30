@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createDocument, elementId, layerId, type DimensionElement, type Element, type EllipseElement, type GlyphElement, type PathElement, type PointMm, type RectangleElement, type SketchElement, type SplineElement, type TextElement } from "@nodra/domain";
-import { addToSelection, appendSketchEdge, appendSplineNode, beginGesture, cancelGesture, clearSelection, closePath, closeSplineElement, commitGesture, createEditor, createElement, createPathCubicNode, createSketchLine, cutLineAtPoint, cutPathSegment, cutSketchEdge, splitPathLineAt, deleteContourNodes, deleteElement, deleteElementNodes, deletePathNodes, dispatch, duplicateElements, flipElements, insertContourNode, invalidDimensionIdsForShapeOperation, moveElement, moveElements, movePathNode, movePathHandle, openPath, previewGesture, previewGestureFromBase, redo, removeFromSelection, reorderLayer, resizeElement, resizeElementToDimensions, resizeElements, resizeElementsToDimensions, rotateElementsAroundCenter, select, selectForPointerDown, setLayerVisibility, setPathJoin, shapeOperation, splitPathSegment, toggleSelection, undo, updateContourNode, updateElement, updateElementNode, updateElementStyles, updateSplineHandle, updateSplineNode } from "./index.js";
+import { addSketchConstraint, addToSelection, appendSketchEdge, appendSplineNode, beginGesture, cancelGesture, clearSelection, closePath, closeSplineElement, commitGesture, createEditor, createElement, createPathCubicNode, createSketchLine, cutLineAtPoint, cutPathSegment, cutSketchEdge, splitPathLineAt, deleteContourNodes, deleteElement, deleteElementNodes, deletePathNodes, deleteSketchConstraint, dispatch, duplicateElements, flipElements, insertContourNode, invalidDimensionIdsForShapeOperation, moveElement, moveElements, movePathNode, movePathHandle, openPath, previewGesture, previewGestureFromBase, redo, removeFromSelection, reorderLayer, resizeElement, resizeElementToDimensions, resizeElements, resizeElementsToDimensions, rotateElementsAroundCenter, select, selectForPointerDown, setLayerVisibility, setPathJoin, shapeOperation, splitPathSegment, toggleSelection, undo, updateContourNode, updateElement, updateElementNode, updateElementStyles, updateSketchConstraint, updateSplineHandle, updateSplineNode } from "./index.js";
 import { boundsOfElements } from "@nodra/geometry";
 import type { Direction } from "@nodra/geometry";
 import { appendLinePoint } from "./index.js";
@@ -15,7 +15,25 @@ const dimension: DimensionElement = { type: "dimension", id: elementId("dimensio
 const glyph: GlyphElement = { type: "glyph", id: elementId("glyph"), layerId: layerId("default"), position: { x: 0, y: 0 }, size: { width: 20, height: 20 }, glyph: "O", fillRule: "evenodd", rotation: 0, style: rectangle.style, contours: [{ nodes: [{ id: "ga", anchor: { x: 0, y: 0 }, join: "smooth" }, { id: "gb", anchor: { x: 10, y: 0 }, join: "smooth" }, { id: "gc", anchor: { x: 10, y: 10 }, join: "smooth" }, { id: "gd", anchor: { x: 0, y: 10 }, join: "smooth" }], segments: [{ type: "cubicBezier", startNodeId: "ga", endNodeId: "gb", control1: { x: 3, y: -2 }, control2: { x: 7, y: -2 } }, { type: "cubicBezier", startNodeId: "gb", endNodeId: "gc", control1: { x: 12, y: 3 }, control2: { x: 12, y: 7 } }, { type: "cubicBezier", startNodeId: "gc", endNodeId: "gd", control1: { x: 7, y: 12 }, control2: { x: 3, y: 12 } }, { type: "cubicBezier", startNodeId: "gd", endNodeId: "ga", control1: { x: -2, y: 7 }, control2: { x: -2, y: 3 } }] }] };
 
 describe("editor core", () => {
-  it("creates sketch edges by reusing shared nodes", () => {
+  it("updates and deletes sketch constraints through atomic commands", () => {
+        const sketch = createSketchLine(elementId("constraint-sketch"), layerId("default"), rectangle.style, { x: 0, y: 0 }, { x: 7, y: 4 });
+        const [first, second] = sketch.nodes;
+        if (!first || !second) throw new Error("Expected sketch nodes");
+        const reference = (nodeId: string) => ({ elementId: sketch.id, nodeId });
+        const horizontal = { id: "horizontal", kind: "horizontal" as const, references: [reference(first.id), reference(second.id)] as const };
+        const initial = createEditor({ ...document, elements: [sketch] });
+        const constrained = dispatch(initial, addSketchConstraint(sketch.id, horizontal));
+        expect((constrained.document.elements[0] as SketchElement).constraints).toEqual([horizontal]);
+        const distance = { ...horizontal, kind: "distance-horizontal" as const, value: 20 };
+        const updated = dispatch(constrained, updateSketchConstraint(sketch.id, horizontal.id, distance));
+        expect((updated.document.elements[0] as SketchElement).nodes[1]?.point).toEqual({ x: 20, y: 0 });
+        const removed = dispatch(updated, deleteSketchConstraint(sketch.id, distance.id));
+        expect((removed.document.elements[0] as SketchElement).constraints).toEqual([]);
+        expect(removed.undo).toHaveLength(3);
+        expect(redo(undo(removed)).document).toEqual(removed.document);
+      });
+
+      it("creates sketch edges by reusing shared nodes", () => {
     const sketch = createSketchLine(elementId("sketch"), layerId("default"), rectangle.style, { x: 0, y: 0 }, { x: 10, y: 0 });
     const initial = createEditor({ ...document, elements: [sketch] });
     const branch = dispatch(initial, appendSketchEdge(sketch.id, sketch.nodes[1]!.id, { x: 10, y: 10 }));

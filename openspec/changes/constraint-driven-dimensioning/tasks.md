@@ -4,7 +4,7 @@
 
 - [x] 1.1 Define stable point references and initial constraint kinds in `@nodra/domain`.
 - [x] 1.2 Add schema validation for references, values, duplicate constraints, and unsupported combinations.
-- [ ] 1.3 Add migration/default behavior without breaking existing documents.
+- [x] 1.3 Add migration/default behavior without breaking existing documents.
 
 ## Phase 2 — deterministic solver
 

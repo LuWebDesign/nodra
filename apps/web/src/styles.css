@@ -139,3 +139,7 @@
 .constraint-status-defined { color:#111827; }
 .constraint-status-conflict { color:#ef4444; }
 .constraint-status-overdefined { color:#f59e0b; }
+ .constraint-issues { margin:6px 0 8px; padding:6px 8px; color:#991b1b; background:#fef2f2; border:1px solid #fecaca; border-radius:4px; font-size:10px; }
+ .constraint-status-overdefined + .constraint-issues { color:#92400e; background:#fffbeb; border-color:#fde68a; }
+ .constraint-issues strong { display:block; margin-bottom:3px; }
+ .constraint-issues ul { margin:0; padding-left:16px; }
