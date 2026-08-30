@@ -212,8 +212,10 @@ export function dimensionGeometry(element: DimensionElement, elements: readonly 
   const endElement = elements.find((candidate) => candidate.id === element.references[1].elementId);
   if (!startElement || !endElement || startElement.type === "dimension" || endElement.type === "dimension") return undefined;
   const startReference = element.references[0]; const endReference = element.references[1];
-  const start = realGeometryNodes(startElement)[startReference.nodeIndex]?.point;
-  const end = realGeometryNodes(endElement)[endReference.nodeIndex]?.point;
+  const startNodes = realGeometryNodes(startElement);
+  const endNodes = realGeometryNodes(endElement);
+  const start = (startReference.nodeId ? startNodes.find((node) => node.nodeId === startReference.nodeId) : startNodes[startReference.nodeIndex])?.point;
+  const end = (endReference.nodeId ? endNodes.find((node) => node.nodeId === endReference.nodeId) : endNodes[endReference.nodeIndex])?.point;
   if (!start || !end) return undefined;
   const midpoint = pointMidpoint(start, end);
   const text = { x: midpoint.x + element.offset.x, y: midpoint.y + element.offset.y };

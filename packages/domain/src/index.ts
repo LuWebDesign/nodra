@@ -80,10 +80,10 @@ export interface SketchEdge { readonly id: string; readonly startNodeId: string;
 export interface SketchElement { readonly type: "sketch"; readonly id: ElementId; readonly layerId: LayerId; readonly nodes: readonly SketchNode[]; readonly edges: readonly SketchEdge[]; readonly style: VisualStyle; readonly operation?: OperationMetadata }
 export type DimensionKind = "aligned" | "horizontal" | "vertical" | "angular";
 export type DimensionReference =
-  | { readonly kind: "node"; readonly elementId: ElementId; readonly nodeIndex: number }
+  | { readonly kind: "node"; readonly elementId: ElementId; readonly nodeIndex: number; readonly nodeId?: string }
   | { readonly kind: "line"; readonly elementId: ElementId; readonly edgeIndex?: number }
   /** Legacy node references are accepted at the boundary and normalized by validation. */
-  | { readonly elementId: ElementId; readonly nodeIndex: number };
+  | { readonly elementId: ElementId; readonly nodeIndex: number; readonly nodeId?: string };
 export interface DimensionElement {
   readonly type: "dimension";
   readonly id: ElementId;

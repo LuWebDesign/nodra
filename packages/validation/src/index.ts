@@ -26,9 +26,9 @@ const connectableAddress = z.union([
 ]);
 const connectionReference = z.object({ elementId: nonEmptyId, node: connectableAddress }).strict();
 const explicitConnection = z.object({ id: nonEmptyId, first: connectionReference, second: connectionReference }).strict();
-const nodeReference = z.object({ kind: z.literal("node"), elementId: nonEmptyId, nodeIndex: finite.int().nonnegative() }).strict();
+const nodeReference = z.object({ kind: z.literal("node"), elementId: nonEmptyId, nodeIndex: finite.int().nonnegative(), nodeId: nonEmptyId.optional() }).strict();
 const lineReference = z.object({ kind: z.literal("line"), elementId: nonEmptyId, edgeIndex: finite.int().nonnegative().optional() }).strict();
-const legacyNodeReference = z.object({ elementId: nonEmptyId, nodeIndex: finite.int().nonnegative() }).strict().transform((reference) => ({ kind: "node" as const, ...reference }));
+const legacyNodeReference = z.object({ elementId: nonEmptyId, nodeIndex: finite.int().nonnegative(), nodeId: nonEmptyId.optional() }).strict().transform((reference) => ({ kind: "node" as const, ...reference }));
 const dimensionReference = z.union([z.discriminatedUnion("kind", [nodeReference, lineReference]), legacyNodeReference]);
 const dimension = z.object({ id: nonEmptyId, layerId: nonEmptyId, type: z.literal("dimension"), kind: z.enum(["aligned", "horizontal", "vertical", "angular"]), references: z.tuple([dimensionReference, dimensionReference]), offset: point, precision: finite.int().min(0).max(6), units: z.literal("mm"), rotation: z.literal(0), style }).strict().superRefine((value, ctx) => {
   const [first, second] = value.references;
@@ -37,7 +37,7 @@ const dimension = z.object({ id: nonEmptyId, layerId: nonEmptyId, type: z.litera
      if (first.kind === "line" && second.kind === "line" && first.elementId === second.elementId && (first.edgeIndex ?? 0) === (second.edgeIndex ?? 0)) ctx.addIssue({ code: "custom", message: "Angular dimension lines must differ", path: ["references"] });
   } else {
     if (first.kind !== "node" || second.kind !== "node") ctx.addIssue({ code: "custom", message: "Linear dimensions require node references", path: ["references"] });
-    if (first.kind === "node" && second.kind === "node" && first.elementId === second.elementId && first.nodeIndex === second.nodeIndex) ctx.addIssue({ code: "custom", message: "Dimension references must differ", path: ["references"] });
+    if (first.kind === "node" && second.kind === "node" && first.elementId === second.elementId && (first.nodeId !== undefined && second.nodeId !== undefined ? first.nodeId === second.nodeId : first.nodeIndex === second.nodeIndex)) ctx.addIssue({ code: "custom", message: "Dimension references must differ", path: ["references"] });
   }
 });
 const contour = z.object({ ...common, type: z.literal("contour"), position: point, size, contours: z.array(z.object({ points: z.array(point).min(3) }).strict()).min(1), fillRule: z.literal("evenodd") }).strict().superRefine((value, ctx) => {
@@ -150,6 +150,10 @@ export const documentSchema = z.object({ schemaVersion: z.literal(CURRENT_SCHEMA
       } else {
         const nodeCount = target?.type === "line" ? 3 : target?.type === "sketch" ? target.nodes.length : target?.type === "rectangle" ? 9 : target?.type === "ellipse" || target?.type === "text" ? 5 : target?.type === "contour" ? target.contours.reduce((count, contour) => count + Math.max(0, contour.points.length - 1) * 2, 0) : target?.type === "path" ? target.nodes.length + target.segments.filter((segment) => segment.type === "cubicBezier").length * 2 : target?.type === "spline" ? target.nodes.length + target.nodes.filter((node) => node.inHandle || node.outHandle).length : target?.type === "glyph" ? target.contours.reduce((count, contour) => count + contour.nodes.length + contour.segments.filter((segment) => segment.type === "cubicBezier").length * 2, 0) : undefined;
         if (nodeCount === undefined || reference.nodeIndex >= nodeCount) ctx.addIssue({ code: "custom", message: "Dimension node reference is out of range", path: ["elements", index, "references", referenceIndex, "nodeIndex"] });
+            if (reference.nodeId !== undefined) {
+              const stableNodeIds = target?.type === "line" ? ["start", "center", "end"] : target?.type === "rectangle" || target?.type === "ellipse" ? ["nw", "ne", "se", "sw", "center", "n", "e", "s", "w"] : target?.type === "sketch" || target?.type === "spline" || target?.type === "path" ? target.nodes.map((node) => node.id) : target?.type === "glyph" ? target.contours.flatMap((contour) => contour.nodes.map((node) => node.id)) : [];
+              if (!stableNodeIds.includes(reference.nodeId)) ctx.addIssue({ code: "custom", message: "Dimension node reference id is unknown", path: ["elements", index, "references", referenceIndex, "nodeId"] });
+            }
       }
     }
     if (element.type === "dimension" && element.kind === "angular" && element.references.every((reference) => reference.kind === "line")) {

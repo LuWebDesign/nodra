@@ -53,7 +53,13 @@ describe("canonical millimetre geometry", () => {
     expect(geometry?.value).toBeCloseTo(Math.hypot(30, 30));
     expect(geometry && geometry.lineEnd.x - geometry.lineStart.x).toBeCloseTo(geometry ? geometry.lineEnd.y - geometry.lineStart.y : 0);
   });
-  it("resizes a group around its existing bounds center when requested", () => {
+
+  it("resolves associative node references by stable node id after node reordering", () => {
+    const sketch = { type: "sketch" as const, id: elementId("stable-sketch"), layerId: layerId("l"), nodes: [{ id: "a", point: { x: 10, y: 10 } }, { id: "b", point: { x: 40, y: 10 } }], edges: [{ id: "ab", startNodeId: "a", endNodeId: "b" }], style };
+    const dimension = { type: "dimension" as const, id: elementId("stable-dimension"), layerId: layerId("l"), kind: "horizontal" as const, references: [{ kind: "node" as const, elementId: sketch.id, nodeIndex: 0, nodeId: "a" }, { kind: "node" as const, elementId: sketch.id, nodeIndex: 1, nodeId: "b" }] as const, offset: { x: 0, y: -5 }, precision: 2, units: "mm" as const, rotation: 0 as const, style };
+    const reordered = { ...sketch, nodes: [sketch.nodes[1]!, sketch.nodes[0]!] };
+    expect(dimensionGeometry(dimension, [reordered])?.value).toBe(30);
+  });  it("resizes a group around its existing bounds center when requested", () => {
     const second = { ...rectangle, id: elementId("r2"), position: { x: 40, y: 25 }, size: { width: 10, height: 15 } };
     const before = boundsOfElements([rectangle, second]);
     const resized = resizeGroup([rectangle, second], "se", { x: before.x + 80, y: before.y + 40 }, 1, false, true);
