@@ -18,6 +18,7 @@ type DesktopFileBridge = {
   openProject: () => Promise<{ readonly path: string; readonly project: ProjectSnapshot } | undefined>;
   saveProject: (project: ProjectSnapshot, currentPath?: string) => Promise<string | undefined>;
   initialProject: () => Promise<{ readonly path: string; readonly project: ProjectSnapshot } | undefined>;
+  checkForUpdates: () => Promise<void>;
 };
 const desktopFileBridge = (): DesktopFileBridge | undefined => {
   const candidate = (globalThis as typeof globalThis & { __KOND_DESKTOP__?: DesktopFileBridge }).__KOND_DESKTOP__;
@@ -241,6 +242,14 @@ export function App() {
       persist.set("failed", error instanceof Error ? error.message : "No se pudo abrir el proyecto inicial");
     });
   }, [setProject]);
+
+  useEffect(() => {
+    const bridge = desktopFileBridge();
+    if (!bridge) return;
+    void bridge.checkForUpdates().catch((error: unknown) => {
+      console.warn("No se pudo buscar actualizaciones", error);
+    });
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -469,7 +478,7 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
       const path = await bridge.saveProject(project, saveAs ? undefined : nativeProjectPath);
       if (!path) return;
       setNativeProjectPath(path);
-      persist.set("saved", "Proyecto guardado");
+      persist.set("saved", `Proyecto guardado en ${path}`);
     } catch (error) {
       persist.set("failed", error instanceof Error ? error.message : "No se pudo guardar el proyecto");
     }
