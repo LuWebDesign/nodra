@@ -16,13 +16,13 @@
 ## Phase 3 — editor integration
 
 - [x] 3.1 Add validated create/update/delete constraint commands.
-- [ ] 3.2 Integrate preview, commit, cancel, undo, and redo as one transaction.
-- [ ] 3.3 Connect supported dimension editing to the solver and preserve safe rectangle behavior.
+- [x] 3.2 Integrate preview, commit, cancel, undo, and redo as one transaction.
+- [x] 3.3 Connect supported dimension editing to the solver and preserve safe rectangle behavior.
 
 ## Phase 4 — rendering and UX
 
-- [ ] 4.1 Render shared underdefined/defined/conflict/overdefined state colors.
-- [ ] 4.2 Add relationship creation feedback without implicit constraints.
+- [x] 4.1 Render shared underdefined/defined/conflict/overdefined state colors.
+- [x] 4.2 Add relationship creation feedback without implicit constraints.
 - [ ] 4.3 Add E2E coverage for drawing, constraining, editing, and rollback.
 
 ## Phase 5 — extensions
