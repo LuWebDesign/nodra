@@ -27,6 +27,7 @@ const saveProjectMirror = (project: ProjectSnapshot): void => {
   try { localStorage.setItem(projectMirrorKey(project.id), JSON.stringify(project)); } catch { /* best-effort reload mirror */ }
 };
 const defaultStyle = { stroke: "#000000", strokeWidth: 1 };
+const pointAlignedToNodeGuides = (point: PointMm, guides: readonly CreationGuide[]): PointMm => guides.reduce((current, guide) => guide.target.y === guide.source.y ? { x: guide.target.x, y: current.y } : { x: current.x, y: guide.target.y }, point);
 const defaultClosedFill = "rgba(101,217,255,0.22)";
 const isPropertyElement = (element: Element): element is PropertyElement => element.type === "rectangle" || element.type === "ellipse";
 const isRotatableElement = (element: Element): element is RotatableElement => element.type !== "dimension" && element.type !== "path" && element.type !== "spline" && element.type !== "sketch";
@@ -695,7 +696,9 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
         const creationSnap = rawCreationPoint ? snapCreationPoint(editorRef.current.document, rawCreationPoint, zoom) : undefined;
             const draftForDirection = creationDraftRef.current;
             const direction = project.preferences.lineGuidesEnabled && tool === "line" && draftForDirection?.points.length ? directionalGuide(draftForDirection.points.at(-1)!, rawCreationPoint!, project.preferences.lineGuideAngle, 5) : undefined;
-            const creationPointForClick = creationSnap?.point ?? direction?.snappedPoint ?? rawCreationPoint;
+            const creationPointForClick = const nodeGuidesForClick = draftForDirection?.points.length ? nodeAlignmentGuides(editorRef.current.document, draftForDirection.points.at(-1)!, rawCreationPoint!, zoom, 5) : [];
+            const nodeGuidedPoint = nodeGuidesForClick.length ? pointAlignedToNodeGuides(rawCreationPoint!, nodeGuidesForClick) : undefined;
+            const creationPointForClick = creationSnap?.point ?? nodeGuidedPoint ?? direction?.snappedPoint ?? rawCreationPoint;
            const inferredPoint = snapCreationPoint(editorRef.current.document, point, zoom)?.point ?? point;
       if (tool === "rectangle" || tool === "ellipse") {
         const creationPoint = creationPointForClick ?? point;
@@ -939,7 +942,7 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
   const onCanvasPointerMove = (event: PointerEvent<HTMLDivElement>) => {
        setCursorPoint(canvasPointAt(event));
       setDocumentCursorPoint(pointAt(event));
-       if (isDrawingTool(tool)) { const pointer = pointAt(event); const draft = creationDraftRef.current; const direction = project.preferences.lineGuidesEnabled && tool === "line" && draft?.points.length ? directionalGuide(draft.points.at(-1)!, pointer, project.preferences.lineGuideAngle, 5) : undefined; setLineCursorAngle(tool === "line" && draft?.points.length ? direction?.angle ?? lineAngleDegrees(draft.points.at(-1)!, pointer) : undefined); setCreationPoint(direction?.snappedPoint ?? pointer); }
+       if (isDrawingTool(tool)) { const pointer = pointAt(event); const draft = creationDraftRef.current; const direction = project.preferences.lineGuidesEnabled && tool === "line" && draft?.points.length ? directionalGuide(draft.points.at(-1)!, pointer, project.preferences.lineGuideAngle, 5) : undefined; const nodeGuidesForMove = draft?.points.length ? nodeAlignmentGuides(editorRef.current.document, draft.points.at(-1)!, pointer, zoom, 5) : []; const nodeGuidedPoint = nodeGuidesForMove.length ? pointAlignedToNodeGuides(pointer, nodeGuidesForMove) : undefined; setLineCursorAngle(tool === "line" && draft?.points.length ? direction?.angle ?? lineAngleDegrees(draft.points.at(-1)!, pointer) : undefined); setCreationPoint(nodeGuidedPoint ?? direction?.snappedPoint ?? pointer); }
       const feedbackTool = tool === "text" || tool === "pan" ? undefined : tool;
      if (tool === "cut" && !interaction.current) setCutSegmentHover(pickCuttableSegment(editorRef.current.document, pointAt(event), zoom));
      else setCutSegmentHover(undefined);
