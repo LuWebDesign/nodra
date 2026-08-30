@@ -281,6 +281,13 @@ export function creationGuides(document: DocumentSnapshot, point: PointMm, zoom:
   return snap ? [{ source: point, target: snap.point, kind: snap.kind }] : [];
 }
 
+/** Returns the live direction angle from a line origin to the pointer. */
+export function lineAngleDegrees(source: PointMm, pointer: PointMm): number | undefined {
+  if (![source.x, source.y, pointer.x, pointer.y].every(Number.isFinite)) throw new Error("line angle coordinates must be finite");
+  if (source.x === pointer.x && source.y === pointer.y) return undefined;
+  return Math.round(Math.atan2(pointer.y - source.y, pointer.x - source.x) * 180 / Math.PI * 10) / 10;
+}
+
 /** Snaps a line endpoint to the nearest configured angular increment. */
 /** Finds the nearest visible node sharing an axis with the active line origin. */
 export function nodeAlignmentGuide(document: DocumentSnapshot, source: PointMm, pointer: PointMm, zoom: number, tolerancePx = 8): CreationGuide | undefined {
