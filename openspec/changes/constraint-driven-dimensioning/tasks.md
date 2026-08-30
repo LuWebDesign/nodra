@@ -15,7 +15,7 @@
 
 ## Phase 3 — editor integration
 
-- [ ] 3.1 Add validated create/update/delete constraint commands.
+- [x] 3.1 Add validated create/update/delete constraint commands.
 - [ ] 3.2 Integrate preview, commit, cancel, undo, and redo as one transaction.
 - [ ] 3.3 Connect supported dimension editing to the solver and preserve safe rectangle behavior.
 

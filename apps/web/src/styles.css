@@ -130,3 +130,7 @@
 .dimension-value-editor button { padding:4px 6px; border:1px solid #cbd5e1; border-radius:3px; background:#f8fafc; cursor:pointer; font-size:10px; }
 .dimension-value-editor button { color:#111827; background:#f1f5f9; opacity:1; }
 .dimension-value-editor button[type="submit"] { color:#ffffff; background:#f59e0b; border-color:#d97706; }
+.constraint-controls { margin-top:10px; padding-top:10px; border-top:1px solid var(--line); }
+.constraint-buttons { display:grid; grid-template-columns:1fr 1fr; gap:4px; }
+.constraint-buttons button { padding:5px 4px; color:#1f2937; background:#f8fafc; border:1px solid #cbd5e1; border-radius:4px; font-size:10px; }
+.constraint-buttons button:disabled { opacity:.45; cursor:not-allowed; }

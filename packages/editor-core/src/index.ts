@@ -3,6 +3,7 @@ import {
   type Element,
   type ElementId,
   type DimensionElement,
+      type SketchConstraint,
   type Layer,
   type LayerId,
   type PointMm,
@@ -865,6 +866,18 @@ export const updateDimensionValue = (dimensionId: ElementId, value: number): Edi
     const size = dimension.kind === "horizontal" ? { width: value, height: target.size.height } : { width: target.size.width, height: value };
     const position = { x: center.x - size.width / 2, y: center.y - size.height / 2 };
     return replaceElements(document, document.elements.map((element) => element.id === target.id && element.type === "rectangle" ? { ...element, position, size } : element));
+  },
+});
+
+export const addSketchConstraint = (sketchId: ElementId, constraint: SketchConstraint): EditorCommand => ({
+  name: `sketch-constraint-add:${sketchId}:${constraint.id}`,
+  apply: (document) => {
+    const sketch = document.elements.find((element): element is SketchElement => element.id === sketchId && element.type === "sketch");
+    if (!sketch || sketch.constraints?.some((current) => current.id === constraint.id)) return { success: false, error: "Sketch constraint cannot be added" };
+    if (!constraint.references.every((reference) => reference.elementId === sketchId && sketch.nodes.some((node) => node.id === reference.nodeId))) return { success: false, error: "Sketch constraint references are invalid" };
+    if ((constraint.kind === "horizontal" || constraint.kind === "vertical" || constraint.kind === "coincident" || constraint.kind === "distance-horizontal" || constraint.kind === "distance-vertical") && constraint.references.length !== 2) return { success: false, error: "This sketch constraint requires two references" };
+    if (constraint.kind === "fixed" && constraint.references.length !== 1) return { success: false, error: "A fixed constraint requires one reference" };
+    return replaceElements(document, document.elements.map((element) => element.id === sketchId && element.type === "sketch" ? { ...element, constraints: [...(element.constraints ?? []), constraint] } : element));
   },
 });
 
