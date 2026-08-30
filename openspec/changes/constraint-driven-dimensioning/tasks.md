@@ -8,10 +8,10 @@
 
 ## Phase 2 — deterministic solver
 
-- [ ] 2.1 Implement relation evaluation for horizontal and vertical segments.
-- [ ] 2.2 Implement coincident and origin-fixed point evaluation.
-- [ ] 2.3 Implement horizontal/vertical distance evaluation with conflict detection.
-- [ ] 2.4 Return status and immutable preview results with focused unit tests.
+- [x] 2.1 Implement relation evaluation for horizontal and vertical segments.
+- [x] 2.2 Implement coincident and origin-fixed point evaluation.
+- [x] 2.3 Implement horizontal/vertical distance evaluation with conflict detection.
+- [x] 2.4 Return status and immutable preview results with focused unit tests.
 
 ## Phase 3 — editor integration
 
