@@ -818,7 +818,11 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
             const placement = pointAt(event);
             const dimension = dimensionDraft.first.kind === "node" && dimensionDraft.second.kind === "node" ? newDimension("layer-1", dimensionDraft.first.hit, dimensionDraft.second.hit, placement) : dimensionDraft.first.kind === "line" && dimensionDraft.second.kind === "line" ? newAngularDimension("layer-1", dimensionDraft.first, dimensionDraft.second, placement) : undefined;
             if (!dimension) return;
-            setEditorState(dispatch(editorRef.current, createElement(dimension)));
+            const next = dispatch(editorRef.current, createElement(dimension));
+            if (next === editorRef.current) return;
+            setEditorState(next);
+            const placedValue = dimensionGeometry(dimension, next.document.elements)?.value;
+            if (placedValue !== undefined) setDimensionEditDraft({ id: dimension.id, value: placedValue.toFixed(2), position: pagePointToCanvas(placement, zoom, panMm) });
            setDimensionDraft(undefined);
            setDimensionNodeHover(undefined);
            return;
@@ -910,7 +914,7 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
           const hit = pickElement(editorRef.current.document, point, zoom);
           const dimension = editorRef.current.document.elements.find((element): element is DimensionElement => element.id === hit && element.type === "dimension");
           const value = dimension ? dimensionGeometry(dimension, editorRef.current.document.elements)?.value : undefined;
-          if (dimension && value !== undefined) setDimensionEditDraft({ id: dimension.id, value: String(value), position: pagePointToCanvas(point, zoom, panMm) });
+          if (dimension && value !== undefined) setDimensionEditDraft({ id: dimension.id, value: value.toFixed(2), position: pagePointToCanvas(point, zoom, panMm) });
         }
         if ((event.target as HTMLElement).closest("textarea")) return;
     const hit = pickElement(editorRef.current.document, point, zoom);
