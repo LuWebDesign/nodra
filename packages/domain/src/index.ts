@@ -98,6 +98,9 @@ export interface DimensionElement {
   readonly units: "mm";
   readonly rotation: 0;
   readonly style: VisualStyle;
+  /** Marks a dimension as driving only when paired with an explicit sketch constraint. */
+  readonly driving?: boolean;
+  readonly constraintId?: string;
 }
 export interface Contour {
   readonly points: readonly PointMm[];

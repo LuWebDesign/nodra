@@ -89,10 +89,12 @@ export const cutSketchEdge = (sketchId: ElementId, segmentIndex: number): Editor
     if (!sketch) return { success: false, error: "Sketch not found" };
     if (!Number.isInteger(segmentIndex) || segmentIndex < 0 || segmentIndex >= sketch.edges.length) return { success: false, error: "Sketch edge not found" };
     const edges = sketch.edges.filter((_, index) => index !== segmentIndex);
-    if (edges.length === 0) return replaceElements(document, document.elements.filter((element) => element.id !== sketchId));
+    if (edges.length === 0) return replaceElements(document, document.elements.filter((element) => element.id !== sketchId && !(element.type === "dimension" && element.references.some((reference) => reference.elementId === sketchId))));
     const usedNodeIds = new Set(edges.flatMap((edge) => [edge.startNodeId, edge.endNodeId]));
     const nodes = sketch.nodes.filter((node) => usedNodeIds.has(node.id));
-    return replaceElements(document, document.elements.map((element) => element.id === sketchId ? { ...sketch, nodes, edges } : element));
+    const removedNodeIds = new Set(sketch.nodes.filter((node) => !usedNodeIds.has(node.id)).map((node) => node.id));
+    const elements = document.elements.filter((element) => !(element.type === "dimension" && element.references.some((reference) => reference.elementId === sketchId && "nodeId" in reference && reference.nodeId !== undefined && removedNodeIds.has(reference.nodeId))));
+    return replaceElements(document, elements.map((element) => element.id === sketchId ? { ...sketch, nodes, edges } : element));
   },
 });
 
@@ -697,7 +699,30 @@ const cutStraightComponent = (document: DocumentSnapshot, elementIdToCut: Elemen
   const elements = document.elements.filter((element) => !componentElements.has(element.id));
   const insertionIndex = firstAffected < 0 ? elements.length : document.elements.slice(0, firstAffected).filter((element) => !componentElements.has(element.id)).length;
   elements.splice(insertionIndex, 0, ...paths);
-  return replaceElements(removeConnectionsFor(document, componentElements), elements);
+  const sourceById = new Map(document.elements.filter((element) => componentElements.has(element.id)).map((element) => [element.id, element]));
+  const pointKey = (point: PointMm) => `${Math.round(point.x / 1e-8)}:${Math.round(point.y / 1e-8)}`;
+  const migrated = document.elements.flatMap((element) => {
+    if (element.type !== "dimension" || !element.references.every((reference) => componentElements.has(reference.elementId))) return [element];
+    const source = sourceById.get(element.references[0].elementId);
+    if (!source) return [];
+    const sourceNodes = realGeometryNodes(source);
+    const targets = element.references.map((reference) => {
+      const sourceIndex = "nodeIndex" in reference ? reference.nodeIndex : undefined;
+      const sourceNode = sourceIndex === undefined ? undefined : sourceNodes[sourceIndex];
+      if (!sourceNode) return undefined;
+      return paths.flatMap((candidate) => candidate.nodes.map((node, nodeIndex) => ({ candidate, node, nodeIndex }))).find(({ node }) => pointKey(node.anchor) === pointKey(sourceNode.point));
+    });
+    const firstTarget = targets[0]; const secondTarget = targets[1];
+    if (!firstTarget || !secondTarget || firstTarget.candidate.id !== secondTarget.candidate.id || firstTarget.node.id === secondTarget.node.id) return [];
+    return [{ ...element, references: [{ kind: "node", elementId: firstTarget.candidate.id, nodeIndex: firstTarget.nodeIndex, nodeId: firstTarget.node.id }, { kind: "node", elementId: secondTarget.candidate.id, nodeIndex: secondTarget.nodeIndex, nodeId: secondTarget.node.id }] } as DimensionElement];
+  });
+  const migratedDimensions = new Map(migrated.filter((element): element is DimensionElement => element.type === "dimension").map((element) => [element.id, element]));
+  const nextElements = elements.flatMap((element) => {
+    if (element.type !== "dimension" || !element.references.some((reference) => componentElements.has(reference.elementId))) return [element];
+    const next = migratedDimensions.get(element.id);
+    return next ? [next] : [];
+  });
+  return replaceElements(removeConnectionsFor(document, componentElements), nextElements);
 };
 
 export const cutLineAtPoint = (lineId: ElementId, point: PointMm): EditorCommand => ({ name: `cut-line-at:${lineId}`, apply: (document) => cutStraightComponent(document, lineId, 0, point) });
@@ -861,6 +886,33 @@ export const updateDimensionValue = (dimensionId: ElementId, value: number): Edi
     const targetId = dimension.references[0].elementId;
     if (dimension.references[1].elementId !== targetId) return { success: false, error: "Driving dimensions require one referenced rectangle" };
     const target = document.elements.find((element) => element.id === targetId);
+    if (target?.type === "path") {
+      const first = dimension.references[0]; const second = dimension.references[1];
+      if (!("kind" in first) || !("kind" in second) || first.kind !== "node" || second.kind !== "node") return { success: false, error: "Path driving dimensions require node references" };
+      const firstNode = target.nodes.find((node, index) => node.id === first.nodeId || (!first.nodeId && first.nodeIndex === index));
+      const secondNode = target.nodes.find((node, index) => node.id === second.nodeId || (!second.nodeId && second.nodeIndex === index));
+      if (!firstNode || !secondNode || firstNode.id === secondNode.id) return { success: false, error: "Path driving dimension references are invalid" };
+      const horizontal = dimension.kind === "horizontal";
+      const delta = horizontal ? secondNode.anchor.x - firstNode.anchor.x : secondNode.anchor.y - firstNode.anchor.y;
+      const direction = delta < 0 ? -1 : 1;
+      const anchor = horizontal ? { x: firstNode.anchor.x + direction * value, y: secondNode.anchor.y } : { x: secondNode.anchor.x, y: firstNode.anchor.y + direction * value };
+      const next = { ...target, nodes: target.nodes.map((node) => node.id === secondNode.id ? { ...node, anchor } : node) };
+      return replaceElements(document, document.elements.map((element) => element.id === target.id ? next : element));
+    }
+    if (target?.type === "sketch") {
+      if (!dimension.driving || !dimension.constraintId) return { success: false, error: "Sketch dimensions require an explicit driving constraint" };
+      const first = dimension.references[0]; const second = dimension.references[1];
+      if (!("kind" in first) || !("kind" in second) || first.kind !== "node" || second.kind !== "node" || !first.nodeId || !second.nodeId) return { success: false, error: "Sketch driving dimensions require node references" };
+      const expectedKind = dimension.kind === "horizontal" ? "distance-horizontal" : "distance-vertical";
+      const constraint = target.constraints?.find((candidate) => candidate.id === dimension.constraintId);
+      const constraintReferenceIds = constraint?.references.map((reference) => `${reference.elementId}:${reference.nodeId}`).sort();
+          const dimensionReferenceIds = [`${first.elementId}:${first.nodeId}`, `${second.elementId}:${second.nodeId}`].sort();
+          const matches = constraint?.kind === expectedKind && constraintReferenceIds?.every((reference, index) => reference === dimensionReferenceIds[index]);
+      if (!matches || !constraint) return { success: false, error: "Driving dimension constraint does not match its references" };
+      const solved = solveSketchConstraints({ ...target, constraints: target.constraints!.map((candidate) => candidate.id === constraint.id ? { ...candidate, value } : candidate) });
+      if (solved.status === "conflict" || solved.status === "overdefined") return { success: false, error: `Sketch constraints are ${solved.status}` };
+      return replaceElements(document, document.elements.map((element) => element.id === target.id ? solved.sketch : element));
+    }
     if (!target || target.type !== "rectangle" || target.rotation !== 0) return { success: false, error: "Driving dimensions currently require an unrotated rectangle" };
     const center = { x: target.position.x + target.size.width / 2, y: target.position.y + target.size.height / 2 };
     const size = dimension.kind === "horizontal" ? { width: value, height: target.size.height } : { width: target.size.width, height: value };
@@ -947,7 +999,10 @@ export const updateElementNode = (id: ElementId, nodeIndex: number, point: Point
     }
     if (current.type === "sketch") {
       if (!node.nodeId) return { success: false, error: "Sketch node not found" };
-      return replaceElements(document, document.elements.map((element) => element.id === id && element.type === "sketch" ? { ...element, nodes: element.nodes.map((candidate) => candidate.id === node.nodeId ? { ...candidate, point } : candidate) } : element));
+      const candidate = { ...current, nodes: current.nodes.map((sketchNode) => sketchNode.id === node.nodeId ? { ...sketchNode, point } : sketchNode) };
+          const solved = solveSketchConstraints(candidate);
+          if (solved.status === "conflict" || solved.status === "overdefined") return { success: false, error: `Sketch constraints are ${solved.status}` };
+          return replaceElements(document, document.elements.map((element) => element.id === id ? solved.sketch : element));
     }
     if (current.type === "path") {
       if (!node.nodeId) return { success: false, error: "Path node not found" };
@@ -1008,6 +1063,17 @@ export const deleteElementNodes = (id: ElementId, nodeIndexes: readonly number[]
     if (!current) return { success: false, error: `Element not found: ${id}` };
     const indexes = [...new Set(nodeIndexes)].sort((a, b) => b - a);
     if (!indexes.length) return { success: false, error: "No Forma nodes selected" };
+    if (current.type === "sketch") {
+      const nodes = realGeometryNodes(current);
+      const nodeIds = new Set(indexes.flatMap((index) => nodes[index]?.nodeId ? [nodes[index]!.nodeId] : []));
+      if (nodeIds.size !== indexes.length) return { success: false, error: "Sketch node not found" };
+      const keptNodes = current.nodes.filter((node) => !nodeIds.has(node.id));
+      const keptEdges = current.edges.filter((edge) => !nodeIds.has(edge.startNodeId) && !nodeIds.has(edge.endNodeId));
+      if (keptNodes.length < 2 || keptEdges.length < 1) return { success: false, error: "A sketch must retain at least two nodes and one edge" };
+      const constraints = current.constraints?.filter((constraint) => !constraint.references.some((reference) => nodeIds.has(reference.nodeId)));
+      const next = { ...current, nodes: keptNodes, edges: keptEdges, ...(constraints ? { constraints } : {}) };
+      return replaceElements(document, document.elements.map((element) => element.id === id ? next : element));
+    }
     if (current.type === "glyph") {
       const glyph = deleteGlyphAnchorNodes(current, indexes);
       return glyph ? replaceElements(document, document.elements.map((element) => element.id === id ? glyph : element)) : { success: false, error: "No se puede eliminar: el glifo debe conservar al menos tres anclas por contorno" };
