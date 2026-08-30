@@ -108,7 +108,7 @@ type FormaNodeOverlay =
 
 type InspectorTab = "properties" | "transform" | "text";
 
-const toolCursorIcons: Record<Tool, string> = { select: "↖", forma: "⌘", pen: "✒", spline: "✒", text: "T", rectangle: "□", ellipse: "○", line: "╱", cut: "✂", dimension: "↔", pan: "✣" };
+const toolCursorIcons: Record<Tool, string> = { select: "↖", forma: "⌘", pen: "✒", spline: "✒", text: "T", rectangle: "□", ellipse: "○", line: "╱", cut: "✂", dimension: "⟷", pan: "✣" };
 const toolCursorLabels: Record<Tool, string> = { select: "Seleccion", forma: "Forma", pen: "Pluma", spline: "Spline", text: "Texto", rectangle: "Rectángulo", ellipse: "Círculo", line: "Línea", cut: "Cortar segmentos", dimension: "Cota", pan: "Desplazar" };
 
 export function App() {
