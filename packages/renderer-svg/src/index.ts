@@ -32,13 +32,13 @@ function viewportResult(input: unknown): { success: true; data: Viewport } | { s
   return { success: true, data: { zoom: candidate.zoom, panMm: { x: candidate.panMm.x, y: candidate.panMm.y } } };
 }
 
-const DEFAULT_CLOSED_FILL = "rgba(101,217,255,0.22)";
+const DEFAULT_FILL_OPACITY = 0.22;
 
 function visualAttributes(element: Element): string {
   if (element.type === "dimension") return `stroke="${escapeAttribute(element.style.stroke)}" stroke-width="${number(element.style.strokeWidth)}" fill="none"`;
   const closed = element.type === "path" || element.type === "spline" ? element.closed : element.type !== "line" && element.type !== "sketch";
-  const fill = closed ? escapeAttribute(element.style.fill ?? DEFAULT_CLOSED_FILL) : "none";
-  return `stroke="${escapeAttribute(element.style.stroke)}" stroke-width="${number(element.style.strokeWidth)}" fill="${fill}"`;
+  const fill = closed ? escapeAttribute(element.style.fill ?? element.style.stroke) : "none";
+  return `stroke="${escapeAttribute(element.style.stroke)}" stroke-width="${number(element.style.strokeWidth)}" fill="${fill}"${closed ? ` fill-opacity="${DEFAULT_FILL_OPACITY}"` : ""}`;
 }
 
 function renderElement(element: Element, viewport: Viewport): string {
@@ -74,9 +74,9 @@ function renderElement(element: Element, viewport: Viewport): string {
   }
   if (element.type === "sketch") {
     const nodes = new Map(element.nodes.map((node) => [node.id, screen(node.point)]));
-    const fill = escapeAttribute(element.style.fill ?? DEFAULT_CLOSED_FILL);
+    const fill = escapeAttribute(element.style.fill ?? element.style.stroke);
     const contours = sketchClosedContours(element).map((contour) => contour.map((point, index) => { const current = screen(point); return `${index === 0 ? "M" : "L"}${number(current.x)} ${number(current.y)}`; }).join(" ") + " Z").join(" ");
-    const faces = contours ? `<path data-sketch-fill="true" d="${escapeAttribute(contours)}" fill="${fill}" stroke="none" fill-rule="evenodd" />` : "";
+    const faces = contours ? `<path data-sketch-fill="true" d="${escapeAttribute(contours)}" fill="${fill}" fill-opacity="${DEFAULT_FILL_OPACITY}" stroke="none" fill-rule="evenodd" />` : "";
     const lines = element.edges.map((edge) => { const start = nodes.get(edge.startNodeId); const end = nodes.get(edge.endNodeId); return start && end ? `<line x1="${number(start.x)}" y1="${number(start.y)}" x2="${number(end.x)}" y2="${number(end.y)}" />` : ""; }).join("");
     return `<g data-element-id="${escapeAttribute(element.id)}" ${visualAttributes(element)}>${faces}${lines}</g>`;
   }

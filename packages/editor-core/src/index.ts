@@ -88,7 +88,9 @@ export const cutSketchEdge = (sketchId: ElementId, segmentIndex: number): Editor
     if (!Number.isInteger(segmentIndex) || segmentIndex < 0 || segmentIndex >= sketch.edges.length) return { success: false, error: "Sketch edge not found" };
     const edges = sketch.edges.filter((_, index) => index !== segmentIndex);
     if (edges.length === 0) return replaceElements(document, document.elements.filter((element) => element.id !== sketchId));
-    return replaceElements(document, document.elements.map((element) => element.id === sketchId ? { ...sketch, edges } : element));
+    const usedNodeIds = new Set(edges.flatMap((edge) => [edge.startNodeId, edge.endNodeId]));
+    const nodes = sketch.nodes.filter((node) => usedNodeIds.has(node.id));
+    return replaceElements(document, document.elements.map((element) => element.id === sketchId ? { ...sketch, nodes, edges } : element));
   },
 });
 
