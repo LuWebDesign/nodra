@@ -290,7 +290,7 @@ export function directionalGuide(source: PointMm, pointer: PointMm, angleIncreme
   const rawAngle = Math.atan2(dy, dx);
   const angle = Math.round(rawAngle / increment) * increment;
   const snappedPoint = { x: source.x + Math.cos(angle) * distance, y: source.y + Math.sin(angle) * distance };
-  return { source, target: snappedPoint, angle: angle * 180 / Math.PI, snappedPoint };
+  return { source, target: snappedPoint, angle: Math.round(angle * 180 / Math.PI * 1e10) / 1e10, snappedPoint };
 }
 
 export function hasNonCollinearPoints(points: readonly PointMm[], epsilon = 1e-9): boolean {
