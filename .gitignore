@@ -2,6 +2,7 @@
 node_modules/
 .build/
 dist/
+apps/desktop/src-tauri/target/
 coverage/
 playwright-report/
 test-results/
