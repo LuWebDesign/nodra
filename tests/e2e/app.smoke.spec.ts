@@ -442,6 +442,32 @@ test("cancels a sketch relationship preview without committing it", async ({ pag
   await page.getByRole("button", { name: "Cancelar" }).click();
   await expect(page.getByRole("button", { name: "Confirmar relación" })).toHaveCount(0);
 });
+test("edits an explicit sketch distance relationship", async ({ page }) => {
+  await page.goto("/");
+  const bounds = await page.locator(".page").boundingBox();
+  expect(bounds).not.toBeNull();
+  const first = { x: bounds!.x + 120, y: bounds!.y + 120 };
+  const second = { x: first.x + 90, y: first.y };
+  const third = { x: second.x, y: second.y + 70 };
+  await page.getByRole("button", { name: "Línea" }).click();
+  for (const point of [first, second, third]) await page.mouse.click(point.x, point.y);
+  await page.getByRole("button", { name: "Forma" }).click();
+  await page.mouse.click((first.x + second.x) / 2, first.y);
+  const nodes = page.locator(".contour-node");
+  await expect(nodes).toHaveCount(3);
+  await nodes.nth(0).click();
+  await nodes.nth(1).click({ modifiers: ["Shift"] });
+  await page.locator(".constraint-buttons").getByRole("button", { name: "Distancia H", exact: true }).click();
+  await page.getByRole("spinbutton").fill("120");
+  await page.getByRole("button", { name: "Confirmar", exact: true }).click();
+  await page.getByRole("button", { name: "Confirmar relación" }).click();
+  const value = page.locator('input[aria-label^="Valor "]').first();
+  await expect(value).toHaveValue("120");
+  await value.fill("140");
+  await page.locator(".properties-bar").getByRole("button", { name: "Guardar", exact: true }).click();
+  await expect(value).toHaveValue("140");
+});
+
 test("creates and confirms an explicit sketch relationship", async ({ page }) => {
   await page.goto("/");
   const bounds = await page.locator(".page").boundingBox();
