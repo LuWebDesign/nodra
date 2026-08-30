@@ -81,8 +81,9 @@ describe("editor core", () => {
    });
 
 it("converts a zero-radius rectangle to an open path when cutting one edge", () => {
-    const state = dispatch(createEditor({ ...document, elements: [rectangle] }), cutPathSegment(rectangle.id, 0));
+    const state = dispatch(createEditor({ ...document, elements: [rectangle, dimension] }), cutPathSegment(rectangle.id, 0));
     expect(state.document.elements[0]).toMatchObject({ type: "path", closed: false, segments: [{ type: "line" }, { type: "line" }, { type: "line" }] });
+    expect(state.document.elements[1]).toMatchObject({ type: "dimension", references: [{ kind: "node", elementId: rectangle.id }, { kind: "node", elementId: rectangle.id }] });
   });
   it("splits a straight path segment at an arbitrary parameter", () => {
     const cutPath: PathElement = { ...path, nodes: [...path.nodes, { id: "c", anchor: { x: 10, y: 10 }, join: "corner" }], segments: [...path.segments, { type: "line", startNodeId: "b", endNodeId: "c" }] };

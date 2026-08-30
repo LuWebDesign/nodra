@@ -699,7 +699,30 @@ const cutStraightComponent = (document: DocumentSnapshot, elementIdToCut: Elemen
   const elements = document.elements.filter((element) => !componentElements.has(element.id));
   const insertionIndex = firstAffected < 0 ? elements.length : document.elements.slice(0, firstAffected).filter((element) => !componentElements.has(element.id)).length;
   elements.splice(insertionIndex, 0, ...paths);
-  return replaceElements(removeConnectionsFor(document, componentElements), elements);
+  const sourceById = new Map(document.elements.filter((element) => componentElements.has(element.id)).map((element) => [element.id, element]));
+  const pointKey = (point: PointMm) => `${Math.round(point.x / 1e-8)}:${Math.round(point.y / 1e-8)}`;
+  const migrated = document.elements.flatMap((element) => {
+    if (element.type !== "dimension" || !element.references.every((reference) => componentElements.has(reference.elementId))) return [element];
+    const source = sourceById.get(element.references[0].elementId);
+    if (!source) return [];
+    const sourceNodes = realGeometryNodes(source);
+    const targets = element.references.map((reference) => {
+      const sourceIndex = "nodeIndex" in reference ? reference.nodeIndex : undefined;
+      const sourceNode = sourceIndex === undefined ? undefined : sourceNodes[sourceIndex];
+      if (!sourceNode) return undefined;
+      return paths.flatMap((candidate) => candidate.nodes.map((node, nodeIndex) => ({ candidate, node, nodeIndex }))).find(({ node }) => pointKey(node.anchor) === pointKey(sourceNode.point));
+    });
+    const firstTarget = targets[0]; const secondTarget = targets[1];
+    if (!firstTarget || !secondTarget || firstTarget.candidate.id !== secondTarget.candidate.id || firstTarget.node.id === secondTarget.node.id) return [];
+    return [{ ...element, references: [{ kind: "node", elementId: firstTarget.candidate.id, nodeIndex: firstTarget.nodeIndex, nodeId: firstTarget.node.id }, { kind: "node", elementId: secondTarget.candidate.id, nodeIndex: secondTarget.nodeIndex, nodeId: secondTarget.node.id }] } as DimensionElement];
+  });
+  const migratedDimensions = new Map(migrated.filter((element): element is DimensionElement => element.type === "dimension").map((element) => [element.id, element]));
+  const nextElements = elements.flatMap((element) => {
+    if (element.type !== "dimension" || !element.references.some((reference) => componentElements.has(reference.elementId))) return [element];
+    const next = migratedDimensions.get(element.id);
+    return next ? [next] : [];
+  });
+  return replaceElements(removeConnectionsFor(document, componentElements), nextElements);
 };
 
 export const cutLineAtPoint = (lineId: ElementId, point: PointMm): EditorCommand => ({ name: `cut-line-at:${lineId}`, apply: (document) => cutStraightComponent(document, lineId, 0, point) });
