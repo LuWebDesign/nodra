@@ -54,6 +54,11 @@ describe("canonical millimetre geometry", () => {
     expect(geometry && geometry.lineEnd.x - geometry.lineStart.x).toBeCloseTo(geometry ? geometry.lineEnd.y - geometry.lineStart.y : 0);
   });
 
+  it("calculates an automatic diameter from an ellipse center and rim node", () => {
+    const ellipse = { type: "ellipse" as const, id: elementId("diameter-ellipse"), layerId: layerId("l"), position: { x: 10, y: 10 }, size: { width: 20, height: 20 }, rotation: 0, style };
+    const dimension = { type: "dimension" as const, id: elementId("diameter"), layerId: layerId("l"), kind: "diameter" as const, references: [{ kind: "node" as const, elementId: ellipse.id, nodeIndex: 4, nodeId: "center" }, { kind: "node" as const, elementId: ellipse.id, nodeIndex: 5, nodeId: "n" }] as const, offset: { x: 0, y: -8 }, precision: 2, units: "mm" as const, rotation: 0 as const, style };
+    expect(dimensionGeometry(dimension, [ellipse])?.value).toBe(20);
+  });
   it("resolves associative node references by stable node id after node reordering", () => {
     const sketch = { type: "sketch" as const, id: elementId("stable-sketch"), layerId: layerId("l"), nodes: [{ id: "a", point: { x: 10, y: 10 } }, { id: "b", point: { x: 40, y: 10 } }], edges: [{ id: "ab", startNodeId: "a", endNodeId: "b" }], style };
     const dimension = { type: "dimension" as const, id: elementId("stable-dimension"), layerId: layerId("l"), kind: "horizontal" as const, references: [{ kind: "node" as const, elementId: sketch.id, nodeIndex: 0, nodeId: "a" }, { kind: "node" as const, elementId: sketch.id, nodeIndex: 1, nodeId: "b" }] as const, offset: { x: 0, y: -5 }, precision: 2, units: "mm" as const, rotation: 0 as const, style };

@@ -149,7 +149,7 @@ export interface BezierHandlePoint { readonly direction: BezierHandleDirection; 
 export interface BezierGeometryNode { readonly nodeId: string; readonly anchor: PointMm; readonly handles: readonly BezierHandlePoint[] }
 export interface EditableGeometryNode { readonly kind: "anchor" | "handle"; readonly nodeId: string; readonly point: PointMm; readonly direction?: BezierHandleDirection; readonly nodeIndex: number; readonly segmentIndex?: number; readonly ringIndex?: number }
 export interface BezierHandleGuide { readonly nodeId: string; readonly anchor: PointMm; readonly point: PointMm; readonly direction: BezierHandleDirection; readonly nodeIndex: number; readonly anchorNodeIndex: number; readonly segmentIndex?: number; readonly ringIndex?: number }
-export interface LinearDimensionGeometry { readonly kind: "aligned" | "horizontal" | "vertical"; readonly start: PointMm; readonly end: PointMm; readonly lineStart: PointMm; readonly lineEnd: PointMm; readonly text: PointMm; readonly value: number }
+export interface LinearDimensionGeometry { readonly kind: "aligned" | "horizontal" | "vertical" | "diameter"; readonly start: PointMm; readonly end: PointMm; readonly lineStart: PointMm; readonly lineEnd: PointMm; readonly text: PointMm; readonly value: number }
 export interface AngularDimensionGeometry { readonly kind: "angular"; readonly vertex: PointMm; readonly start: PointMm; readonly end: PointMm; readonly lineStart: PointMm; readonly lineEnd: PointMm; readonly text: PointMm; readonly value: number; readonly radius: number; readonly sweep: 0 | 1 }
 export type DimensionGeometry = LinearDimensionGeometry | AngularDimensionGeometry;
 export type DimensionPlacementKind = Extract<DimensionElement["kind"], "aligned" | "horizontal" | "vertical">;
@@ -218,6 +218,15 @@ export function dimensionGeometry(element: DimensionElement, elements: readonly 
   const end = (endReference.nodeId ? endNodes.find((node) => node.nodeId === endReference.nodeId) : endNodes[endReference.nodeIndex])?.point;
   if (!start || !end) return undefined;
   const midpoint = pointMidpoint(start, end);
+  if (element.kind === "diameter" && startElement.type === "ellipse" && endElement.id === startElement.id) {
+    const centerNode = startElement.type === "ellipse" ? realGeometryNodes(startElement).find((node) => node.kind === "center") : undefined;
+    const center = centerNode?.point;
+    const rim = Math.hypot(start.x - (center?.x ?? start.x), start.y - (center?.y ?? start.y)) > Math.hypot(end.x - (center?.x ?? end.x), end.y - (center?.y ?? end.y)) ? start : end;
+    if (!center || Math.hypot(rim.x - center.x, rim.y - center.y) === 0) return undefined;
+    const radius = Math.hypot(rim.x - center.x, rim.y - center.y); const direction = { x: (rim.x - center.x) / radius, y: (rim.y - center.y) / radius };
+    const lineStart = { x: center.x - direction.x * radius, y: center.y - direction.y * radius }; const lineEnd = { x: center.x + direction.x * radius, y: center.y + direction.y * radius }; const text = { x: center.x + element.offset.x, y: center.y + element.offset.y };
+    return { kind: "diameter", start: lineStart, end: lineEnd, lineStart, lineEnd, text, value: radius * 2 };
+  }
   const text = { x: midpoint.x + element.offset.x, y: midpoint.y + element.offset.y };
   const lineStart = element.kind === "horizontal" ? { x: start.x, y: text.y } : element.kind === "vertical" ? { x: text.x, y: start.y } : alignedOffsetPoint(start, start, end, element.offset);
   const lineEnd = element.kind === "horizontal" ? { x: end.x, y: text.y } : element.kind === "vertical" ? { x: text.x, y: end.y } : alignedOffsetPoint(end, start, end, element.offset);
