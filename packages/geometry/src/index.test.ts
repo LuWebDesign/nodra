@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { angularDimensionGeometry, bezierHandlePoint, boundsOf, boundsOfElements, boundsOutsidePage, connectableNode, connectableNodeAddress, closedElementToPolygon, cubicBezierBounds, cuttableSegments, cubicBezierDerivative, degreesToRadians, dimensionGeometry, dimensionKindForNodes, dimensionKindForPlacement, dimensionOffsetForAlignedPlacement, dimensionOffsetForPlacement, editableGeometryNodes, elementCenter, elementSegmentAt, elementToContour, evaluateCubicBezier, ELLIPSE_APPROXIMATION_SEGMENTS, groupCenter, groupHandlePoints, hitTest, mirrorHandleOffset, mmToScreen, pointMidpoint, radiansToDegrees, realGeometryNodes, resizeGroup, resizeHandle, rotatedLineEndpoints, rotateElements, rotationFromDrag, solveSketchConstraints, rotationHandlePoints, screenToMm, shapeResultContours, sketchClosedContours, splitCubicBezier, splitCuttableSegments, validateSize, visibleBezierHandleGuides } from "./index.js";
+import { angularDimensionGeometry, bezierHandlePoint, boundsOf, boundsOfElements, boundsOutsidePage, connectableNode, connectableNodeAddress, closedElementToPolygon, cubicBezierBounds, cuttableSegments, cubicBezierDerivative, degreesToRadians, dimensionGeometry, dimensionKindForNodes, dimensionKindForPlacement, dimensionOffsetForAlignedPlacement, dimensionOffsetForPlacement, editableGeometryNodes, elementCenter, elementSegmentAt, elementToContour, evaluateCubicBezier, ELLIPSE_APPROXIMATION_SEGMENTS, groupCenter, groupHandlePoints, hitTest, mirrorHandleOffset, mmToScreen, pointMidpoint, radiansToDegrees, realGeometryNodes, resizeGroup, resizeHandle, rotatedLineEndpoints, rotateElements, rotationFromDrag, solveSketchConstraints, solveCircleConstraints, rotationHandlePoints, screenToMm, shapeResultContours, sketchClosedContours, splitCubicBezier, splitCuttableSegments, validateSize, visibleBezierHandleGuides } from "./index.js";
 import { elementId, layerId } from "@nodra/domain";
 
 const style = { stroke: "#000", strokeWidth: 0.2 };
@@ -76,6 +76,14 @@ describe("canonical millimetre geometry", () => {
     const dimension = { type: "dimension" as const, id: elementId("diameter"), layerId: layerId("l"), kind: "diameter" as const, references: [{ kind: "node" as const, elementId: ellipse.id, nodeIndex: 0, nodeId: "center" }, { kind: "node" as const, elementId: ellipse.id, nodeIndex: 1, nodeId: "n" }] as const, offset: { x: 0, y: -8 }, precision: 2, units: "mm" as const, rotation: 0 as const, style };
     expect(dimensionGeometry(dimension, [ellipse])?.value).toBe(20);
   });
+  it("solves circle center and size constraints as three independent degrees of freedom", () => {
+    const circle = { type: "ellipse" as const, id: elementId("parametric-circle"), layerId: layerId("l"), position: { x: 10, y: 20 }, size: { width: 20, height: 20 }, rotation: 0, style, circleConstraints: [{ id: "cx", kind: "center-horizontal" as const, value: 30 }, { id: "cy", kind: "center-vertical" as const, value: 40 }, { id: "diameter", kind: "diameter" as const, value: 50 }] };
+    const result = solveCircleConstraints(circle);
+    expect(result.status).toBe("defined");
+    expect(result.circle.position).toEqual({ x: 5, y: 15 });
+    expect(result.circle.size).toEqual({ width: 50, height: 50 });
+  });
+
   it("calculates a radius from an ellipse center and rim node", () => {
     const ellipse = { type: "ellipse" as const, id: elementId("radius-ellipse"), layerId: layerId("l"), position: { x: 10, y: 10 }, size: { width: 20, height: 20 }, rotation: 0, style };
     const dimension = { type: "dimension" as const, id: elementId("radius"), layerId: layerId("l"), kind: "radius" as const, references: [{ kind: "node" as const, elementId: ellipse.id, nodeIndex: 0, nodeId: "center" }, { kind: "node" as const, elementId: ellipse.id, nodeIndex: 1, nodeId: "n" }] as const, offset: { x: 8, y: -8 }, precision: 2, units: "mm" as const, rotation: 0 as const, style };

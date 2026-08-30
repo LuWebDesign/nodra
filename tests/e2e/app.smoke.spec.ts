@@ -830,7 +830,7 @@ test("creates a Cota with two nodes and a third placement click", async ({ page 
   await expect(page.locator('[data-dimension="horizontal"]')).toHaveCount(1);
 });
 
-test("creates a radius Cota for a circle using the explicit Radio tool", async ({ page }) => {
+test("creates a radius Cota from the integrated Cota modes", async ({ page }) => {
   await page.goto("/");
   const bounds = await page.locator(".page").boundingBox();
   expect(bounds).not.toBeNull();
@@ -843,29 +843,8 @@ test("creates a radius Cota for a circle using the explicit Radio tool", async (
   await expect(ellipse).toHaveCount(1);
   const ellipseBox = await ellipse.boundingBox();
   expect(ellipseBox).not.toBeNull();
-  await page.getByRole("button", { name: "Radio" }).click();
-  const center = { x: ellipseBox!.x + ellipseBox!.width / 2, y: ellipseBox!.y + ellipseBox!.height / 2 };
-  const rim = { x: ellipseBox!.x + ellipseBox!.width, y: center.y };
-  await page.mouse.click(center.x, center.y);
-  await page.mouse.click(rim.x, rim.y);
-  await page.mouse.click(ellipseBox!.x + ellipseBox!.width + 35, center.y);
-  await expect(page.locator('[data-dimension="radius"]')).toContainText("R");
-});
-
-test("creates a radius Cota for a circle using the explicit Radio tool", async ({ page }) => {
-  await page.goto("/");
-  const bounds = await page.locator(".page").boundingBox();
-  expect(bounds).not.toBeNull();
-  const start = { x: bounds!.x + 100, y: bounds!.y + 100 };
-  const end = { x: start.x + 100, y: start.y };
-  await page.getByRole("button", { name: "Círculo" }).click();
-  await page.mouse.click(start.x, start.y);
-  await page.mouse.click(end.x, end.y);
-  const ellipse = page.locator(".page-svg svg ellipse[data-element-id]");
-  await expect(ellipse).toHaveCount(1);
-  const ellipseBox = await ellipse.boundingBox();
-  expect(ellipseBox).not.toBeNull();
-  await page.getByRole("button", { name: "Radio" }).click();
+  await page.getByRole("button", { name: "Cota" }).click();
+  await page.getByRole("group", { name: "Modo de cota" }).getByRole("button", { name: "Radio" }).click();
   const center = { x: ellipseBox!.x + ellipseBox!.width / 2, y: ellipseBox!.y + ellipseBox!.height / 2 };
   const rim = { x: ellipseBox!.x + ellipseBox!.width, y: center.y };
   await page.mouse.click(center.x, center.y);
@@ -883,12 +862,11 @@ test("creates a radius Cota for a circle using the explicit Radio tool", async (
   await page.getByRole("button", { name: "Seleccion" }).click();
   const dimensionText = page.locator('[data-dimension="radius"] text');
   await expect.poll(() => dimensionText.boundingBox()).not.toBeNull();
-  const textBox = await dimensionText.boundingBox();
-  expect(textBox).not.toBeNull();
-  await page.mouse.click(textBox!.x + textBox!.width / 2, textBox!.y + textBox!.height / 2);
+  await dimensionText.click({ force: true });
   await expect(page.locator('input[type="number"]').last()).toBeVisible();
   await page.locator('input[type="number"]').last().fill("60");
   await page.getByRole("button", { name: "Confirmar", exact: true }).last().click();
+  await expect.poll(async () => (await ellipse.boundingBox())?.width ?? 0).toBeGreaterThan(80);
   const editedAgain = await ellipse.boundingBox();
   expect(editedAgain).not.toBeNull();
   expect(editedAgain!.width).toBeGreaterThan(80);

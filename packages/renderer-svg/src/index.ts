@@ -1,4 +1,4 @@
-import { CURRENT_SCHEMA_VERSION, type Element, type PathElement, type SplineElement } from "@nodra/domain";
+import { CURRENT_SCHEMA_VERSION, isLineElement, type Element, type PathElement, type SplineElement } from "@nodra/domain";
 import { dimensionGeometry, mmToScreen, sketchClosedContours, solveSketchConstraints, type Viewport } from "@nodra/geometry";
 import { validateDocument } from "@nodra/validation";
 
@@ -101,7 +101,8 @@ function renderElement(element: Element, viewport: Viewport): string {
     const lines = element.text.split(/\r\n|\r|\n/).map((line, index) => `<tspan x="${number(x)}" dy="${number(index === 0 ? 0 : fontSize * element.lineHeight)}">${escapeAttribute(line)}</tspan>`).join("");
     return `<text data-element-id="${escapeAttribute(element.id)}" x="${number(x)}" y="${number(position.y + fontSize * 0.8)}" text-anchor="${anchor}" font-family="${escapeAttribute(element.fontFamily)}" font-size="${number(fontSize)}" font-weight="${element.fontWeight}" font-style="${element.fontStyle}" fill="${escapeAttribute(element.style.fill ?? "none")}" stroke="${escapeAttribute(element.style.stroke)}" stroke-width="${number(element.style.strokeWidth)}" transform="translate(${number(position.x)} ${number(position.y)}) rotate(${degrees(element.rotation)}) scale(${number(element.scaleX ?? 1)} ${number(element.scaleY ?? 1)}) translate(${number(-position.x)} ${number(-position.y)})">${lines}</text>`;
   }
-  const start = screen(element.start);
+  if (!isLineElement(element)) return "";
+      const start = screen(element.start);
   const end = screen(element.end);
   const center = { x: (start.x + end.x) / 2, y: (start.y + end.y) / 2 };
   return `<line data-element-id="${escapeAttribute(element.id)}" x1="${number(start.x)}" y1="${number(start.y)}" x2="${number(end.x)}" y2="${number(end.y)}" transform="${transform(element, center.x, center.y)}" ${visualAttributes(element)} />`;

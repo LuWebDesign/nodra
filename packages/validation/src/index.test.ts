@@ -48,7 +48,7 @@ describe("native document validation", () => {
   });
   it("accepts explicit radius dimensions on circle nodes", () => {
     const base = createDocument("radius-doc", [{ id: layerId("layer-1"), name: "Design", visible: true, order: 0 }]);
-    const ellipse = { type: "ellipse" as const, id: "circle", layerId: "layer-1", position: { x: 10, y: 10 }, size: { width: 20, height: 20 }, rotation: 0, style: { stroke: "#000", strokeWidth: 1 } };
+    const ellipse = { type: "ellipse" as const, id: "circle", layerId: "layer-1", position: { x: 10, y: 10 }, size: { width: 20, height: 20 }, rotation: 0, style: { stroke: "#000", strokeWidth: 1 }, circleConstraints: [{ id: "cx", kind: "center-horizontal" as const, value: 0 }, { id: "cy", kind: "center-vertical" as const, value: -5 }] };
     const radius = { type: "dimension" as const, id: "radius", layerId: "layer-1", kind: "radius" as const, references: [{ kind: "node" as const, elementId: "circle", nodeIndex: 0, nodeId: "center" }, { kind: "node" as const, elementId: "circle", nodeIndex: 2, nodeId: "e" }] as const, offset: { x: 8, y: 0 }, precision: 2, units: "mm" as const, rotation: 0 as const, style: { stroke: "#2563eb", strokeWidth: 0.45 } };
     expect(validateDocument({ ...base, elements: [ellipse, radius] }).success).toBe(true);
   });
