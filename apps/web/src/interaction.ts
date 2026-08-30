@@ -339,6 +339,20 @@ export function hasNonCollinearPoints(points: readonly PointMm[], epsilon = 1e-9
 export type NodeFeedbackTool = "select" | "forma" | "pen" | "spline" | "rectangle" | "ellipse" | "line" | "cut" | "dimension";
 export type HoverNode = NodeHit | FormaNodeHit;
 
+/** Snaps a Forma node drag to another visible real node within screen tolerance. */
+export function snapFormaNodePoint(document: DocumentSnapshot, point: PointMm, zoom: number, moving: { readonly elementId: ElementId; readonly nodeIndex?: number }, tolerancePx = 8): PointMm {
+  if (![point.x, point.y, zoom, tolerancePx].every(Number.isFinite) || zoom <= 0 || tolerancePx < 0) throw new Error("Forma snap coordinates and tolerance must be valid");
+  const visible = new Set(document.layers.filter((layer) => layer.visible).map((layer) => layer.id));
+  let best: { point: PointMm; distance: number; order: string } | undefined;
+  for (const element of document.elements) if (visible.has(element.layerId)) for (const [nodeIndex, node] of realGeometryNodes(element).entries()) {
+    if (node.kind === "center" || element.id === moving.elementId && moving.nodeIndex === nodeIndex) continue;
+    const distance = Math.hypot(node.point.x - point.x, node.point.y - point.y) * zoom;
+    const order = element.id + ":" + nodeIndex;
+    if (distance <= tolerancePx && (!best || distance < best.distance || distance === best.distance && order < best.order)) best = { point: node.point, distance, order };
+  }
+  return best?.point ?? point;
+}
+
 /** Finds the node feedback target supported by a tool without changing its hit semantics. */
 export function pickHoverNode(document: DocumentSnapshot, point: PointMm, zoom: number, tool: NodeFeedbackTool, tolerancePx = 8): HoverNode | undefined {
   if (tool === "forma") return pickFormaNode(document, point, zoom, tolerancePx);
