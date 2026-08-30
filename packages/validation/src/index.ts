@@ -30,7 +30,7 @@ const nodeReference = z.object({ kind: z.literal("node"), elementId: nonEmptyId,
 const lineReference = z.object({ kind: z.literal("line"), elementId: nonEmptyId, edgeIndex: finite.int().nonnegative().optional() }).strict();
 const legacyNodeReference = z.object({ elementId: nonEmptyId, nodeIndex: finite.int().nonnegative(), nodeId: nonEmptyId.optional() }).strict().transform((reference) => ({ kind: "node" as const, ...reference }));
 const dimensionReference = z.union([z.discriminatedUnion("kind", [nodeReference, lineReference]), legacyNodeReference]);
-const dimension = z.object({ id: nonEmptyId, layerId: nonEmptyId, type: z.literal("dimension"), kind: z.enum(["aligned", "horizontal", "vertical", "angular", "diameter"]), references: z.tuple([dimensionReference, dimensionReference]), offset: point, precision: finite.int().min(0).max(6), units: z.literal("mm"), rotation: z.literal(0), style, driving: z.boolean().optional(), constraintId: nonEmptyId.optional() }).strict().superRefine((value, ctx) => {
+const dimension = z.object({ id: nonEmptyId, layerId: nonEmptyId, type: z.literal("dimension"), kind: z.enum(["aligned", "horizontal", "vertical", "angular", "radius", "diameter"]), references: z.tuple([dimensionReference, dimensionReference]), offset: point, precision: finite.int().min(0).max(6), units: z.literal("mm"), rotation: z.literal(0), style, driving: z.boolean().optional(), constraintId: nonEmptyId.optional() }).strict().superRefine((value, ctx) => {
   const [first, second] = value.references;
   if (value.kind === "angular") {
     if (first.kind !== "line" || second.kind !== "line") ctx.addIssue({ code: "custom", message: "Angular dimensions require line references", path: ["references"] });
@@ -166,6 +166,12 @@ export const documentSchema = z.object({ schemaVersion: z.literal(CURRENT_SCHEMA
               if (!stableNodeIds.includes(reference.nodeId)) ctx.addIssue({ code: "custom", message: "Dimension node reference id is unknown", path: ["elements", index, "references", referenceIndex, "nodeId"] });
             }
       }
+    }
+    if (element.type === "dimension" && element.kind === "radius") {
+      const [first, second] = element.references;
+      const target = first.kind === "node" && second.kind === "node" && first.elementId === second.elementId ? value.elements.find((candidate) => candidate.id === first.elementId) : undefined;
+      const nodeIds = target?.type === "ellipse" ? new Set(["center", "n", "e", "s", "w"]) : undefined;
+      if (target?.type !== "ellipse" || first.kind !== "node" || second.kind !== "node" || first.nodeId === undefined || second.nodeId === undefined || !nodeIds?.has(first.nodeId) || !nodeIds.has(second.nodeId) || first.nodeId === second.nodeId || first.nodeId !== "center" && second.nodeId !== "center") ctx.addIssue({ code: "custom", message: "Radius dimensions require distinct center and cardinal nodes on one circle", path: ["elements", index, "references"] });
     }
     if (element.type === "dimension" && element.kind === "angular" && element.references.every((reference) => reference.kind === "line")) {
       const first = value.elements.find((candidate) => candidate.id === element.references[0].elementId);

@@ -336,7 +336,7 @@ export function hasNonCollinearPoints(points: readonly PointMm[], epsilon = 1e-9
   return false;
 }
 
-export type NodeFeedbackTool = "select" | "forma" | "pen" | "spline" | "rectangle" | "ellipse" | "line" | "cut" | "dimension";
+export type NodeFeedbackTool = "select" | "forma" | "pen" | "spline" | "rectangle" | "ellipse" | "line" | "cut" | "dimension" | "radius";
 export type HoverNode = NodeHit | FormaNodeHit;
 
 /** Snaps a Forma node drag to another visible real node within screen tolerance. */
