@@ -1019,7 +1019,7 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
       return;
     }
     if (active.kind === "contour-node" && active.formaNode) {
-      const point = pointAt(event);
+      const point = snapFormaNodePoint(editorRef.current.document, pointAt(event), zoom, active.formaNode);
       if (!active.startClient || !movementExceedsThreshold(active.startClient, { x: event.clientX, y: event.clientY })) return;
       active.dragged = true;
       const command = active.formaNode.contourNode ? updateContourNode(active.formaNode.elementId, active.formaNode.contourNode, point) : updateElementNode(active.formaNode.elementId, active.formaNode.nodeIndex ?? -1, point);
