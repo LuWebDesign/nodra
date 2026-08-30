@@ -119,7 +119,7 @@ export function App() {
   const persist = usePersistenceStore();
   const [online, setOnline] = useState(navigator.onLine);
   const [grid, setGrid] = useState(false);
-const [directionalGuideState, setDirectionalGuideState = useState<DirectionalGuide>();
+const [directionalGuideState, setDirectionalGuideState] = useState<DirectionalGuide>();
   const [marquee, setMarquee] = useState<{ start: PointMm; end: PointMm }>();
   const [snapGuide, setSnapGuide] = useState<SnapGuide>();
   const [alignmentGuideState, setAlignmentGuideState] = useState<readonly AlignmentGuide[]>([]);
