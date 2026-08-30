@@ -1238,12 +1238,12 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
    // The page uses border-box sizing; include the border so its content box
    // remains exactly document width × zoom for both SVG rendering and input.
    const pageStyle = { width: document.page.width * zoom + 2, height: document.page.height * zoom + 2, left: -panMm.x * zoom, top: -panMm.y * zoom };
-   const pendingDimensionOverlay = tool === "dimension" && dimensionDraft?.phase === "placement" && cursorPoint ? (() => {
+   const pendingDimensionOverlay = tool === "dimension" && dimensionDraft && cursorPoint ? (() => {
     const firstPoint = dimensionDraft.first.kind === "node" ? dimensionDraft.first.hit.node.point : dimensionDraft.first.hit.line.start;
      const start = pagePointToCanvas(firstPoint, zoom, panMm);
     const secondPoint = dimensionDraft.phase === "placement" ? dimensionDraft.second.kind === "node" ? dimensionDraft.second.hit.node.point : dimensionDraft.second.hit.line.start : undefined;
      const end = secondPoint ? pagePointToCanvas(secondPoint, zoom, panMm) : cursorPoint ?? pagePointToCanvas(firstPoint, zoom, panMm);
-        return <svg className="dimension-pending-overlay" aria-hidden="true"><line x1={start.x} y1={start.y} x2={end.x} y2={end.y} /><circle cx={start.x} cy={start.y} r="7" /><circle cx={end.x} cy={end.y} r="7" /></svg>;
+        return <svg className="dimension-pending-overlay" aria-hidden="true"><line x1={start.x} y1={start.y} x2={end.x} y2={end.y} /></svg>;
    })() : undefined;
      const cutSegmentHoverOverlay = tool === "cut" && cutSegmentHover ? <svg className="cut-segment-hover-overlay" viewBox={`0 0 ${document.page.width} ${document.page.height}`} style={{ left: pageStyle.left + 1, top: pageStyle.top + 1, width: document.page.width * zoom, height: document.page.height * zoom, right: "auto", bottom: "auto" }} aria-label="Segmento de corte bajo el puntero">{cutSegmentHover.points ? <polyline points={cutSegmentHover.points.map((point) => `${point.x},${point.y}`).join(" ")} /> : <line x1={cutSegmentHover.start.x} y1={cutSegmentHover.start.y} x2={cutSegmentHover.end.x} y2={cutSegmentHover.end.y} />}</svg> : undefined;
      const cursorNodeGuideOverlay = tool === "line" && documentCursorPoint ? (() => { const guides = cursorNodeGuides(document, documentCursorPoint, zoom, 5); return guides.length ? <svg className="node-guide-overlay" viewBox={`0 0 ${document.page.width} ${document.page.height}`} style={{ left: pageStyle.left + 1, top: pageStyle.top + 1, width: document.page.width * zoom, height: document.page.height * zoom, right: "auto", bottom: "auto" }} aria-label="Guía de nodo">{guides.map((guide, index) => <line key={`cursor-node-guide-${index}`} className="creation-guide creation-guide-node-alignment" x1={guide.source.x} y1={guide.source.y} x2={guide.target.x} y2={guide.target.y} />)}</svg> : undefined; })() : undefined;
