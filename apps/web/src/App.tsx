@@ -14,6 +14,15 @@ import { extractTextGlyphOutlines, fontFamilyFromFileName, FontOutlineError } fr
 import { circleGeometry, creationGuides, cursorNodeGuides, directionalGuide, lineAngleDegrees, nodeAlignmentGuides, type CreationGuide } from "./interaction.js";
 
 const defaultFonts = ["Arial", "Helvetica", "Times New Roman", "Courier New", "Inter"] as const;
+type DesktopFileBridge = {
+  openProject: () => Promise<{ readonly path: string; readonly project: ProjectSnapshot } | undefined>;
+  saveProject: (project: ProjectSnapshot, currentPath?: string) => Promise<string | undefined>;
+  initialProject: () => Promise<{ readonly path: string; readonly project: ProjectSnapshot } | undefined>;
+};
+const desktopFileBridge = (): DesktopFileBridge | undefined => {
+  const candidate = (globalThis as typeof globalThis & { __KOND_DESKTOP__?: DesktopFileBridge }).__KOND_DESKTOP__;
+  return candidate;
+};
 const projectMirrorKey = (projectId: string) => `nodra:project-mirror:${projectId}`;
 const loadProjectMirror = (projectId: string): ProjectSnapshot | undefined => {
   try {
@@ -151,6 +160,7 @@ export function App() {
   const [fontSources, setFontSources] = useState<Record<string, ArrayBuffer>>({});
   const [fontLoadError, setFontLoadError] = useState<string>();
   const [persistenceReady, setPersistenceReady] = useState(false);
+  const [nativeProjectPath, setNativeProjectPath] = useState<string>();
   const [textDraft, setTextDraft] = useState<{ readonly position: PointMm; readonly value: string; readonly elementId?: ElementId; readonly fontSize?: number; readonly element?: TextElement }>();
   type DimensionDraft = { readonly phase: "first"; readonly first: DimensionTarget } | { readonly phase: "placement"; readonly first: DimensionTarget; readonly second: DimensionTarget };
   const [dimensionDraft, setDimensionDraft] = useState<DimensionDraft>();
@@ -217,6 +227,20 @@ export function App() {
       removeEventListener("offline", off);
     };
   }, [repository]);
+
+  useEffect(() => {
+    const bridge = desktopFileBridge();
+    if (!bridge) return;
+    void bridge.initialProject().then((result) => {
+      if (!result) return;
+      setProject(result.project);
+      setNativeProjectPath(result.path);
+      useSelectionStore.getState().setSelected(undefined);
+      persist.set("recovered", "Proyecto abierto desde archivo");
+    }).catch((error: unknown) => {
+      persist.set("failed", error instanceof Error ? error.message : "No se pudo abrir el proyecto inicial");
+    });
+  }, [setProject]);
 
   useEffect(() => {
     let cancelled = false;
@@ -423,6 +447,32 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
     editorRef.current = next;
     if (!next.gesture && (persistenceReady || next.document.revision > document.revision)) saveProjectMirror(projectFromDocument(project, next.document));
     setEditor(next);
+  };
+  const openDesktopProject = async () => {
+    const bridge = desktopFileBridge();
+    if (!bridge) return;
+    try {
+      const result = await bridge.openProject();
+      if (!result) return;
+      setProject(result.project);
+      setNativeProjectPath(result.path);
+      useSelectionStore.getState().setSelected(undefined);
+      persist.set("recovered", "Proyecto abierto");
+    } catch (error) {
+      persist.set("failed", error instanceof Error ? error.message : "No se pudo abrir el proyecto");
+    }
+  };
+  const saveDesktopProject = async (saveAs = false) => {
+    const bridge = desktopFileBridge();
+    if (!bridge) return;
+    try {
+      const path = await bridge.saveProject(project, saveAs ? undefined : nativeProjectPath);
+      if (!path) return;
+      setNativeProjectPath(path);
+      persist.set("saved", "Proyecto guardado");
+    } catch (error) {
+      persist.set("failed", error instanceof Error ? error.message : "No se pudo guardar el proyecto");
+    }
   };
   /** The only client-coordinate ingress for document interactions. */
   const documentPointAtClient = (clientX: number, clientY: number): PointMm => {
@@ -1579,7 +1629,7 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
     <header className="topbar">
       <div className="brand" aria-label="KOND DESIGN"><span className="brand-kond">KOND</span> <span className="brand-design">DESIGN</span></div>
       <nav aria-label="Modo de espacio de trabajo"><button className={mode === "design" ? "active" : ""} onClick={() => setMode("design")}>Diseño</button><button className={mode === "prepare" ? "active" : ""} onClick={() => setMode("prepare")}>Preparar <small>Vista previa</small></button></nav>
-      <div className="top-actions"><button aria-label="Deshacer" onClick={() => setEditorState(undo(editorRef.current))}>↶</button><button aria-label="Rehacer" onClick={() => setEditorState(redo(editorRef.current))}>↷</button><span className="project-name">Diseño sin título</span></div>
+      <div className="top-actions">{desktopFileBridge() && <><button aria-label="Abrir proyecto" title="Abrir proyecto" onClick={() => void openDesktopProject()}>Abrir</button><button aria-label="Guardar proyecto" title="Guardar proyecto" onClick={() => void saveDesktopProject()}>Guardar</button><button aria-label="Guardar como" title="Guardar como" onClick={() => void saveDesktopProject(true)}>Guardar como</button></>}<button aria-label="Deshacer" onClick={() => setEditorState(undo(editorRef.current))}>↶</button><button aria-label="Rehacer" onClick={() => setEditorState(redo(editorRef.current))}>↷</button><span className="project-name">Diseño sin título</span></div>
     </header>
     {mode === "prepare" ? <section className="prepare"><div><div className="prepare-icon">◇</div><h1>Preparar aún no está disponible</h1><p>Nodra ofrece actualmente solo un espacio de trabajo de Diseño sin conexión. No hay hardware conectado, controlado ni listo.</p><button onClick={() => setMode("design")}>Volver a Diseño</button></div></section> : <div className="workspace">
       <section className="properties-bar" aria-label="Barra de propiedades">
