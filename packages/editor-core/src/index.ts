@@ -868,6 +868,18 @@ export const updateElementNode = (id: ElementId, nodeIndex: number, point: Point
       const next = updateGlyphNodeData(current, nodeIndex, point);
       return next ? replaceElements(document, document.elements.map((element) => element.id === id ? next : element)) : { success: false, error: "Glyph node not found" };
     }
+    if (current.type === "sketch") {
+      if (!node.nodeId) return { success: false, error: "Sketch node not found" };
+      return replaceElements(document, document.elements.map((element) => element.id === id && element.type === "sketch" ? { ...element, nodes: element.nodes.map((candidate) => candidate.id === node.nodeId ? { ...candidate, point } : candidate) } : element));
+    }
+    if (current.type === "path") {
+      if (!node.nodeId) return { success: false, error: "Path node not found" };
+      return node.kind === "control" ? movePathHandle(id, node.segmentIndex ?? -1, node.handle ?? "control1", point).apply(document) : movePathNode(id, node.nodeId, point).apply(document);
+    }
+    if (current.type === "spline") {
+      if (!node.nodeId) return { success: false, error: "Spline node not found" };
+      return updateSplineNode(id, node.nodeId, point).apply(document);
+    }
     if (node.kind === "center" || ((current.type === "rectangle" || current.type === "ellipse") && node.kind === "corner")) {
       return moveElement(id, { x: point.x - node.point.x, y: point.y - node.point.y }).apply(document);
     }
