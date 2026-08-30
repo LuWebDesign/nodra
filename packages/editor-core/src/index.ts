@@ -882,10 +882,23 @@ export const updateDimensionValue = (dimensionId: ElementId, value: number): Edi
   apply: (document) => {
     if (!Number.isFinite(value) || value <= 0) return { success: false, error: "Dimension value must be positive" };
     const dimension = document.elements.find((element): element is DimensionElement => element.id === dimensionId && element.type === "dimension");
-    if (!dimension || (dimension.kind !== "horizontal" && dimension.kind !== "vertical")) return { success: false, error: "Only horizontal and vertical dimensions can drive rectangles" };
+    if (!dimension) return { success: false, error: "Dimension not found" };
     const targetId = dimension.references[0].elementId;
-    if (dimension.references[1].elementId !== targetId) return { success: false, error: "Driving dimensions require one referenced rectangle" };
+    if (dimension.references[1].elementId !== targetId) return { success: false, error: "Driving dimensions require one referenced element" };
     const target = document.elements.find((element) => element.id === targetId);
+    if (dimension.kind === "radius") {
+      if (target?.type !== "ellipse" || target.size.width !== target.size.height) return { success: false, error: "Radius driving dimensions require a circle" };
+      const first = dimension.references[0]; const second = dimension.references[1];
+      if (!("kind" in first) || !("kind" in second) || first.kind !== "node" || second.kind !== "node" || !first.nodeId || !second.nodeId || ![first.nodeId, second.nodeId].includes("center") || first.nodeId === second.nodeId) return { success: false, error: "Radius driving references require center and rim nodes" };
+      const rimId = first.nodeId === "center" ? second.nodeId : first.nodeId;
+      const center = elementCenter(target); const rim = realGeometryNodes(target).find((node) => node.nodeId === rimId)?.point;
+      if (!rim) return { success: false, error: "Radius driving rim reference is invalid" };
+      const currentRadius = Math.hypot(rim.x - center.x, rim.y - center.y);
+      if (!Number.isFinite(currentRadius) || currentRadius <= 0) return { success: false, error: "Radius driving circle is degenerate" };
+      const position = { x: center.x - value, y: center.y - value };
+      return replaceElements(document, document.elements.map((element) => element.id === target.id && element.type === "ellipse" ? { ...element, position, size: { width: value * 2, height: value * 2 } } : element));
+    }
+    if (dimension.kind !== "horizontal" && dimension.kind !== "vertical") return { success: false, error: "Only horizontal and vertical dimensions can drive rectangles" };
     if (target?.type === "path") {
       const first = dimension.references[0]; const second = dimension.references[1];
       if (!("kind" in first) || !("kind" in second) || first.kind !== "node" || second.kind !== "node") return { success: false, error: "Path driving dimensions require node references" };
