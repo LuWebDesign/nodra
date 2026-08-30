@@ -56,6 +56,15 @@ const sketch = z.object({ id: nonEmptyId, layerId: nonEmptyId, type: z.literal("
   if (new Set(nodeIds).size !== nodeIds.length) ctx.addIssue({ code: "custom", message: "Sketch node IDs must be unique", path: ["nodes"] });
   if (new Set(edgeIds).size !== edgeIds.length) ctx.addIssue({ code: "custom", message: "Sketch edge IDs must be unique", path: ["edges"] });
   const known = new Set(nodeIds);
+  const constraints = value.constraints ?? [];
+  const constraintIds = constraints.map((constraint) => constraint.id);
+  if (new Set(constraintIds).size !== constraintIds.length) ctx.addIssue({ code: "custom", message: "Sketch constraint IDs must be unique", path: ["constraints"] });
+  constraints.forEach((constraint, index) => {
+    if (constraint.references.some((reference) => reference.elementId !== value.id || !known.has(reference.nodeId))) ctx.addIssue({ code: "custom", message: "Sketch constraint references an unknown node", path: ["constraints", index, "references"] });
+    const expectedReferences = constraint.kind === "fixed" ? 1 : 2;
+    if (constraint.references.length !== expectedReferences) ctx.addIssue({ code: "custom", message: constraint.kind + " constraints require " + expectedReferences + " reference" + (expectedReferences === 1 ? "" : "s"), path: ["constraints", index, "references"] });
+    if ((constraint.kind === "distance-horizontal" || constraint.kind === "distance-vertical") && (constraint.value === undefined || constraint.value <= 0)) ctx.addIssue({ code: "custom", message: "Distance constraints require a positive value", path: ["constraints", index, "value"] });
+  });
   value.edges.forEach((edge, index) => {
     if (!known.has(edge.startNodeId) || !known.has(edge.endNodeId)) ctx.addIssue({ code: "custom", message: "Sketch edge references an unknown node", path: ["edges", index] });
     if (edge.startNodeId === edge.endNodeId) ctx.addIssue({ code: "custom", message: "Sketch edge endpoints must differ", path: ["edges", index] });
