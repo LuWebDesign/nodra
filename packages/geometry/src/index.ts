@@ -1,5 +1,5 @@
 import polygonClipping, { type MultiPolygon } from "polygon-clipping";
-import type { ConnectableNodeAddress, ContourElement, DimensionElement, Element, ElementId, EllipseElement, GlyphElement, HandleOffset, LineElement, PathCubicSegment, PathElement, PointMm, RectangleElement, SizeMm, SketchElement, SplineElement, SplineNode } from "@nodra/domain";
+import type { ConnectableNodeAddress, ContourElement, DimensionElement, Element, ElementId, EllipseElement, GlyphElement, HandleOffset, LineElement, PathCubicSegment, PathElement, PointMm, RectangleElement, SizeMm, SketchConstraint, SketchElement, SplineElement, SplineNode } from "@nodra/domain";
 
 export interface Bounds { readonly x: number; readonly y: number; readonly width: number; readonly height: number }
 export interface Viewport { readonly zoom: number; readonly panMm: PointMm }
@@ -152,6 +152,50 @@ export interface BezierHandleGuide { readonly nodeId: string; readonly anchor: P
 export interface LinearDimensionGeometry { readonly kind: "aligned" | "horizontal" | "vertical" | "diameter"; readonly start: PointMm; readonly end: PointMm; readonly lineStart: PointMm; readonly lineEnd: PointMm; readonly text: PointMm; readonly value: number }
 export interface AngularDimensionGeometry { readonly kind: "angular"; readonly vertex: PointMm; readonly start: PointMm; readonly end: PointMm; readonly lineStart: PointMm; readonly lineEnd: PointMm; readonly text: PointMm; readonly value: number; readonly radius: number; readonly sweep: 0 | 1 }
 export type DimensionGeometry = LinearDimensionGeometry | AngularDimensionGeometry;
+export type SketchConstraintStatus = "underdefined" | "defined" | "conflict" | "overdefined";
+export interface SketchConstraintSolveResult { readonly sketch: SketchElement; readonly status: SketchConstraintStatus; readonly conflicts: readonly string[] }
+
+/** Applies the bounded, deterministic first-slice sketch constraints without guessing unsupported geometry. */
+export function solveSketchConstraints(sketch: SketchElement): SketchConstraintSolveResult {
+  const constraints = sketch.constraints ?? [];
+  const nodes = new Map(sketch.nodes.map((node) => [node.id, { ...node.point }]));
+  const conflicts: string[] = [];
+  const resolve = (reference: { readonly elementId: string; readonly nodeId: string }) => reference.elementId === sketch.id ? nodes.get(reference.nodeId) : undefined;
+  const refs = (constraint: SketchConstraint) => constraint.references.map(resolve);
+  const samePair = (a: SketchConstraint, b: SketchConstraint) => a.kind === b.kind && a.references.length === b.references.length && a.references.every((reference, index) => reference.elementId === b.references[index]?.elementId && reference.nodeId === b.references[index]?.nodeId);
+  for (const constraint of [...constraints].sort((a, b) => a.id.localeCompare(b.id))) {
+    const points = refs(constraint);
+    if (points.some((point) => !point)) { conflicts.push(constraint.id); continue; }
+    const first = points[0]!; const second = points[1];
+    if (constraint.kind === "fixed") { first.x = 0; first.y = 0; continue; }
+    if (!second) { conflicts.push(constraint.id); continue; }
+    if (constraint.kind === "coincident") { second.x = first.x; second.y = first.y; }
+    else if (constraint.kind === "horizontal") second.y = first.y;
+    else if (constraint.kind === "vertical") second.x = first.x;
+    else if (constraint.kind === "distance-horizontal" || constraint.kind === "distance-vertical") {
+      if (constraint.value === undefined) { conflicts.push(constraint.id); continue; }
+      if (constraint.kind === "distance-horizontal") second.x = first.x + (second.x < first.x ? -constraint.value : constraint.value);
+      else second.y = first.y + (second.y < first.y ? -constraint.value : constraint.value);
+    }
+  }
+  const failed = [...constraints].filter((constraint) => {
+    const points = refs(constraint); const first = points[0]; const second = points[1];
+    if (!first || (constraint.kind !== "fixed" && !second)) return true;
+    if (constraint.kind === "fixed") return first.x !== 0 || first.y !== 0;
+    if (constraint.kind === "coincident") return first.x !== second!.x || first.y !== second!.y;
+    if (constraint.kind === "horizontal") return first.y !== second!.y;
+    if (constraint.kind === "vertical") return first.x !== second!.x;
+    if (constraint.kind === "distance-horizontal") return Math.abs(Math.abs(second!.x - first.x) - (constraint.value ?? -1)) > 1e-6;
+    return Math.abs(Math.abs(second!.y - first.y) - (constraint.value ?? -1)) > 1e-6;
+  }).map((constraint) => constraint.id);
+  conflicts.push(...failed.filter((id) => !conflicts.includes(id)));
+  const duplicate = constraints.filter((constraint, index) => constraints.some((other, otherIndex) => otherIndex < index && samePair(constraint, other))).map((constraint) => constraint.id);
+  conflicts.push(...duplicate.filter((id) => !conflicts.includes(id)));
+  const fixedNodeIds = new Set(constraints.filter((constraint) => constraint.kind === "fixed").flatMap((constraint) => constraint.references.filter((reference) => reference.elementId === sketch.id).map((reference) => reference.nodeId)));
+  const status: SketchConstraintStatus = conflicts.length ? duplicate.length ? "overdefined" : "conflict" : fixedNodeIds.size >= sketch.nodes.length ? "defined" : "underdefined";
+  return { sketch: { ...sketch, nodes: sketch.nodes.map((node) => ({ ...node, point: nodes.get(node.id) ?? node.point })) }, status, conflicts: [...new Set(conflicts)] };
+}
+
 export type DimensionPlacementKind = Extract<DimensionElement["kind"], "aligned" | "horizontal" | "vertical">;
 export const pointMidpoint = (first: PointMm, second: PointMm): PointMm => ({ x: (first.x + second.x) / 2, y: (first.y + second.y) / 2 });
 export const dimensionKindForNodes = (first: PointMm, second: PointMm): DimensionPlacementKind => {
