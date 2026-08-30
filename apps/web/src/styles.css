@@ -124,10 +124,10 @@
 .cut-segment-hover-overlay { position:absolute; inset:0; width:100%; height:100%; overflow:visible; pointer-events:none; z-index:6; }.cut-segment-hover-overlay line,.cut-segment-hover-overlay polyline { fill:none; stroke:#ef4444; stroke-width:2; stroke-linecap:round; stroke-linejoin:round; vector-effect:non-scaling-stroke; }
   .node-hover-feedback { position:absolute; z-index:5; box-sizing:border-box; width:3mm; height:3mm; border:1px solid #111827; border-radius:50%; background:#f59e0b; box-shadow:none; transform:translate(-50%,-50%); pointer-events:none; }
 .canvas, .canvas * { cursor:default !important; }
-.dimension-value-editor { position:absolute; z-index:20; display:flex; align-items:flex-end; gap:4px; padding:6px; background:#ffffff; border:1px solid #f59e0b; border-radius:6px; box-shadow:0 4px 12px rgba(15,23,42,.18); font-size:11px; }
+.dimension-value-editor { position:absolute; z-index:20; display:flex; align-items:flex-end; gap:8px; padding:10px; background:#ffffff; border:1px solid #f59e0b; border-radius:6px; box-shadow:0 4px 12px rgba(15,23,42,.18); font-size:11px; }
 .dimension-value-editor label { display:flex; flex-direction:column; gap:2px; color:#374151; font-weight:600; }
-.dimension-value-editor input { width:76px; padding:3px 4px; border:1px solid #cbd5e1; border-radius:3px; }
-.dimension-value-editor button { padding:4px 6px; border:1px solid #cbd5e1; border-radius:3px; background:#f8fafc; cursor:pointer; font-size:10px; }
+.dimension-value-editor input { width:120px; padding:7px 8px; border:1px solid #cbd5e1; border-radius:3px; }
+.dimension-value-editor button { min-width:82px; padding:8px 10px; border:1px solid #cbd5e1; border-radius:3px; background:#f8fafc; cursor:pointer; font-size:10px; }
 .dimension-value-editor button { color:#111827; background:#f1f5f9; opacity:1; }
 .dimension-value-editor button[type="submit"] { color:#ffffff; background:#f59e0b; border-color:#d97706; }
 .constraint-controls { margin-top:10px; padding-top:10px; border-top:1px solid var(--line); }
