@@ -678,7 +678,7 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
      setCenterHover(undefined);
        setCursorPoint(canvasPointAt(event));
        setDocumentCursorPoint(pointAt(event));
-       if (isDrawingTool(tool)) { const pointer = pointAt(event); const draft = creationDraftRef.current; const direction = project.preferences.lineGuidesEnabled && tool === "line" && draft?.points.length ? directionalGuide(draft.points.at(-1)!, pointer, project.preferences.lineGuideAngle) : undefined; setDirectionalGuideState(direction); setCreationPoint(direction?.snappedPoint ?? pointer); }
+       if (isDrawingTool(tool)) { const pointer = pointAt(event); const draft = creationDraftRef.current; const direction = project.preferences.lineGuidesEnabled && tool === "line" && draft?.points.length ? directionalGuide(draft.points.at(-1)!, pointer, project.preferences.lineGuideAngle) : undefined; setDirectionalGuideState(undefined); setCreationPoint(direction?.snappedPoint ?? pointer); }
      setSnapGuide(undefined);
      setAlignmentGuideState([]);
      if (tool !== "forma") setEditModeElementIds([]);
@@ -696,8 +696,7 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
             const draftForDirection = creationDraftRef.current;
             const direction = project.preferences.lineGuidesEnabled && tool === "line" && draftForDirection?.points.length ? directionalGuide(draftForDirection.points.at(-1)!, rawCreationPoint!, project.preferences.lineGuideAngle) : undefined;
             const creationPointForClick = creationSnap?.point ?? direction?.snappedPoint ?? rawCreationPoint;
-            setDirectionalGuideState(direction);
-       const inferredPoint = snapCreationPoint(editorRef.current.document, point, zoom)?.point ?? point;
+           const inferredPoint = snapCreationPoint(editorRef.current.document, point, zoom)?.point ?? point;
       if (tool === "rectangle" || tool === "ellipse") {
         const creationPoint = creationPointForClick ?? point;
         const draft = creationDraftRef.current;
@@ -940,7 +939,7 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
   const onCanvasPointerMove = (event: PointerEvent<HTMLDivElement>) => {
        setCursorPoint(canvasPointAt(event));
       setDocumentCursorPoint(pointAt(event));
-       if (isDrawingTool(tool)) setCreationPoint(pointAt(event));
+       if (isDrawingTool(tool)) { const pointer = pointAt(event); const draft = creationDraftRef.current; const direction = project.preferences.lineGuidesEnabled && tool === "line" && draft?.points.length ? directionalGuide(draft.points.at(-1)!, pointer, project.preferences.lineGuideAngle) : undefined; setDirectionalGuideState(direction); setCreationPoint(direction?.snappedPoint ?? pointer); }
       const feedbackTool = tool === "text" || tool === "pan" ? undefined : tool;
      if (tool === "cut" && !interaction.current) setCutSegmentHover(pickCuttableSegment(editorRef.current.document, pointAt(event), zoom));
      else setCutSegmentHover(undefined);
