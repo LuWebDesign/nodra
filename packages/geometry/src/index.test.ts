@@ -1,12 +1,29 @@
 import { describe, expect, it } from "vitest";
-import { angularDimensionGeometry, bezierHandlePoint, boundsOf, boundsOfElements, boundsOutsidePage, connectableNode, connectableNodeAddress, closedElementToPolygon, cubicBezierBounds, cuttableSegments, cubicBezierDerivative, degreesToRadians, dimensionGeometry, dimensionKindForNodes, dimensionKindForPlacement, dimensionOffsetForAlignedPlacement, dimensionOffsetForPlacement, editableGeometryNodes, elementCenter, elementSegmentAt, elementToContour, evaluateCubicBezier, ELLIPSE_APPROXIMATION_SEGMENTS, groupCenter, groupHandlePoints, hitTest, mirrorHandleOffset, mmToScreen, pointMidpoint, radiansToDegrees, realGeometryNodes, resizeGroup, resizeHandle, rotatedLineEndpoints, rotateElements, rotationFromDrag, rotationHandlePoints, screenToMm, shapeResultContours, sketchClosedContours, splitCubicBezier, splitCuttableSegments, validateSize, visibleBezierHandleGuides } from "./index.js";
+import { angularDimensionGeometry, bezierHandlePoint, boundsOf, boundsOfElements, boundsOutsidePage, connectableNode, connectableNodeAddress, closedElementToPolygon, cubicBezierBounds, cuttableSegments, cubicBezierDerivative, degreesToRadians, dimensionGeometry, dimensionKindForNodes, dimensionKindForPlacement, dimensionOffsetForAlignedPlacement, dimensionOffsetForPlacement, editableGeometryNodes, elementCenter, elementSegmentAt, elementToContour, evaluateCubicBezier, ELLIPSE_APPROXIMATION_SEGMENTS, groupCenter, groupHandlePoints, hitTest, mirrorHandleOffset, mmToScreen, pointMidpoint, radiansToDegrees, realGeometryNodes, resizeGroup, resizeHandle, rotatedLineEndpoints, rotateElements, rotationFromDrag, solveSketchConstraints, rotationHandlePoints, screenToMm, shapeResultContours, sketchClosedContours, splitCubicBezier, splitCuttableSegments, validateSize, visibleBezierHandleGuides } from "./index.js";
 import { elementId, layerId } from "@nodra/domain";
 
 const style = { stroke: "#000", strokeWidth: 0.2 };
 const rectangle = { type: "rectangle" as const, id: elementId("r"), layerId: layerId("l"), position: { x: 10, y: 20 }, size: { width: 20, height: 10 }, cornerRadius: 0, rotation: 0, style };
 
 describe("canonical millimetre geometry", () => {
-  it("exposes sketch nodes, edge hit testing, and bounds", () => {
+  it("solves horizontal and distance constraints deterministically", () => {
+    const sketch = { type: "sketch" as const, id: elementId("solver"), layerId: layerId("l"), nodes: [{ id: "a", point: { x: 0, y: 0 } }, { id: "b", point: { x: 7, y: 4 } }], edges: [{ id: "ab", startNodeId: "a", endNodeId: "b" }], constraints: [{ id: "h", kind: "horizontal" as const, references: [{ elementId: elementId("solver"), nodeId: "a" }, { elementId: elementId("solver"), nodeId: "b" }] as const }, { id: "d", kind: "distance-horizontal" as const, references: [{ elementId: elementId("solver"), nodeId: "a" }, { elementId: elementId("solver"), nodeId: "b" }] as const, value: 20 }], style };
+    const result = solveSketchConstraints(sketch);
+    expect(result.status).toBe("underdefined");
+    expect(result.sketch.nodes[1]?.point).toEqual({ x: 20, y: 0 });
+  });
+  it("rejects ambiguous zero-axis distances and detects reversed duplicates", () => {
+        const sketch = { type: "sketch" as const, id: elementId("solver-safety"), layerId: layerId("l"), nodes: [{ id: "a", point: { x: 0, y: 0 } }, { id: "b", point: { x: 0, y: 5 } }], edges: [{ id: "ab", startNodeId: "a", endNodeId: "b" }], constraints: [{ id: "distance", kind: "distance-horizontal" as const, references: [{ elementId: elementId("solver-safety"), nodeId: "a" }, { elementId: elementId("solver-safety"), nodeId: "b" }] as const, value: 10 }, { id: "h1", kind: "horizontal" as const, references: [{ elementId: elementId("solver-safety"), nodeId: "a" }, { elementId: elementId("solver-safety"), nodeId: "b" }] as const }, { id: "h2", kind: "horizontal" as const, references: [{ elementId: elementId("solver-safety"), nodeId: "b" }, { elementId: elementId("solver-safety"), nodeId: "a" }] as const }], style };
+        const result = solveSketchConstraints(sketch);
+        expect(result.status).toBe("conflict");
+        expect(result.conflicts).toEqual(["distance", "h2"]);
+        expect(result.sketch.nodes[1]?.point).toEqual({ x: 0, y: 0 });
+      });
+      it("reports fully constrained sketches as defined using independent degrees of freedom", () => {
+        const sketch = { type: "sketch" as const, id: elementId("defined"), layerId: layerId("l"), nodes: [{ id: "a", point: { x: 3, y: 4 } }, { id: "b", point: { x: 8, y: 9 } }], edges: [{ id: "ab", startNodeId: "a", endNodeId: "b" }], constraints: [{ id: "fa", kind: "fixed" as const, references: [{ elementId: elementId("defined"), nodeId: "a" }] as const }, { id: "fb", kind: "fixed" as const, references: [{ elementId: elementId("defined"), nodeId: "b" }] as const }], style };
+        expect(solveSketchConstraints(sketch).status).toBe("defined");
+      });
+      it("exposes sketch nodes, edge hit testing, and bounds", () => {
     const sketch = { type: "sketch" as const, id: elementId("sketch"), layerId: layerId("l"), nodes: [{ id: "a", point: { x: 0, y: 0 } }, { id: "b", point: { x: 10, y: 0 } }, { id: "c", point: { x: 10, y: 10 } }], edges: [{ id: "ab", startNodeId: "a", endNodeId: "b" }, { id: "bc", startNodeId: "b", endNodeId: "c" }], style };
     expect(realGeometryNodes(sketch).map((node) => node.nodeId)).toEqual(["a", "b", "c"]);
     expect(connectableNodeAddress(sketch, 1)).toEqual({ kind: "sketch", nodeId: "b" });
@@ -53,7 +70,18 @@ describe("canonical millimetre geometry", () => {
     expect(geometry?.value).toBeCloseTo(Math.hypot(30, 30));
     expect(geometry && geometry.lineEnd.x - geometry.lineStart.x).toBeCloseTo(geometry ? geometry.lineEnd.y - geometry.lineStart.y : 0);
   });
-  it("resizes a group around its existing bounds center when requested", () => {
+
+  it("calculates an automatic diameter from an ellipse center and rim node", () => {
+    const ellipse = { type: "ellipse" as const, id: elementId("diameter-ellipse"), layerId: layerId("l"), position: { x: 10, y: 10 }, size: { width: 20, height: 20 }, rotation: 0, style };
+    const dimension = { type: "dimension" as const, id: elementId("diameter"), layerId: layerId("l"), kind: "diameter" as const, references: [{ kind: "node" as const, elementId: ellipse.id, nodeIndex: 4, nodeId: "center" }, { kind: "node" as const, elementId: ellipse.id, nodeIndex: 5, nodeId: "n" }] as const, offset: { x: 0, y: -8 }, precision: 2, units: "mm" as const, rotation: 0 as const, style };
+    expect(dimensionGeometry(dimension, [ellipse])?.value).toBe(20);
+  });
+  it("resolves associative node references by stable node id after node reordering", () => {
+    const sketch = { type: "sketch" as const, id: elementId("stable-sketch"), layerId: layerId("l"), nodes: [{ id: "a", point: { x: 10, y: 10 } }, { id: "b", point: { x: 40, y: 10 } }], edges: [{ id: "ab", startNodeId: "a", endNodeId: "b" }], style };
+    const dimension = { type: "dimension" as const, id: elementId("stable-dimension"), layerId: layerId("l"), kind: "horizontal" as const, references: [{ kind: "node" as const, elementId: sketch.id, nodeIndex: 0, nodeId: "a" }, { kind: "node" as const, elementId: sketch.id, nodeIndex: 1, nodeId: "b" }] as const, offset: { x: 0, y: -5 }, precision: 2, units: "mm" as const, rotation: 0 as const, style };
+    const reordered = { ...sketch, nodes: [sketch.nodes[1]!, sketch.nodes[0]!] };
+    expect(dimensionGeometry(dimension, [reordered])?.value).toBe(30);
+  });  it("resizes a group around its existing bounds center when requested", () => {
     const second = { ...rectangle, id: elementId("r2"), position: { x: 40, y: 25 }, size: { width: 10, height: 15 } };
     const before = boundsOfElements([rectangle, second]);
     const resized = resizeGroup([rectangle, second], "se", { x: before.x + 80, y: before.y + 40 }, 1, false, true);

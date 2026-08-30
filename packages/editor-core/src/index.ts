@@ -2,6 +2,8 @@ import {
   type DocumentSnapshot,
   type Element,
   type ElementId,
+  type DimensionElement,
+      type SketchConstraint,
   type Layer,
   type LayerId,
   type PointMm,
@@ -23,7 +25,7 @@ import {
   withElements,
 } from "@nodra/domain";
 import { validateDocument } from "@nodra/validation";
-import { boundsOfElements, contourWithPoints, directionVector, elementCenter, elementToContour, glyphGeometryNodes, groupCenter, mirrorHandleOffset, realGeometryNodes, resizeGroup, rotateElements, shapeResultContours, transformPoint, splitCuttableSegments, classifyCutGraph, cuttableSegments, type Direction } from "@nodra/geometry";
+import { boundsOfElements, contourWithPoints, directionVector, elementCenter, elementToContour, glyphGeometryNodes, groupCenter, mirrorHandleOffset, realGeometryNodes, resizeGroup, rotateElements, shapeResultContours, transformPoint, splitCuttableSegments, classifyCutGraph, cuttableSegments, solveSketchConstraints, type Direction } from "@nodra/geometry";
 import { insertSplineNode, moveSplineHandle as moveSplineHandleData, moveSplineNode as moveSplineNodeData } from "./spline.js";
 
 export * from "./spline.js";
@@ -134,7 +136,7 @@ export const convertTextToGlyphs = (textId: ElementId, outlines: readonly GlyphO
 export const deleteElement = (id: ElementId): EditorCommand => ({
   name: `delete:${id}`,
   apply: (document) => document.elements.some((element) => element.id === id)
-    ? replaceElements(removeConnectionsFor(document, new Set([id])), document.elements.filter((element) => element.id !== id))
+    ? replaceElements(removeConnectionsFor(document, new Set([id])), document.elements.filter((element) => element.id !== id && !(element.type === "dimension" && element.references.some((reference) => reference.elementId === id))))
     : { success: false, error: `Element not found: ${id}` },
 });
 
@@ -847,6 +849,80 @@ export const insertFormaNode = (id: ElementId, address: ContourSegmentAddress, p
     const contour = elementToContour(current);
     const inserted = insertContourNode(id, address, point).apply({ ...document, elements: document.elements.map((element) => element.id === id ? contour : element) });
     return inserted.success ? inserted : { success: false, error: inserted.error };
+  },
+});
+
+export const updateDimensionValue = (dimensionId: ElementId, value: number): EditorCommand => ({
+  name: `dimension-value:${dimensionId}`,
+  apply: (document) => {
+    if (!Number.isFinite(value) || value <= 0) return { success: false, error: "Dimension value must be positive" };
+    const dimension = document.elements.find((element): element is DimensionElement => element.id === dimensionId && element.type === "dimension");
+    if (!dimension || (dimension.kind !== "horizontal" && dimension.kind !== "vertical")) return { success: false, error: "Only horizontal and vertical dimensions can drive rectangles" };
+    const targetId = dimension.references[0].elementId;
+    if (dimension.references[1].elementId !== targetId) return { success: false, error: "Driving dimensions require one referenced rectangle" };
+    const target = document.elements.find((element) => element.id === targetId);
+    if (!target || target.type !== "rectangle" || target.rotation !== 0) return { success: false, error: "Driving dimensions currently require an unrotated rectangle" };
+    const center = { x: target.position.x + target.size.width / 2, y: target.position.y + target.size.height / 2 };
+    const size = dimension.kind === "horizontal" ? { width: value, height: target.size.height } : { width: target.size.width, height: value };
+    const position = { x: center.x - size.width / 2, y: center.y - size.height / 2 };
+    return replaceElements(document, document.elements.map((element) => element.id === target.id && element.type === "rectangle" ? { ...element, position, size } : element));
+  },
+});
+
+const validateSketchConstraint = (sketch: SketchElement, constraint: SketchConstraint): string | undefined => {
+  if (!constraint.references.every((reference) => reference.elementId === sketch.id && sketch.nodes.some((node) => node.id === reference.nodeId))) return "Sketch constraint references are invalid";
+  if ((constraint.kind === "horizontal" || constraint.kind === "vertical" || constraint.kind === "coincident" || constraint.kind === "distance-horizontal" || constraint.kind === "distance-vertical") && constraint.references.length !== 2) return "This sketch constraint requires two references";
+  if (constraint.kind === "fixed" && constraint.references.length !== 1) return "A fixed constraint requires one reference";
+  if ((constraint.kind === "distance-horizontal" || constraint.kind === "distance-vertical" ) && (!Number.isFinite(constraint.value) || constraint.value === undefined || constraint.value <= 0)) return "Distance constraints require a positive value";
+  return undefined;
+};
+
+const solveSketchCandidate = (document: DocumentSnapshot, sketch: SketchElement, constraints: readonly SketchConstraint[]): CommandResult => {
+  const validationError = constraints.map((constraint) => validateSketchConstraint(sketch, constraint)).find((error): error is string => error !== undefined);
+  if (validationError) return { success: false, error: validationError };
+  const solved = solveSketchConstraints({ ...sketch, constraints });
+  if (solved.status === "conflict" || solved.status === "overdefined") return { success: false, error: `Sketch constraints are ${solved.status}` };
+  return replaceElements(document, document.elements.map((element) => element.id === sketch.id ? solved.sketch : element));
+};
+
+export const addSketchConstraint = (sketchId: ElementId, constraint: SketchConstraint): EditorCommand => ({
+  name: `sketch-constraint-add:${sketchId}:${constraint.id}`,
+  apply: (document) => {
+    const sketch = document.elements.find((element): element is SketchElement => element.id === sketchId && element.type === "sketch");
+    if (!sketch || sketch.constraints?.some((current) => current.id === constraint.id)) return { success: false, error: "Sketch constraint cannot be added" };
+    return solveSketchCandidate(document, sketch, [...(sketch.constraints ?? []), constraint]);
+  },
+});
+
+export const updateSketchConstraint = (sketchId: ElementId, constraintId: string, constraint: SketchConstraint): EditorCommand => ({
+  name: `sketch-constraint-update:${sketchId}:${constraintId}`,
+  apply: (document) => {
+    const sketch = document.elements.find((element): element is SketchElement => element.id === sketchId && element.type === "sketch");
+    const current = sketch?.constraints?.find((candidate) => candidate.id === constraintId);
+    if (!sketch || !current) return { success: false, error: "Sketch constraint not found" };
+    if (constraint.id !== constraintId) return { success: false, error: "Sketch constraint id cannot change" };
+    const constraints = sketch.constraints!.map((candidate) => candidate.id === constraintId ? constraint : candidate);
+    return solveSketchCandidate(document, sketch, constraints);
+  },
+});
+
+export const deleteSketchConstraint = (sketchId: ElementId, constraintId: string): EditorCommand => ({
+  name: `sketch-constraint-delete:${sketchId}:${constraintId}`,
+  apply: (document) => {
+    const sketch = document.elements.find((element): element is SketchElement => element.id === sketchId && element.type === "sketch");
+    if (!sketch || !sketch.constraints?.some((constraint) => constraint.id === constraintId)) return { success: false, error: "Sketch constraint not found" };
+    return solveSketchCandidate(document, sketch, sketch.constraints.filter((constraint) => constraint.id !== constraintId));
+  },
+});
+
+export const solveSketch = (sketchId: ElementId): EditorCommand => ({
+  name: `sketch-solve:${sketchId}`,
+  apply: (document) => {
+    const sketch = document.elements.find((element): element is SketchElement => element.id === sketchId && element.type === "sketch");
+    if (!sketch) return { success: false, error: "Sketch not found" };
+    const result = solveSketchConstraints(sketch);
+    if (result.status === "conflict" || result.status === "overdefined") return { success: false, error: `Sketch constraints are ${result.status}` };
+    return replaceElements(document, document.elements.map((element) => element.id === sketchId ? result.sketch : element));
   },
 });
 

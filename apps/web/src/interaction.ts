@@ -574,6 +574,8 @@ export function containsBounds(container: Bounds, candidate: Bounds): boolean {
   return candidate.x >= container.x && candidate.y >= container.y && candidate.x + candidate.width <= container.x + container.width && candidate.y + candidate.height <= container.y + container.height;
 }
 
+const distanceToSegment = (point: PointMm, start: PointMm, end: PointMm): number => { const dx = end.x - start.x; const dy = end.y - start.y; const lengthSquared = dx * dx + dy * dy; const t = lengthSquared === 0 ? 0 : Math.max(0, Math.min(1, ((point.x - start.x) * dx + (point.y - start.y) * dy) / lengthSquared)); return Math.hypot(point.x - (start.x + t * dx), point.y - (start.y + t * dy)); };
+
 export function pickElement(document: DocumentSnapshot, point: PointMm, zoom: number): ElementId | undefined {
   if (!Number.isFinite(zoom) || zoom <= 0) throw new Error("zoom must be positive");
   const node = pickNode(document, point, zoom);
@@ -585,7 +587,8 @@ export function pickElement(document: DocumentSnapshot, point: PointMm, zoom: nu
     if (!visible.has(element.layerId)) return false;
     if (element.type !== "dimension") return hitTest(element, point, tolerance);
     const geometry = dimensionGeometry(element, document.elements);
-    return Boolean(geometry && (Math.hypot(point.x - geometry.text.x, point.y - geometry.text.y) <= Math.max(tolerance, 3) || Math.hypot(point.x - geometry.lineStart.x, point.y - geometry.lineStart.y) <= tolerance || Math.hypot(point.x - geometry.lineEnd.x, point.y - geometry.lineEnd.y) <= tolerance));
+        const dimensionTolerance = Math.max(tolerance, 12);
+    return Boolean(geometry && (distanceToSegment(point, geometry.lineStart, geometry.lineEnd) <= dimensionTolerance || Math.hypot(point.x - geometry.text.x, point.y - geometry.text.y) <= dimensionTolerance || Math.hypot(point.x - geometry.text.x, point.y - (geometry.text.y - 8)) <= dimensionTolerance));
   })?.id;
 }
 

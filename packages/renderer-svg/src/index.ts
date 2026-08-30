@@ -1,5 +1,5 @@
 import { CURRENT_SCHEMA_VERSION, type Element, type PathElement, type SplineElement } from "@nodra/domain";
-import { dimensionGeometry, mmToScreen, sketchClosedContours, type Viewport } from "@nodra/geometry";
+import { dimensionGeometry, mmToScreen, sketchClosedContours, solveSketchConstraints, type Viewport } from "@nodra/geometry";
 import { validateDocument } from "@nodra/validation";
 
 const MAX_ISSUES = 8;
@@ -48,7 +48,7 @@ function renderElement(element: Element, viewport: Viewport): string {
     if (!geometry) return "";
     const start = screen(geometry.start); const end = screen(geometry.end); const lineStart = screen(geometry.lineStart); const lineEnd = screen(geometry.lineEnd); const text = screen(geometry.text);
     if (geometry.kind === "angular") return renderAngularDimension(element, geometry, viewport);
-    const value = `${geometry.value.toFixed(element.precision)} ${element.units}`;
+    const value = `${geometry.kind === "diameter" ? "Ø" : ""}${geometry.value.toFixed(element.precision)} ${element.units}`;
     return `<g data-element-id="${escapeAttribute(element.id)}" data-dimension="${element.kind}" ${visualAttributes(element)}><line x1="${number(start.x)}" y1="${number(start.y)}" x2="${number(lineStart.x)}" y2="${number(lineStart.y)}" /><line x1="${number(end.x)}" y1="${number(end.y)}" x2="${number(lineEnd.x)}" y2="${number(lineEnd.y)}" /><line x1="${number(lineStart.x)}" y1="${number(lineStart.y)}" x2="${number(lineEnd.x)}" y2="${number(lineEnd.y)}" /><text x="${number(text.x)}" y="${number(text.y - 4)}" text-anchor="middle" fill="${escapeAttribute(element.style.stroke)}" stroke="none" font-size="12">${escapeAttribute(value)}</text></g>`;
   }
   if (element.type === "rectangle") {
@@ -75,10 +75,13 @@ function renderElement(element: Element, viewport: Viewport): string {
   if (element.type === "sketch") {
     const nodes = new Map(element.nodes.map((node) => [node.id, screen(node.point)]));
     const fill = escapeAttribute(element.style.fill ?? element.style.stroke);
+        const constraintStatus = solveSketchConstraints(element).status;
+        const constraintStroke = constraintStatus === "defined" ? "#111827" : constraintStatus === "conflict" ? "#ef4444" : constraintStatus === "overdefined" ? "#f59e0b" : "#2563eb";
+        const sketchAttributes = visualAttributes(element).replace(`stroke="${escapeAttribute(element.style.stroke)}"`, `stroke="${constraintStroke}"`);
     const contours = sketchClosedContours(element).map((contour) => contour.map((point, index) => { const current = screen(point); return `${index === 0 ? "M" : "L"}${number(current.x)} ${number(current.y)}`; }).join(" ") + " Z").join(" ");
     const faces = contours ? `<path data-sketch-fill="true" d="${escapeAttribute(contours)}" fill="${fill}" fill-opacity="${DEFAULT_FILL_OPACITY}" stroke="none" fill-rule="evenodd" />` : "";
     const lines = element.edges.map((edge) => { const start = nodes.get(edge.startNodeId); const end = nodes.get(edge.endNodeId); return start && end ? `<line x1="${number(start.x)}" y1="${number(start.y)}" x2="${number(end.x)}" y2="${number(end.y)}" />` : ""; }).join("");
-    return `<g data-element-id="${escapeAttribute(element.id)}" ${visualAttributes(element)}>${faces}${lines}</g>`;
+    return `<g data-element-id="${escapeAttribute(element.id)}" ${sketchAttributes}>${faces}${lines}</g>`;
   }
   if (element.type === "contour") {
     const path = element.contours.map((contour) => contour.points.map((point, index) => {
@@ -185,7 +188,7 @@ function renderDimension(element: Extract<Element, { type: "dimension" }>, viewp
   const screen = (point: { x: number; y: number }) => mmToScreen(point, viewport);
   const start = screen(geometry.start); const end = screen(geometry.end); const lineStart = screen(geometry.lineStart); const lineEnd = screen(geometry.lineEnd); const text = screen(geometry.text);
   if (geometry.kind === "angular") return renderAngularDimension(element, geometry, viewport);
-  const value = `${geometry.value.toFixed(element.precision)} ${element.units}`;
+  const value = `${geometry.kind === "diameter" ? "Ø" : ""}${geometry.value.toFixed(element.precision)} ${element.units}`;
   const stroke = escapeAttribute(element.style.stroke);
   const markerId = `dimension-arrow-${escapeAttribute(element.id)}`;
   return `<g data-element-id="${escapeAttribute(element.id)}" data-dimension="${element.kind}" stroke="${stroke}" stroke-width="${number(element.style.strokeWidth)}" fill="none" vector-effect="non-scaling-stroke"><defs><marker id="${markerId}" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 10 5 0 10 2.5 5Z" fill="${stroke}" stroke="none" /></marker></defs><line x1="${number(start.x)}" y1="${number(start.y)}" x2="${number(lineStart.x)}" y2="${number(lineStart.y)}" stroke-dasharray="4 3" opacity="0.7" /><line x1="${number(end.x)}" y1="${number(end.y)}" x2="${number(lineEnd.x)}" y2="${number(lineEnd.y)}" stroke-dasharray="4 3" opacity="0.7" /><line x1="${number(lineStart.x)}" y1="${number(lineStart.y)}" x2="${number(lineEnd.x)}" y2="${number(lineEnd.y)}" marker-start="url(#${markerId})" marker-end="url(#${markerId})" /><text x="${number(text.x)}" y="${number(text.y - 8)}" text-anchor="middle" dominant-baseline="middle" fill="${stroke}" stroke="#ffffff" stroke-width="3" paint-order="stroke" font-size="18" font-weight="600">${escapeAttribute(value)}</text></g>`;

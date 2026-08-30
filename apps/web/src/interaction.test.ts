@@ -87,7 +87,9 @@ describe("canvas coordinates", () => {
     const layer = { id: layerId("dimension-layer"), name: "Dimension layer", visible: true, order: 0 };
     const line = { type: "line" as const, id: elementId("dimension-line"), layerId: layer.id, start: { x: 0, y: 0 }, end: { x: 10, y: 0 }, rotation: 0, style: { stroke: "#000", strokeWidth: 1 } };
     const dimension = { type: "dimension" as const, id: elementId("dimension-hit"), layerId: layer.id, kind: "aligned" as const, references: [{ elementId: line.id, nodeIndex: 0 }, { elementId: line.id, nodeIndex: 2 }] as const, offset: { x: 0, y: -8 }, precision: 2, units: "mm" as const, rotation: 0 as const, style: { stroke: "#2563eb", strokeWidth: 0.45 } };
-    expect(pickElement({ ...createDocument("dimension-doc", [layer]), elements: [line, dimension] }, { x: 5, y: -8 }, 3)).toBe(dimension.id);
+    const checked = { ...createDocument("dimension-doc", [layer]), elements: [line, dimension] };
+     expect(pickElement(checked, { x: 5, y: -8 }, 3)).toBe(dimension.id);
+     expect(pickElement(checked, { x: 5, y: -19 }, 3)).toBe(dimension.id);
   });
 
   it("shows center feedback only when the selected object is the picked object", () => {

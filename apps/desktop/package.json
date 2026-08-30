@@ -1,0 +1,33 @@
+{
+  "name": "@nodra/desktop",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1 --port 1420",
+    "build": "vite build",
+    "tauri": "tauri"
+  },
+  "dependencies": {
+    "@nodra/domain": "workspace:*",
+    "@nodra/editor-core": "workspace:*",
+    "@nodra/geometry": "workspace:*",
+    "@nodra/persistence": "workspace:*",
+    "@nodra/renderer-svg": "workspace:*",
+    "@nodra/validation": "workspace:*",
+    "@tauri-apps/api": "^2.8.0",
+    "@tauri-apps/plugin-dialog": "^2.4.0",
+    "@tauri-apps/plugin-fs": "^2.4.0",
+    "react": "19.1.1",
+    "react-dom": "19.1.1",
+    "zustand": "5.0.8",
+    "opentype.js": "1.3.4"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.8.0",
+    "@types/react": "19.1.10",
+    "@types/react-dom": "19.1.7",
+    "@vitejs/plugin-react": "5.0.2",
+    "vite": "7.1.3"
+  }
+}
