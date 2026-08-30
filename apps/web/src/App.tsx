@@ -696,7 +696,7 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
         const creationSnap = rawCreationPoint ? snapCreationPoint(editorRef.current.document, rawCreationPoint, zoom) : undefined;
             const draftForDirection = creationDraftRef.current;
             const direction = project.preferences.lineGuidesEnabled && tool === "line" && draftForDirection?.points.length ? directionalGuide(draftForDirection.points.at(-1)!, rawCreationPoint!, project.preferences.lineGuideAngle, 5) : undefined;
-            const creationPointForClick = const nodeGuidesForClick = draftForDirection?.points.length ? nodeAlignmentGuides(editorRef.current.document, draftForDirection.points.at(-1)!, rawCreationPoint!, zoom, 5) : [];
+            const nodeGuidesForClick = draftForDirection?.points.length ? nodeAlignmentGuides(editorRef.current.document, draftForDirection.points.at(-1)!, rawCreationPoint!, zoom, 5) : [];
             const nodeGuidedPoint = nodeGuidesForClick.length ? pointAlignedToNodeGuides(rawCreationPoint!, nodeGuidesForClick) : undefined;
             const creationPointForClick = creationSnap?.point ?? nodeGuidedPoint ?? direction?.snappedPoint ?? rawCreationPoint;
            const inferredPoint = snapCreationPoint(editorRef.current.document, point, zoom)?.point ?? point;
