@@ -24,7 +24,7 @@ import {
   withElements,
 } from "@nodra/domain";
 import { validateDocument } from "@nodra/validation";
-import { boundsOfElements, contourWithPoints, directionVector, elementCenter, elementToContour, glyphGeometryNodes, groupCenter, mirrorHandleOffset, realGeometryNodes, resizeGroup, rotateElements, shapeResultContours, transformPoint, splitCuttableSegments, classifyCutGraph, cuttableSegments, type Direction } from "@nodra/geometry";
+import { boundsOfElements, contourWithPoints, directionVector, elementCenter, elementToContour, glyphGeometryNodes, groupCenter, mirrorHandleOffset, realGeometryNodes, resizeGroup, rotateElements, shapeResultContours, transformPoint, splitCuttableSegments, classifyCutGraph, cuttableSegments, solveSketchConstraints, type Direction } from "@nodra/geometry";
 import { insertSplineNode, moveSplineHandle as moveSplineHandleData, moveSplineNode as moveSplineNodeData } from "./spline.js";
 
 export * from "./spline.js";
@@ -865,6 +865,17 @@ export const updateDimensionValue = (dimensionId: ElementId, value: number): Edi
     const size = dimension.kind === "horizontal" ? { width: value, height: target.size.height } : { width: target.size.width, height: value };
     const position = { x: center.x - size.width / 2, y: center.y - size.height / 2 };
     return replaceElements(document, document.elements.map((element) => element.id === target.id && element.type === "rectangle" ? { ...element, position, size } : element));
+  },
+});
+
+export const solveSketch = (sketchId: ElementId): EditorCommand => ({
+  name: `sketch-solve:${sketchId}`,
+  apply: (document) => {
+    const sketch = document.elements.find((element): element is SketchElement => element.id === sketchId && element.type === "sketch");
+    if (!sketch) return { success: false, error: "Sketch not found" };
+    const result = solveSketchConstraints(sketch);
+    if (result.status === "conflict" || result.status === "overdefined") return { success: false, error: `Sketch constraints are ${result.status}` };
+    return replaceElements(document, document.elements.map((element) => element.id === sketchId ? result.sketch : element));
   },
 });
 
