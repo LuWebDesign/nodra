@@ -89,10 +89,12 @@ export const cutSketchEdge = (sketchId: ElementId, segmentIndex: number): Editor
     if (!sketch) return { success: false, error: "Sketch not found" };
     if (!Number.isInteger(segmentIndex) || segmentIndex < 0 || segmentIndex >= sketch.edges.length) return { success: false, error: "Sketch edge not found" };
     const edges = sketch.edges.filter((_, index) => index !== segmentIndex);
-    if (edges.length === 0) return replaceElements(document, document.elements.filter((element) => element.id !== sketchId));
+    if (edges.length === 0) return replaceElements(document, document.elements.filter((element) => element.id !== sketchId && !(element.type === "dimension" && element.references.some((reference) => reference.elementId === sketchId))));
     const usedNodeIds = new Set(edges.flatMap((edge) => [edge.startNodeId, edge.endNodeId]));
     const nodes = sketch.nodes.filter((node) => usedNodeIds.has(node.id));
-    return replaceElements(document, document.elements.map((element) => element.id === sketchId ? { ...sketch, nodes, edges } : element));
+    const removedNodeIds = new Set(sketch.nodes.filter((node) => !usedNodeIds.has(node.id)).map((node) => node.id));
+    const elements = document.elements.filter((element) => !(element.type === "dimension" && element.references.some((reference) => reference.elementId === sketchId && "nodeId" in reference && reference.nodeId !== undefined && removedNodeIds.has(reference.nodeId))));
+    return replaceElements(document, elements.map((element) => element.id === sketchId ? { ...sketch, nodes, edges } : element));
   },
 });
 

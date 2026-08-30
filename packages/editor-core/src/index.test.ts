@@ -72,7 +72,15 @@ describe("editor core", () => {
     const cut = dispatch(closed, cutSketchEdge(sketch.id, 1));
     expect(cut.document.elements[0]).toMatchObject({ type: "sketch", nodes: [{ id: sketch.nodes[0]!.id }, { id: sketch.nodes[1]!.id }, { point: { x: 10, y: 10 } }], edges: [{ startNodeId: sketch.nodes[0]!.id, endNodeId: sketch.nodes[1]!.id }, { startNodeId: branched.nodes[2]!.id, endNodeId: sketch.nodes[0]!.id }] });
   });
-  it("converts a zero-radius rectangle to an open path when cutting one edge", () => {
+  it("removes dimensions whose sketch node is removed by a cut", () => {
+     const sketch = { ...createSketchLine(elementId("cut-dimension-sketch"), layerId("default"), rectangle.style, { x: 0, y: 0 }, { x: 10, y: 0 }), nodes: [{ id: "a", point: { x: 0, y: 0 } }, { id: "b", point: { x: 10, y: 0 } }, { id: "c", point: { x: 20, y: 0 } }], edges: [{ id: "ab", startNodeId: "a", endNodeId: "b" }, { id: "bc", startNodeId: "b", endNodeId: "c" }] };
+     const linked: DimensionElement = { ...dimension, id: elementId("cut-dimension"), references: [{ kind: "node", elementId: sketch.id, nodeIndex: 0, nodeId: "a" }, { kind: "node", elementId: sketch.id, nodeIndex: 2, nodeId: "c" }] };
+     const state = dispatch(createEditor({ ...document, elements: [sketch, linked] }), cutSketchEdge(sketch.id, 1));
+     expect(state.document.elements).toHaveLength(1);
+     expect(state.document.elements[0]).toMatchObject({ type: "sketch", nodes: [{ id: "a" }, { id: "b" }] });
+   });
+
+it("converts a zero-radius rectangle to an open path when cutting one edge", () => {
     const state = dispatch(createEditor({ ...document, elements: [rectangle] }), cutPathSegment(rectangle.id, 0));
     expect(state.document.elements[0]).toMatchObject({ type: "path", closed: false, segments: [{ type: "line" }, { type: "line" }, { type: "line" }] });
   });
