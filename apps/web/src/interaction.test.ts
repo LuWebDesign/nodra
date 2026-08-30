@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createDocument, elementId, layerId, type DocumentSnapshot } from "@nodra/domain";
 import { validateDocument } from "@nodra/validation";
-import { canActivateRotation, circleGeometry, centerPageInCanvas, clientPointToCanvas, clientPointToPage, creationGuides, hasNonCollinearPoints, hoveredSelectionCenter, INITIAL_ZOOM, isDrawingTool, marqueeSelection, MAX_ZOOM, MIN_ZOOM, movementExceedsThreshold, normalizeBounds, normalizeDrag, pagePointToScreen, screenDeltaToMm, screenPointToMm, viewportPointToCanvas, containsBounds, elementsContainedBy, pickDimensionTarget, pickElement, pickFormaElement, pickFormaNode, pickFormaSegment, pickHoverNode, pickCuttableSegment, pickNode, pointerDownIntent, selectedNodeAnchor, selectionCenter, selectionFrame, snapCreationPoint, snapMoveDelta, visibleEditablePathNodeIndexes, zoomAtPoint } from "./interaction.js";
+import { canActivateRotation, circleGeometry, centerPageInCanvas, clientPointToCanvas, clientPointToPage, creationGuides, directionalGuide, hasNonCollinearPoints, hoveredSelectionCenter, INITIAL_ZOOM, isDrawingTool, marqueeSelection, MAX_ZOOM, MIN_ZOOM, movementExceedsThreshold, normalizeBounds, normalizeDrag, pagePointToScreen, screenDeltaToMm, screenPointToMm, viewportPointToCanvas, containsBounds, elementsContainedBy, pickDimensionTarget, pickElement, pickFormaElement, pickFormaNode, pickFormaSegment, pickHoverNode, pickCuttableSegment, pickNode, pointerDownIntent, selectedNodeAnchor, selectionCenter, selectionFrame, snapCreationPoint, snapMoveDelta, visibleEditablePathNodeIndexes, zoomAtPoint } from "./interaction.js";
 import { geometryPatch, geometryValue } from "./propertyBar.js";
 import { dimensionKindForNodes, dimensionOffsetForPlacement, pointMidpoint } from "@nodra/geometry";
 
@@ -441,5 +441,11 @@ describe("drag geometry", () => {
     expect(pickHoverNode(checked.data, { x: 10, y: 10 }, 1, "spline")).toMatchObject({ elementId: rectangle.id, nodeIndex: 0 });
     expect(pickHoverNode(checked.data, { x: 10, y: 10 }, 1, "dimension")).toMatchObject({ elementId: rectangle.id, nodeIndex: 0 });
     expect(pickHoverNode(checked.data, { x: 100, y: 100 }, 1, "select")).toBeUndefined();
+  });
+  it("snaps line endpoints to fifteen-degree directions", () => {
+    const guide = directionalGuide({ x: 10, y: 10 }, { x: 25, y: 20 }, 15);
+    expect(guide?.angle).toBe(30);
+    expect(guide?.snappedPoint.x).toBeCloseTo(25.6125);
+    expect(guide?.snappedPoint.y).toBeCloseTo(19.0139);
   });
 });

@@ -746,7 +746,7 @@ test("creates an aligned Cota for a diagonal line", async ({ page }) => {
   const bounds = await page.locator(".page").boundingBox();
   expect(bounds).not.toBeNull();
   const start = { x: bounds!.x + 100, y: bounds!.y + 100 };
-  const end = { x: bounds!.x + 220, y: bounds!.y + 160 };
+  const end = { x: bounds!.x + 220, y: bounds!.y + 100 + 120 * Math.tan(Math.PI / 6) };
   await drawLine(page, start, end);
   await page.getByRole("button", { name: "Cota" }).click();
   await page.mouse.click(start.x, start.y);

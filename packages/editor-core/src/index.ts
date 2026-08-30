@@ -88,7 +88,9 @@ export const cutSketchEdge = (sketchId: ElementId, segmentIndex: number): Editor
     if (!Number.isInteger(segmentIndex) || segmentIndex < 0 || segmentIndex >= sketch.edges.length) return { success: false, error: "Sketch edge not found" };
     const edges = sketch.edges.filter((_, index) => index !== segmentIndex);
     if (edges.length === 0) return replaceElements(document, document.elements.filter((element) => element.id !== sketchId));
-    return replaceElements(document, document.elements.map((element) => element.id === sketchId ? { ...sketch, edges } : element));
+    const usedNodeIds = new Set(edges.flatMap((edge) => [edge.startNodeId, edge.endNodeId]));
+    const nodes = sketch.nodes.filter((node) => usedNodeIds.has(node.id));
+    return replaceElements(document, document.elements.map((element) => element.id === sketchId ? { ...sketch, nodes, edges } : element));
   },
 });
 
@@ -734,7 +736,8 @@ export const splitPathSegment = (pathId: ElementId, segmentIndex: number, newNod
   const segments = [...path.segments]; segments.splice(segmentIndex, 1, ...inserted);
   return updatePath(document, { ...path, nodes, segments });
 } });
-export const closePath = (pathId: ElementId): EditorCommand => ({ name: `path-close:${pathId}`, apply: (document) => { const path = pathAt(document, pathId); if (!path || path.closed) return { success: false, error: "Path is already closed" }; const first = path.nodes[0]!; const last = path.nodes.at(-1)!; return updatePath(document, { ...path, closed: true, segments: [...path.segments, { type: "line", startNodeId: last.id, endNodeId: first.id }] }); } });
+const DEFAULT_CLOSED_FILL = "rgba(101,217,255,0.22)";
+export const closePath = (pathId: ElementId): EditorCommand => ({ name: `path-close:${pathId}`, apply: (document) => { const path = pathAt(document, pathId); if (!path || path.closed) return { success: false, error: "Path is already closed" }; const first = path.nodes[0]!; const last = path.nodes.at(-1)!; return updatePath(document, { ...path, style: { ...path.style, fill: path.style.fill ?? DEFAULT_CLOSED_FILL }, closed: true, segments: [...path.segments, { type: "line", startNodeId: last.id, endNodeId: first.id }] }); } });
 export const openPath = (pathId: ElementId): EditorCommand => ({ name: `path-open:${pathId}`, apply: (document) => { const path = pathAt(document, pathId); if (!path || !path.closed) return { success: false, error: "Path is already open" }; return updatePath(document, { ...path, closed: false, segments: path.segments.slice(0, -1) }); } });
 export const reversePath = (pathId: ElementId): EditorCommand => ({ name: `path-reverse:${pathId}`, apply: (document) => { const path = pathAt(document, pathId); if (!path) return { success: false, error: "Path not found" }; const nodes = [...path.nodes].reverse(); const segments = [...path.segments].reverse().map((segment) => segment.type === "line" ? { ...segment, startNodeId: segment.endNodeId, endNodeId: segment.startNodeId } : { ...segment, startNodeId: segment.endNodeId, endNodeId: segment.startNodeId, control1: segment.control2, control2: segment.control1 }); return updatePath(document, { ...path, nodes, segments }); } });
 
@@ -865,6 +868,18 @@ export const updateElementNode = (id: ElementId, nodeIndex: number, point: Point
     if (current.type === "glyph") {
       const next = updateGlyphNodeData(current, nodeIndex, point);
       return next ? replaceElements(document, document.elements.map((element) => element.id === id ? next : element)) : { success: false, error: "Glyph node not found" };
+    }
+    if (current.type === "sketch") {
+      if (!node.nodeId) return { success: false, error: "Sketch node not found" };
+      return replaceElements(document, document.elements.map((element) => element.id === id && element.type === "sketch" ? { ...element, nodes: element.nodes.map((candidate) => candidate.id === node.nodeId ? { ...candidate, point } : candidate) } : element));
+    }
+    if (current.type === "path") {
+      if (!node.nodeId) return { success: false, error: "Path node not found" };
+      return node.kind === "control" ? movePathHandle(id, node.segmentIndex ?? -1, node.handle ?? "control1", point).apply(document) : movePathNode(id, node.nodeId, point).apply(document);
+    }
+    if (current.type === "spline") {
+      if (!node.nodeId) return { success: false, error: "Spline node not found" };
+      return updateSplineNode(id, node.nodeId, point).apply(document);
     }
     if (node.kind === "center" || ((current.type === "rectangle" || current.type === "ellipse") && node.kind === "corner")) {
       return moveElement(id, { x: point.x - node.point.x, y: point.y - node.point.y }).apply(document);

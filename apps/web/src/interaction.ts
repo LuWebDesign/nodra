@@ -4,6 +4,7 @@ import { boundsOf, boundsOfElements, connectableNodeAddress, contourSegmentAt, c
 export interface DragGeometry { readonly position: PointMm; readonly size: { readonly width: number; readonly height: number } }
 export interface CircleGeometry { readonly position: PointMm; readonly size: { readonly width: number; readonly height: number }; readonly radius: number }
 export interface CreationGuide { readonly source: PointMm; readonly target: PointMm; readonly kind: "node" | "center" }
+export interface DirectionalGuide { readonly source: PointMm; readonly target: PointMm; readonly angle: number; readonly snappedPoint: PointMm }
 export interface CreationSnap { readonly point: PointMm; readonly kind: "node" | "center"; readonly node?: NodeHit; readonly address?: import("@nodra/domain").ConnectableNodeAddress }
 export interface SnapGuide { readonly source: PointMm; readonly target: PointMm }
 export interface SnapMoveResult { readonly delta: PointMm; readonly guide: SnapGuide | undefined }
@@ -280,6 +281,52 @@ export function creationGuides(document: DocumentSnapshot, point: PointMm, zoom:
   return snap ? [{ source: point, target: snap.point, kind: snap.kind }] : [];
 }
 
+/** Returns the live direction angle from a line origin to the pointer. */
+export function lineAngleDegrees(source: PointMm, pointer: PointMm): number | undefined {
+  if (![source.x, source.y, pointer.x, pointer.y].every(Number.isFinite)) throw new Error("line angle coordinates must be finite");
+  if (source.x === pointer.x && source.y === pointer.y) return undefined;
+  return Math.round(Math.atan2(pointer.y - source.y, pointer.x - source.x) * 180 / Math.PI * 10) / 10;
+}
+
+/** Finds axis guides from the cursor to nearby visible nodes before line creation. */
+export function cursorNodeGuides(document: DocumentSnapshot, pointer: PointMm, zoom: number, tolerancePx = 8): readonly CreationGuide[] {
+  if (![pointer.x, pointer.y, zoom, tolerancePx].every(Number.isFinite) || zoom <= 0 || tolerancePx < 0) throw new Error("cursor node guide coordinates and tolerance must be valid");
+  const visible = new Set(document.layers.filter((layer) => layer.visible).map((layer) => layer.id));
+  const best: [ { guide: CreationGuide; distance: number; order: string } | undefined, { guide: CreationGuide; distance: number; order: string } | undefined ] = [undefined, undefined];
+  for (const element of document.elements) if (visible.has(element.layerId)) for (const [index, node] of realGeometryNodes(element).entries()) {
+    const candidates = [{ distance: Math.abs(pointer.x - node.point.x) * zoom, target: { x: node.point.x, y: pointer.y }, order: element.id + ":" + index + ":vertical" }, { distance: Math.abs(pointer.y - node.point.y) * zoom, target: { x: pointer.x, y: node.point.y }, order: element.id + ":" + index + ":horizontal" }];
+    candidates.forEach((candidate, axis) => { if (candidate.distance <= tolerancePx && (!best[axis] || candidate.distance < best[axis]!.distance || candidate.distance === best[axis]!.distance && candidate.order < best[axis]!.order)) best[axis] = { distance: candidate.distance, order: candidate.order, guide: { source: node.point, target: candidate.target, kind: "node" } }; });
+  }
+  return best.flatMap((candidate) => candidate ? [candidate.guide] : []);
+}
+
+/** Snaps a line endpoint to the nearest configured angular increment. */
+export function directionalGuide(source: PointMm, pointer: PointMm, angleIncrementDegrees = 15, toleranceDegrees = 5): DirectionalGuide | undefined {
+  if (![source.x, source.y, pointer.x, pointer.y, angleIncrementDegrees, toleranceDegrees].every(Number.isFinite) || angleIncrementDegrees <= 0 || angleIncrementDegrees > 180 || toleranceDegrees < 0 || toleranceDegrees > angleIncrementDegrees / 2) throw new Error("direction guide coordinates and angle must be valid");
+  const dx = pointer.x - source.x; const dy = pointer.y - source.y; const distance = Math.hypot(dx, dy);
+  if (distance === 0) return undefined;
+  const increment = angleIncrementDegrees * Math.PI / 180;
+  const rawAngle = Math.atan2(dy, dx); const angle = Math.round(rawAngle / increment) * increment;
+  const angularDistance = Math.abs(Math.atan2(Math.sin(rawAngle - angle), Math.cos(rawAngle - angle))) * 180 / Math.PI;
+  const cardinal = Math.abs(Math.sin(angle)) < 1e-10 || Math.abs(Math.cos(angle)) < 1e-10;
+  if (angularDistance > (cardinal ? Math.max(toleranceDegrees, 10) : toleranceDegrees)) return undefined;
+  const snappedPoint = { x: source.x + Math.cos(angle) * distance, y: source.y + Math.sin(angle) * distance };
+  return { source, target: snappedPoint, angle: Math.round(angle * 180 / Math.PI * 1e10) / 1e10, snappedPoint };
+}
+
+/** Finds visual axis guides from the active line origin to nearby visible nodes. */
+export function nodeAlignmentGuides(document: DocumentSnapshot, source: PointMm, pointer: PointMm, zoom: number, tolerancePx = 8): readonly CreationGuide[] {
+  if (![source.x, source.y, pointer.x, pointer.y, zoom, tolerancePx].every(Number.isFinite) || zoom <= 0 || tolerancePx < 0) throw new Error("node guide coordinates and tolerance must be valid");
+  const visible = new Set(document.layers.filter((layer) => layer.visible).map((layer) => layer.id));
+  const best: [ { guide: CreationGuide; distance: number; order: string } | undefined, { guide: CreationGuide; distance: number; order: string } | undefined ] = [undefined, undefined];
+  for (const element of document.elements) if (visible.has(element.layerId)) for (const [index, node] of realGeometryNodes(element).entries()) {
+    if (node.point.x === source.x && node.point.y === source.y) continue;
+    const candidates = [{ distance: Math.abs(pointer.x - node.point.x) * zoom, target: { x: node.point.x, y: source.y }, order: element.id + ":" + index + ":vertical" }, { distance: Math.abs(pointer.y - node.point.y) * zoom, target: { x: source.x, y: node.point.y }, order: element.id + ":" + index + ":horizontal" }];
+    candidates.forEach((candidate, axis) => { if (candidate.distance <= tolerancePx && (!best[axis] || candidate.distance < best[axis]!.distance || candidate.distance === best[axis]!.distance && candidate.order < best[axis]!.order)) best[axis] = { distance: candidate.distance, order: candidate.order, guide: { source, target: candidate.target, kind: "node" } }; });
+  }
+  return best.flatMap((candidate) => candidate ? [candidate.guide] : []);
+}
+
 export function hasNonCollinearPoints(points: readonly PointMm[], epsilon = 1e-9): boolean {
   if (points.length < 3) return false;
   for (let first = 0; first < points.length - 2; first += 1) for (let second = first + 1; second < points.length - 1; second += 1) for (let third = second + 1; third < points.length; third += 1) {
@@ -291,6 +338,20 @@ export function hasNonCollinearPoints(points: readonly PointMm[], epsilon = 1e-9
 
 export type NodeFeedbackTool = "select" | "forma" | "pen" | "spline" | "rectangle" | "ellipse" | "line" | "cut" | "dimension";
 export type HoverNode = NodeHit | FormaNodeHit;
+
+/** Snaps a Forma node drag to another visible real node within screen tolerance. */
+export function snapFormaNodePoint(document: DocumentSnapshot, point: PointMm, zoom: number, moving: { readonly elementId: ElementId; readonly nodeIndex?: number }, tolerancePx = 8): PointMm {
+  if (![point.x, point.y, zoom, tolerancePx].every(Number.isFinite) || zoom <= 0 || tolerancePx < 0) throw new Error("Forma snap coordinates and tolerance must be valid");
+  const visible = new Set(document.layers.filter((layer) => layer.visible).map((layer) => layer.id));
+  let best: { point: PointMm; distance: number; order: string } | undefined;
+  for (const element of document.elements) if (visible.has(element.layerId)) for (const [nodeIndex, node] of realGeometryNodes(element).entries()) {
+    if (node.kind === "center" || element.id === moving.elementId && moving.nodeIndex === nodeIndex) continue;
+    const distance = Math.hypot(node.point.x - point.x, node.point.y - point.y) * zoom;
+    const order = element.id + ":" + nodeIndex;
+    if (distance <= tolerancePx && (!best || distance < best.distance || distance === best.distance && order < best.order)) best = { point: node.point, distance, order };
+  }
+  return best?.point ?? point;
+}
 
 /** Finds the node feedback target supported by a tool without changing its hit semantics. */
 export function pickHoverNode(document: DocumentSnapshot, point: PointMm, zoom: number, tool: NodeFeedbackTool, tolerancePx = 8): HoverNode | undefined {

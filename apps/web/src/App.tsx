@@ -5,13 +5,13 @@ import { boundsOfElements, connectableNodeAddress, contourVertexNodes, dimension
 import { DebouncedAutosave, DexieProjectRepository, requestStoragePersistence, type FontRecord } from "@nodra/persistence";
 import { validateDesign, validateProject } from "@nodra/validation";
 import { renderSvg } from "@nodra/renderer-svg";
-import { canActivateRotation, centerPageInCanvas, clientPointToCanvas, clientPointToPage, cubicPlacementControls, formaNodeKey, hoveredSelectionCenter, isDrawingTool, marqueeSelection, movementExceedsThreshold, normalizeBounds, normalizeDrag, pagePointToCanvas, pathGuides, pickDimensionTarget, pickElement, pickFormaElement, pickFormaNode, pickFormaSegment, pickHoverNode, pickCuttableSegment, pickNode, pickPathNode, pickPathSegment, pointerDownIntent, visibleEditablePathNodeIndexes, screenDeltaToMm, screenPointToMm, selectedNodeAnchor, selectedPathAnchorIds, alignmentGuides, snapCreationPoint, snapMoveDelta, viewportPointToCanvas, zoomAtPoint, type AlignmentGuide, type ContourNodeHit, type CuttableSegmentHit, type DimensionTarget, type FormaNodeHit, type HoverNode, type NodeHit, type PathNodeHit, type SnapGuide, type TransformMode, type CreationSnap } from "./interaction.js";
+import { canActivateRotation, centerPageInCanvas, clientPointToCanvas, clientPointToPage, cubicPlacementControls, formaNodeKey, hoveredSelectionCenter, isDrawingTool, marqueeSelection, movementExceedsThreshold, normalizeBounds, normalizeDrag, pagePointToCanvas, pathGuides, pickDimensionTarget, pickElement, pickFormaElement, pickFormaNode, pickFormaSegment, pickHoverNode, pickCuttableSegment, pickNode, pickPathNode, pickPathSegment, pointerDownIntent, visibleEditablePathNodeIndexes, screenDeltaToMm, screenPointToMm, selectedNodeAnchor, selectedPathAnchorIds, alignmentGuides, snapCreationPoint, snapFormaNodePoint, snapMoveDelta, viewportPointToCanvas, zoomAtPoint, type AlignmentGuide, type ContourNodeHit, type CuttableSegmentHit, type DimensionTarget, type FormaNodeHit, type HoverNode, type NodeHit, type PathNodeHit, type SnapGuide, type TransformMode, type CreationSnap } from "./interaction.js";
 import { aspectSize, formatMm, geometryValue, rotationDegreesValue, rotationPatch, type GeometryField, type PropertyElement, type RotatableElement } from "./propertyBar.js";
 import { useDocumentStore, usePersistenceStore, useUiStore, useViewportStore, type Tool } from "./stores.js";
 import { pathJoinGuidance, pathJoinOptions } from "./pathJoins.js";
 import { textSizeFor } from "./textMetrics.js";
 import { extractTextGlyphOutlines, fontFamilyFromFileName, FontOutlineError } from "./fontOutline.js";
-import { circleGeometry, creationGuides, type CreationGuide } from "./interaction.js";
+import { circleGeometry, creationGuides, cursorNodeGuides, directionalGuide, lineAngleDegrees, nodeAlignmentGuides, type CreationGuide } from "./interaction.js";
 
 const defaultFonts = ["Arial", "Helvetica", "Times New Roman", "Courier New", "Inter"] as const;
 const projectMirrorKey = (projectId: string) => `nodra:project-mirror:${projectId}`;
@@ -27,6 +27,7 @@ const saveProjectMirror = (project: ProjectSnapshot): void => {
   try { localStorage.setItem(projectMirrorKey(project.id), JSON.stringify(project)); } catch { /* best-effort reload mirror */ }
 };
 const defaultStyle = { stroke: "#000000", strokeWidth: 1 };
+const pointAlignedToNodeGuides = (point: PointMm, guides: readonly CreationGuide[]): PointMm => guides.reduce((current, guide) => guide.target.y === guide.source.y ? { x: guide.target.x, y: current.y } : { x: current.x, y: guide.target.y }, point);
 const defaultClosedFill = "rgba(101,217,255,0.22)";
 const isPropertyElement = (element: Element): element is PropertyElement => element.type === "rectangle" || element.type === "ellipse";
 const isRotatableElement = (element: Element): element is RotatableElement => element.type !== "dimension" && element.type !== "path" && element.type !== "spline" && element.type !== "sketch";
@@ -112,13 +113,14 @@ const toolCursorLabels: Record<Tool, string> = { select: "Seleccion", forma: "Fo
 
 export function App() {
   const { mode, tool, setMode, setTool } = useUiStore();
-  const { editor, project, setEditor, setProject } = useDocumentStore();
+  const { editor, project, setEditor, setProject, setProjectPreferences } = useDocumentStore();
   const document = editor.document;
   const selection = editor.selection;
   const { zoom, panMm, setZoom, setPanMm } = useViewportStore();
   const persist = usePersistenceStore();
   const [online, setOnline] = useState(navigator.onLine);
   const [grid, setGrid] = useState(false);
+      const [lineCursorAngle, setLineCursorAngle] = useState<number>();
   const [marquee, setMarquee] = useState<{ start: PointMm; end: PointMm }>();
   const [snapGuide, setSnapGuide] = useState<SnapGuide>();
   const [alignmentGuideState, setAlignmentGuideState] = useState<readonly AlignmentGuide[]>([]);
@@ -677,7 +679,7 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
      setCenterHover(undefined);
        setCursorPoint(canvasPointAt(event));
        setDocumentCursorPoint(pointAt(event));
-       if (isDrawingTool(tool)) setCreationPoint(pointAt(event));
+       if (isDrawingTool(tool)) { const pointer = pointAt(event); const draft = creationDraftRef.current; const direction = project.preferences.lineGuidesEnabled && tool === "line" && draft?.points.length ? directionalGuide(draft.points.at(-1)!, pointer, project.preferences.lineGuideAngle, 5) : undefined; setLineCursorAngle(undefined); setCreationPoint(direction?.snappedPoint ?? pointer); }
      setSnapGuide(undefined);
      setAlignmentGuideState([]);
      if (tool !== "forma") setEditModeElementIds([]);
@@ -692,8 +694,12 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
       const point = pointAt(event);
        const rawCreationPoint = isDrawingTool(tool) ? point : undefined;
         const creationSnap = rawCreationPoint ? snapCreationPoint(editorRef.current.document, rawCreationPoint, zoom) : undefined;
-        const creationPointForClick = creationSnap?.point ?? rawCreationPoint;
-       const inferredPoint = snapCreationPoint(editorRef.current.document, point, zoom)?.point ?? point;
+            const draftForDirection = creationDraftRef.current;
+            const direction = project.preferences.lineGuidesEnabled && tool === "line" && draftForDirection?.points.length ? directionalGuide(draftForDirection.points.at(-1)!, rawCreationPoint!, project.preferences.lineGuideAngle, 5) : undefined;
+            const nodeGuidesForClick = tool === "line" && draftForDirection?.points.length ? nodeAlignmentGuides(editorRef.current.document, draftForDirection.points.at(-1)!, rawCreationPoint!, zoom, 5) : [];
+            const nodeGuidedPoint = nodeGuidesForClick.length ? pointAlignedToNodeGuides(rawCreationPoint!, nodeGuidesForClick) : undefined;
+            const creationPointForClick = creationSnap?.point ?? nodeGuidedPoint ?? direction?.snappedPoint ?? rawCreationPoint;
+           const inferredPoint = snapCreationPoint(editorRef.current.document, point, zoom)?.point ?? point;
       if (tool === "rectangle" || tool === "ellipse") {
         const creationPoint = creationPointForClick ?? point;
         const draft = creationDraftRef.current;
@@ -721,7 +727,7 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
          creationDraftRef.current = nextDraft;
          setCreationDraft(nextDraft);
        } else if (draft.points.length === 1 && !draft.elementId) {
-          const sketch = createSketchLine(id(), layerId(editorRef.current.document.layers[0]?.id ?? "layer-1"), defaultStyle, draft.points[0]!, creationPoint);
+          const sketch = createSketchLine(id(), layerId(editorRef.current.document.layers[0]?.id ?? "layer-1"), { ...defaultStyle, strokeWidth: 1.5 }, draft.points[0]!, creationPoint);
           const next = dispatch(editorRef.current, createElement(sketch, creationConnections(sketch, [...(draft.snaps ?? []), creationSnap])));
           const nextDraft = { tool, points: [...draft.points, creationPoint], pointer: creationPoint, elementId: sketch.id, currentNodeId: sketch.nodes[1]!.id } as const;
          creationDraftRef.current = nextDraft;
@@ -936,7 +942,7 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
   const onCanvasPointerMove = (event: PointerEvent<HTMLDivElement>) => {
        setCursorPoint(canvasPointAt(event));
       setDocumentCursorPoint(pointAt(event));
-       if (isDrawingTool(tool)) setCreationPoint(pointAt(event));
+       if (isDrawingTool(tool)) { const pointer = pointAt(event); const draft = creationDraftRef.current; const direction = project.preferences.lineGuidesEnabled && tool === "line" && draft?.points.length ? directionalGuide(draft.points.at(-1)!, pointer, project.preferences.lineGuideAngle, 5) : undefined; const nodeGuidesForMove = tool === "line" && draft?.points.length ? nodeAlignmentGuides(editorRef.current.document, draft.points.at(-1)!, pointer, zoom, 5) : []; const nodeGuidedPoint = nodeGuidesForMove.length ? pointAlignedToNodeGuides(pointer, nodeGuidesForMove) : undefined; setLineCursorAngle(tool === "line" && draft?.points.length ? direction?.angle ?? lineAngleDegrees(draft.points.at(-1)!, pointer) : undefined); setCreationPoint(nodeGuidedPoint ?? direction?.snappedPoint ?? pointer); }
       const feedbackTool = tool === "text" || tool === "pan" ? undefined : tool;
      if (tool === "cut" && !interaction.current) setCutSegmentHover(pickCuttableSegment(editorRef.current.document, pointAt(event), zoom));
      else setCutSegmentHover(undefined);
@@ -1013,7 +1019,7 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
       return;
     }
     if (active.kind === "contour-node" && active.formaNode) {
-      const point = pointAt(event);
+      const point = snapFormaNodePoint(editorRef.current.document, pointAt(event), zoom, active.formaNode);
       if (!active.startClient || !movementExceedsThreshold(active.startClient, { x: event.clientX, y: event.clientY })) return;
       active.dragged = true;
       const command = active.formaNode.contourNode ? updateContourNode(active.formaNode.elementId, active.formaNode.contourNode, point) : updateElementNode(active.formaNode.elementId, active.formaNode.nodeIndex ?? -1, point);
@@ -1241,14 +1247,16 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
     return <svg className="dimension-pending-overlay" aria-hidden="true"><line x1={start.x} y1={start.y} x2={end.x} y2={end.y} /><circle cx={start.x} cy={start.y} r="7" /><circle cx={end.x} cy={end.y} r="7" /><text x={start.x + 10} y={start.y - 10}>Primer nodo</text><text x={end.x + 12} y={end.y - 12}>{label}</text></svg>;
    })() : undefined;
      const cutSegmentHoverOverlay = tool === "cut" && cutSegmentHover ? <svg className="cut-segment-hover-overlay" viewBox={`0 0 ${document.page.width} ${document.page.height}`} style={{ left: pageStyle.left + 1, top: pageStyle.top + 1, width: document.page.width * zoom, height: document.page.height * zoom, right: "auto", bottom: "auto" }} aria-label="Segmento de corte bajo el puntero">{cutSegmentHover.points ? <polyline points={cutSegmentHover.points.map((point) => `${point.x},${point.y}`).join(" ")} /> : <line x1={cutSegmentHover.start.x} y1={cutSegmentHover.start.y} x2={cutSegmentHover.end.x} y2={cutSegmentHover.end.y} />}</svg> : undefined;
-     const pendingCreationOverlay = creationDraft && creationPoint ? (() => {
+     const cursorNodeGuideOverlay = tool === "line" && documentCursorPoint ? (() => { const guides = cursorNodeGuides(document, documentCursorPoint, zoom, 5); return guides.length ? <svg className="node-guide-overlay" viewBox={`0 0 ${document.page.width} ${document.page.height}`} style={{ left: pageStyle.left + 1, top: pageStyle.top + 1, width: document.page.width * zoom, height: document.page.height * zoom, right: "auto", bottom: "auto" }} aria-label="Guía de nodo">{guides.map((guide, index) => <line key={`cursor-node-guide-${index}`} className="creation-guide creation-guide-node-alignment" x1={guide.source.x} y1={guide.source.y} x2={guide.target.x} y2={guide.target.y} />)}</svg> : undefined; })() : undefined;
+         const pendingCreationOverlay = creationDraft && creationPoint ? (() => {
       const start = creationDraft.tool === "line" ? creationDraft.points.at(-1)! : creationDraft.points[0]!;
        const pointer = creationPoint;
       const rectangle = creationDraft.tool === "rectangle" ? normalizeDrag(creationDraft.points[0]!, pointer) : undefined;
       const circle = creationDraft.tool === "ellipse" ? circleGeometry(creationDraft.points[0]!, pointer) : undefined;
       const shape = rectangle ? <rect x={rectangle.position.x} y={rectangle.position.y} width={rectangle.size.width} height={rectangle.size.height} /> : circle ? <circle cx={creationDraft.points[0]!.x} cy={creationDraft.points[0]!.y} r={circle.radius} /> : undefined;
        const guides: readonly CreationGuide[] = creationGuides(document, pointer, zoom);
-       return <svg className="creation-pending-overlay" viewBox={`0 0 ${document.page.width} ${document.page.height}`} style={{ left: pageStyle.left + 1, top: pageStyle.top + 1, width: document.page.width * zoom, height: document.page.height * zoom, right: "auto", bottom: "auto" }} aria-label="Vista previa de creación"><g className="creation-preview-shape">{shape}</g><line className="creation-preview-radius" x1={start.x} y1={start.y} x2={pointer.x} y2={pointer.y} />{guides.map((guide, index) => <line key={index} className={`creation-guide creation-guide-${guide.kind}`} x1={guide.source.x} y1={guide.source.y} x2={guide.target.x} y2={guide.target.y} />)}</svg>;
+           const nodeGuides = creationDraft.tool === "line" ? nodeAlignmentGuides(document, start, pointer, zoom, 5) : [];
+       return <svg className="creation-pending-overlay" viewBox={`0 0 ${document.page.width} ${document.page.height}`} style={{ left: pageStyle.left + 1, top: pageStyle.top + 1, width: document.page.width * zoom, height: document.page.height * zoom, right: "auto", bottom: "auto" }} aria-label="Vista previa de creación"><g className="creation-preview-shape">{shape}</g><line className="creation-preview-radius" x1={start.x} y1={start.y} x2={pointer.x} y2={pointer.y} />{nodeGuides.map((guide, index) => <line key={`node-guide-${index}`} className="creation-guide creation-guide-node-alignment" x1={guide.source.x} y1={guide.source.y} x2={guide.target.x} y2={guide.target.y} />)}{guides.map((guide, index) => <line key={index} className={`creation-guide creation-guide-${guide.kind}`} x1={guide.source.x} y1={guide.source.y} x2={guide.target.x} y2={guide.target.y} />)}</svg>;
     })() : undefined;
    const dimensionHoverStyle = dimensionNodeHover && tool === "dimension" ? (() => { const point = pagePointToCanvas(dimensionNodeHover.node.point, zoom, panMm); return { left: point.x, top: point.y }; })() : undefined;
   const rulerMajorStep = [1, 5, 10, 25, 50, 100, 250, 500].find((step) => step * zoom >= 50) ?? 1000;
@@ -1567,8 +1575,8 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
             {tool === "select" && transformMode === "resize" && (handlePoints || groupPoints) && <div className="resize-handles">{handleNames.map((handle) => <button key={handle} type="button" className={`resize-handle resize-handle-${handle}`} data-resize-handle={handle} aria-label={`Redimensionar ${handle}`} style={handleStyle(handle)} onPointerDown={(event) => resizePointerDown(event, handle)} onPointerUp={(event) => finishPointer(event, false)} onPointerCancel={(event) => finishPointer(event, true)} />)}{groupPoints && !isDrawingTool(tool) && <button type="button" className="resize-handle resize-handle-center" data-resize-handle="center" aria-label="Centro del grupo" style={handleStyle("center")} onPointerDown={(event) => event.stopPropagation()} />}</div>}
            {transformMode === "rotate" && selectedElements.length > 0 && <div className="rotation-controls" aria-label="Controles de rotación"><span className="rotation-center" style={selectedElements.length > 1 && selectedBounds ? { left: pagePointToCanvas(groupCenter(selectedBounds), zoom, panMm).x, top: pagePointToCanvas(groupCenter(selectedBounds), zoom, panMm).y } : centerStyle} aria-hidden="true" />{rotationPoints.map((point, index) => { const screen = pagePointToCanvas(point, zoom, panMm); return <button key={index} type="button" className="rotation-handle" aria-label={`Rotar objeto, control ${index + 1}`} style={{ left: screen.x, top: screen.y }} onPointerDown={rotationPointerDown} onPointerUp={(event) => finishPointer(event, false)} onPointerCancel={(event) => finishPointer(event, true)}><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M15.5 8A6 6 0 1 0 16 12" /><path d="m12.5 4 3 4-5 .5" /></svg></button>; })}</div>}
           {marqueeStyle && <div className="marquee" style={marqueeStyle} />}
-           {pendingDimensionOverlay}{pendingCreationOverlay}{cutSegmentHoverOverlay}
-              {cursorPoint && <span className={`tool-cursor${dimensionNodeHover && tool === "dimension" ? " dimension-node-cursor" : ""}`} style={{ left: cursorPoint.x, top: cursorPoint.y }} aria-label={`Herramienta activa: ${toolCursorLabels[tool]}`} title={dimensionNodeHover && tool === "dimension" ? "Nodo de dimensión" : tool === "forma" && documentCursorPoint && pickFormaSegment(document, documentCursorPoint, zoom) ? "Doble clic para insertar un nodo" : undefined}>{toolCursorIcons[tool]}</span>}
+           {pendingDimensionOverlay}{pendingCreationOverlay}{cursorNodeGuideOverlay}{cutSegmentHoverOverlay}
+              {cursorPoint && <span className={`tool-cursor${dimensionNodeHover && tool === "dimension" ? " dimension-node-cursor" : ""}`} style={{ left: cursorPoint.x, top: cursorPoint.y }} aria-label={`Herramienta activa: ${toolCursorLabels[tool]}`} title={dimensionNodeHover && tool === "dimension" ? "Nodo de dimensión" : tool === "forma" && documentCursorPoint && pickFormaSegment(document, documentCursorPoint, zoom) ? "Doble clic para insertar un nodo" : undefined}>{toolCursorIcons[tool]}{tool === "line" && creationDraft && lineCursorAngle !== undefined && <span className="line-guide-cursor-hud" data-line-guide-hud="true"><span aria-hidden="true">{Math.abs(lineCursorAngle) < 0.1 ? "↔" : Math.abs(Math.abs(lineCursorAngle) - 90) < 0.1 ? "↕" : "↗"}</span><span>{lineCursorAngle.toFixed(1)}°</span></span>}</span>}
             {nodeHover && tool !== "dimension" && !interaction.current && (() => { const point = "node" in nodeHover ? nodeHover.node.point : nodeHover.point; const screen = pagePointToCanvas(point, zoom, panMm); return <span className="node-hover-feedback" data-node-hover-feedback={`${nodeHover.elementId}:${nodeHover.nodeIndex ?? "forma"}`} style={{ left: screen.x, top: screen.y }} aria-label="Nodo bajo el puntero" />; })()}
            {dimensionHoverStyle && <span className="dimension-node-target" data-dimension-node-target={`${dimensionNodeHover!.elementId}:${dimensionNodeHover!.nodeIndex}`} style={dimensionHoverStyle} aria-label="Nodo de dimensión bajo el puntero" title="Nodo de dimensión" />}
           <span className="canvas-hint">{tool === "dimension" ? !dimensionDraft ? "Cota: seleccione el primer nodo" : dimensionDraft.phase === "first" ? "Cota: seleccione el segundo nodo" : "Cota: coloque la cota" : `Clic: relleno · clic derecho: contorno · ${toolCursorLabels[tool]}`}</span>
@@ -1581,7 +1589,7 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
            <button type="button" role="tab" aria-selected={inspectorTab === "text"} className={inspectorTab === "text" ? "active" : ""} onClick={() => setInspectorTab("text")}>Texto</button>
          </div>
          <div className="inspector-tab-content" role="tabpanel">
-                {inspectorTab === "properties" && <>{selectedElements.length === 0 ? <section className="inspector-card"><div className="panel-title">PÁGINA</div><div className="preset-row"><button onClick={() => setPage(1200, 900)}>Horizontal</button><button onClick={() => setPage(900, 1200)}>Vertical</button></div><div className="fields"><Field label="W" value={document.page.width} onChange={(value) => setPage(value, document.page.height)} /><Field label="H" value={document.page.height} onChange={(value) => setPage(document.page.width, value)} /></div><label className="grid-toggle"><input type="checkbox" checked={grid} onChange={(event) => setGrid(event.target.checked)} /> Mostrar cuadrícula del espacio de trabajo</label></section> : <section className="inspector-card inspector-object-card"><div className="panel-title">OBJETO</div>{propertyElement ? <div className="inspector-object-properties">{objectPropertySections(true)}</div> : <><div className="selected-type">{selectedElement?.type === "contour" ? "CONTORNO" : selectedElement?.type === "path" ? "TRAZADO" : selectedElement?.type === "spline" ? "SPLINE" : "LÍNEA"}</div><p className="muted">{selectedElement?.type === "contour" ? "Los contornos conservan su geometría real; las dimensiones no están disponibles." : selectedElement?.type === "path" ? "Los trazados conservan sus nodos y segmentos." : selectedElement?.type === "spline" ? "Las splines conservan sus nodos y handles relativos." : "Las líneas no tienen dimensiones rectangulares."}</p>{selectedElement && isRotatableElement(selectedElement) && rotationField(selectedElement)}</>}</section>}{pathClosureControls}{splineClosureControls}{pathJoinControls}{pathSegmentControls}</>}
+                {inspectorTab === "properties" && <>{selectedElements.length === 0 ? <section className="inspector-card"><div className="panel-title">PÁGINA</div><div className="preset-row"><button onClick={() => setPage(1200, 900)}>Horizontal</button><button onClick={() => setPage(900, 1200)}>Vertical</button></div><div className="fields"><Field label="W" value={document.page.width} onChange={(value) => setPage(value, document.page.height)} /><Field label="H" value={document.page.height} onChange={(value) => setPage(document.page.width, value)} /></div><label className="grid-toggle"><input type="checkbox" checked={grid} onChange={(event) => setGrid(event.target.checked)} /> Mostrar cuadrícula del espacio de trabajo</label><label className="grid-toggle"><input type="checkbox" checked={project.preferences.lineGuidesEnabled} onChange={(event) => setProjectPreferences({ ...project.preferences, lineGuidesEnabled: event.target.checked })} /> Guías angulares de línea (15°)</label></section> : <section className="inspector-card inspector-object-card"><div className="panel-title">OBJETO</div>{propertyElement ? <div className="inspector-object-properties">{objectPropertySections(true)}</div> : <><div className="selected-type">{selectedElement?.type === "contour" ? "CONTORNO" : selectedElement?.type === "path" ? "TRAZADO" : selectedElement?.type === "spline" ? "SPLINE" : "LÍNEA"}</div><p className="muted">{selectedElement?.type === "contour" ? "Los contornos conservan su geometría real; las dimensiones no están disponibles." : selectedElement?.type === "path" ? "Los trazados conservan sus nodos y segmentos." : selectedElement?.type === "spline" ? "Las splines conservan sus nodos y handles relativos." : "Las líneas no tienen dimensiones rectangulares."}</p>{selectedElement && isRotatableElement(selectedElement) && rotationField(selectedElement)}</>}</section>}{pathClosureControls}{splineClosureControls}{pathJoinControls}{pathSegmentControls}</>}
               {inspectorTab === "transform" && transformControls()}
             {inspectorTab === "text" && <section className="inspector-card"><div className="panel-title">TEXTO</div>{textPropertyPanel()}</section>}
          </div>

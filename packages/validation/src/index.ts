@@ -173,7 +173,8 @@ export const documentSchema = z.object({ schemaVersion: z.literal(CURRENT_SCHEMA
   validateConnections(value.elements, value.connections, ctx, ["connections"]);
 });
 const pageSchema = z.object({ id: nonEmptyId, page: size, layers: z.array(layerSchema), elements: z.array(elementSchema), connections: z.array(explicitConnection).default([]) }).strict();
-export const projectSchema = z.object({ schemaVersion: z.literal(CURRENT_SCHEMA_VERSION), id: nonEmptyId, revision: finite.int().nonnegative(), origin: z.literal("top-left"), units: z.literal("mm"), pages: z.array(pageSchema).min(1), activePageId: nonEmptyId }).strict().superRefine((value, ctx) => {
+const projectPreferencesSchema = z.object({ lineGuidesEnabled: z.boolean().default(true), lineGuideAngle: z.literal(15).default(15) }).strict().default({ lineGuidesEnabled: true, lineGuideAngle: 15 });
+export const projectSchema = z.object({ schemaVersion: z.literal(CURRENT_SCHEMA_VERSION), id: nonEmptyId, revision: finite.int().nonnegative(), origin: z.literal("top-left"), units: z.literal("mm"), capabilities: z.object({ spline: z.literal(1).optional() }).strict().optional(), preferences: projectPreferencesSchema, pages: z.array(pageSchema).min(1), activePageId: nonEmptyId }).strict().superRefine((value, ctx) => {
   if (!value.pages.some((page) => page.id === value.activePageId)) ctx.addIssue({ code: "custom", message: "Active page does not exist", path: ["activePageId"] });
   const layerIds = new Set(value.pages.flatMap((page) => page.layers.map((layer) => layer.id)));
   value.pages.forEach((page, pageIndex) => { page.elements.forEach((element, elementIndex) => { if (!layerIds.has(element.layerId)) ctx.addIssue({ code: "custom", message: "Element references an unknown layer", path: ["pages", pageIndex, "elements", elementIndex, "layerId"] }); }); validateConnections(page.elements, page.connections, ctx, ["pages", pageIndex, "connections"]); });
