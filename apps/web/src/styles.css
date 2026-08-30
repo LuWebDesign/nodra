@@ -152,3 +152,11 @@
  .constraint-status-overdefined + .constraint-issues { color:#92400e; background:#fffbeb; border-color:#fde68a; }
  .constraint-issues strong { display:block; margin-bottom:3px; }
  .constraint-issues ul { margin:0; padding-left:16px; }
+
+/* Constraint status is a compact, explanatory summary rather than a bare label. */
+.constraint-status { display:flex; align-items:flex-start; gap:8px; padding:8px 9px; border:1px solid currentColor; border-radius:6px; background:color-mix(in srgb, currentColor 8%, transparent); }
+.constraint-status-icon { flex:0 0 18px; width:18px; height:18px; border:1px solid currentColor; border-radius:50%; text-align:center; font-size:12px; line-height:16px; }
+.constraint-status strong,.constraint-status small { display:block; }
+.constraint-status small { margin-top:3px; color:var(--muted); font-size:10px; font-weight:400; line-height:1.35; }
+.constraint-list-heading { display:flex; justify-content:space-between; align-items:center; margin:10px 0 5px; color:var(--muted); font-size:10px; text-transform:uppercase; letter-spacing:.08em; }
+.constraint-list-heading span { min-width:18px; padding:2px 5px; border-radius:9px; color:var(--text); background:var(--line); text-align:center; }
