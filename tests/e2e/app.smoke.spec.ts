@@ -26,7 +26,9 @@ async function drawRectangle(page: Page) {
    await page.mouse.click(start.x, start.y);
    await page.mouse.move(end.x, end.y);
    await page.mouse.click(end.x, end.y);
-  await expect(page.locator(".page-svg svg")).toBeVisible();
+  const rectangle = page.locator(".page-svg svg rect[data-element-id]").first();
+  await expect(rectangle).toHaveCount(1);
+  await expect.poll(() => rectangle.boundingBox()).not.toBeNull();
 }
 
 async function drawLine(page: Page, start: { x: number; y: number }, end: { x: number; y: number }) {
