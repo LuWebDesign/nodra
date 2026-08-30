@@ -877,7 +877,10 @@ export const addSketchConstraint = (sketchId: ElementId, constraint: SketchConst
     if (!constraint.references.every((reference) => reference.elementId === sketchId && sketch.nodes.some((node) => node.id === reference.nodeId))) return { success: false, error: "Sketch constraint references are invalid" };
     if ((constraint.kind === "horizontal" || constraint.kind === "vertical" || constraint.kind === "coincident" || constraint.kind === "distance-horizontal" || constraint.kind === "distance-vertical") && constraint.references.length !== 2) return { success: false, error: "This sketch constraint requires two references" };
     if (constraint.kind === "fixed" && constraint.references.length !== 1) return { success: false, error: "A fixed constraint requires one reference" };
-    return replaceElements(document, document.elements.map((element) => element.id === sketchId && element.type === "sketch" ? { ...element, constraints: [...(element.constraints ?? []), constraint] } : element));
+    const candidate = { ...sketch, constraints: [...(sketch.constraints ?? []), constraint] };
+    const solved = solveSketchConstraints(candidate);
+    if (solved.status === "conflict" || solved.status === "overdefined") return { success: false, error: `Sketch constraints are ${solved.status}` };
+    return replaceElements(document, document.elements.map((element) => element.id === sketchId ? solved.sketch : element));
   },
 });
 

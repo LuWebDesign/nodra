@@ -134,3 +134,8 @@
 .constraint-buttons { display:grid; grid-template-columns:1fr 1fr; gap:4px; }
 .constraint-buttons button { padding:5px 4px; color:#1f2937; background:#f8fafc; border:1px solid #cbd5e1; border-radius:4px; font-size:10px; }
 .constraint-buttons button:disabled { opacity:.45; cursor:not-allowed; }
+.constraint-status { margin:6px 0; font-size:11px; font-weight:700; }
+.constraint-status-underdefined { color:#2563eb; }
+.constraint-status-defined { color:#111827; }
+.constraint-status-conflict { color:#ef4444; }
+.constraint-status-overdefined { color:#f59e0b; }
