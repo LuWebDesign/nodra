@@ -1,0 +1,45 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Kond Design",
+  "version": "0.1.0",
+  "identifier": "com.konddesign.editor",
+  "build": {
+    "beforeDevCommand": "corepack pnpm --filter @nodra/desktop dev",
+    "devUrl": "http://127.0.0.1:1420",
+    "beforeBuildCommand": "corepack pnpm --filter @nodra/desktop build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Kond Design",
+        "width": 1440,
+        "height": 900,
+        "minWidth": 960,
+        "minHeight": 640,
+        "resizable": true
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "fileAssociations": [
+      {
+        "ext": ["kond"],
+        "name": "Kond Design project",
+        "description": "Kond Design project file",
+        "mimeType": "application/x-kond-design"
+      }
+    ],
+    "targets": ["nsis"],
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser",
+        "displayLanguageSelector": true
+      }
+    }
+  }
+}
