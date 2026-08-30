@@ -485,7 +485,7 @@ test("edits an explicit sketch distance relationship", async ({ page }) => {
   const value = page.locator('input[aria-label^="Valor "]').first();
   await expect(value).toHaveValue("120");
   await value.fill("140");
-  await page.locator(".properties-bar").getByRole("button", { name: "Guardar", exact: true }).click();
+  await page.locator(".inspector").getByRole("button", { name: "Guardar", exact: true }).click();
   await expect(value).toHaveValue("140");
 });
 
