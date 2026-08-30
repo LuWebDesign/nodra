@@ -2,6 +2,7 @@ import {
   type DocumentSnapshot,
   type Element,
   type ElementId,
+  type DimensionElement,
   type Layer,
   type LayerId,
   type PointMm,
@@ -847,6 +848,23 @@ export const insertFormaNode = (id: ElementId, address: ContourSegmentAddress, p
     const contour = elementToContour(current);
     const inserted = insertContourNode(id, address, point).apply({ ...document, elements: document.elements.map((element) => element.id === id ? contour : element) });
     return inserted.success ? inserted : { success: false, error: inserted.error };
+  },
+});
+
+export const updateDimensionValue = (dimensionId: ElementId, value: number): EditorCommand => ({
+  name: `dimension-value:${dimensionId}`,
+  apply: (document) => {
+    if (!Number.isFinite(value) || value <= 0) return { success: false, error: "Dimension value must be positive" };
+    const dimension = document.elements.find((element): element is DimensionElement => element.id === dimensionId && element.type === "dimension");
+    if (!dimension || (dimension.kind !== "horizontal" && dimension.kind !== "vertical")) return { success: false, error: "Only horizontal and vertical dimensions can drive rectangles" };
+    const targetId = dimension.references[0].elementId;
+    if (dimension.references[1].elementId !== targetId) return { success: false, error: "Driving dimensions require one referenced rectangle" };
+    const target = document.elements.find((element) => element.id === targetId);
+    if (!target || target.type !== "rectangle" || target.rotation !== 0) return { success: false, error: "Driving dimensions currently require an unrotated rectangle" };
+    const center = { x: target.position.x + target.size.width / 2, y: target.position.y + target.size.height / 2 };
+    const size = dimension.kind === "horizontal" ? { width: value, height: target.size.height } : { width: target.size.width, height: value };
+    const position = { x: center.x - size.width / 2, y: center.y - size.height / 2 };
+    return replaceElements(document, document.elements.map((element) => element.id === target.id && element.type === "rectangle" ? { ...element, position, size } : element));
   },
 });
 
