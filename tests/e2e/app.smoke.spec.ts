@@ -876,7 +876,7 @@ test("shows millimetre coordinate rulers around the workspace", async ({ page })
 test("exposes real contour vertices in Forma and edits one vertex", async ({ page }) => {
   await page.goto("/");
   await drawRectangle(page);
-  const first = await page.locator(".page-svg svg rect").first().boundingBox();
+  const first = await page.locator(".page-svg svg rect[data-element-id]").first().boundingBox();
   expect(first).not.toBeNull();
   await page.getByRole("button", { name: "Rectángulo" }).click();
   const secondStart = { x: first!.x + first!.width / 2, y: first!.y + first!.height / 2 };
@@ -885,15 +885,15 @@ test("exposes real contour vertices in Forma and edits one vertex", async ({ pag
   await page.mouse.move(secondEnd.x, secondEnd.y);
   await expect(page.locator(".creation-pending-overlay")).toBeVisible();
   await page.mouse.click(secondEnd.x, secondEnd.y);
-  await expect(page.locator(".page-svg svg rect")).toHaveCount(2);
+  await expect(page.locator(".page-svg svg rect[data-element-id]")).toHaveCount(2);
 
   await page.getByRole("button", { name: "Seleccion" }).click();
-  const rectangles = page.locator(".page-svg svg rect");
+  const rectangles = page.locator(".page-svg svg rect[data-element-id]");
   await expect(rectangles).toHaveCount(2);
+  await expect.poll(() => rectangles.nth(0).boundingBox()).not.toBeNull();
+  await expect.poll(() => rectangles.nth(1).boundingBox()).not.toBeNull();
   const firstRectangle = await rectangles.nth(0).boundingBox();
   const secondRectangle = await rectangles.nth(1).boundingBox();
-  expect(firstRectangle).not.toBeNull();
-  expect(secondRectangle).not.toBeNull();
   await page.mouse.click(firstRectangle!.x + 4, firstRectangle!.y + 4);
   await page.keyboard.down("Shift");
   await page.mouse.click(secondRectangle!.x + secondRectangle!.width / 2, secondRectangle!.y + secondRectangle!.height / 2);
@@ -926,7 +926,7 @@ test("recovers the latest local revision after reload", async ({ page }) => {
   await page.waitForTimeout(1000);
   await page.reload();
 
-  await expect(page.locator(".page-svg svg rect")).toHaveCount(1);
+  await expect(page.locator(".page-svg svg rect[data-element-id]")).toHaveCount(1);
   await expect(page.getByText("Revisión local recuperada")).toBeVisible();
 });
 
@@ -934,13 +934,13 @@ test("keeps a deleted object deleted after reload", async ({ page }) => {
   await page.goto("/");
   await drawRectangle(page);
   await page.getByRole("button", { name: "Seleccion" }).click();
-  const rect = await page.locator(".page-svg svg rect").first().boundingBox();
+  const rect = await page.locator(".page-svg svg rect[data-element-id]").first().boundingBox();
   expect(rect).not.toBeNull();
   await page.mouse.click(rect!.x + rect!.width / 2, rect!.y + rect!.height / 2);
   await page.keyboard.press("Delete");
-  await expect(page.locator(".page-svg svg rect")).toHaveCount(0);
+  await expect(page.locator(".page-svg svg rect[data-element-id]")).toHaveCount(0);
   await page.reload();
-  await expect(page.locator(".page-svg svg rect")).toHaveCount(0);
+  await expect(page.locator(".page-svg svg rect[data-element-id]")).toHaveCount(0);
 });
 
 test("shows offline status while editing remains available", async ({ page, context }) => {
