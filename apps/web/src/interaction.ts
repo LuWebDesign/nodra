@@ -282,13 +282,28 @@ export function creationGuides(document: DocumentSnapshot, point: PointMm, zoom:
 }
 
 /** Snaps a line endpoint to the nearest configured angular increment. */
-export function directionalGuide(source: PointMm, pointer: PointMm, angleIncrementDegrees = 15): DirectionalGuide | undefined {
-  if (![source.x, source.y, pointer.x, pointer.y, angleIncrementDegrees].every(Number.isFinite) || angleIncrementDegrees <= 0 || angleIncrementDegrees > 180) throw new Error("direction guide coordinates and angle must be valid");
+/** Finds the nearest visible node sharing an axis with the active line origin. */
+export function nodeAlignmentGuide(document: DocumentSnapshot, source: PointMm, pointer: PointMm, zoom: number, tolerancePx = 8): CreationGuide | undefined {
+  if (![source.x, source.y, pointer.x, pointer.y, zoom, tolerancePx].every(Number.isFinite) || zoom <= 0 || tolerancePx < 0) throw new Error("node guide coordinates and tolerance must be valid");
+  const visible = new Set(document.layers.filter((layer) => layer.visible).map((layer) => layer.id));
+  let best: { guide: CreationGuide; distance: number; order: string } | undefined;
+  for (const element of document.elements) if (visible.has(element.layerId)) for (const [index, node] of realGeometryNodes(element).entries()) {
+    if (node.point.x === source.x && node.point.y === source.y) continue;
+    const candidates = [{ distance: Math.abs(pointer.x - node.point.x) * zoom, target: { x: node.point.x, y: source.y }, order: element.id + ":" + index + ":vertical" }, { distance: Math.abs(pointer.y - node.point.y) * zoom, target: { x: source.x, y: node.point.y }, order: element.id + ":" + index + ":horizontal" }];
+    for (const candidate of candidates) if (candidate.distance <= tolerancePx && (!best || candidate.distance < best.distance || candidate.distance === best.distance && candidate.order < best.order)) best = { distance: candidate.distance, order: candidate.order, guide: { source, target: candidate.target, kind: "node" } };
+  }
+  return best?.guide;
+}
+
+export function directionalGuide(source: PointMm, pointer: PointMm, angleIncrementDegrees = 15, toleranceDegrees = 5): DirectionalGuide | undefined {
+  if (![source.x, source.y, pointer.x, pointer.y, angleIncrementDegrees, toleranceDegrees].every(Number.isFinite) || angleIncrementDegrees <= 0 || angleIncrementDegrees > 180 || toleranceDegrees < 0 || toleranceDegrees > angleIncrementDegrees / 2) throw new Error("direction guide coordinates and angle must be valid");
   const dx = pointer.x - source.x; const dy = pointer.y - source.y; const distance = Math.hypot(dx, dy);
   if (distance === 0) return undefined;
   const increment = angleIncrementDegrees * Math.PI / 180;
   const rawAngle = Math.atan2(dy, dx);
   const angle = Math.round(rawAngle / increment) * increment;
+  const angularDistance = Math.abs(Math.atan2(Math.sin(rawAngle - angle), Math.cos(rawAngle - angle))) * 180 / Math.PI;
+  if (angularDistance > toleranceDegrees) return undefined;
   const snappedPoint = { x: source.x + Math.cos(angle) * distance, y: source.y + Math.sin(angle) * distance };
   return { source, target: snappedPoint, angle: Math.round(angle * 180 / Math.PI * 1e10) / 1e10, snappedPoint };
 }

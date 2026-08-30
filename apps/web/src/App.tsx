@@ -11,7 +11,7 @@ import { useDocumentStore, usePersistenceStore, useUiStore, useViewportStore, ty
 import { pathJoinGuidance, pathJoinOptions } from "./pathJoins.js";
 import { textSizeFor } from "./textMetrics.js";
 import { extractTextGlyphOutlines, fontFamilyFromFileName, FontOutlineError } from "./fontOutline.js";
-import { circleGeometry, creationGuides, directionalGuide, type CreationGuide, type DirectionalGuide } from "./interaction.js";
+import { circleGeometry, creationGuides, directionalGuide, nodeAlignmentGuide, type CreationGuide, type DirectionalGuide } from "./interaction.js";
 
 const defaultFonts = ["Arial", "Helvetica", "Times New Roman", "Courier New", "Inter"] as const;
 const projectMirrorKey = (projectId: string) => `nodra:project-mirror:${projectId}`;
@@ -678,7 +678,7 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
      setCenterHover(undefined);
        setCursorPoint(canvasPointAt(event));
        setDocumentCursorPoint(pointAt(event));
-       if (isDrawingTool(tool)) { const pointer = pointAt(event); const draft = creationDraftRef.current; const direction = project.preferences.lineGuidesEnabled && tool === "line" && draft?.points.length ? directionalGuide(draft.points.at(-1)!, pointer, project.preferences.lineGuideAngle) : undefined; setDirectionalGuideState(undefined); setCreationPoint(direction?.snappedPoint ?? pointer); }
+       if (isDrawingTool(tool)) { const pointer = pointAt(event); const draft = creationDraftRef.current; const direction = project.preferences.lineGuidesEnabled && tool === "line" && draft?.points.length ? directionalGuide(draft.points.at(-1)!, pointer, project.preferences.lineGuideAngle, 5) : undefined; setDirectionalGuideState(undefined); setCreationPoint(direction?.snappedPoint ?? pointer); }
      setSnapGuide(undefined);
      setAlignmentGuideState([]);
      if (tool !== "forma") setEditModeElementIds([]);
@@ -694,7 +694,7 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
        const rawCreationPoint = isDrawingTool(tool) ? point : undefined;
         const creationSnap = rawCreationPoint ? snapCreationPoint(editorRef.current.document, rawCreationPoint, zoom) : undefined;
             const draftForDirection = creationDraftRef.current;
-            const direction = project.preferences.lineGuidesEnabled && tool === "line" && draftForDirection?.points.length ? directionalGuide(draftForDirection.points.at(-1)!, rawCreationPoint!, project.preferences.lineGuideAngle) : undefined;
+            const direction = project.preferences.lineGuidesEnabled && tool === "line" && draftForDirection?.points.length ? directionalGuide(draftForDirection.points.at(-1)!, rawCreationPoint!, project.preferences.lineGuideAngle, 5) : undefined;
             const creationPointForClick = creationSnap?.point ?? direction?.snappedPoint ?? rawCreationPoint;
            const inferredPoint = snapCreationPoint(editorRef.current.document, point, zoom)?.point ?? point;
       if (tool === "rectangle" || tool === "ellipse") {
@@ -724,7 +724,7 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
          creationDraftRef.current = nextDraft;
          setCreationDraft(nextDraft);
        } else if (draft.points.length === 1 && !draft.elementId) {
-          const sketch = createSketchLine(id(), layerId(editorRef.current.document.layers[0]?.id ?? "layer-1"), defaultStyle, draft.points[0]!, creationPoint);
+          const sketch = createSketchLine(id(), layerId(editorRef.current.document.layers[0]?.id ?? "layer-1"), { ...defaultStyle, strokeWidth: 1.5 }, draft.points[0]!, creationPoint);
           const next = dispatch(editorRef.current, createElement(sketch, creationConnections(sketch, [...(draft.snaps ?? []), creationSnap])));
           const nextDraft = { tool, points: [...draft.points, creationPoint], pointer: creationPoint, elementId: sketch.id, currentNodeId: sketch.nodes[1]!.id } as const;
          creationDraftRef.current = nextDraft;
@@ -939,7 +939,7 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
   const onCanvasPointerMove = (event: PointerEvent<HTMLDivElement>) => {
        setCursorPoint(canvasPointAt(event));
       setDocumentCursorPoint(pointAt(event));
-       if (isDrawingTool(tool)) { const pointer = pointAt(event); const draft = creationDraftRef.current; const direction = project.preferences.lineGuidesEnabled && tool === "line" && draft?.points.length ? directionalGuide(draft.points.at(-1)!, pointer, project.preferences.lineGuideAngle) : undefined; setDirectionalGuideState(direction); setCreationPoint(direction?.snappedPoint ?? pointer); }
+       if (isDrawingTool(tool)) { const pointer = pointAt(event); const draft = creationDraftRef.current; const direction = project.preferences.lineGuidesEnabled && tool === "line" && draft?.points.length ? directionalGuide(draft.points.at(-1)!, pointer, project.preferences.lineGuideAngle, 5) : undefined; setDirectionalGuideState(direction); setCreationPoint(direction?.snappedPoint ?? pointer); }
       const feedbackTool = tool === "text" || tool === "pan" ? undefined : tool;
      if (tool === "cut" && !interaction.current) setCutSegmentHover(pickCuttableSegment(editorRef.current.document, pointAt(event), zoom));
      else setCutSegmentHover(undefined);
@@ -1251,9 +1251,10 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
       const circle = creationDraft.tool === "ellipse" ? circleGeometry(creationDraft.points[0]!, pointer) : undefined;
       const shape = rectangle ? <rect x={rectangle.position.x} y={rectangle.position.y} width={rectangle.size.width} height={rectangle.size.height} /> : circle ? <circle cx={creationDraft.points[0]!.x} cy={creationDraft.points[0]!.y} r={circle.radius} /> : undefined;
        const guides: readonly CreationGuide[] = creationGuides(document, pointer, zoom);
+           const nodeGuide = creationDraft.tool === "line" ? nodeAlignmentGuide(document, start, pointer, zoom, 5) : undefined;
            const extent = Math.hypot(document.page.width, document.page.height) * 2;
            const directionalLine = directionalGuideState && creationDraft.tool === "line" ? (() => { const radians = directionalGuideState.angle * Math.PI / 180; return { angle: directionalGuideState.angle, start: { x: directionalGuideState.source.x - Math.cos(radians) * extent, y: directionalGuideState.source.y - Math.sin(radians) * extent }, end: { x: directionalGuideState.source.x + Math.cos(radians) * extent, y: directionalGuideState.source.y + Math.sin(radians) * extent } }; })() : undefined;
-       return <svg className="creation-pending-overlay" viewBox={`0 0 ${document.page.width} ${document.page.height}`} style={{ left: pageStyle.left + 1, top: pageStyle.top + 1, width: document.page.width * zoom, height: document.page.height * zoom, right: "auto", bottom: "auto" }} aria-label="Vista previa de creación"><g className="creation-preview-shape">{shape}</g><line className="creation-preview-radius" x1={start.x} y1={start.y} x2={pointer.x} y2={pointer.y} />{directionalLine && <><line className="directional-guide" data-directional-guide="true" x1={directionalLine!.start.x} y1={directionalLine!.start.y} x2={directionalLine!.end.x} y2={directionalLine!.end.y} /><text className="directional-guide-label" x={directionalLine.end.x + 8 / zoom} y={directionalLine.end.y - 8 / zoom}>{Math.round(Math.abs(directionalLine.angle))}°</text></>}{guides.map((guide, index) => <line key={index} className={`creation-guide creation-guide-${guide.kind}`} x1={guide.source.x} y1={guide.source.y} x2={guide.target.x} y2={guide.target.y} />)}</svg>;
+       return <svg className="creation-pending-overlay" viewBox={`0 0 ${document.page.width} ${document.page.height}`} style={{ left: pageStyle.left + 1, top: pageStyle.top + 1, width: document.page.width * zoom, height: document.page.height * zoom, right: "auto", bottom: "auto" }} aria-label="Vista previa de creación"><g className="creation-preview-shape">{shape}</g><line className="creation-preview-radius" x1={start.x} y1={start.y} x2={pointer.x} y2={pointer.y} />{directionalLine && <><line className="directional-guide" data-directional-guide="true" x1={directionalLine!.start.x} y1={directionalLine!.start.y} x2={directionalLine!.end.x} y2={directionalLine!.end.y} /><text className="directional-guide-label" x={directionalLine.end.x + 8 / zoom} y={directionalLine.end.y - 8 / zoom}>{Math.round(Math.abs(directionalLine.angle))}°</text></>}{nodeGuide && <line className="creation-guide creation-guide-node-alignment" x1={nodeGuide.source.x} y1={nodeGuide.source.y} x2={nodeGuide.target.x} y2={nodeGuide.target.y} />}{guides.map((guide, index) => <line key={index} className={`creation-guide creation-guide-${guide.kind}`} x1={guide.source.x} y1={guide.source.y} x2={guide.target.x} y2={guide.target.y} />)}</svg>;
     })() : undefined;
    const dimensionHoverStyle = dimensionNodeHover && tool === "dimension" ? (() => { const point = pagePointToCanvas(dimensionNodeHover.node.point, zoom, panMm); return { left: point.x, top: point.y }; })() : undefined;
   const rulerMajorStep = [1, 5, 10, 25, 50, 100, 250, 500].find((step) => step * zoom >= 50) ?? 1000;
