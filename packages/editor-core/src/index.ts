@@ -861,6 +861,20 @@ export const updateDimensionValue = (dimensionId: ElementId, value: number): Edi
     const targetId = dimension.references[0].elementId;
     if (dimension.references[1].elementId !== targetId) return { success: false, error: "Driving dimensions require one referenced rectangle" };
     const target = document.elements.find((element) => element.id === targetId);
+    if (target?.type === "sketch") {
+      if (!dimension.driving || !dimension.constraintId) return { success: false, error: "Sketch dimensions require an explicit driving constraint" };
+      const first = dimension.references[0]; const second = dimension.references[1];
+      if (!("kind" in first) || !("kind" in second) || first.kind !== "node" || second.kind !== "node" || !first.nodeId || !second.nodeId) return { success: false, error: "Sketch driving dimensions require node references" };
+      const expectedKind = dimension.kind === "horizontal" ? "distance-horizontal" : "distance-vertical";
+      const constraint = target.constraints?.find((candidate) => candidate.id === dimension.constraintId);
+      const constraintReferenceIds = constraint?.references.map((reference) => `${reference.elementId}:${reference.nodeId}`).sort();
+          const dimensionReferenceIds = [`${first.elementId}:${first.nodeId}`, `${second.elementId}:${second.nodeId}`].sort();
+          const matches = constraint?.kind === expectedKind && constraintReferenceIds?.every((reference, index) => reference === dimensionReferenceIds[index]);
+      if (!matches || !constraint) return { success: false, error: "Driving dimension constraint does not match its references" };
+      const solved = solveSketchConstraints({ ...target, constraints: target.constraints!.map((candidate) => candidate.id === constraint.id ? { ...candidate, value } : candidate) });
+      if (solved.status === "conflict" || solved.status === "overdefined") return { success: false, error: `Sketch constraints are ${solved.status}` };
+      return replaceElements(document, document.elements.map((element) => element.id === target.id ? solved.sketch : element));
+    }
     if (!target || target.type !== "rectangle" || target.rotation !== 0) return { success: false, error: "Driving dimensions currently require an unrotated rectangle" };
     const center = { x: target.position.x + target.size.width / 2, y: target.position.y + target.size.height / 2 };
     const size = dimension.kind === "horizontal" ? { width: value, height: target.size.height } : { width: target.size.width, height: value };

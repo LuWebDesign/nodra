@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createDocument, elementId, layerId, type DimensionElement, type Element, type EllipseElement, type GlyphElement, type PathElement, type PointMm, type RectangleElement, type SketchElement, type SplineElement, type TextElement } from "@nodra/domain";
-import { addSketchConstraint, addToSelection, appendSketchEdge, appendSplineNode, beginGesture, cancelGesture, clearSelection, closePath, closeSplineElement, commitGesture, createEditor, createElement, createPathCubicNode, createSketchLine, cutLineAtPoint, cutPathSegment, cutSketchEdge, splitPathLineAt, deleteContourNodes, deleteElement, deleteElementNodes, deletePathNodes, deleteSketchConstraint, dispatch, duplicateElements, flipElements, insertContourNode, invalidDimensionIdsForShapeOperation, moveElement, moveElements, movePathNode, movePathHandle, openPath, previewGesture, previewGestureFromBase, redo, removeFromSelection, reorderLayer, resizeElement, resizeElementToDimensions, resizeElements, resizeElementsToDimensions, rotateElementsAroundCenter, select, selectForPointerDown, setLayerVisibility, setPathJoin, shapeOperation, splitPathSegment, toggleSelection, undo, updateContourNode, updateElement, updateElementNode, updateElementStyles, updateSketchConstraint, updateSplineHandle, updateSplineNode } from "./index.js";
+import { addSketchConstraint, addToSelection, appendSketchEdge, appendSplineNode, beginGesture, cancelGesture, clearSelection, closePath, closeSplineElement, commitGesture, createEditor, createElement, createPathCubicNode, createSketchLine, cutLineAtPoint, cutPathSegment, cutSketchEdge, splitPathLineAt, deleteContourNodes, deleteElement, deleteElementNodes, deletePathNodes, deleteSketchConstraint, dispatch, duplicateElements, flipElements, insertContourNode, invalidDimensionIdsForShapeOperation, moveElement, moveElements, movePathNode, movePathHandle, openPath, previewGesture, previewGestureFromBase, redo, removeFromSelection, reorderLayer, resizeElement, resizeElementToDimensions, resizeElements, resizeElementsToDimensions, rotateElementsAroundCenter, select, selectForPointerDown, setLayerVisibility, setPathJoin, shapeOperation, splitPathSegment, toggleSelection, undo, updateContourNode, updateDimensionValue, updateElement, updateElementNode, updateElementStyles, updateSketchConstraint, updateSplineHandle, updateSplineNode } from "./index.js";
 import { boundsOfElements } from "@nodra/geometry";
 import type { Direction } from "@nodra/geometry";
 import { appendLinePoint } from "./index.js";
@@ -348,7 +348,17 @@ describe("editor core", () => {
     }
     expect(state.undo).toHaveLength(1);
   });
-  it("re-solves sketch constraints after moving a node", () => {
+  it("updates an explicitly linked sketch driving dimension", () => {
+     const sketch = createSketchLine(elementId("driving-sketch"), layerId("default"), rectangle.style, { x: 0, y: 0 }, { x: 10, y: 0 });
+     const first = sketch.nodes[0]!; const second = sketch.nodes[1]!;
+     const constraint = { id: "distance", kind: "distance-horizontal" as const, references: [{ elementId: sketch.id, nodeId: first.id }, { elementId: sketch.id, nodeId: second.id }] as const, value: 10 };
+     const driving = { type: "dimension" as const, id: elementId("driving-dimension"), layerId: "default" as typeof rectangle.layerId, kind: "horizontal" as const, references: [{ kind: "node" as const, elementId: sketch.id, nodeIndex: 0, nodeId: first.id }, { kind: "node" as const, elementId: sketch.id, nodeIndex: 1, nodeId: second.id }] as const, offset: { x: 0, y: -8 }, precision: 2, units: "mm" as const, rotation: 0 as const, style: rectangle.style, driving: true, constraintId: constraint.id };
+     const initial = createEditor({ ...document, elements: [{ ...sketch, constraints: [constraint] }, driving] });
+     const updated = dispatch(initial, updateDimensionValue(driving.id, 20));
+     expect((updated.document.elements[0] as SketchElement).nodes[1]?.point).toEqual({ x: 20, y: 0 });
+     expect(updated.undo).toHaveLength(1);
+   });
+   it("re-solves sketch constraints after moving a node", () => {
      const sketch = createSketchLine(elementId("move-constrained"), layerId("default"), rectangle.style, { x: 0, y: 0 }, { x: 10, y: 4 });
      const first = sketch.nodes[0]!; const second = sketch.nodes[1]!;
      const constrained = { ...sketch, constraints: [{ id: "horizontal", kind: "horizontal" as const, references: [{ elementId: sketch.id, nodeId: first.id }, { elementId: sketch.id, nodeId: second.id }] as const }] };
