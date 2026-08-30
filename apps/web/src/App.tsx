@@ -825,7 +825,9 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
             if (!dimension) return;
             const next = dispatch(editorRef.current, createElement(dimension));
             if (next === editorRef.current) return;
-            setEditorState(next);
+            const selectedTargetId = dimensionDraft.first.hit.elementId;
+            setEditModeElementIds([selectedTargetId]);
+            setEditorState(select(next, [selectedTargetId]));
             const placedValue = dimensionGeometry(dimension, next.document.elements)?.value;
             if (placedValue !== undefined) setDimensionEditDraft({ id: dimension.id, value: placedValue.toFixed(2), position: pagePointToCanvas(placement, zoom, panMm) });
            setDimensionDraft(undefined);

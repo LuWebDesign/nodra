@@ -422,6 +422,27 @@ test("continues a click line and closes a valid non-collinear path", async ({ pa
   await expect(sketch.locator("line")).toHaveCount(3);
 });
 
+test("keeps a path selected after creating a dimension", async ({ page }) => {
+  await page.goto("/");
+  const bounds = await page.locator(".page").boundingBox();
+  expect(bounds).not.toBeNull();
+  const start = { x: bounds!.x + 120, y: bounds!.y + 180 };
+  const end = { x: start.x + 160, y: start.y };
+  await page.getByRole("button", { name: "Pluma" }).click();
+  await page.mouse.click(start.x, start.y);
+  await page.mouse.click(end.x, end.y);
+  await page.getByRole("button", { name: "Cota" }).click();
+  await page.mouse.click(start.x, start.y);
+  await page.mouse.click(end.x, end.y);
+  await page.mouse.click((start.x + end.x) / 2, start.y - 35);
+  await expect(page.locator('[data-dimension="horizontal"]')).toHaveCount(1);
+  await page.getByRole("button", { name: "Forma" }).click();
+  await page.mouse.click((start.x + end.x) / 2, start.y);
+  await expect(page.getByRole("button", { name: "Dividir segmento del trazado en el punto medio" })).toBeEnabled();
+  await page.getByRole("button", { name: "Dividir segmento del trazado en el punto medio" }).click();
+  await expect(page.locator('[data-dimension="horizontal"]')).toHaveCount(1);
+});
+
 test("cancels a sketch relationship preview without committing it", async ({ page }) => {
   await page.goto("/");
   const bounds = await page.locator(".page").boundingBox();
