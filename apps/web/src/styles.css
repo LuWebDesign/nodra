@@ -131,7 +131,16 @@
 .dimension-value-editor button { color:#111827; background:#f1f5f9; opacity:1; }
 .dimension-value-editor button[type="submit"] { color:#ffffff; background:#f59e0b; border-color:#d97706; }
 .constraint-controls { margin-top:10px; padding-top:10px; border-top:1px solid var(--line); }
-.constraint-buttons { display:grid; grid-template-columns:1fr 1fr; gap:4px; }
+.constraint-list { display:grid; gap:4px; margin:6px 0; padding:0; list-style:none; }
+ .constraint-list li { display:grid; grid-template-columns:1fr auto auto; gap:4px; align-items:center; font-size:10px; }
+ .constraint-list input { width:58px; min-width:0; padding:3px; border:1px solid #cbd5e1; border-radius:3px; font-size:10px; }
+ .constraint-list button { padding:3px 5px; color:#475569; background:#f8fafc; border:1px solid #cbd5e1; border-radius:3px; font-size:9px; }
+ .constraint-list button:disabled { opacity:.45; cursor:not-allowed; }
+ .constraint-draft-actions { display:grid; grid-template-columns:1fr 1fr; gap:4px; margin:6px 0; align-items:center; }
+ .constraint-draft-actions span { grid-column:1 / -1; color:#2563eb; font-size:10px; font-weight:700; }
+ .constraint-draft-actions button { padding:5px 4px; color:#1f2937; background:#f8fafc; border:1px solid #cbd5e1; border-radius:4px; font-size:10px; }
+ .constraint-draft-actions button:first-of-type { color:#ffffff; background:#2563eb; border-color:#1d4ed8; }
+ .constraint-buttons { display:grid; grid-template-columns:1fr 1fr; gap:4px; }
 .constraint-buttons button { padding:5px 4px; color:#1f2937; background:#f8fafc; border:1px solid #cbd5e1; border-radius:4px; font-size:10px; }
 .constraint-buttons button:disabled { opacity:.45; cursor:not-allowed; }
 .constraint-status { margin:6px 0; font-size:11px; font-weight:700; }

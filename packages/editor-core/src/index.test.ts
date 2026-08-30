@@ -15,7 +15,23 @@ const dimension: DimensionElement = { type: "dimension", id: elementId("dimensio
 const glyph: GlyphElement = { type: "glyph", id: elementId("glyph"), layerId: layerId("default"), position: { x: 0, y: 0 }, size: { width: 20, height: 20 }, glyph: "O", fillRule: "evenodd", rotation: 0, style: rectangle.style, contours: [{ nodes: [{ id: "ga", anchor: { x: 0, y: 0 }, join: "smooth" }, { id: "gb", anchor: { x: 10, y: 0 }, join: "smooth" }, { id: "gc", anchor: { x: 10, y: 10 }, join: "smooth" }, { id: "gd", anchor: { x: 0, y: 10 }, join: "smooth" }], segments: [{ type: "cubicBezier", startNodeId: "ga", endNodeId: "gb", control1: { x: 3, y: -2 }, control2: { x: 7, y: -2 } }, { type: "cubicBezier", startNodeId: "gb", endNodeId: "gc", control1: { x: 12, y: 3 }, control2: { x: 12, y: 7 } }, { type: "cubicBezier", startNodeId: "gc", endNodeId: "gd", control1: { x: 7, y: 12 }, control2: { x: 3, y: 12 } }, { type: "cubicBezier", startNodeId: "gd", endNodeId: "ga", control1: { x: -2, y: 7 }, control2: { x: -2, y: 3 } }] }] };
 
 describe("editor core", () => {
-  it("updates and deletes sketch constraints through atomic commands", () => {
+  it("previews, commits, cancels, and undoes a sketch constraint as one transaction", () => {
+        const sketch = createSketchLine(elementId("transaction-sketch"), layerId("default"), rectangle.style, { x: 0, y: 0 }, { x: 7, y: 4 });
+        const [first, second] = sketch.nodes;
+        if (!first || !second) throw new Error("Expected sketch nodes");
+        const constraint = { id: "transaction-constraint", kind: "horizontal" as const, references: [{ elementId: sketch.id, nodeId: first.id }, { elementId: sketch.id, nodeId: second.id }] as const };
+        const initial = createEditor({ ...document, elements: [sketch] });
+        const preview = previewGesture(beginGesture(initial), addSketchConstraint(sketch.id, constraint));
+        expect(preview.gesture).toBeDefined();
+        expect((preview.document.elements[0] as SketchElement).constraints).toEqual([constraint]);
+        expect(preview.undo).toHaveLength(0);
+        expect(cancelGesture(preview).document).toEqual(initial.document);
+        const committed = commitGesture(preview);
+        expect(committed.undo).toHaveLength(1);
+        expect(undo(committed).document).toEqual(initial.document);
+      });
+
+      it("updates and deletes sketch constraints through atomic commands", () => {
         const sketch = createSketchLine(elementId("constraint-sketch"), layerId("default"), rectangle.style, { x: 0, y: 0 }, { x: 7, y: 4 });
         const [first, second] = sketch.nodes;
         if (!first || !second) throw new Error("Expected sketch nodes");
