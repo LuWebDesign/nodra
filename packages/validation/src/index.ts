@@ -49,7 +49,9 @@ const contour = z.object({ ...common, type: z.literal("contour"), position: poin
 });
 const sketchNode = z.object({ id: nonEmptyId, point }).strict();
 const sketchEdge = z.object({ id: nonEmptyId, startNodeId: nonEmptyId, endNodeId: nonEmptyId }).strict();
-const sketch = z.object({ id: nonEmptyId, layerId: nonEmptyId, type: z.literal("sketch"), nodes: z.array(sketchNode).min(2), edges: z.array(sketchEdge).min(1), style, operation: operation.optional() }).strict().superRefine((value, ctx) => {
+const sketchPointReference = z.object({ elementId: nonEmptyId, nodeId: nonEmptyId }).strict();
+const sketchConstraint = z.object({ id: nonEmptyId, kind: z.enum(["horizontal", "vertical", "coincident", "distance-horizontal", "distance-vertical", "fixed"]), references: z.array(sketchPointReference).min(1).max(2), value: finite.positive().optional() }).strict();
+const sketch = z.object({ id: nonEmptyId, layerId: nonEmptyId, type: z.literal("sketch"), nodes: z.array(sketchNode).min(2), edges: z.array(sketchEdge).min(1), constraints: z.array(sketchConstraint).optional(), style, operation: operation.optional() }).strict().superRefine((value, ctx) => {
   const nodeIds = value.nodes.map((node) => node.id); const edgeIds = value.edges.map((edge) => edge.id);
   if (new Set(nodeIds).size !== nodeIds.length) ctx.addIssue({ code: "custom", message: "Sketch node IDs must be unique", path: ["nodes"] });
   if (new Set(edgeIds).size !== edgeIds.length) ctx.addIssue({ code: "custom", message: "Sketch edge IDs must be unique", path: ["edges"] });
