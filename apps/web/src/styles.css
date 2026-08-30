@@ -128,3 +128,5 @@
 .dimension-value-editor label { display:flex; flex-direction:column; gap:2px; color:#374151; font-weight:600; }
 .dimension-value-editor input { width:76px; padding:3px 4px; border:1px solid #cbd5e1; border-radius:3px; }
 .dimension-value-editor button { padding:4px 6px; border:1px solid #cbd5e1; border-radius:3px; background:#f8fafc; cursor:pointer; font-size:10px; }
+.dimension-value-editor button { color:#111827; background:#f1f5f9; opacity:1; }
+.dimension-value-editor button[type="submit"] { color:#ffffff; background:#f59e0b; border-color:#d97706; }
