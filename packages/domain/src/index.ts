@@ -51,6 +51,8 @@ export interface RectangleElement {
   readonly style: VisualStyle;
   readonly operation?: OperationMetadata;
 }
+export type CircleConstraintKind = "center-horizontal" | "center-vertical" | "radius" | "diameter";
+export interface CircleConstraint { readonly id: string; readonly kind: CircleConstraintKind; readonly value?: number; readonly driving?: boolean }
 export interface EllipseElement {
   readonly type: "ellipse";
   readonly id: ElementId;
@@ -62,6 +64,8 @@ export interface EllipseElement {
   readonly flipY?: boolean;
   readonly style: VisualStyle;
   readonly operation?: OperationMetadata;
+  /** Optional parametric constraints; valid only for circular ellipses (equal width and height). */
+  readonly circleConstraints?: readonly CircleConstraint[];
 }
 export interface LineElement {
   readonly type: "line";
@@ -171,7 +175,17 @@ export type ConnectableNodeAddress =
 export interface ConnectableNodeReference { readonly elementId: ElementId; readonly node: ConnectableNodeAddress }
 export interface ExplicitConnection { readonly id: string; readonly first: ConnectableNodeReference; readonly second: ConnectableNodeReference }
 export interface DocumentCapabilities { readonly spline?: 1 }
-export interface DocumentSnapshot {
+/** Elements that expose a document-space rotation, independent of their geometry representation. */
+    export type RotatableElement = Extract<Element, { readonly rotation: number }>;
+    export const hasRotation = (element: Element): element is RotatableElement => "rotation" in element && typeof element.rotation === "number";
+
+    export const isLineElement = (element: Element): element is LineElement => element.type === "line";
+
+/** Elements that expose an axis-aligned document-space bounding box. */
+    export type BoundedElement = Extract<Element, { readonly position: PointMm; readonly size: SizeMm }>;
+    export const hasBounds = (element: Element): element is BoundedElement => "position" in element && "size" in element;
+
+    export interface DocumentSnapshot {
   readonly schemaVersion: SchemaVersion;
   readonly id: DocumentId;
   readonly revision: Revision;

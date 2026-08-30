@@ -1,5 +1,6 @@
 import polygonClipping, { type MultiPolygon } from "polygon-clipping";
-import type { ConnectableNodeAddress, ContourElement, DimensionElement, Element, ElementId, EllipseElement, GlyphElement, HandleOffset, LineElement, PathCubicSegment, PathElement, PointMm, RectangleElement, SizeMm, SketchConstraint, SketchElement, SplineElement, SplineNode } from "@nodra/domain";
+import { hasBounds } from "@nodra/domain";
+    import type { ConnectableNodeAddress, ContourElement, DimensionElement, Element, ElementId, EllipseElement, GlyphElement, HandleOffset, LineElement, PathCubicSegment, PathElement, PointMm, RectangleElement, SizeMm, SketchConstraint, SketchElement, SplineElement, SplineNode } from "@nodra/domain";
 
 export interface Bounds { readonly x: number; readonly y: number; readonly width: number; readonly height: number }
 export interface Viewport { readonly zoom: number; readonly panMm: PointMm }
@@ -240,6 +241,26 @@ export function solveSketchConstraints(sketch: SketchElement): SketchConstraintS
   const uniqueConflicts = [...new Set(conflicts)];
   const status: SketchConstraintStatus = uniqueConflicts.length ? "conflict" : rows.length > rank(rows) ? "overdefined" : degreesOfFreedom === 0 ? "defined" : "underdefined";
   return { sketch: { ...sketch, nodes: sketch.nodes.map((node) => ({ ...node, point: nodes.get(node.id) ?? node.point })) }, status, conflicts: uniqueConflicts };
+}
+
+export type CircleConstraintStatus = "underdefined" | "defined" | "conflict";
+export interface CircleConstraintSolveResult { readonly circle: EllipseElement; readonly status: CircleConstraintStatus; readonly conflicts: readonly string[] }
+
+/** Solves the independent cx, cy, and r degrees of freedom of a circular ellipse. */
+export function solveCircleConstraints(circle: EllipseElement): CircleConstraintSolveResult {
+  const constraints = [...(circle.circleConstraints ?? [])].sort((a, b) => a.id.localeCompare(b.id));
+  const center = elementCenter(circle); const values = { x: center.x, y: center.y, radius: circle.size.width / 2 };
+  const conflicts: string[] = []; const seen = new Map<string, string>();
+  for (const constraint of constraints) {
+    const axis = constraint.kind === "center-horizontal" ? "x" : constraint.kind === "center-vertical" ? "y" : "radius";
+    if (constraint.value === undefined || !Number.isFinite(constraint.value) || constraint.value <= 0 && axis === "radius") { conflicts.push(constraint.id); continue; }
+    const value = constraint.kind === "diameter" ? constraint.value / 2 : constraint.value;
+    const previous = seen.get(axis);
+    if (previous) { conflicts.push(constraint.id); continue; }
+    seen.set(axis, constraint.id); values[axis] = value;
+  }
+  const radius = values.radius; const solved: EllipseElement = { ...circle, position: { x: values.x - radius, y: values.y - radius }, size: { width: radius * 2, height: radius * 2 } };
+  return { circle: solved, status: conflicts.length ? "conflict" : seen.size === 3 ? "defined" : "underdefined", conflicts };
 }
 
 export type DimensionPlacementKind = Extract<DimensionElement["kind"], "aligned" | "horizontal" | "vertical">;
@@ -502,7 +523,7 @@ export function elementCenter(element: Element): PointMm {
     : element.type === "spline" ? groupCenter(splineBounds(element))
     : element.type === "sketch" ? groupCenter(boundsOf(element))
     : element.type === "glyph" ? groupCenter(glyphBounds(element))
-    : { x: element.position.x + element.size.width * (element.type === "text" ? element.scaleX ?? 1 : 1) / 2, y: element.position.y + element.size.height * (element.type === "text" ? element.scaleY ?? 1 : 1) / 2 };
+    : hasBounds(element) ? { x: element.position.x + element.size.width * (element.type === "text" ? element.scaleX ?? 1 : 1) / 2, y: element.position.y + element.size.height * (element.type === "text" ? element.scaleY ?? 1 : 1) / 2 } : { x: 0, y: 0 };
 }
 
 const contourBounds = (element: ContourElement): Bounds => {
@@ -733,7 +754,8 @@ export function realGeometryNodes(element: Element): readonly RealGeometryNode[]
   if (element.type === "sketch") return element.nodes.map((node) => ({ kind: "anchor" as const, nodeId: node.id, point: node.point }));
   if (element.type === "glyph") return glyphGeometryNodes(element);
   if (element.type === "spline") return element.nodes.flatMap((node) => [{ kind: "anchor" as const, nodeId: node.id, point: node.anchor }, ...(node.inHandle ? [{ kind: "control" as const, nodeId: node.id, point: resolveHandle(node.anchor, node.inHandle), handle: "control2" as const }] : []), ...(node.outHandle ? [{ kind: "control" as const, nodeId: node.id, point: resolveHandle(node.anchor, node.outHandle), handle: "control1" as const }] : [])]);
-  const half = { x: element.size.width / 2, y: element.size.height / 2 };
+  if (!hasBounds(element)) return [];
+      const half = { x: element.size.width / 2, y: element.size.height / 2 };
   const center = { x: element.position.x + half.x, y: element.position.y + half.y };
   if (element.type === "rectangle") {
     const [nw, ne, se, sw] = rotatedCorners(element);

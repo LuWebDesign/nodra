@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { CURRENT_SCHEMA_VERSION, type DocumentSnapshot, type Element, type PointMm, type ProjectSnapshot, type SizeMm } from "@nodra/domain";
+import { CURRENT_SCHEMA_VERSION, hasBounds, type DocumentSnapshot, type Element, type PointMm, type ProjectSnapshot, type SizeMm } from "@nodra/domain";
 
 const finite = z.number().finite();
 const nonEmptyId = z.string().min(1);
@@ -15,8 +15,11 @@ const visualLineEndpoints = (line: { readonly start: PointMm; readonly end: Poin
 const common = { id: nonEmptyId, layerId: nonEmptyId, rotation: finite, flipX: z.boolean().default(false), flipY: z.boolean().default(false), style, operation: operation.optional() };
 const cornerRadii = z.object({ topLeft: finite.min(0), topRight: finite.min(0), bottomRight: finite.min(0), bottomLeft: finite.min(0) }).strict();
 const rectangle = z.object({ ...common, type: z.literal("rectangle"), position: point, size, cornerRadius: finite.min(0).default(0), cornerRadii: cornerRadii.optional() }).strict();
-const ellipse = z.object({ ...common, type: z.literal("ellipse"), position: point, size }).strict();
-const line = z.object({ ...common, type: z.literal("line"), start: point, end: point }).strict().superRefine((value, ctx) => {
+const circleConstraint = z.object({ id: nonEmptyId, kind: z.enum(["center-horizontal", "center-vertical", "radius", "diameter"]), value: finite.optional(), driving: z.boolean().optional() }).strict().superRefine((value, ctx) => {
+  if ((value.kind === "radius" || value.kind === "diameter") && (value.value === undefined || value.value <= 0)) ctx.addIssue({ code: "custom", message: "Circle size constraints require a positive value", path: ["value"] });
+});
+const ellipse = z.object({ ...common, type: z.literal("ellipse"), position: point, size, circleConstraints: z.array(circleConstraint).optional() }).strict();
+export const line = z.object({ ...common, type: z.literal("line"), start: point, end: point }).strict().superRefine((value, ctx) => {
   if (value.start.x === value.end.x && value.start.y === value.end.y) ctx.addIssue({ code: "custom", message: "Line endpoints must differ", path: ["end"] });
 });
 const connectableAddress = z.union([
@@ -280,7 +283,7 @@ const elementPoints = (element: Element): readonly PointMm[] => {
     case "sketch": return element.nodes.map((node) => node.point);
     case "contour": return element.contours.flatMap((contour) => contour.points);
     case "dimension": return [];
-    default: return [element.position, { x: element.position.x + element.size.width, y: element.position.y + element.size.height }];
+    default: return hasBounds(element) ? [element.position, { x: element.position.x + element.size.width, y: element.position.y + element.size.height }] : [];
   }
 };
 
