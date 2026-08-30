@@ -325,6 +325,15 @@ it("converts a zero-radius rectangle to an open path when cutting one edge", () 
     const resizedHeight = dispatch(createEditor({ ...document, elements: [rectangle, bottomRight], connections: [bottomConnection] }), resizeElementToDimensions(rectangle.id, "height", 10, true));
     expect(resizedHeight.document.elements.find((element) => element.id === rectangle.id)).toMatchObject({ position: { x: -9, y: -3 }, size: { width: 20, height: 10 } });
   });
+  it("updates a circle radius through explicit center and rim references", () => {
+    const circle: EllipseElement = { type: "ellipse", id: elementId("circle"), layerId: rectangle.layerId, position: { x: 10, y: 10 }, size: { width: 20, height: 20 }, rotation: 0, style: rectangle.style };
+    const radius: DimensionElement = { type: "dimension", id: elementId("radius-driving"), layerId: rectangle.layerId, kind: "radius", references: [{ kind: "node", elementId: circle.id, nodeIndex: 0, nodeId: "center" }, { kind: "node", elementId: circle.id, nodeIndex: 2, nodeId: "e" }], offset: { x: 8, y: 0 }, precision: 2, units: "mm", rotation: 0, style: rectangle.style };
+    const state = dispatch(createEditor({ ...document, elements: [circle, radius] }), updateDimensionValue(radius.id, 15));
+    expect((state.document.elements[0] as EllipseElement).size).toEqual({ width: 30, height: 30 });
+    expect((state.document.elements[0] as EllipseElement).position).toEqual({ x: 5, y: 5 });
+    expect(state.undo).toHaveLength(1);
+  });
+
   it("drives an edited path through explicit node references", () => {
      const linked: DimensionElement = { ...dimension, id: elementId("path-dimension"), references: [{ kind: "node", elementId: path.id, nodeIndex: 0, nodeId: "a" }, { kind: "node", elementId: path.id, nodeIndex: 1, nodeId: "b" }] };
      const state = dispatch(createEditor({ ...document, elements: [path, linked] }), updateDimensionValue(linked.id, 25));
