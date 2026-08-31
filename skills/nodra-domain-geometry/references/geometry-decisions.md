@@ -1,6 +1,6 @@
 # Domain and geometry decisions
 
-The domain currently has schemaVersion 3, stable branded IDs, revisions, pages/layers, rectangle/ellipse/line elements, styles, and inert laser operation metadata. Coordinates and sizes are millimetres with a top-left origin. Geometry provides bounds, rotation, hit testing, viewport conversion, resize handles, and selection helpers. Validation uses Zod and migrations.
+The domain currently has schemaVersion 5, stable branded IDs, revisions, pages/layers, rectangle/ellipse/line/sketch/dimension elements, styles, and inert laser operation metadata. Coordinates and sizes are millimetres with a top-left origin. Geometry provides bounds, rotation, hit testing, viewport conversion, resize handles, selection helpers, and deterministic sketch-constraint solving. Validation uses Zod and migrations.
 
 | Area | Current solution | Candidate to evaluate | Use when | Do not use when |
 |---|---|---|---|---|
@@ -10,5 +10,9 @@ The domain currently has schemaVersion 3, stable branded IDs, revisions, pages/l
 | Heavy computation | Main thread | Web Worker | Profiling shows blocking work | Before measurable need |
 | Spatial indexing | Direct geometry queries | RBush | Dataset/query scale proves need | As speculative abstraction |
 | Import/export | None installed | DXF/PDF parsers | A defined boundary and format exist | Inferring or installing one now |
+
+Sketches are graphs of stable nodes and edges. Shared nodes preserve topology; constraints express design intent. Current solver relations include horizontal, vertical, coincident, perpendicular, parallel, equal, distance, angle, and fixed, with four node references for line-pair relations. Inferred relations are only added for clearly axis-aligned or orthogonal geometry; free-angle segments remain unconstrained.
+
+Cutting a sketch edge at a crossing uses the true finite segment intersection, creates a split node, and preserves the other geometry. The cut command modifies only the clicked geometry. Cross-object dimensions use stable node references and drive the second node for aligned/horizontal/vertical edits.
 
 Evaluate candidates by browser/TypeScript compatibility, license, maintenance, precision, bundle impact, performance, worker suitability, and API fit. Numeric robustness requires finite inputs, explicit tolerances, stable rotation conventions, and tests around boundaries; do not round model values for display concerns.
