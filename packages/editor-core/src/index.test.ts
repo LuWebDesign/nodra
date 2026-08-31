@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createDocument, elementId, layerId, type DimensionElement, type Element, type EllipseElement, type GlyphElement, type PathElement, type PointMm, type RectangleElement, type SketchElement, type SplineElement, type TextElement } from "@nodra/domain";
+import { createDocument, elementId, layerId, type DimensionElement, type Element, type EllipseElement, type LineElement, type GlyphElement, type PathElement, type PointMm, type RectangleElement, type SketchElement, type SplineElement, type TextElement } from "@nodra/domain";
 import { addSketchConstraint, addToSelection, appendSketchEdge, appendSplineNode, beginGesture, cancelGesture, clearSelection, closePath, closeSplineElement, commitGesture, createEditor, createElement, createPathCubicNode, createSketchLine, cutLineAtPoint, cutPathSegment, cutSketchEdge, splitPathLineAt, deleteContourNodes, deleteElement, deleteElementNodes, deletePathNodes, deleteSketchConstraint, dispatch, duplicateElements, flipElements, insertContourNode, invalidDimensionIdsForShapeOperation, moveElement, moveElements, movePathNode, movePathHandle, openPath, previewGesture, previewGestureFromBase, redo, removeFromSelection, reorderLayer, resizeElement, resizeElementToDimensions, resizeElements, resizeElementsToDimensions, rotateElementsAroundCenter, select, selectForPointerDown, setDimensionDriving, updateCircleConstraint, deleteCircleConstraint, solveCircle, setLayerVisibility, setPathJoin, shapeOperation, splitPathSegment, toggleSelection, undo, updateContourNode, updateDimensionValue, updateElement, updateElementNode, updateElementStyles, updateSketchConstraint, updateSplineHandle, updateSplineNode } from "./index.js";
 import { boundsOfElements } from "@nodra/geometry";
 import type { Direction } from "@nodra/geometry";
@@ -374,6 +374,15 @@ it("converts a zero-radius rectangle to an open path when cutting one edge", () 
      const linked: DimensionElement = { ...dimension, id: elementId("path-dimension"), references: [{ kind: "node", elementId: path.id, nodeIndex: 0, nodeId: "a" }, { kind: "node", elementId: path.id, nodeIndex: 1, nodeId: "b" }] };
      const state = dispatch(createEditor({ ...document, elements: [path, linked] }), updateDimensionValue(linked.id, 25));
      expect((state.document.elements[0] as PathElement).nodes[1]?.anchor).toEqual({ x: 25, y: 0 });
+     expect(state.undo).toHaveLength(1);
+   });
+
+   it("drives the real length of an angled line while preserving its direction", () => {
+     const line: LineElement = { type: "line", id: elementId("angled-line"), layerId: layerId("default"), start: { x: 10, y: 10 }, end: { x: 20, y: 20 }, rotation: 0, style: rectangle.style };
+     const linked: DimensionElement = { type: "dimension", id: elementId("angled-line-dimension"), layerId: line.layerId, kind: "aligned", references: [{ kind: "node", elementId: line.id, nodeIndex: 0, nodeId: "start" }, { kind: "node", elementId: line.id, nodeIndex: 1, nodeId: "end" }], offset: { x: 0, y: -8 }, precision: 2, units: "mm", rotation: 0, style: rectangle.style };
+     const state = dispatch(createEditor({ ...document, elements: [line, linked] }), updateDimensionValue(linked.id, 20));
+     expect((state.document.elements[0] as LineElement).start).toEqual(line.start);
+     expect((state.document.elements[0] as LineElement).end).toEqual({ x: 10 + Math.sqrt(200), y: 10 + Math.sqrt(200) });
      expect(state.undo).toHaveLength(1);
    });
 

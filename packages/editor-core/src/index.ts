@@ -905,6 +905,27 @@ export const updateDimensionValue = (dimensionId: ElementId, value: number): Edi
       const updated = { ...target, position, size: { width: radius * 2, height: radius * 2 }, ...(updatedConstraints ? { circleConstraints: updatedConstraints } : {}) };
       return replaceElements(document, document.elements.map((element) => element.id === target.id ? updated : element));
     }
+    if (target?.type === "line") {
+      const first = dimension.references[0]; const second = dimension.references[1];
+      if (!("kind" in first) || !("kind" in second) || first.kind !== "node" || second.kind !== "node") return { success: false, error: "Line driving dimensions require node references" };
+      const nodes = realGeometryNodes(target);
+      const firstNode = first.nodeId ? nodes.find((node) => node.nodeId === first.nodeId) : nodes[first.nodeIndex];
+      const secondNode = second.nodeId ? nodes.find((node) => node.nodeId === second.nodeId) : nodes[second.nodeIndex];
+      if (!firstNode || !secondNode || firstNode.nodeId === secondNode.nodeId || firstNode.kind !== "endpoint" || secondNode.kind !== "endpoint") return { success: false, error: "Line driving dimension references are invalid" };
+      const dx = secondNode.point.x - firstNode.point.x; const dy = secondNode.point.y - firstNode.point.y;
+      const currentLength = Math.hypot(dx, dy);
+      if (!Number.isFinite(currentLength) || currentLength <= 1e-9) return { success: false, error: "Cannot dimension a zero-length line" };
+      let end: PointMm;
+      if (dimension.kind === "aligned") {
+        end = { x: firstNode.point.x + dx * value / currentLength, y: firstNode.point.y + dy * value / currentLength };
+      } else if (dimension.kind === "horizontal") {
+        end = { x: firstNode.point.x + Math.sign(dx || 1) * value, y: secondNode.point.y };
+      } else if (dimension.kind === "vertical") {
+        end = { x: secondNode.point.x, y: firstNode.point.y + Math.sign(dy || 1) * value };
+      } else return { success: false, error: "Unsupported line dimension kind" };
+      const updated = secondNode.nodeId === "start" ? { ...target, start: end } : { ...target, end };
+      return replaceElements(document, document.elements.map((element) => element.id === target.id ? updated : element));
+    }
     if (dimension.kind !== "horizontal" && dimension.kind !== "vertical") return { success: false, error: "Only horizontal and vertical dimensions can drive rectangles" };
     if (target?.type === "path") {
       const first = dimension.references[0]; const second = dimension.references[1];
