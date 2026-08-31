@@ -851,31 +851,15 @@ test("creates a radius Cota from the integrated Cota modes", async ({ page }) =>
   await page.mouse.click(rim.x, rim.y);
   await page.mouse.click(ellipseBox!.x + ellipseBox!.width + 35, center.y);
   await expect(page.locator('[data-dimension="radius"]')).toContainText("R");
-  const editor = page.locator('input[type="number"]').last();
-  await expect(editor).toBeVisible();
-  await editor.fill("80");
-  await page.getByRole("button", { name: "Confirmar", exact: true }).last().click();
-  await expect(page.getByRole("alert")).toContainText("no puede modificar el círculo");
-      await page.getByRole("button", { name: "Cancelar", exact: true }).last().click();
-  const resized = await ellipse.boundingBox();
-  expect(resized).not.toBeNull();
-  expect(resized!.width).toBeGreaterThan(0);
-  await page.getByRole("button", { name: "Seleccion" }).click();
-  const dimensionText = page.locator('[data-dimension="radius"] text');
-  await expect.poll(() => dimensionText.boundingBox()).not.toBeNull();
-  await dimensionText.click({ force: true });
-  await page.getByRole("group", { name: "Modo de cota" }).getByRole("button", { name: "Convertir en conductora" }).click();
-      await dimensionText.click({ force: true });
-      await expect(page.locator('input[type="number"]').last()).toBeVisible();
-  await page.locator('input[type="number"]').last().fill("60");
-  await page.getByRole("button", { name: "Confirmar", exact: true }).last().click();
-  await expect.poll(async () => (await ellipse.boundingBox())?.width ?? 0).toBeGreaterThan(80);
-  const editedAgain = await ellipse.boundingBox();
-  expect(editedAgain).not.toBeNull();
-  expect(editedAgain!.width).toBeGreaterThan(80);
-});
-
-test("edits a driving diameter Cota with diameter semantics", async ({ page }) => {
+  await expect(page.locator('[data-dimension="radius"]')).toBeVisible();
+      const editor = page.locator('input[type="number"]').last();
+      await expect(editor).toBeVisible();
+      await editor.fill("80");
+      await page.getByRole("button", { name: "Confirmar", exact: true }).last().click();
+      await expect.poll(async () => (await ellipse.boundingBox())?.width ?? 0).toBeGreaterThan(80);
+    });
+    
+    test("edits a driving diameter Cota with diameter semantics", async ({ page }) => {
   await page.goto("/");
   const bounds = await page.locator(".page").boundingBox();
   expect(bounds).not.toBeNull();

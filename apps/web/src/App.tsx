@@ -885,11 +885,12 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
             const placement = pointAt(event);
             const dimension = dimensionDraft.first.kind === "node" && dimensionDraft.second.kind === "node" ? newDimension("layer-1", dimensionDraft.first.hit, dimensionDraft.second.hit, placement, tool === "radius" ? "radius" : dimensionMode) : dimensionDraft.first.kind === "line" && dimensionDraft.second.kind === "line" ? newAngularDimension("layer-1", dimensionDraft.first, dimensionDraft.second, placement) : undefined;
             if (!dimension) return;
-            const next = dispatch(editorRef.current, createElement(dimension));
-            if (next === editorRef.current) return;
-             const selectedTargetId = dimensionDraft.first.hit.elementId;
-             setEditModeElementIds([selectedTargetId]);
-             setEditorState(select(next, [selectedTargetId]));            const placedValue = dimensionGeometry(dimension, next.document.elements)?.value;
+            const created = dispatch(editorRef.current, createElement(dimension));
+            if (created === editorRef.current) return;
+            const next = dimension.kind === "radius" || dimension.kind === "diameter" ? dispatch(created, setDimensionDriving(dimension.id, true)) : created;
+            const selectedTargetId = dimensionDraft.first.hit.elementId;
+            setEditModeElementIds([selectedTargetId]);
+            setEditorState(select(next, [selectedTargetId]));            const placedValue = dimensionGeometry(dimension, next.document.elements)?.value;
             if (placedValue !== undefined) { setDimensionEditError(undefined); setDimensionEditDraft({ id: dimension.id, value: placedValue.toFixed(2), position: pagePointToCanvas(placement, zoom, panMm) }); }
            setDimensionDraft(undefined);
            setDimensionNodeHover(undefined);
