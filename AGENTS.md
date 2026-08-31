@@ -1,52 +1,33 @@
 # Nodra agent guidance
 
-## Workspace
+## Setup and entrypoints
 
-- This is a pnpm workspace over `apps/*` and `packages/*`; install with `pnpm install --frozen-lockfile`.
-- Requirements: Node `>=24.0.0`; pnpm `>=10.15.1 <11`. The root package manifest declares pnpm 10.15.1 and Node `>=24.0.0`.
-- `apps/web` is the React/Vite/PWA composition root; start composition changes at `apps/web/src/main.tsx`.
-- Package boundaries are `@nodra/domain`, `@nodra/geometry`, `@nodra/validation`, `@nodra/renderer-svg`, `@nodra/editor-core`, `@nodra/ui`, and `@nodra/persistence`; each exports source from `src/index.ts`.
-- Keep domain, geometry, validation, editor-core, renderer-svg, and persistence independent of the web composition layer; use workspace package imports rather than reaching across package internals.
-- Existing UI copy is Spanish; preserve it when changing UI artifacts.
+- This is a pnpm workspace over `apps/*` and `packages/*`. Requirements are Node.js `>=24.0.0` and pnpm `>=10.15.1 <11`; the pinned package manager is pnpm `10.15.1`.
+- Install from the repository root with `corepack pnpm install --frozen-lockfile`. On Windows, use `corepack pnpm` when bare `pnpm` is unavailable.
+- Start the browser composition at `apps/web/src/main.tsx`; run it with `corepack pnpm dev` or `corepack pnpm --filter @nodra/web dev`.
+- `apps/desktop` is a separate Vite/Tauri host. The root `build` script type-checks the workspace and builds only `@nodra/web`; use the desktop package scripts for desktop work.
 
-## Execution environments
+## Boundaries and conventions
 
-- Nodra may be executed from Windows PowerShell or Ubuntu/WSL. These are distinct environments; do not assume PATH, filesystem paths, shell syntax, Node, pnpm, or browser availability are shared.
-- Before diagnosing a tooling failure, report and verify the OS, shell, `node --version`, and `pnpm --version` (or Corepack availability).
-- If bare `pnpm` is unavailable on Windows, `corepack pnpm <command>` may be used and reported as an environment-specific equivalent; do not silently label this a code failure.
-- Do not mix WSL and Windows paths without explicitly stating the boundary.
+- Public workspace packages are `@nodra/domain`, `@nodra/geometry`, `@nodra/validation`, `@nodra/editor-core`, `@nodra/renderer-svg`, `@nodra/persistence`, and `@nodra/ui`; each exports `src/index.ts`.
+- Dependency direction is one-way: `domain` has no dependencies; `geometry` and `validation` depend on `domain`; `editor-core` depends on domain/geometry/validation; `renderer-svg` depends on domain/geometry/validation; `persistence` depends on domain/validation; web composes the runtime packages. `ui` is standalone and is not currently a web dependency.
+- Import package APIs through `@nodra/*` workspace names, not package internals. Preserve the existing Spanish UI copy when changing UI artifacts.
 
 ## Verification
 
-- Use the repository's recommended root-script validation order: `pnpm lint`, `pnpm typecheck`, `pnpm test`, `pnpm test:e2e`, `pnpm build`. No `.github/workflows` directory is present, so this is not verified CI behavior.
-- Validation reports must identify the OS/shell context and distinguish code/test failures from environment/tooling failures.
-- `pnpm lint` fails on any warning. `pnpm typecheck` is strict and no-emit. `pnpm test` runs Vitest; `pnpm test:e2e` runs one real Playwright smoke test and is not comprehensive product coverage.
-- Focus package tests with, for example, `pnpm --filter @nodra/domain test`; valid package filters are the seven `@nodra/*` packages above.
-- Run one test file with `pnpm exec vitest run packages/domain/src/index.test.ts`.
-- Vitest discovers `packages/*/src/**/*.test.ts[x]` and `apps/*/src/**/*.test.ts[x]`, uses forked workers, excludes generated/output directories, and permits no tests.
-- Playwright reads `tests/e2e`; `tests/e2e/app.smoke.spec.ts` covers editor workspace load, title `Nodra Editor`, properties region `Barra de propiedades`, and `Seleccion` button. `playwright.config.ts` starts `corepack pnpm --filter @nodra/web dev --host 127.0.0.1 --port 4173`, waits for `http://127.0.0.1:4173`, uses that URL as `baseURL`, reuses an existing server outside CI, and remains Chromium-only. No workflow evidence verifies CI E2E scheduling.
+- Run the repository quality gates from the root in this order: `corepack pnpm lint`, `corepack pnpm typecheck`, `corepack pnpm test`, `corepack pnpm test:e2e`, `corepack pnpm build`. This is also the order in `.github/workflows/ci.yml` (Ubuntu 24.04, Node 24, pnpm 10.15.1).
+- `lint` uses type-aware ESLint and treats warnings as failures (`--max-warnings=0`). `typecheck` is strict and no-emit. Unit tests use Vitest with forked workers and discover `packages/*/src/**/*.test.ts[x]` and `apps/*/src/**/*.test.ts[x]`.
+- Focus a package with `corepack pnpm --filter @nodra/domain test`; run one file with `corepack pnpm exec vitest run packages/domain/src/index.test.ts`.
+- `test:e2e` installs Chromium, then runs Playwright tests in `tests/e2e`. The config is Chromium-only and starts `@nodra/web` at `http://127.0.0.1:4173`; outside CI it reuses an existing server. This suite is browser coverage, not a complete product test suite.
+- For a focused browser test, use Playwright directly, for example: `corepack pnpm exec playwright test tests/e2e/app.smoke.spec.ts -g "loads the editor workspace"`.
 
-## TypeScript and generated output
+## Strictness and generated output
 
-- Respect strict checks including `noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`, `noImplicitReturns`, `noFallthroughCasesInSwitch`, and `verbatimModuleSyntax`.
-- TypeScript build output goes to `.build`; Vite/PWA output goes to `apps/web/dist` and may create service-worker/app-shell artifacts. Do not edit generated output.
-- ESLint is type-aware and ignores generated, build, and test-output directories. `tsconfig.json` includes `tests/**/*.ts` for type-aware lint/typecheck coverage.
+- TypeScript enables strict mode plus `noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`, `noImplicitReturns`, `noFallthroughCasesInSwitch`, `isolatedModules`, and `verbatimModuleSyntax`; preserve these constraints.
+- `corepack pnpm build` writes TypeScript output to `.build`, then Vite/PWA output to `apps/web/dist` (including service-worker/app-shell artifacts). Do not edit generated output; these paths are ignored by ESLint and Git.
+- `tsconfig.json` includes `tests/**/*.ts` for type-checking; the build config intentionally excludes tests.
 
-## Repository workflow
+## Project-specific skills
 
-- `.atl/skill-registry.md` is generated; refresh it only with `gentle-ai skill-registry refresh --force`.
-- `openspec/config.yaml` is stale for tooling; current package manifests are authoritative. No `.github/workflows` directory is present, so do not infer CI behavior from repository scripts. Treat OpenSpec task status as planning context, not proof that code exists; verify implementation in the repository.
-
-## Agent skills
-
-Use the smallest matching project skill before changing a subsystem; read its local references only when the task needs the detail.
-
-- Architecture and boundaries: `skills/nodra-architecture/SKILL.md`
-- Editor commands, gestures, tools, and history: `skills/nodra-editor-workflow/SKILL.md`
-- Exact editor tool runtime contract and interaction matrix: `skills/nodra-editor-tools-contract/SKILL.md` (trigger: Nodra editor tool contract, tool gesture, connection, or any of select, forma, pen, spline, text, rectangle, ellipse, line, dimension, pan)
-- Domain and geometry: `skills/nodra-domain-geometry/SKILL.md`
-- Persistence and autosave: `skills/nodra-persistence/SKILL.md`
-- SVG rendering and performance: `skills/nodra-rendering-performance/SKILL.md`
-- Verification and test evidence: `skills/nodra-verification/SKILL.md`
-
-Skills guide but do not replace technical analysis. Examples are guidance, not mandatory implementations.
+- Before changing a subsystem, load the smallest matching skill: architecture (`skills/nodra-architecture/SKILL.md`), editor workflow (`skills/nodra-editor-workflow/SKILL.md`), domain/geometry (`skills/nodra-domain-geometry/SKILL.md`), persistence (`skills/nodra-persistence/SKILL.md`), rendering (`skills/nodra-rendering-performance/SKILL.md`), or verification (`skills/nodra-verification/SKILL.md`).
+- For editor tool gestures or runtime contracts, also load `skills/nodra-editor-tools-contract/SKILL.md`.

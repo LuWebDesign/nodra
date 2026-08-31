@@ -50,6 +50,7 @@ const palette = [
 type DimensionMode = "auto" | "radius" | "diameter";
 const id = () => elementId(`element-${crypto.randomUUID()}`);
 const newDimension = (layer: string, first: NodeHit, second: NodeHit, placement: PointMm, mode: DimensionMode = "auto"): DimensionElement => { const midpoint = pointMidpoint(first.node.point, second.node.point); const sameEllipse = first.elementId === second.elementId && (first.node.kind === "center" && (second.node.kind === "edge-midpoint" || second.node.kind === "cardinal") || second.node.kind === "center" && (first.node.kind === "edge-midpoint" || first.node.kind === "cardinal")); const kind = sameEllipse ? mode === "radius" ? "radius" : "diameter" : dimensionKindForPlacement(first.node.point, second.node.point, placement); return { type: "dimension", id: id(), layerId: layerId(layer), kind, references: [{ kind: "node", elementId: first.elementId, nodeIndex: first.nodeIndex, ...(first.node.nodeId && first.node.kind !== "control" ? { nodeId: first.node.nodeId } : {}) }, { kind: "node", elementId: second.elementId, nodeIndex: second.nodeIndex, ...(second.node.nodeId && second.node.kind !== "control" ? { nodeId: second.node.nodeId } : {}) }], offset: kind === "diameter" || kind === "radius" ? { x: placement.x - midpoint.x, y: placement.y - midpoint.y } : kind === "aligned" ? dimensionOffsetForAlignedPlacement(first.node.point, second.node.point, placement) : dimensionOffsetForPlacement(kind, midpoint, placement), precision: 2, units: "mm", rotation: 0, style: { stroke: "#2563eb", strokeWidth: 0.45 } }; };
+const newCircleDimension = (layer: string, hit: Extract<DimensionTarget, { kind: "circle" }>["hit"], placement: PointMm, mode: DimensionMode): DimensionElement => newDimension(layer, hit.center, hit.rim, placement, mode === "auto" ? "diameter" : mode);
 const newAngularDimension = (layer: string, first: Extract<DimensionTarget, { kind: "line" }>, second: Extract<DimensionTarget, { kind: "line" }>, placement: PointMm): DimensionElement => ({ type: "dimension", id: id(), layerId: layerId(layer), kind: "angular", references: [{ kind: "line", elementId: first.hit.elementId, ...(first.hit.edgeIndex !== undefined ? { edgeIndex: first.hit.edgeIndex } : {}) }, { kind: "line", elementId: second.hit.elementId, ...(second.hit.edgeIndex !== undefined ? { edgeIndex: second.hit.edgeIndex } : {}) }], offset: { x: placement.x - first.hit.line.start.x, y: placement.y - first.hit.line.start.y }, precision: 2, units: "mm", rotation: 0, style: { stroke: "#2563eb", strokeWidth: 0.45 } });
 const newElement = (tool: Exclude<Tool, "select" | "dimension" | "radius" | "pan" | "forma" | "pen" | "spline" | "text">, layer: string, start: PointMm, end: PointMm, nextId = id()): Element => tool === "line"
   ? { type: "line", id: nextId, layerId: layerId(layer), start, end, rotation: 0, style: defaultStyle }
@@ -880,8 +881,22 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
       const contourNodeHit = formaNodeHit?.contourNode;
       const nodeHit = tool !== "forma" && transformMode === "resize" ? pickNode(editorRef.current.document, point, zoom) : undefined;
       const pathSegmentHit = tool === "forma" && !formaNodeHit ? (() => { const hit = pickPathSegment(editorRef.current.document, point, zoom); return hit && editModeElementIds.includes(hit.elementId) ? hit : undefined; })() : undefined;
-       if ((tool === "dimension" || tool === "radius")) {
-          if (dimensionDraft?.phase === "placement") {
+        if ((tool === "dimension" || tool === "radius")) {
+           if (dimensionDraft?.phase === "first" && dimensionDraft.first.kind === "circle") {
+             const placement = pointAt(event);
+             const dimension = newCircleDimension("layer-1", dimensionDraft.first.hit, placement, tool === "radius" ? "radius" : dimensionMode);
+             const created = dispatch(editorRef.current, createElement(dimension));
+             if (created === editorRef.current) return;
+             const next = dispatch(created, setDimensionDriving(dimension.id, true));
+             setEditModeElementIds([dimensionDraft.first.hit.elementId]);
+             setEditorState(select(next, [dimensionDraft.first.hit.elementId]));
+             const placedValue = dimensionGeometry(dimension, next.document.elements)?.value;
+             if (placedValue !== undefined) { setDimensionEditError(undefined); setDimensionEditDraft({ id: dimension.id, value: placedValue.toFixed(2), position: pagePointToCanvas(placement, zoom, panMm) }); }
+             setDimensionDraft(undefined);
+             setDimensionNodeHover(undefined);
+             return;
+           }
+           if (dimensionDraft?.phase === "placement") {
             const placement = pointAt(event);
             const dimension = dimensionDraft.first.kind === "node" && dimensionDraft.second.kind === "node" ? newDimension("layer-1", dimensionDraft.first.hit, dimensionDraft.second.hit, placement, tool === "radius" ? "radius" : dimensionMode) : dimensionDraft.first.kind === "line" && dimensionDraft.second.kind === "line" ? newAngularDimension("layer-1", dimensionDraft.first, dimensionDraft.second, placement) : undefined;
             if (!dimension) return;
@@ -896,13 +911,18 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
            setDimensionNodeHover(undefined);
            return;
          }
-          const dimensionTarget = pickDimensionTarget(editorRef.current.document, point, zoom);
+           const dimensionTarget = pickDimensionTarget(editorRef.current.document, point, zoom);
           if (!dimensionTarget) return;
           if (!dimensionDraft) { setDimensionDraft({ phase: "first", first: dimensionTarget }); return; }
           if (dimensionDraft.phase === "first") {
             if (dimensionDraft.first.kind === "node" && dimensionTarget.kind === "node" && dimensionDraft.first.hit.elementId === dimensionTarget.hit.elementId && dimensionDraft.first.hit.nodeIndex === dimensionTarget.hit.nodeIndex) return;
-            if (dimensionDraft.first.kind === "line" && dimensionTarget.kind === "line" && dimensionDraft.first.hit.elementId === dimensionTarget.hit.elementId && (dimensionDraft.first.hit.edgeIndex ?? 0) === (dimensionTarget.hit.edgeIndex ?? 0)) return;
-            if (dimensionDraft.first.kind !== dimensionTarget.kind) return;
+           if (dimensionDraft.first.kind === "line" && dimensionTarget.kind === "line" && dimensionDraft.first.hit.elementId === dimensionTarget.hit.elementId && (dimensionDraft.first.hit.edgeIndex ?? 0) === (dimensionTarget.hit.edgeIndex ?? 0)) return;
+             if (dimensionDraft.first.kind === "node" && dimensionTarget.kind === "circle" && dimensionDraft.first.hit.elementId === dimensionTarget.hit.elementId && dimensionDraft.first.hit.node.nodeId === "center") {
+               setDimensionDraft({ phase: "placement", first: dimensionDraft.first, second: { kind: "node", hit: dimensionTarget.hit.rim } });
+               setDimensionNodeHover(undefined);
+               return;
+             }
+             if (dimensionDraft.first.kind !== dimensionTarget.kind) return;
             setDimensionDraft({ phase: "placement", first: dimensionDraft.first, second: dimensionTarget });
            setDimensionNodeHover(undefined);
            return;
@@ -1346,9 +1366,9 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
    // remains exactly document width × zoom for both SVG rendering and input.
    const pageStyle = { width: document.page.width * zoom + 2, height: document.page.height * zoom + 2, left: -panMm.x * zoom, top: -panMm.y * zoom };
    const pendingDimensionOverlay = (tool === "dimension" || tool === "radius") && dimensionDraft && cursorPoint ? (() => {
-    const firstPoint = dimensionDraft.first.kind === "node" ? dimensionDraft.first.hit.node.point : dimensionDraft.first.hit.line.start;
+     const firstPoint = dimensionDraft.first.kind === "node" ? dimensionDraft.first.hit.node.point : dimensionDraft.first.kind === "circle" ? dimensionDraft.first.hit.center.node.point : dimensionDraft.first.hit.line.start;
      const start = pagePointToCanvas(firstPoint, zoom, panMm);
-    const secondPoint = dimensionDraft.phase === "placement" ? dimensionDraft.second.kind === "node" ? dimensionDraft.second.hit.node.point : dimensionDraft.second.hit.line.start : undefined;
+     const secondPoint = dimensionDraft.phase === "placement" ? dimensionDraft.second.kind === "node" ? dimensionDraft.second.hit.node.point : dimensionDraft.second.kind === "circle" ? dimensionDraft.second.hit.center.node.point : dimensionDraft.second.hit.line.start : undefined;
      const end = secondPoint ? pagePointToCanvas(secondPoint, zoom, panMm) : cursorPoint ?? pagePointToCanvas(firstPoint, zoom, panMm);
         return <svg className="dimension-pending-overlay" aria-hidden="true"><line x1={start.x} y1={start.y} x2={end.x} y2={end.y} /></svg>;
    })() : undefined;

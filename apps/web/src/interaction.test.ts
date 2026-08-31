@@ -410,6 +410,24 @@ describe("drag geometry", () => {
     expect(selectedNodeAnchor(node, [])).toBeUndefined();
   });
 
+  it("uses visible layer and document order to break coincident node ties", () => {
+    const lower = { id: layerId("coincident-lower"), name: "Lower", visible: true, order: 0 };
+    const higher = { id: layerId("coincident-higher"), name: "Higher", visible: true, order: 1 };
+    const first = { type: "ellipse" as const, id: elementId("coincident-first"), layerId: lower.id, position: { x: 0, y: 0 }, size: { width: 20, height: 20 }, rotation: 0, style: { stroke: "#000", strokeWidth: 1 } };
+    const second = { ...first, id: elementId("coincident-second"), layerId: higher.id };
+    expect(pickNode({ ...createDocument("coincident-nodes", [lower, higher]), elements: [first, second] }, { x: 10, y: 0 }, 1)?.elementId).toBe(second.id);
+  });
+
+  it("starts a circular dimension from an arbitrary visible circle contour", () => {
+    const layer = { id: layerId("circle-contour-dimension"), name: "Circles", visible: true, order: 0 };
+    const circle = { type: "ellipse" as const, id: elementId("circle-contour-target"), layerId: layer.id, position: { x: 10, y: 10 }, size: { width: 20, height: 20 }, rotation: 0, style: { stroke: "#000", strokeWidth: 1 } };
+    const center = { x: 20, y: 20 };
+    const point = { x: center.x + Math.SQRT1_2 * 10, y: center.y + Math.SQRT1_2 * 10 };
+    const target = pickDimensionTarget({ ...createDocument("circle-contour-dimension", [layer]), elements: [circle] }, point, 1, 0.01);
+    expect(target?.kind).toBe("circle");
+    expect(target).toMatchObject({ kind: "circle", hit: { elementId: circle.id, center: { node: { nodeId: "center" } } } });
+  });
+
   it("returns the exact cuttable segment endpoints for hover feedback", () => {
     const layer = { id: layerId("cut-hover"), name: "Cut hover", visible: true, order: 0 };
     const document = createDocument("cut-hover", [layer]);
