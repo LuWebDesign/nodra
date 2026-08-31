@@ -15,10 +15,15 @@ const visualLineEndpoints = (line: { readonly start: PointMm; readonly end: Poin
 const common = { id: nonEmptyId, layerId: nonEmptyId, rotation: finite, flipX: z.boolean().default(false), flipY: z.boolean().default(false), style, operation: operation.optional() };
 const cornerRadii = z.object({ topLeft: finite.min(0), topRight: finite.min(0), bottomRight: finite.min(0), bottomLeft: finite.min(0) }).strict();
 const rectangle = z.object({ ...common, type: z.literal("rectangle"), position: point, size, cornerRadius: finite.min(0).default(0), cornerRadii: cornerRadii.optional() }).strict();
-const circleConstraint = z.object({ id: nonEmptyId, kind: z.enum(["center-horizontal", "center-vertical", "radius", "diameter"]), value: finite.optional(), driving: z.boolean().optional() }).strict().superRefine((value, ctx) => {
-  if ((value.kind === "radius" || value.kind === "diameter") && (value.value === undefined || value.value <= 0)) ctx.addIssue({ code: "custom", message: "Circle size constraints require a positive value", path: ["value"] });
+const circleConstraint = z.object({ id: nonEmptyId, kind: z.enum(["center-horizontal", "center-vertical", "radius", "diameter"]), value: finite, driving: z.boolean().optional() }).strict().superRefine((value, ctx) => {
+  if ((value.kind === "radius" || value.kind === "diameter") && value.value <= 0) ctx.addIssue({ code: "custom", message: "Circle size constraints require a positive value", path: ["value"] });
 });
-const ellipse = z.object({ ...common, type: z.literal("ellipse"), position: point, size, circleConstraints: z.array(circleConstraint).optional() }).strict();
+const ellipse = z.object({ ...common, type: z.literal("ellipse"), position: point, size, circleConstraints: z.array(circleConstraint).optional() }).strict().superRefine((value, ctx) => {
+  const constraints = value.circleConstraints ?? [];
+  if (constraints.length > 0 && value.size.width !== value.size.height) ctx.addIssue({ code: "custom", message: "Circle constraints require a circular ellipse", path: ["circleConstraints"] });
+  const ids = constraints.map((constraint) => constraint.id);
+  if (new Set(ids).size !== ids.length) ctx.addIssue({ code: "custom", message: "Circle constraint IDs must be unique", path: ["circleConstraints"] });
+});
 export const line = z.object({ ...common, type: z.literal("line"), start: point, end: point }).strict().superRefine((value, ctx) => {
   if (value.start.x === value.end.x && value.start.y === value.end.y) ctx.addIssue({ code: "custom", message: "Line endpoints must differ", path: ["end"] });
 });
@@ -170,7 +175,7 @@ export const documentSchema = z.object({ schemaVersion: z.literal(CURRENT_SCHEMA
             }
       }
     }
-    if (element.type === "dimension" && element.kind === "radius") {
+    if (element.type === "dimension" && (element.kind === "radius" || element.kind === "diameter")) {
       const [first, second] = element.references;
       const target = first.kind === "node" && second.kind === "node" && first.elementId === second.elementId ? value.elements.find((candidate) => candidate.id === first.elementId) : undefined;
       const nodeIds = target?.type === "ellipse" ? new Set(["center", "n", "e", "s", "w"]) : undefined;

@@ -1010,6 +1010,30 @@ export const addCircleConstraint = (circleId: ElementId, constraint: CircleConst
   },
 });
 
+export const updateCircleConstraint = (circleId: ElementId, constraintId: string, constraint: CircleConstraint): EditorCommand => ({
+  name: `circle-constraint-update:${circleId}:${constraintId}`,
+  apply: (document) => {
+    const circle = document.elements.find((element): element is Extract<Element, { type: "ellipse" }> => element.id === circleId && element.type === "ellipse");
+    if (!circle || circle.size.width !== circle.size.height) return { success: false, error: "Circle not found or is not circular" };
+    if (constraint.id !== constraintId || constraint.value === undefined || !Number.isFinite(constraint.value) || (constraint.kind === "radius" || constraint.kind === "diameter") && constraint.value <= 0) return { success: false, error: "Invalid circle constraint" };
+    if (!circle.circleConstraints?.some((candidate) => candidate.id === constraintId)) return { success: false, error: "Circle constraint not found" };
+    const constraints = circle.circleConstraints.map((candidate) => candidate.id === constraintId ? constraint : candidate);
+    const result = solveCircleConstraints({ ...circle, circleConstraints: constraints });
+    if (result.status === "conflict") return { success: false, error: "Circle constraints are in conflict" };
+    return replaceElements(document, document.elements.map((element) => element.id === circleId ? result.circle : element));
+  },
+});
+
+export const deleteCircleConstraint = (circleId: ElementId, constraintId: string): EditorCommand => ({
+  name: `circle-constraint-delete:${circleId}:${constraintId}`,
+  apply: (document) => {
+    const circle = document.elements.find((element): element is Extract<Element, { type: "ellipse" }> => element.id === circleId && element.type === "ellipse");
+    if (!circle || !circle.circleConstraints?.some((candidate) => candidate.id === constraintId)) return { success: false, error: "Circle constraint not found" };
+    const result = solveCircleConstraints({ ...circle, circleConstraints: circle.circleConstraints.filter((candidate) => candidate.id !== constraintId) });
+    return replaceElements(document, document.elements.map((element) => element.id === circleId ? result.circle : element));
+  },
+});
+
 export const setDimensionDriving = (dimensionId: ElementId, driving: boolean): EditorCommand => ({
   name: `dimension-driving:${dimensionId}:${driving}`,
   apply: (document) => {

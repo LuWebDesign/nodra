@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createDocument, elementId, layerId, type DimensionElement, type Element, type EllipseElement, type GlyphElement, type PathElement, type PointMm, type RectangleElement, type SketchElement, type SplineElement, type TextElement } from "@nodra/domain";
-import { addSketchConstraint, addToSelection, appendSketchEdge, appendSplineNode, beginGesture, cancelGesture, clearSelection, closePath, closeSplineElement, commitGesture, createEditor, createElement, createPathCubicNode, createSketchLine, cutLineAtPoint, cutPathSegment, cutSketchEdge, splitPathLineAt, deleteContourNodes, deleteElement, deleteElementNodes, deletePathNodes, deleteSketchConstraint, dispatch, duplicateElements, flipElements, insertContourNode, invalidDimensionIdsForShapeOperation, moveElement, moveElements, movePathNode, movePathHandle, openPath, previewGesture, previewGestureFromBase, redo, removeFromSelection, reorderLayer, resizeElement, resizeElementToDimensions, resizeElements, resizeElementsToDimensions, rotateElementsAroundCenter, select, selectForPointerDown, setDimensionDriving, solveCircle, setLayerVisibility, setPathJoin, shapeOperation, splitPathSegment, toggleSelection, undo, updateContourNode, updateDimensionValue, updateElement, updateElementNode, updateElementStyles, updateSketchConstraint, updateSplineHandle, updateSplineNode } from "./index.js";
+import { addSketchConstraint, addToSelection, appendSketchEdge, appendSplineNode, beginGesture, cancelGesture, clearSelection, closePath, closeSplineElement, commitGesture, createEditor, createElement, createPathCubicNode, createSketchLine, cutLineAtPoint, cutPathSegment, cutSketchEdge, splitPathLineAt, deleteContourNodes, deleteElement, deleteElementNodes, deletePathNodes, deleteSketchConstraint, dispatch, duplicateElements, flipElements, insertContourNode, invalidDimensionIdsForShapeOperation, moveElement, moveElements, movePathNode, movePathHandle, openPath, previewGesture, previewGestureFromBase, redo, removeFromSelection, reorderLayer, resizeElement, resizeElementToDimensions, resizeElements, resizeElementsToDimensions, rotateElementsAroundCenter, select, selectForPointerDown, setDimensionDriving, updateCircleConstraint, deleteCircleConstraint, solveCircle, setLayerVisibility, setPathJoin, shapeOperation, splitPathSegment, toggleSelection, undo, updateContourNode, updateDimensionValue, updateElement, updateElementNode, updateElementStyles, updateSketchConstraint, updateSplineHandle, updateSplineNode } from "./index.js";
 import { boundsOfElements } from "@nodra/geometry";
 import type { Direction } from "@nodra/geometry";
 import { appendLinePoint } from "./index.js";
@@ -349,6 +349,15 @@ it("converts a zero-radius rectangle to an open path when cutting one edge", () 
         expect((state.document.elements[0] as EllipseElement).size).toEqual({ width: 30, height: 30 });
         expect((state.document.elements[0] as EllipseElement).position).toEqual({ x: 5, y: 5 });
         expect(state.undo).toHaveLength(1);
+      });
+
+      it("updates and deletes circle constraints atomically", () => {
+        const circle: EllipseElement = { type: "ellipse", id: elementId("circle-constraints"), layerId: rectangle.layerId, position: { x: 10, y: 10 }, size: { width: 20, height: 20 }, rotation: 0, style: rectangle.style, circleConstraints: [{ id: "radius", kind: "radius", value: 10 }] };
+        const base = dispatch(createEditor({ ...document, elements: [circle] }), updateCircleConstraint(circle.id, "radius", { id: "radius", kind: "radius", value: 15 }));
+        expect((base.document.elements[0] as EllipseElement).size.width).toBe(30);
+        const removed = dispatch(base, deleteCircleConstraint(circle.id, "radius"));
+        expect((removed.document.elements[0] as EllipseElement).circleConstraints).toEqual([]);
+        expect(removed.undo).toHaveLength(2);
       });
 
       it("converts a circular dimension to a driving constraint", () => {
