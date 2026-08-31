@@ -26,7 +26,7 @@ import {
   withElements,
 } from "@nodra/domain";
 import { validateDocument } from "@nodra/validation";
-import { boundsOfElements, contourWithPoints, directionVector, elementCenter, elementToContour, dimensionGeometry, glyphGeometryNodes, groupCenter, mirrorHandleOffset, realGeometryNodes, resizeGroup, rotateElements, shapeResultContours, transformPoint, splitCuttableSegments, classifyCutGraph, cuttableSegments, solveSketchConstraints, solveCircleConstraints, type Direction } from "@nodra/geometry";
+import { boundsOfElements, contourWithPoints, directionVector, elementCenter, elementToContour, dimensionGeometry, glyphGeometryNodes, groupCenter, mirrorHandleOffset, realGeometryNodes, resizeGroup, rotateElements, shapeResultContours, transformPoint, splitCuttableSegments, classifyCutGraph, cuttableSegments, lineSegmentIntersection, solveSketchConstraints, solveCircleConstraints, type Direction } from "@nodra/geometry";
 import { insertSplineNode, moveSplineHandle as moveSplineHandleData, moveSplineNode as moveSplineNodeData } from "./spline.js";
 
 export * from "./spline.js";
@@ -109,9 +109,16 @@ export const cutSketchEdge = (sketchId: ElementId, segmentIndex: number, cutPoin
     const startNode = sketch.nodes.find((node) => node.id === edge.startNodeId)!;
     const endNode = sketch.nodes.find((node) => node.id === edge.endNodeId)!;
     if (cutPoint) {
+      const crossingSegments = document.elements.filter((element) => element.id !== sketch.id && element.type !== "dimension").flatMap((element) => cuttableSegments(element));
+      const intersections = crossingSegments.flatMap((segment) => {
+        const hit = lineSegmentIntersection(startNode.point, endNode.point, segment.start, segment.end, 1e-7);
+        return hit ? [hit.point] : [];
+      });
+      const intersection = intersections.sort((first, second) => Math.hypot(first.x - cutPoint.x, first.y - cutPoint.y) - Math.hypot(second.x - cutPoint.x, second.y - cutPoint.y))[0];
+      const requestedPoint = intersection ?? cutPoint;
       const vx = endNode.point.x - startNode.point.x; const vy = endNode.point.y - startNode.point.y; const lengthSquared = vx * vx + vy * vy;
       if (lengthSquared <= 1e-12) return { success: false, error: "Cannot split a zero-length sketch edge" };
-      const parameter = ((cutPoint.x - startNode.point.x) * vx + (cutPoint.y - startNode.point.y) * vy) / lengthSquared;
+      const parameter = ((requestedPoint.x - startNode.point.x) * vx + (requestedPoint.y - startNode.point.y) * vy) / lengthSquared;
       if (parameter <= 1e-6 || parameter >= 1 - 1e-6) return { success: false, error: "Cut point must be inside the sketch segment" };
       const splitNodeId = sketchNodeId(); const splitEdgeA = { id: sketchEdgeId(), startNodeId: edge.startNodeId, endNodeId: splitNodeId }; const splitEdgeB = { id: sketchEdgeId(), startNodeId: splitNodeId, endNodeId: edge.endNodeId };
       const splitPoint = { x: startNode.point.x + vx * parameter, y: startNode.point.y + vy * parameter };

@@ -82,6 +82,15 @@ describe("editor core", () => {
      expect(result.nodes.find((node) => node.point.x === 8)?.point).toEqual({ x: 8, y: 0 });
    });
 
+  it("cuts a sketch segment at a crossing rectangle intersection instead of the click point", () => {
+     const sketch = createSketchLine(elementId("intersection-sketch"), layerId("default"), rectangle.style, { x: 0, y: 0 }, { x: 20, y: 0 });
+     const cutter = { ...rectangle, id: elementId("intersection-rectangle"), position: { x: 8, y: -5 }, size: { width: 4, height: 10 } };
+     const state = dispatch(createEditor({ ...document, elements: [sketch, cutter] }), cutSketchEdge(sketch.id, 0, { x: 19, y: 0 }));
+     const result = state.document.elements.find((element): element is SketchElement => element.id === sketch.id)!;
+     expect(result.nodes.some((node) => node.point.x === 12 && node.point.y === 0)).toBe(true);
+     expect(result.nodes.some((node) => node.point.x === 19)).toBe(false);
+   });
+
   it("removes dimensions whose sketch node is removed by a cut", () => {
      const sketch = { ...createSketchLine(elementId("cut-dimension-sketch"), layerId("default"), rectangle.style, { x: 0, y: 0 }, { x: 10, y: 0 }), nodes: [{ id: "a", point: { x: 0, y: 0 } }, { id: "b", point: { x: 10, y: 0 } }, { id: "c", point: { x: 20, y: 0 } }], edges: [{ id: "ab", startNodeId: "a", endNodeId: "b" }, { id: "bc", startNodeId: "b", endNodeId: "c" }] };
      const linked: DimensionElement = { ...dimension, id: elementId("cut-dimension"), references: [{ kind: "node", elementId: sketch.id, nodeIndex: 0, nodeId: "a" }, { kind: "node", elementId: sketch.id, nodeIndex: 2, nodeId: "c" }] };
