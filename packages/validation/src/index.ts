@@ -42,7 +42,7 @@ const dimension = z.object({ id: nonEmptyId, layerId: nonEmptyId, type: z.litera
   const [first, second] = value.references;
   if (value.kind === "angular") {
     if (first.kind !== "line" || second.kind !== "line") ctx.addIssue({ code: "custom", message: "Angular dimensions require line references", path: ["references"] });
-     if (first.kind === "line" && second.kind === "line" && first.elementId === second.elementId && (first.edgeIndex ?? 0) === (second.edgeIndex ?? 0)) ctx.addIssue({ code: "custom", message: "Angular dimension lines must differ", path: ["references"] });
+     // Two identical line references represent an angle against the horizontal axis.
   } else {
     if (first.kind !== "node" || second.kind !== "node") ctx.addIssue({ code: "custom", message: "Linear dimensions require node references", path: ["references"] });
     if (first.kind === "node" && second.kind === "node" && first.elementId === second.elementId && (first.nodeId !== undefined && second.nodeId !== undefined ? first.nodeId === second.nodeId : first.nodeIndex === second.nodeIndex)) ctx.addIssue({ code: "custom", message: "Dimension references must differ", path: ["references"] });
@@ -58,7 +58,7 @@ const contour = z.object({ ...common, type: z.literal("contour"), position: poin
 const sketchNode = z.object({ id: nonEmptyId, point }).strict();
 const sketchEdge = z.object({ id: nonEmptyId, startNodeId: nonEmptyId, endNodeId: nonEmptyId }).strict();
 const sketchPointReference = z.object({ elementId: nonEmptyId, nodeId: nonEmptyId }).strict();
-const sketchConstraint = z.object({ id: nonEmptyId, kind: z.enum(["horizontal", "vertical", "coincident", "distance-horizontal", "distance-vertical", "fixed"]), references: z.array(sketchPointReference).min(1).max(2), value: finite.positive().optional() }).strict();
+const sketchConstraint = z.object({ id: nonEmptyId, kind: z.enum(["horizontal", "vertical", "coincident", "parallel", "perpendicular", "equal", "distance-horizontal", "distance-vertical", "distance", "angle", "fixed"]), references: z.array(sketchPointReference).min(1).max(4), value: finite.positive().optional() }).strict();
 const sketch = z.object({ id: nonEmptyId, layerId: nonEmptyId, type: z.literal("sketch"), nodes: z.array(sketchNode).min(2), edges: z.array(sketchEdge).min(1), constraints: z.array(sketchConstraint).optional(), style, operation: operation.optional() }).strict().superRefine((value, ctx) => {
   const nodeIds = value.nodes.map((node) => node.id); const edgeIds = value.edges.map((edge) => edge.id);
   if (new Set(nodeIds).size !== nodeIds.length) ctx.addIssue({ code: "custom", message: "Sketch node IDs must be unique", path: ["nodes"] });
@@ -69,9 +69,9 @@ const sketch = z.object({ id: nonEmptyId, layerId: nonEmptyId, type: z.literal("
   if (new Set(constraintIds).size !== constraintIds.length) ctx.addIssue({ code: "custom", message: "Sketch constraint IDs must be unique", path: ["constraints"] });
   constraints.forEach((constraint, index) => {
     if (constraint.references.some((reference) => reference.elementId !== value.id || !known.has(reference.nodeId))) ctx.addIssue({ code: "custom", message: "Sketch constraint references an unknown node", path: ["constraints", index, "references"] });
-    const expectedReferences = constraint.kind === "fixed" ? 1 : 2;
+    const expectedReferences = constraint.kind === "fixed" ? 1 : constraint.kind === "parallel" || constraint.kind === "perpendicular" || constraint.kind === "equal" ? 4 : 2;
     if (constraint.references.length !== expectedReferences) ctx.addIssue({ code: "custom", message: constraint.kind + " constraints require " + expectedReferences + " reference" + (expectedReferences === 1 ? "" : "s"), path: ["constraints", index, "references"] });
-    if ((constraint.kind === "distance-horizontal" || constraint.kind === "distance-vertical") && (constraint.value === undefined || constraint.value <= 0)) ctx.addIssue({ code: "custom", message: "Distance constraints require a positive value", path: ["constraints", index, "value"] });
+    if ((constraint.kind === "distance-horizontal" || constraint.kind === "distance-vertical" || constraint.kind === "distance" || constraint.kind === "angle") && (constraint.value === undefined || constraint.value <= 0)) ctx.addIssue({ code: "custom", message: "Distance constraints require a positive value", path: ["constraints", index, "value"] });
   });
   value.edges.forEach((edge, index) => {
     if (!known.has(edge.startNodeId) || !known.has(edge.endNodeId)) ctx.addIssue({ code: "custom", message: "Sketch edge references an unknown node", path: ["edges", index] });
@@ -193,7 +193,8 @@ export const documentSchema = z.object({ schemaVersion: z.literal(CURRENT_SCHEMA
          return start && end ? [start, end] : undefined;
        };
        const points = endpoints(first, element.references[0]); const otherPoints = endpoints(second, element.references[1]);
-       if (points && otherPoints) {
+       const [firstReference, secondReference] = element.references;
+       if (points && otherPoints && !(firstReference.kind === "line" && secondReference.kind === "line" && firstReference.elementId === secondReference.elementId && (firstReference.edgeIndex ?? 0) === (secondReference.edgeIndex ?? 0))) {
          const connected = points.some((point) => otherPoints.some((other) => Math.hypot(point.x - other.x, point.y - other.y) <= 1e-6));
          if (!connected) ctx.addIssue({ code: "custom", message: "Angular dimension lines must share a visual endpoint", path: ["elements", index, "references"] });
       }
@@ -202,7 +203,7 @@ export const documentSchema = z.object({ schemaVersion: z.literal(CURRENT_SCHEMA
   validateConnections(value.elements, value.connections, ctx, ["connections"]);
 });
 const pageSchema = z.object({ id: nonEmptyId, page: size, layers: z.array(layerSchema), elements: z.array(elementSchema), connections: z.array(explicitConnection).default([]) }).strict();
-const projectPreferencesSchema = z.object({ lineGuidesEnabled: z.boolean().default(true), lineGuideAngle: z.literal(15).default(15) }).strict().default({ lineGuidesEnabled: true, lineGuideAngle: 15 });
+const projectPreferencesSchema = z.object({ lineGuidesEnabled: z.boolean().default(true), lineGuideAngle: z.union([z.literal(15), z.literal(45)]).default(45).transform(() => 45) }).strict().default({ lineGuidesEnabled: true, lineGuideAngle: 45 });
 export const projectSchema = z.object({ schemaVersion: z.literal(CURRENT_SCHEMA_VERSION), id: nonEmptyId, revision: finite.int().nonnegative(), origin: z.literal("top-left"), units: z.literal("mm"), capabilities: z.object({ spline: z.literal(1).optional() }).strict().optional(), preferences: projectPreferencesSchema, pages: z.array(pageSchema).min(1), activePageId: nonEmptyId }).strict().superRefine((value, ctx) => {
   if (!value.pages.some((page) => page.id === value.activePageId)) ctx.addIssue({ code: "custom", message: "Active page does not exist", path: ["activePageId"] });
   const layerIds = new Set(value.pages.flatMap((page) => page.layers.map((layer) => layer.id)));

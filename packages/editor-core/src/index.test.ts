@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createDocument, elementId, layerId, type DimensionElement, type Element, type EllipseElement, type GlyphElement, type PathElement, type PointMm, type RectangleElement, type SketchElement, type SplineElement, type TextElement } from "@nodra/domain";
+import { createDocument, elementId, layerId, type DimensionElement, type Element, type EllipseElement, type LineElement, type GlyphElement, type PathElement, type PointMm, type RectangleElement, type SketchElement, type SplineElement, type TextElement } from "@nodra/domain";
 import { addSketchConstraint, addToSelection, appendSketchEdge, appendSplineNode, beginGesture, cancelGesture, clearSelection, closePath, closeSplineElement, commitGesture, createEditor, createElement, createPathCubicNode, createSketchLine, cutLineAtPoint, cutPathSegment, cutSketchEdge, splitPathLineAt, deleteContourNodes, deleteElement, deleteElementNodes, deletePathNodes, deleteSketchConstraint, dispatch, duplicateElements, flipElements, insertContourNode, invalidDimensionIdsForShapeOperation, moveElement, moveElements, movePathNode, movePathHandle, openPath, previewGesture, previewGestureFromBase, redo, removeFromSelection, reorderLayer, resizeElement, resizeElementToDimensions, resizeElements, resizeElementsToDimensions, rotateElementsAroundCenter, select, selectForPointerDown, setDimensionDriving, updateCircleConstraint, deleteCircleConstraint, solveCircle, setLayerVisibility, setPathJoin, shapeOperation, splitPathSegment, toggleSelection, undo, updateContourNode, updateDimensionValue, updateElement, updateElementNode, updateElementStyles, updateSketchConstraint, updateSplineHandle, updateSplineNode } from "./index.js";
 import { boundsOfElements } from "@nodra/geometry";
 import type { Direction } from "@nodra/geometry";
@@ -69,9 +69,28 @@ describe("editor core", () => {
     const branched = branch.document.elements[0] as SketchElement;
     const closed = dispatch(branch, appendSketchEdge(sketch.id, branched.nodes[2]!.id, branched.nodes[0]!.point, branched.nodes[0]!.id));
     expect(closed.document.elements[0]).toMatchObject({ type: "sketch", nodes: [{ id: sketch.nodes[0]!.id }, { id: sketch.nodes[1]!.id }, { point: { x: 10, y: 10 } }], edges: [{ startNodeId: sketch.nodes[0]!.id, endNodeId: sketch.nodes[1]!.id }, { startNodeId: sketch.nodes[1]!.id }, { startNodeId: branched.nodes[2]!.id, endNodeId: sketch.nodes[0]!.id }] });
+    expect((closed.document.elements[0] as SketchElement).constraints?.map((constraint) => constraint.kind)).toEqual(["horizontal", "vertical", "perpendicular"]);
     const cut = dispatch(closed, cutSketchEdge(sketch.id, 1));
     expect(cut.document.elements[0]).toMatchObject({ type: "sketch", nodes: [{ id: sketch.nodes[0]!.id }, { id: sketch.nodes[1]!.id }, { point: { x: 10, y: 10 } }], edges: [{ startNodeId: sketch.nodes[0]!.id, endNodeId: sketch.nodes[1]!.id }, { startNodeId: branched.nodes[2]!.id, endNodeId: sketch.nodes[0]!.id }] });
   });
+  it("splits a sketch segment at the cut point without deleting the whole line", () => {
+     const sketch = createSketchLine(elementId("split-sketch"), layerId("default"), rectangle.style, { x: 0, y: 0 }, { x: 20, y: 0 });
+     const state = dispatch(createEditor({ ...document, elements: [sketch] }), cutSketchEdge(sketch.id, 0, { x: 8, y: 0 }));
+     const result = state.document.elements[0] as SketchElement;
+     expect(result.nodes).toHaveLength(3);
+     expect(result.edges).toHaveLength(2);
+     expect(result.nodes.find((node) => node.point.x === 8)?.point).toEqual({ x: 8, y: 0 });
+   });
+
+  it("cuts a sketch segment at a crossing rectangle intersection instead of the click point", () => {
+     const sketch = createSketchLine(elementId("intersection-sketch"), layerId("default"), rectangle.style, { x: 0, y: 0 }, { x: 20, y: 0 });
+     const cutter = { ...rectangle, id: elementId("intersection-rectangle"), position: { x: 8, y: -5 }, size: { width: 4, height: 10 } };
+     const state = dispatch(createEditor({ ...document, elements: [sketch, cutter] }), cutSketchEdge(sketch.id, 0, { x: 19, y: 0 }));
+     const result = state.document.elements.find((element): element is SketchElement => element.id === sketch.id)!;
+     expect(result.nodes.some((node) => node.point.x === 12 && node.point.y === 0)).toBe(true);
+     expect(result.nodes.some((node) => node.point.x === 19)).toBe(false);
+   });
+
   it("removes dimensions whose sketch node is removed by a cut", () => {
      const sketch = { ...createSketchLine(elementId("cut-dimension-sketch"), layerId("default"), rectangle.style, { x: 0, y: 0 }, { x: 10, y: 0 }), nodes: [{ id: "a", point: { x: 0, y: 0 } }, { id: "b", point: { x: 10, y: 0 } }, { id: "c", point: { x: 20, y: 0 } }], edges: [{ id: "ab", startNodeId: "a", endNodeId: "b" }, { id: "bc", startNodeId: "b", endNodeId: "c" }] };
      const linked: DimensionElement = { ...dimension, id: elementId("cut-dimension"), references: [{ kind: "node", elementId: sketch.id, nodeIndex: 0, nodeId: "a" }, { kind: "node", elementId: sketch.id, nodeIndex: 2, nodeId: "c" }] };
@@ -375,6 +394,42 @@ it("converts a zero-radius rectangle to an open path when cutting one edge", () 
      const state = dispatch(createEditor({ ...document, elements: [path, linked] }), updateDimensionValue(linked.id, 25));
      expect((state.document.elements[0] as PathElement).nodes[1]?.anchor).toEqual({ x: 25, y: 0 });
      expect(state.undo).toHaveLength(1);
+   });
+
+   it("allows reference dimensions between nodes from different objects", () => {
+     const sketch = createSketchLine(elementId("reference-sketch"), layerId("default"), rectangle.style, { x: 0, y: 0 }, { x: 10, y: 10 });
+     const linked: DimensionElement = { type: "dimension", id: elementId("cross-object-dimension"), layerId: sketch.layerId, kind: "aligned", references: [{ kind: "node", elementId: sketch.id, nodeIndex: 0, nodeId: sketch.nodes[0]!.id }, { kind: "node", elementId: rectangle.id, nodeIndex: 0, nodeId: "nw" }], offset: { x: 0, y: -8 }, precision: 2, units: "mm", rotation: 0, style: rectangle.style };
+     const state = dispatch(createEditor({ ...document, elements: [sketch, rectangle, linked] }), updateDimensionValue(linked.id, 20));
+     expect(state.document.elements[0]).toEqual(sketch);
+     const movedCorner = (state.document.elements[1] as RectangleElement).position;
+     expect(Math.hypot(movedCorner.x - sketch.nodes[0]!.point.x, movedCorner.y - sketch.nodes[0]!.point.y)).toBeCloseTo(20);
+     expect(state.document.elements).toHaveLength(3);
+   });
+
+   it("drives the real length of an angled line while preserving its direction", () => {
+     const line: LineElement = { type: "line", id: elementId("angled-line"), layerId: layerId("default"), start: { x: 10, y: 10 }, end: { x: 20, y: 20 }, rotation: 0, style: rectangle.style };
+     const linked: DimensionElement = { type: "dimension", id: elementId("angled-line-dimension"), layerId: line.layerId, kind: "aligned", references: [{ kind: "node", elementId: line.id, nodeIndex: 0, nodeId: "start" }, { kind: "node", elementId: line.id, nodeIndex: 1, nodeId: "end" }], offset: { x: 0, y: -8 }, precision: 2, units: "mm", rotation: 0, style: rectangle.style };
+     const state = dispatch(createEditor({ ...document, elements: [line, linked] }), updateDimensionValue(linked.id, 20));
+     expect((state.document.elements[0] as LineElement).start).toEqual(line.start);
+     expect((state.document.elements[0] as LineElement).end).toEqual({ x: 10 + Math.sqrt(200), y: 10 + Math.sqrt(200) });
+     expect(state.undo).toHaveLength(1);
+   });
+
+it("updates an angled sketch line dimension without requiring a separate constraint", () => {
+     const sketch = createSketchLine(elementId("sketch-line-dimension"), layerId("default"), rectangle.style, { x: 0, y: 0 }, { x: 10, y: 10 });
+     const linked: DimensionElement = { type: "dimension", id: elementId("sketch-line-dimension-value"), layerId: sketch.layerId, kind: "aligned", references: [{ kind: "node", elementId: sketch.id, nodeIndex: 0, nodeId: sketch.nodes[0]!.id }, { kind: "node", elementId: sketch.id, nodeIndex: 1, nodeId: sketch.nodes[1]!.id }], offset: { x: 0, y: -8 }, precision: 2, units: "mm", rotation: 0, style: rectangle.style };
+     const state = dispatch(createEditor({ ...document, elements: [sketch, linked] }), updateDimensionValue(linked.id, 20));
+     const updated = state.document.elements[0] as SketchElement;
+     expect(Math.hypot(updated.nodes[1]!.point.x - updated.nodes[0]!.point.x, updated.nodes[1]!.point.y - updated.nodes[0]!.point.y)).toBeCloseTo(20);
+   });
+
+it("drives an individual line angle while preserving its length", () => {
+     const line: LineElement = { type: "line", id: elementId("line-angle"), layerId: layerId("default"), start: { x: 0, y: 0 }, end: { x: 10, y: 10 }, rotation: 0, style: rectangle.style };
+     const linked: DimensionElement = { type: "dimension", id: elementId("line-angle-dimension"), layerId: line.layerId, kind: "angular", references: [{ kind: "line", elementId: line.id }, { kind: "line", elementId: line.id }], offset: { x: 8, y: -8 }, precision: 2, units: "mm", rotation: 0, style: rectangle.style };
+     const state = dispatch(createEditor({ ...document, elements: [line, linked] }), updateDimensionValue(linked.id, 30));
+     const updated = state.document.elements[0] as LineElement;
+     expect(Math.hypot(updated.end.x - updated.start.x, updated.end.y - updated.start.y)).toBeCloseTo(Math.sqrt(200));
+     expect(Math.atan2(updated.end.y - updated.start.y, updated.end.x - updated.start.x) * 180 / Math.PI).toBeCloseTo(30);
    });
 
 it("moves a dimension by changing only its placement offset and supports undo", () => {

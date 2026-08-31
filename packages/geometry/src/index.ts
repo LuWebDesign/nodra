@@ -150,7 +150,7 @@ export interface BezierHandlePoint { readonly direction: BezierHandleDirection; 
 export interface BezierGeometryNode { readonly nodeId: string; readonly anchor: PointMm; readonly handles: readonly BezierHandlePoint[] }
 export interface EditableGeometryNode { readonly kind: "anchor" | "handle"; readonly nodeId: string; readonly point: PointMm; readonly direction?: BezierHandleDirection; readonly nodeIndex: number; readonly segmentIndex?: number; readonly ringIndex?: number }
 export interface BezierHandleGuide { readonly nodeId: string; readonly anchor: PointMm; readonly point: PointMm; readonly direction: BezierHandleDirection; readonly nodeIndex: number; readonly anchorNodeIndex: number; readonly segmentIndex?: number; readonly ringIndex?: number }
-export interface LinearDimensionGeometry { readonly kind: "aligned" | "horizontal" | "vertical" | "radius" | "diameter"; readonly start: PointMm; readonly end: PointMm; readonly lineStart: PointMm; readonly lineEnd: PointMm; readonly text: PointMm; readonly value: number }
+export interface LinearDimensionGeometry { readonly kind: "aligned" | "horizontal" | "vertical" | "radius" | "diameter"; readonly start: PointMm; readonly end: PointMm; readonly lineStart: PointMm; readonly lineEnd: PointMm; readonly text: PointMm; readonly value: number; readonly leaderStart?: PointMm; readonly leaderEnd?: PointMm }
 export interface AngularDimensionGeometry { readonly kind: "angular"; readonly vertex: PointMm; readonly start: PointMm; readonly end: PointMm; readonly lineStart: PointMm; readonly lineEnd: PointMm; readonly text: PointMm; readonly value: number; readonly radius: number; readonly sweep: 0 | 1 }
 export type DimensionGeometry = LinearDimensionGeometry | AngularDimensionGeometry;
 export type SketchConstraintStatus = "underdefined" | "defined" | "conflict" | "overdefined";
@@ -171,9 +171,9 @@ export function solveSketchConstraints(sketch: SketchElement): SketchConstraintS
   };
   const invalid = (constraint: SketchConstraint): boolean => {
     if (constraint.references.some((reference) => reference.elementId !== sketch.id || !nodes.has(reference.nodeId))) return true;
-    if ((constraint.kind === "fixed" && constraint.references.length !== 1) || (constraint.kind !== "fixed" && constraint.references.length !== 2)) return true;
+    if ((constraint.kind === "fixed" && constraint.references.length !== 1) || ((constraint.kind === "parallel" || constraint.kind === "perpendicular" || constraint.kind === "equal") && constraint.references.length !== 4) || (constraint.kind !== "fixed" && constraint.kind !== "parallel" && constraint.kind !== "perpendicular" && constraint.kind !== "equal" && constraint.references.length !== 2)) return true;
     if (constraint.references.length === 2 && referenceKey(constraint.references[0]!) === referenceKey(constraint.references[1]!)) return true;
-    return (constraint.kind === "distance-horizontal" || constraint.kind === "distance-vertical") && (!Number.isFinite(constraint.value) || constraint.value === undefined || constraint.value <= 0);
+    return (constraint.kind === "distance-horizontal" || constraint.kind === "distance-vertical" || constraint.kind === "distance" || constraint.kind === "angle") && (!Number.isFinite(constraint.value) || constraint.value === undefined || constraint.value <= 0);
   };
   for (const constraint of [...constraints].sort((a, b) => a.id.localeCompare(b.id))) {
     if (invalid(constraint)) { conflicts.push(constraint.id); continue; }
@@ -182,11 +182,19 @@ export function solveSketchConstraints(sketch: SketchElement): SketchConstraintS
     if (constraint.kind === "coincident") { second!.x = first.x; second!.y = first.y; }
     else if (constraint.kind === "horizontal") second!.y = first.y;
     else if (constraint.kind === "vertical") second!.x = first.x;
-    else if (constraint.kind === "distance-horizontal" || constraint.kind === "distance-vertical") {
-      const delta = constraint.kind === "distance-horizontal" ? second!.x - first.x : second!.y - first.y;
-      if (Math.abs(delta) <= 1e-6) { conflicts.push(constraint.id); continue; }
-      if (constraint.kind === "distance-horizontal") second!.x = first.x + (delta < 0 ? -constraint.value! : constraint.value!);
-      else second!.y = first.y + (delta < 0 ? -constraint.value! : constraint.value!);
+    else if (constraint.kind === "parallel" || constraint.kind === "perpendicular" || constraint.kind === "equal") {
+      const third = points[2]!; const fourth = points[3]!; const ax = second!.x - first.x; const ay = second!.y - first.y; const length = Math.hypot(fourth.x - third.x, fourth.y - third.y);
+      if (Math.hypot(ax, ay) <= 1e-6 || length <= 1e-6) { conflicts.push(constraint.id); continue; }
+      const angle = Math.atan2(ay, ax) + (constraint.kind === "perpendicular" ? Math.PI / 2 : 0);
+      fourth.x = third.x + length * Math.cos(angle); fourth.y = third.y + length * Math.sin(angle);
+    }
+    else if (constraint.kind === "distance-horizontal" || constraint.kind === "distance-vertical" || constraint.kind === "distance" || constraint.kind === "angle") {
+      const dx = second!.x - first.x; const dy = second!.y - first.y;
+      if ((constraint.kind === "distance-horizontal" && Math.abs(dx) <= 1e-6) || (constraint.kind === "distance-vertical" && Math.abs(dy) <= 1e-6) || (constraint.kind !== "distance-horizontal" && constraint.kind !== "distance-vertical" && Math.hypot(dx, dy) <= 1e-6)) { conflicts.push(constraint.id); continue; }
+      if (constraint.kind === "distance-horizontal") second!.x = first.x + (dx < 0 ? -constraint.value! : constraint.value!);
+      else if (constraint.kind === "distance-vertical") second!.y = first.y + (dy < 0 ? -constraint.value! : constraint.value!);
+      else if (constraint.kind === "distance") { const length = Math.hypot(dx, dy); second!.x = first.x + dx * constraint.value! / length; second!.y = first.y + dy * constraint.value! / length; }
+      else { const length = Math.hypot(dx, dy); const angle = constraint.value! * Math.PI / 180; second!.x = first.x + length * Math.cos(angle); second!.y = first.y + length * Math.sin(angle); }
     }
   }
   const failed = [...constraints].filter((constraint) => {
@@ -196,8 +204,16 @@ export function solveSketchConstraints(sketch: SketchElement): SketchConstraintS
     if (constraint.kind === "coincident") return first.x !== second!.x || first.y !== second!.y;
     if (constraint.kind === "horizontal") return Math.abs(first.y - second!.y) > 1e-6;
     if (constraint.kind === "vertical") return Math.abs(first.x - second!.x) > 1e-6;
+    if (constraint.kind === "parallel" || constraint.kind === "perpendicular" || constraint.kind === "equal") {
+      const third = points[2]!; const fourth = points[3]!; const ax = second!.x - first.x; const ay = second!.y - first.y; const bx = fourth.x - third.x; const by = fourth.y - third.y;
+      const cross = ax * by - ay * bx; const dot = ax * bx + ay * by;
+      return constraint.kind === "parallel" ? Math.abs(cross) > 1e-6 : constraint.kind === "perpendicular" ? Math.abs(dot) > 1e-6 : Math.abs(Math.hypot(ax, ay) - Math.hypot(bx, by)) > 1e-6;
+    }
     if (constraint.kind === "distance-horizontal") return Math.abs(Math.abs(second!.x - first.x) - constraint.value!) > 1e-6;
-    return Math.abs(Math.abs(second!.y - first.y) - constraint.value!) > 1e-6;
+    if (constraint.kind === "distance-vertical") return Math.abs(Math.abs(second!.y - first.y) - constraint.value!) > 1e-6;
+    if (constraint.kind === "distance") return Math.abs(Math.hypot(second!.x - first.x, second!.y - first.y) - constraint.value!) > 1e-6;
+    if (constraint.kind === "angle") return Math.abs(Math.atan2(second!.y - first.y, second!.x - first.x) - constraint.value! * Math.PI / 180) > 1e-6;
+    return false;
   }).map((constraint) => constraint.id);
   conflicts.push(...failed.filter((id) => !conflicts.includes(id)));
   const duplicate = constraints.filter((constraint, index) => constraints.some((other, otherIndex) => otherIndex < index && samePair(constraint, other))).map((constraint) => constraint.id);
@@ -280,9 +296,13 @@ export const dimensionKindForPlacement = (first: PointMm, second: PointMm, place
   if (segmentDy === 0) return "horizontal";
   const midpoint = pointMidpoint(first, second);
   const intentDx = Math.abs(placement.x - midpoint.x); const intentDy = Math.abs(placement.y - midpoint.y);
-  const clearIntentRatio = 1.75;
-  if (intentDx >= intentDy * clearIntentRatio) return "horizontal";
-  if (intentDy >= intentDx * clearIntentRatio) return "vertical";
+  // Keep the aligned preview active near the segment. An axis dimension only
+  // wins after the cursor is clearly displaced and predominantly on one axis;
+  // this makes changing the measurement reference intentional and visible.
+  const clearIntentRatio = 2.5;
+  const minimumAxisDisplacement = 12;
+  if (intentDx >= minimumAxisDisplacement && intentDx >= intentDy * clearIntentRatio) return "horizontal";
+  if (intentDy >= minimumAxisDisplacement && intentDy >= intentDx * clearIntentRatio) return "vertical";
   return "aligned";
 };
 export const dimensionOffsetForPlacement = (kind: DimensionPlacementKind, midpoint: PointMm, placement: PointMm): PointMm => kind === "horizontal" ? { x: 0, y: placement.y - midpoint.y } : kind === "vertical" ? { x: placement.x - midpoint.x, y: 0 } : { x: placement.x - midpoint.x, y: placement.y - midpoint.y };
@@ -305,8 +325,20 @@ const lineAt = (reference: DimensionElement["references"][number], elements: rea
 };
 export function angularDimensionGeometry(element: DimensionElement, elements: readonly Element[]): AngularDimensionGeometry | undefined {
   if (element.kind !== "angular" || !element.references.every((reference) => "kind" in reference && reference.kind === "line")) return undefined;
-  const first = lineAt(element.references[0], elements); const second = lineAt(element.references[1], elements); if (!first || !second) return undefined;
+  const firstReference = element.references[0]; const secondReference = element.references[1];
+  if (!("kind" in firstReference) || firstReference.kind !== "line" || !("kind" in secondReference) || secondReference.kind !== "line") return undefined;
+  const first = lineAt(firstReference, elements); const second = lineAt(secondReference, elements); if (!first || !second) return undefined;
   const [firstStart, firstEnd] = rotatedLineEndpoints(first); const [secondStart, secondEnd] = rotatedLineEndpoints(second);
+  const sameLine = firstReference.elementId === secondReference.elementId && (firstReference.edgeIndex ?? 0) === (secondReference.edgeIndex ?? 0);
+  if (sameLine) {
+    const dx = firstEnd.x - firstStart.x; const dy = firstEnd.y - firstStart.y; const length = Math.hypot(dx, dy);
+    if (length === 0) return undefined;
+    const radius = Math.max(Math.hypot(element.offset.x, element.offset.y), 8);
+    const lineStart = { x: firstStart.x + radius, y: firstStart.y };
+    const lineEnd = { x: firstStart.x + dx / length * radius, y: firstStart.y + dy / length * radius };
+    const value = Math.abs(Math.atan2(dy, dx) * 180 / Math.PI);
+    return { kind: "angular", vertex: firstStart, start: lineStart, end: lineEnd, lineStart, lineEnd, text: { x: firstStart.x + element.offset.x, y: firstStart.y + element.offset.y }, value, radius, sweep: dy >= 0 ? 1 : 0 };
+  }
   const candidates: readonly [PointMm, PointMm, PointMm][] = [[firstStart, firstEnd, secondStart], [firstStart, firstEnd, secondEnd], [firstEnd, firstStart, secondStart], [firstEnd, firstStart, secondEnd]];
   const connected = candidates.find((candidate) => Math.hypot(candidate[0].x - candidate[2].x, candidate[0].y - candidate[2].y) <= 1e-6); if (!connected) return undefined;
   const vertex = connected[0]; const firstRay = { x: connected[1].x - vertex.x, y: connected[1].y - vertex.y }; const secondEndpoint = Math.hypot(vertex.x - secondStart.x, vertex.y - secondStart.y) <= 1e-6 ? secondEnd : secondStart; const secondRay = { x: secondEndpoint.x - vertex.x, y: secondEndpoint.y - vertex.y };
@@ -336,7 +368,7 @@ export function dimensionGeometry(element: DimensionElement, elements: readonly 
     if (!center || Math.hypot(rim.x - center.x, rim.y - center.y) === 0) return undefined;
     const radius = Math.hypot(rim.x - center.x, rim.y - center.y); const direction = { x: (rim.x - center.x) / radius, y: (rim.y - center.y) / radius };
     const lineStart = element.kind === "radius" ? center : { x: center.x - direction.x * radius, y: center.y - direction.y * radius }; const lineEnd = { x: center.x + direction.x * radius, y: center.y + direction.y * radius }; const text = { x: center.x + element.offset.x, y: center.y + element.offset.y };
-    return { kind: element.kind, start: lineStart, end: lineEnd, lineStart, lineEnd, text, value: element.kind === "radius" ? radius : radius * 2 };
+     return { kind: element.kind, start: lineStart, end: lineEnd, lineStart, lineEnd, text, leaderStart: center, leaderEnd: text, value: element.kind === "radius" ? radius : radius * 2 };
   }
   const text = { x: midpoint.x + element.offset.x, y: midpoint.y + element.offset.y };
   const lineStart = element.kind === "horizontal" ? { x: start.x, y: text.y } : element.kind === "vertical" ? { x: text.x, y: start.y } : alignedOffsetPoint(start, start, end, element.offset);

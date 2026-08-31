@@ -462,10 +462,10 @@ describe("drag geometry", () => {
     expect(pickHoverNode(checked.data, { x: 10, y: 10 }, 1, "dimension")).toMatchObject({ elementId: rectangle.id, nodeIndex: 0 });
     expect(pickHoverNode(checked.data, { x: 100, y: 100 }, 1, "select")).toBeUndefined();
   });
-  it("snaps line endpoints to fifteen-degree directions", () => {
-    const guide = directionalGuide({ x: 10, y: 10 }, { x: 25, y: 20 }, 15);
-    expect(guide?.angle).toBe(30);
-    expect(guide?.snappedPoint.x).toBeCloseTo(25.6125);
-    expect(guide?.snappedPoint.y).toBeCloseTo(19.0139);
+  it("snaps line endpoints to important forty-five-degree directions", () => {
+    const guide = directionalGuide({ x: 10, y: 10 }, { x: 20, y: 20 }, 45, 3);
+    expect(guide?.angle).toBe(45);
+    expect(guide?.snappedPoint.x).toBeCloseTo(20);
+    expect(guide?.snappedPoint.y).toBeCloseTo(20);
   });
 });

@@ -81,7 +81,7 @@ export interface LineElement {
 }
 export interface SketchNode { readonly id: string; readonly point: PointMm }
 export interface SketchEdge { readonly id: string; readonly startNodeId: string; readonly endNodeId: string }
-export type SketchConstraintKind = "horizontal" | "vertical" | "coincident" | "distance-horizontal" | "distance-vertical" | "fixed";
+export type SketchConstraintKind = "horizontal" | "vertical" | "coincident" | "parallel" | "perpendicular" | "equal" | "distance-horizontal" | "distance-vertical" | "distance" | "angle" | "fixed";
 export interface SketchPointReference { readonly elementId: ElementId; readonly nodeId: string }
 export interface SketchConstraint { readonly id: string; readonly kind: SketchConstraintKind; readonly references: readonly [SketchPointReference, ...SketchPointReference[]]; readonly value?: number }
 export interface SketchElement { readonly type: "sketch"; readonly id: ElementId; readonly layerId: LayerId; readonly nodes: readonly SketchNode[]; readonly edges: readonly SketchEdge[]; readonly constraints?: readonly SketchConstraint[]; readonly style: VisualStyle; readonly operation?: OperationMetadata }
@@ -208,7 +208,7 @@ export interface PageSnapshot {
 
 export interface ProjectPreferences {
   readonly lineGuidesEnabled: boolean;
-  readonly lineGuideAngle: 15;
+  readonly lineGuideAngle: 45;
 }
 
 export interface ProjectSnapshot {
@@ -235,7 +235,7 @@ export function createDocument(id: string, layers: readonly Layer[] = []): Docum
 
 export function createProject(document: DocumentSnapshot): ProjectSnapshot {
   const page = { id: pageId("page-1"), page: document.page, layers: document.layers, elements: document.elements, connections: document.connections ?? [] };
-  return { schemaVersion: CURRENT_SCHEMA_VERSION, id: document.id, revision: document.revision, origin: document.origin, units: document.units, preferences: { lineGuidesEnabled: true, lineGuideAngle: 15 }, pages: [page], activePageId: page.id };
+  return { schemaVersion: CURRENT_SCHEMA_VERSION, id: document.id, revision: document.revision, origin: document.origin, units: document.units, preferences: { lineGuidesEnabled: true, lineGuideAngle: 45 }, pages: [page], activePageId: page.id };
 }
 
 export function projectPage(project: ProjectSnapshot, pageIdValue = project.activePageId): PageSnapshot {

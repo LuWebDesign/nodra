@@ -83,6 +83,7 @@ describe("native document validation", () => {
     expect(legacy.success).toBe(true);
     if (legacy.success) expect(legacy.data.elements[1]).toMatchObject({ references: [{ kind: "node" }, { kind: "node" }] });
     expect(validateDocument({ ...base, elements: [first, { ...angular, references: [{ kind: "line", elementId: "first" }, { kind: "line", elementId: "missing" }] } as typeof angular] }).success).toBe(false);
+    expect(validateDocument({ ...base, elements: [first, { ...angular, references: [{ kind: "line", elementId: "first" }, { kind: "line", elementId: "first" }] } as typeof angular] }).success).toBe(true);
   });
   it("validates angular references to connected sketch edges", () => {
     const base = createDocument("sketch-angular-doc", [{ id: layerId("layer-1"), name: "Design", visible: true, order: 0 }]);

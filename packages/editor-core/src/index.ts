@@ -26,7 +26,7 @@ import {
   withElements,
 } from "@nodra/domain";
 import { validateDocument } from "@nodra/validation";
-import { boundsOfElements, contourWithPoints, directionVector, elementCenter, elementToContour, dimensionGeometry, glyphGeometryNodes, groupCenter, mirrorHandleOffset, realGeometryNodes, resizeGroup, rotateElements, shapeResultContours, transformPoint, splitCuttableSegments, classifyCutGraph, cuttableSegments, solveSketchConstraints, solveCircleConstraints, type Direction } from "@nodra/geometry";
+import { boundsOfElements, contourWithPoints, directionVector, elementCenter, elementToContour, dimensionGeometry, glyphGeometryNodes, groupCenter, mirrorHandleOffset, realGeometryNodes, resizeGroup, rotateElements, shapeResultContours, transformPoint, splitCuttableSegments, classifyCutGraph, cuttableSegments, lineSegmentIntersection, solveSketchConstraints, solveCircleConstraints, type Direction } from "@nodra/geometry";
 import { insertSplineNode, moveSplineHandle as moveSplineHandleData, moveSplineNode as moveSplineNodeData } from "./spline.js";
 
 export * from "./spline.js";
@@ -66,7 +66,10 @@ const sketchNodeId = (): string => `sketch-node-${crypto.randomUUID()}`;
 const sketchEdgeId = (): string => `sketch-edge-${crypto.randomUUID()}`;
 export const createSketchLine = (sketchId: ElementId, layer: LayerId, style: VisualStyle, start: PointMm, end: PointMm): SketchElement => {
   const startNodeId = sketchNodeId(); const endNodeId = sketchNodeId();
-  return { type: "sketch", id: sketchId, layerId: layer, nodes: [{ id: startNodeId, point: start }, { id: endNodeId, point: end }], edges: [{ id: sketchEdgeId(), startNodeId, endNodeId }], style };
+  const edgeId = sketchEdgeId(); const dx = Math.abs(end.x - start.x); const dy = Math.abs(end.y - start.y);
+  const relationKind = dy <= dx * 0.1 ? "horizontal" : dx <= dy * 0.1 ? "vertical" : undefined;
+  const relation: SketchConstraint | undefined = relationKind ? { id: `auto:${edgeId}:${relationKind}`, kind: relationKind, references: [{ elementId: sketchId, nodeId: startNodeId }, { elementId: sketchId, nodeId: endNodeId }] } : undefined;
+  return { type: "sketch", id: sketchId, layerId: layer, nodes: [{ id: startNodeId, point: start }, { id: endNodeId, point: end }], edges: [{ id: edgeId, startNodeId, endNodeId }], ...(relation ? { constraints: [relation] } : {}), style };
 };
 export const appendSketchEdge = (sketchId: ElementId, fromNodeId: string, point: PointMm, toNodeId?: string): EditorCommand => ({
   name: `sketch-create-edge:${sketchId}`,
@@ -79,23 +82,58 @@ export const appendSketchEdge = (sketchId: ElementId, fromNodeId: string, point:
     if (endNodeId === fromNodeId) return { success: false, error: "Sketch edge endpoints must differ" };
     const duplicate = sketch.edges.some((edge) => (edge.startNodeId === fromNodeId && edge.endNodeId === endNodeId) || (edge.startNodeId === endNodeId && edge.endNodeId === fromNodeId));
     if (duplicate) return { success: false, error: "Sketch edge already exists" };
-    const next: SketchElement = { ...sketch, nodes: existingTarget ? sketch.nodes : [...sketch.nodes, { id: endNodeId, point }], edges: [...sketch.edges, { id: sketchEdgeId(), startNodeId: fromNodeId, endNodeId }] };
+    const edgeId = sketchEdgeId();
+    const start = sketch.nodes.find((node) => node.id === fromNodeId)!.point;
+    const end = existingTarget?.point ?? point;
+    const dx = Math.abs(end.x - start.x); const dy = Math.abs(end.y - start.y);
+    const relationKind = dy <= dx * 0.1 ? "horizontal" : dx <= dy * 0.1 ? "vertical" : undefined;
+    const relation: SketchConstraint | undefined = relationKind ? { id: `auto:${edgeId}:${relationKind}`, kind: relationKind, references: [{ elementId: sketch.id, nodeId: fromNodeId }, { elementId: sketch.id, nodeId: endNodeId }] } : undefined;
+    const previous = sketch.edges.at(-1);
+    const previousStart = previous ? sketch.nodes.find((node) => node.id === previous.startNodeId)?.point : undefined;
+    const previousEnd = previous ? sketch.nodes.find((node) => node.id === previous.endNodeId)?.point : undefined;
+    const previousDx = previousEnd && previousStart ? previousEnd.x - previousStart.x : 0; const previousDy = previousEnd && previousStart ? previousEnd.y - previousStart.y : 0;
+    const currentDx = end.x - start.x; const currentDy = end.y - start.y;
+    const perpendicular = previous && previousEnd && previousStart && Math.hypot(previousDx, previousDy) > 1e-9 && Math.hypot(currentDx, currentDy) > 1e-9 && Math.abs(previousDx * currentDx + previousDy * currentDy) <= Math.hypot(previousDx, previousDy) * Math.hypot(currentDx, currentDy) * 0.1 ? { id: `auto:${edgeId}:perpendicular`, kind: "perpendicular" as const, references: [{ elementId: sketch.id, nodeId: previous.startNodeId }, { elementId: sketch.id, nodeId: previous.endNodeId }, { elementId: sketch.id, nodeId: fromNodeId }, { elementId: sketch.id, nodeId: endNodeId }] as const } : undefined;
+    const autoRelations = [relation, perpendicular].filter((candidate): candidate is SketchConstraint => candidate !== undefined);
+    const next: SketchElement = { ...sketch, nodes: existingTarget ? sketch.nodes : [...sketch.nodes, { id: endNodeId, point }], edges: [...sketch.edges, { id: edgeId, startNodeId: fromNodeId, endNodeId }], ...(autoRelations.length ? { constraints: [...(sketch.constraints ?? []), ...autoRelations] } : {}) };
     return replaceElements(document, document.elements.map((element) => element.id === sketchId ? next : element));
   },
 });
-export const cutSketchEdge = (sketchId: ElementId, segmentIndex: number): EditorCommand => ({
+export const cutSketchEdge = (sketchId: ElementId, segmentIndex: number, cutPoint?: PointMm): EditorCommand => ({
   name: `sketch-cut-edge:${sketchId}:${segmentIndex}`,
   apply: (document) => {
     const sketch = document.elements.find((element): element is SketchElement => element.id === sketchId && element.type === "sketch");
     if (!sketch) return { success: false, error: "Sketch not found" };
     if (!Number.isInteger(segmentIndex) || segmentIndex < 0 || segmentIndex >= sketch.edges.length) return { success: false, error: "Sketch edge not found" };
+    const edge = sketch.edges[segmentIndex]!;
+    const startNode = sketch.nodes.find((node) => node.id === edge.startNodeId)!;
+    const endNode = sketch.nodes.find((node) => node.id === edge.endNodeId)!;
+    if (cutPoint) {
+      const crossingSegments = document.elements.filter((element) => element.id !== sketch.id && element.type !== "dimension").flatMap((element) => cuttableSegments(element));
+      const intersections = crossingSegments.flatMap((segment) => {
+        const hit = lineSegmentIntersection(startNode.point, endNode.point, segment.start, segment.end, 1e-7);
+        return hit ? [hit.point] : [];
+      });
+      const intersection = intersections.sort((first, second) => Math.hypot(first.x - cutPoint.x, first.y - cutPoint.y) - Math.hypot(second.x - cutPoint.x, second.y - cutPoint.y))[0];
+      const requestedPoint = intersection ?? cutPoint;
+      const vx = endNode.point.x - startNode.point.x; const vy = endNode.point.y - startNode.point.y; const lengthSquared = vx * vx + vy * vy;
+      if (lengthSquared <= 1e-12) return { success: false, error: "Cannot split a zero-length sketch edge" };
+      const parameter = ((requestedPoint.x - startNode.point.x) * vx + (requestedPoint.y - startNode.point.y) * vy) / lengthSquared;
+      if (parameter <= 1e-6 || parameter >= 1 - 1e-6) return { success: false, error: "Cut point must be inside the sketch segment" };
+      const splitNodeId = sketchNodeId(); const splitEdgeA = { id: sketchEdgeId(), startNodeId: edge.startNodeId, endNodeId: splitNodeId }; const splitEdgeB = { id: sketchEdgeId(), startNodeId: splitNodeId, endNodeId: edge.endNodeId };
+      const splitPoint = { x: startNode.point.x + vx * parameter, y: startNode.point.y + vy * parameter };
+      const edges = sketch.edges.flatMap((candidate, index) => index === segmentIndex ? [splitEdgeA, splitEdgeB] : [candidate]);
+      const nodes = [...sketch.nodes, { id: splitNodeId, point: splitPoint }];
+      return replaceElements(document, document.elements.map((element) => element.id === sketchId ? { ...sketch, nodes, edges } : element));
+    }
     const edges = sketch.edges.filter((_, index) => index !== segmentIndex);
     if (edges.length === 0) return replaceElements(document, document.elements.filter((element) => element.id !== sketchId && !(element.type === "dimension" && element.references.some((reference) => reference.elementId === sketchId))));
     const usedNodeIds = new Set(edges.flatMap((edge) => [edge.startNodeId, edge.endNodeId]));
     const nodes = sketch.nodes.filter((node) => usedNodeIds.has(node.id));
+    const constraints = sketch.constraints?.filter((constraint) => constraint.references.every((reference) => usedNodeIds.has(reference.nodeId)));
     const removedNodeIds = new Set(sketch.nodes.filter((node) => !usedNodeIds.has(node.id)).map((node) => node.id));
-    const elements = document.elements.filter((element) => !(element.type === "dimension" && element.references.some((reference) => reference.elementId === sketchId && "nodeId" in reference && reference.nodeId !== undefined && removedNodeIds.has(reference.nodeId))));
-    return replaceElements(document, elements.map((element) => element.id === sketchId ? { ...sketch, nodes, edges } : element));
+    const elements = document.elements.filter((element) => !(element.type === "dimension" && element.references.some((reference) => reference.elementId === sketchId && (("nodeId" in reference && reference.nodeId !== undefined && removedNodeIds.has(reference.nodeId)) || ("nodeIndex" in reference && reference.nodeIndex >= nodes.length)))));
+    return replaceElements(document, elements.map((element) => element.id === sketchId ? { ...sketch, nodes, edges, ...(constraints ? { constraints } : {}) } : element));
   },
 });
 
@@ -885,8 +923,27 @@ export const updateDimensionValue = (dimensionId: ElementId, value: number): Edi
     const dimension = document.elements.find((element): element is DimensionElement => element.id === dimensionId && element.type === "dimension");
     if (!dimension) return { success: false, error: "Dimension not found" };
     const targetId = dimension.references[0].elementId;
-    if (dimension.references[1].elementId !== targetId) return { success: false, error: "Driving dimensions require one referenced element" };
     const target = document.elements.find((element) => element.id === targetId);
+    // A cross-object dimension drives the second referenced node while the
+    // first reference remains the datum. This makes the relation useful and
+    // deterministic without guessing which object the user intended to fix.
+    if (dimension.references[1].elementId !== targetId) {
+      if (dimension.driving === true) return { success: false, error: "Driving dimensions require one referenced element" };
+      const first = dimension.references[0]; const second = dimension.references[1];
+      if (!("kind" in first) || !("kind" in second) || first.kind !== "node" || second.kind !== "node") return { success: true, document };
+      if (!target) return { success: false, error: "First dimension reference element not found" };
+      const firstNodes = realGeometryNodes(target);
+      const secondElement = document.elements.find((element) => element.id === second.elementId);
+      if (!secondElement) return { success: false, error: "Second dimension reference element not found" };
+      const secondNodes = realGeometryNodes(secondElement);
+      const firstNode = first.nodeId ? firstNodes.find((node) => node.nodeId === first.nodeId) : firstNodes[first.nodeIndex];
+      const secondNode = second.nodeId ? secondNodes.find((node) => node.nodeId === second.nodeId) : secondNodes[second.nodeIndex];
+      if (!firstNode || !secondNode) return { success: false, error: "Cross-object dimension references are invalid" };
+      const dx = secondNode.point.x - firstNode.point.x; const dy = secondNode.point.y - firstNode.point.y; const length = Math.hypot(dx, dy);
+      if (length <= 1e-9) return { success: false, error: "Cannot dimension coincident cross-object nodes" };
+      const point = dimension.kind === "aligned" ? { x: firstNode.point.x + dx * value / length, y: firstNode.point.y + dy * value / length } : dimension.kind === "horizontal" ? { x: firstNode.point.x + Math.sign(dx || 1) * value, y: secondNode.point.y } : dimension.kind === "vertical" ? { x: secondNode.point.x, y: firstNode.point.y + Math.sign(dy || 1) * value } : undefined;
+      return point ? updateElementNode(second.elementId, second.nodeIndex, point).apply(document) : { success: true, document }; 
+    }
     if ((dimension.kind === "radius" || dimension.kind === "diameter") && dimension.driving !== true) return { success: false, error: "Only driving circular dimensions can change a circle" };
         if (dimension.kind === "radius" || dimension.kind === "diameter") {
       if (target?.type !== "ellipse" || target.size.width !== target.size.height) return { success: false, error: "Circular driving dimensions require a circle" };
@@ -905,24 +962,69 @@ export const updateDimensionValue = (dimensionId: ElementId, value: number): Edi
       const updated = { ...target, position, size: { width: radius * 2, height: radius * 2 }, ...(updatedConstraints ? { circleConstraints: updatedConstraints } : {}) };
       return replaceElements(document, document.elements.map((element) => element.id === target.id ? updated : element));
     }
-    if (dimension.kind !== "horizontal" && dimension.kind !== "vertical") return { success: false, error: "Only horizontal and vertical dimensions can drive rectangles" };
+    if (target?.type === "line") {
+      const first = dimension.references[0]; const second = dimension.references[1];
+      if (dimension.kind === "angular") {
+        if (!("kind" in first) || !("kind" in second) || first.kind !== "line" || second.kind !== "line" || first.elementId !== target.id || second.elementId !== target.id) return { success: false, error: "Line angle dimensions require two references to the same line" };
+        const dx = target.end.x - target.start.x; const dy = target.end.y - target.start.y; const length = Math.hypot(dx, dy);
+        if (length <= 1e-9) return { success: false, error: "Cannot dimension a zero-length line" };
+        const currentAngle = Math.atan2(dy, dx); const sign = currentAngle < 0 ? -1 : 1; const angle = sign * value * Math.PI / 180;
+        const end = { x: target.start.x + length * Math.cos(angle), y: target.start.y + length * Math.sin(angle) };
+        return replaceElements(document, document.elements.map((element) => element.id === target.id && element.type === "line" ? { ...element, end } : element));
+      }
+      if (!("kind" in first) || !("kind" in second) || first.kind !== "node" || second.kind !== "node") return { success: false, error: "Line driving dimensions require node references" };
+      const nodes = realGeometryNodes(target);
+      const firstNode = first.nodeId ? nodes.find((node) => node.nodeId === first.nodeId) : nodes[first.nodeIndex];
+      const secondNode = second.nodeId ? nodes.find((node) => node.nodeId === second.nodeId) : nodes[second.nodeIndex];
+      if (!firstNode || !secondNode || firstNode.nodeId === secondNode.nodeId || firstNode.kind !== "endpoint" || secondNode.kind !== "endpoint") return { success: false, error: "Line driving dimension references are invalid" };
+      const dx = secondNode.point.x - firstNode.point.x; const dy = secondNode.point.y - firstNode.point.y;
+      const currentLength = Math.hypot(dx, dy);
+      if (!Number.isFinite(currentLength) || currentLength <= 1e-9) return { success: false, error: "Cannot dimension a zero-length line" };
+      let end: PointMm;
+      if (dimension.kind === "aligned") {
+        end = { x: firstNode.point.x + dx * value / currentLength, y: firstNode.point.y + dy * value / currentLength };
+      } else if (dimension.kind === "horizontal") {
+        end = { x: firstNode.point.x + Math.sign(dx || 1) * value, y: secondNode.point.y };
+      } else if (dimension.kind === "vertical") {
+        end = { x: secondNode.point.x, y: firstNode.point.y + Math.sign(dy || 1) * value };
+      } else return { success: false, error: "Unsupported line dimension kind" };
+      const updated = secondNode.nodeId === "start" ? { ...target, start: end } : { ...target, end };
+      return replaceElements(document, document.elements.map((element) => element.id === target.id ? updated : element));
+    }
+    if (dimension.kind !== "aligned" && dimension.kind !== "horizontal" && dimension.kind !== "vertical") return { success: false, error: "This dimension kind cannot drive the referenced geometry" };
     if (target?.type === "path") {
       const first = dimension.references[0]; const second = dimension.references[1];
       if (!("kind" in first) || !("kind" in second) || first.kind !== "node" || second.kind !== "node") return { success: false, error: "Path driving dimensions require node references" };
       const firstNode = target.nodes.find((node, index) => node.id === first.nodeId || (!first.nodeId && first.nodeIndex === index));
       const secondNode = target.nodes.find((node, index) => node.id === second.nodeId || (!second.nodeId && second.nodeIndex === index));
       if (!firstNode || !secondNode || firstNode.id === secondNode.id) return { success: false, error: "Path driving dimension references are invalid" };
+      const dx = secondNode.anchor.x - firstNode.anchor.x; const dy = secondNode.anchor.y - firstNode.anchor.y;
+      const currentLength = Math.hypot(dx, dy);
+      if (currentLength <= 1e-9) return { success: false, error: "Cannot dimension a zero-length path segment" };
       const horizontal = dimension.kind === "horizontal";
-      const delta = horizontal ? secondNode.anchor.x - firstNode.anchor.x : secondNode.anchor.y - firstNode.anchor.y;
-      const direction = delta < 0 ? -1 : 1;
-      const anchor = horizontal ? { x: firstNode.anchor.x + direction * value, y: secondNode.anchor.y } : { x: secondNode.anchor.x, y: firstNode.anchor.y + direction * value };
+      const vertical = dimension.kind === "vertical";
+      const direction = (horizontal ? dx : vertical ? dy : currentLength) < 0 ? -1 : 1;
+      const anchor = dimension.kind === "aligned"
+        ? { x: firstNode.anchor.x + dx * value / currentLength, y: firstNode.anchor.y + dy * value / currentLength }
+        : horizontal ? { x: firstNode.anchor.x + direction * value, y: secondNode.anchor.y }
+          : { x: secondNode.anchor.x, y: firstNode.anchor.y + direction * value };
       const next = { ...target, nodes: target.nodes.map((node) => node.id === secondNode.id ? { ...node, anchor } : node) };
       return replaceElements(document, document.elements.map((element) => element.id === target.id ? next : element));
     }
     if (target?.type === "sketch") {
-      if (!dimension.driving || !dimension.constraintId) return { success: false, error: "Sketch dimensions require an explicit driving constraint" };
       const first = dimension.references[0]; const second = dimension.references[1];
       if (!("kind" in first) || !("kind" in second) || first.kind !== "node" || second.kind !== "node" || !first.nodeId || !second.nodeId) return { success: false, error: "Sketch driving dimensions require node references" };
+      const firstNode = target.nodes.find((node) => node.id === first.nodeId);
+      const secondNode = target.nodes.find((node) => node.id === second.nodeId);
+      if (!firstNode || !secondNode || firstNode.id === secondNode.id) return { success: false, error: "Sketch driving dimension references are invalid" };
+      if (!dimension.driving || !dimension.constraintId) {
+        const dx = secondNode.point.x - firstNode.point.x; const dy = secondNode.point.y - firstNode.point.y; const currentLength = Math.hypot(dx, dy);
+        if (currentLength <= 1e-9) return { success: false, error: "Cannot dimension a zero-length sketch segment" };
+        const direction = dimension.kind === "horizontal" ? Math.sign(dx || 1) : dimension.kind === "vertical" ? Math.sign(dy || 1) : 1;
+        const point = dimension.kind === "aligned" ? { x: firstNode.point.x + dx * value / currentLength, y: firstNode.point.y + dy * value / currentLength } : dimension.kind === "horizontal" ? { x: firstNode.point.x + direction * value, y: secondNode.point.y } : { x: secondNode.point.x, y: firstNode.point.y + direction * value };
+        const next = { ...target, nodes: target.nodes.map((node) => node.id === secondNode.id ? { ...node, point } : node) };
+        return replaceElements(document, document.elements.map((element) => element.id === target.id ? next : element));
+      }
       const expectedKind = dimension.kind === "horizontal" ? "distance-horizontal" : "distance-vertical";
       const constraint = target.constraints?.find((candidate) => candidate.id === dimension.constraintId);
       const constraintReferenceIds = constraint?.references.map((reference) => `${reference.elementId}:${reference.nodeId}`).sort();
@@ -943,9 +1045,10 @@ export const updateDimensionValue = (dimensionId: ElementId, value: number): Edi
 
 const validateSketchConstraint = (sketch: SketchElement, constraint: SketchConstraint): string | undefined => {
   if (!constraint.references.every((reference) => reference.elementId === sketch.id && sketch.nodes.some((node) => node.id === reference.nodeId))) return "Sketch constraint references are invalid";
-  if ((constraint.kind === "horizontal" || constraint.kind === "vertical" || constraint.kind === "coincident" || constraint.kind === "distance-horizontal" || constraint.kind === "distance-vertical") && constraint.references.length !== 2) return "This sketch constraint requires two references";
+  if ((constraint.kind === "parallel" || constraint.kind === "perpendicular" || constraint.kind === "equal") && constraint.references.length !== 4) return "This sketch relation requires two line references";
+  if ((constraint.kind === "horizontal" || constraint.kind === "vertical" || constraint.kind === "coincident" || constraint.kind === "distance-horizontal" || constraint.kind === "distance-vertical" || constraint.kind === "distance" || constraint.kind === "angle") && constraint.references.length !== 2) return "This sketch constraint requires two references";
   if (constraint.kind === "fixed" && constraint.references.length !== 1) return "A fixed constraint requires one reference";
-  if ((constraint.kind === "distance-horizontal" || constraint.kind === "distance-vertical" ) && (!Number.isFinite(constraint.value) || constraint.value === undefined || constraint.value <= 0)) return "Distance constraints require a positive value";
+  if ((constraint.kind === "distance-horizontal" || constraint.kind === "distance-vertical" || constraint.kind === "distance" || constraint.kind === "angle") && (!Number.isFinite(constraint.value) || constraint.value === undefined || constraint.value <= 0)) return "Distance constraints require a positive value";
   return undefined;
 };
 
@@ -962,7 +1065,9 @@ export const addSketchConstraint = (sketchId: ElementId, constraint: SketchConst
   apply: (document) => {
     const sketch = document.elements.find((element): element is SketchElement => element.id === sketchId && element.type === "sketch");
     if (!sketch || sketch.constraints?.some((current) => current.id === constraint.id)) return { success: false, error: "Sketch constraint cannot be added" };
-    return solveSketchCandidate(document, sketch, [...(sketch.constraints ?? []), constraint]);
+    const sameReferences = (first: SketchConstraint, second: SketchConstraint) => first.kind === second.kind && first.references.length === second.references.length && first.references.every((reference, index) => reference.elementId === second.references[index]?.elementId && reference.nodeId === second.references[index]?.nodeId);
+    const constraints = (sketch.constraints ?? []).filter((current) => !(current.id.startsWith("auto:") && (sameReferences(current, constraint) || constraint.references.every((reference) => current.references.some((candidate) => `${candidate.elementId}:${candidate.nodeId}` === `${reference.elementId}:${reference.nodeId}`)))));
+    return solveSketchCandidate(document, sketch, [...constraints, constraint]);
   },
 });
 

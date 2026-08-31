@@ -59,6 +59,8 @@ describe("canonical millimetre geometry", () => {
     expect(dimensionKindForPlacement(first, second, { x: midpoint.x + 40, y: midpoint.y + 4 })).toBe("horizontal");
     expect(dimensionKindForPlacement(first, second, { x: midpoint.x + 4, y: midpoint.y + 40 })).toBe("vertical");
     expect(dimensionKindForPlacement({ x: 0, y: 0 }, { x: 20, y: 0 }, { x: 10, y: 50 })).toBe("horizontal");
+    expect(dimensionKindForPlacement(first, second, { x: midpoint.x + 15, y: midpoint.y + 4 })).toBe("horizontal");
+    expect(dimensionKindForPlacement(first, second, { x: midpoint.x + 8, y: midpoint.y + 40 })).toBe("vertical");
   });
   it("uses aligned Euclidean geometry and only the perpendicular placement offset for diagonals", () => {
     const start = { x: 10, y: 10 }; const end = { x: 40, y: 40 };
@@ -92,6 +94,9 @@ describe("canonical millimetre geometry", () => {
     expect(geometry?.value).toBe(10);
     expect(geometry?.lineStart).toEqual({ x: 20, y: 20 });
     expect(geometry?.lineEnd).toEqual({ x: 20, y: 10 });
+    if (geometry?.kind !== "radius") throw new Error("Expected radius geometry");
+    expect(geometry.leaderStart).toEqual({ x: 20, y: 20 });
+    expect(geometry.leaderEnd).toEqual({ x: 28, y: 12 });
   });
 
   it("resolves associative node references by stable node id after node reordering", () => {
@@ -112,6 +117,11 @@ describe("canonical millimetre geometry", () => {
     const second = { type: "line" as const, id: elementId("second"), layerId: layerId("l"), start: { x: 20, y: 20 }, end: { x: 20, y: 60 }, rotation: 0, style };
     const dimension = { type: "dimension" as const, id: elementId("angular"), layerId: layerId("l"), kind: "angular" as const, references: [{ kind: "line" as const, elementId: first.id }, { kind: "line" as const, elementId: second.id }] as const, offset: { x: 10, y: 10 }, precision: 2, units: "mm" as const, rotation: 0 as const, style };
     expect(angularDimensionGeometry(dimension, [first, second])?.value).toBeCloseTo(90);
+  });
+  it("calculates an angle dimension for one line against the horizontal axis", () => {
+    const line = { type: "line" as const, id: elementId("single-angle-line"), layerId: layerId("l"), start: { x: 10, y: 10 }, end: { x: 20, y: 20 }, rotation: 0, style };
+    const dimension = { type: "dimension" as const, id: elementId("single-angle"), layerId: line.layerId, kind: "angular" as const, references: [{ kind: "line" as const, elementId: line.id }, { kind: "line" as const, elementId: line.id }] as const, offset: { x: 8, y: -8 }, precision: 2, units: "mm" as const, rotation: 0 as const, style };
+    expect(angularDimensionGeometry(dimension, [line])?.value).toBeCloseTo(45);
   });
   it("projects primitives to editable nodes and segments without changing the primitive", () => {
     expect(realGeometryNodes(rectangle)).toHaveLength(9);
