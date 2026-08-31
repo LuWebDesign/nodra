@@ -381,7 +381,9 @@ it("converts a zero-radius rectangle to an open path when cutting one edge", () 
      const sketch = createSketchLine(elementId("reference-sketch"), layerId("default"), rectangle.style, { x: 0, y: 0 }, { x: 10, y: 10 });
      const linked: DimensionElement = { type: "dimension", id: elementId("cross-object-dimension"), layerId: sketch.layerId, kind: "aligned", references: [{ kind: "node", elementId: sketch.id, nodeIndex: 0, nodeId: sketch.nodes[0]!.id }, { kind: "node", elementId: rectangle.id, nodeIndex: 0, nodeId: "nw" }], offset: { x: 0, y: -8 }, precision: 2, units: "mm", rotation: 0, style: rectangle.style };
      const state = dispatch(createEditor({ ...document, elements: [sketch, rectangle, linked] }), updateDimensionValue(linked.id, 20));
-     expect(state.document.elements).toEqual([sketch, rectangle, linked]);
+     expect(state.document.elements[0]).toEqual(sketch);
+     const movedCorner = (state.document.elements[1] as RectangleElement).position;
+     expect(Math.hypot(movedCorner.x - sketch.nodes[0]!.point.x, movedCorner.y - sketch.nodes[0]!.point.y)).toBeCloseTo(20);
      expect(state.error).toBeUndefined();
    });
 

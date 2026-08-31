@@ -885,13 +885,27 @@ export const updateDimensionValue = (dimensionId: ElementId, value: number): Edi
     const dimension = document.elements.find((element): element is DimensionElement => element.id === dimensionId && element.type === "dimension");
     if (!dimension) return { success: false, error: "Dimension not found" };
     const targetId = dimension.references[0].elementId;
-    // A dimension between two different objects is a driven/reference
-    // measurement. It is valid, but cannot resize either object.
+    const target = document.elements.find((element) => element.id === targetId);
+    // A cross-object dimension drives the second referenced node while the
+    // first reference remains the datum. This makes the relation useful and
+    // deterministic without guessing which object the user intended to fix.
     if (dimension.references[1].elementId !== targetId) {
       if (dimension.driving === true) return { success: false, error: "Driving dimensions require one referenced element" };
-      return { document };
+      const first = dimension.references[0]; const second = dimension.references[1];
+      if (!("kind" in first) || !("kind" in second) || first.kind !== "node" || second.kind !== "node") return { document };
+      if (!target) return { success: false, error: "First dimension reference element not found" };
+      const firstNodes = realGeometryNodes(target);
+      const secondElement = document.elements.find((element) => element.id === second.elementId);
+      if (!secondElement) return { success: false, error: "Second dimension reference element not found" };
+      const secondNodes = realGeometryNodes(secondElement);
+      const firstNode = first.nodeId ? firstNodes.find((node) => node.nodeId === first.nodeId) : firstNodes[first.nodeIndex];
+      const secondNode = second.nodeId ? secondNodes.find((node) => node.nodeId === second.nodeId) : secondNodes[second.nodeIndex];
+      if (!firstNode || !secondNode) return { success: false, error: "Cross-object dimension references are invalid" };
+      const dx = secondNode.point.x - firstNode.point.x; const dy = secondNode.point.y - firstNode.point.y; const length = Math.hypot(dx, dy);
+      if (length <= 1e-9) return { success: false, error: "Cannot dimension coincident cross-object nodes" };
+      const point = dimension.kind === "aligned" ? { x: firstNode.point.x + dx * value / length, y: firstNode.point.y + dy * value / length } : dimension.kind === "horizontal" ? { x: firstNode.point.x + Math.sign(dx || 1) * value, y: secondNode.point.y } : dimension.kind === "vertical" ? { x: secondNode.point.x, y: firstNode.point.y + Math.sign(dy || 1) * value } : undefined;
+      return point ? updateElementNode(second.elementId, second.nodeIndex, point).apply(document) : { document }; 
     }
-    const target = document.elements.find((element) => element.id === targetId);
     if ((dimension.kind === "radius" || dimension.kind === "diameter") && dimension.driving !== true) return { success: false, error: "Only driving circular dimensions can change a circle" };
         if (dimension.kind === "radius" || dimension.kind === "diameter") {
       if (target?.type !== "ellipse" || target.size.width !== target.size.height) return { success: false, error: "Circular driving dimensions require a circle" };
