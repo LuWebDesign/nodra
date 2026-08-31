@@ -208,7 +208,7 @@ export interface PageSnapshot {
 
 export interface ProjectPreferences {
   readonly lineGuidesEnabled: boolean;
-  readonly lineGuideAngle: 15;
+  readonly lineGuideAngle: 45;
 }
 
 export interface ProjectSnapshot {
@@ -235,7 +235,7 @@ export function createDocument(id: string, layers: readonly Layer[] = []): Docum
 
 export function createProject(document: DocumentSnapshot): ProjectSnapshot {
   const page = { id: pageId("page-1"), page: document.page, layers: document.layers, elements: document.elements, connections: document.connections ?? [] };
-  return { schemaVersion: CURRENT_SCHEMA_VERSION, id: document.id, revision: document.revision, origin: document.origin, units: document.units, preferences: { lineGuidesEnabled: true, lineGuideAngle: 15 }, pages: [page], activePageId: page.id };
+  return { schemaVersion: CURRENT_SCHEMA_VERSION, id: document.id, revision: document.revision, origin: document.origin, units: document.units, preferences: { lineGuidesEnabled: true, lineGuideAngle: 45 }, pages: [page], activePageId: page.id };
 }
 
 export function projectPage(project: ProjectSnapshot, pageIdValue = project.activePageId): PageSnapshot {
