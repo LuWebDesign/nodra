@@ -99,12 +99,26 @@ export const appendSketchEdge = (sketchId: ElementId, fromNodeId: string, point:
     return replaceElements(document, document.elements.map((element) => element.id === sketchId ? next : element));
   },
 });
-export const cutSketchEdge = (sketchId: ElementId, segmentIndex: number): EditorCommand => ({
+export const cutSketchEdge = (sketchId: ElementId, segmentIndex: number, cutPoint?: PointMm): EditorCommand => ({
   name: `sketch-cut-edge:${sketchId}:${segmentIndex}`,
   apply: (document) => {
     const sketch = document.elements.find((element): element is SketchElement => element.id === sketchId && element.type === "sketch");
     if (!sketch) return { success: false, error: "Sketch not found" };
     if (!Number.isInteger(segmentIndex) || segmentIndex < 0 || segmentIndex >= sketch.edges.length) return { success: false, error: "Sketch edge not found" };
+    const edge = sketch.edges[segmentIndex]!;
+    const startNode = sketch.nodes.find((node) => node.id === edge.startNodeId)!;
+    const endNode = sketch.nodes.find((node) => node.id === edge.endNodeId)!;
+    if (cutPoint) {
+      const vx = endNode.point.x - startNode.point.x; const vy = endNode.point.y - startNode.point.y; const lengthSquared = vx * vx + vy * vy;
+      if (lengthSquared <= 1e-12) return { success: false, error: "Cannot split a zero-length sketch edge" };
+      const parameter = ((cutPoint.x - startNode.point.x) * vx + (cutPoint.y - startNode.point.y) * vy) / lengthSquared;
+      if (parameter <= 1e-6 || parameter >= 1 - 1e-6) return { success: false, error: "Cut point must be inside the sketch segment" };
+      const splitNodeId = sketchNodeId(); const splitEdgeA = { id: sketchEdgeId(), startNodeId: edge.startNodeId, endNodeId: splitNodeId }; const splitEdgeB = { id: sketchEdgeId(), startNodeId: splitNodeId, endNodeId: edge.endNodeId };
+      const splitPoint = { x: startNode.point.x + vx * parameter, y: startNode.point.y + vy * parameter };
+      const edges = sketch.edges.flatMap((candidate, index) => index === segmentIndex ? [splitEdgeA, splitEdgeB] : [candidate]);
+      const nodes = [...sketch.nodes, { id: splitNodeId, point: splitPoint }];
+      return replaceElements(document, document.elements.map((element) => element.id === sketchId ? { ...sketch, nodes, edges } : element));
+    }
     const edges = sketch.edges.filter((_, index) => index !== segmentIndex);
     if (edges.length === 0) return replaceElements(document, document.elements.filter((element) => element.id !== sketchId && !(element.type === "dimension" && element.references.some((reference) => reference.elementId === sketchId))));
     const usedNodeIds = new Set(edges.flatMap((edge) => [edge.startNodeId, edge.endNodeId]));

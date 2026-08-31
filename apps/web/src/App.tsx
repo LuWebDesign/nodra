@@ -835,7 +835,7 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
               const next = dispatch(editorRef.current, cutLineAtPoint(hit.elementId, point));
               if (next !== editorRef.current) setEditorState(select(next, next.document.elements.filter((candidate) => candidate.type === "path" && (candidate.id === hit.elementId || candidate.id.startsWith(`${hit.elementId}:piece:`))).map((candidate) => candidate.id)));
             } else if (hit && element?.type === "sketch") {
-          const next = dispatch(editorRef.current, cutSketchEdge(hit.elementId, hit.segmentIndex));
+          const next = dispatch(editorRef.current, cutSketchEdge(hit.elementId, hit.segmentIndex, point));
           if (next !== editorRef.current) setEditorState(select(next, next.document.elements.some((candidate) => candidate.id === hit.elementId) ? [hit.elementId] : []));
             } else if (hit && (element?.type === "rectangle" || element?.type === "ellipse" || segment?.type === "line")) {
           const next = dispatch(editorRef.current, cutPathSegment(hit.elementId, hit.segmentIndex, point));
