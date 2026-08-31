@@ -29,5 +29,5 @@
 
 - [x] 5.1a Add circle radius and diameter driving dimensions with explicit circle constraints.
 - [ ] 5.1b Add arc radius and diameter driving dimensions after ArcElement persistence and tool integration.
-- [ ] 5.2 Add angular, aligned, positional, tangent, parallel, perpendicular, concentric, and equal relations.
+- [ ] 5.2 Add angular, aligned, positional, tangent, parallel, perpendicular, concentric, and equal relations. Tracked in GitHub issue #151.
 - [ ] 5.3 Add spline-specific constraints and solver support.
