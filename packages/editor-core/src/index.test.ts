@@ -386,6 +386,15 @@ it("converts a zero-radius rectangle to an open path when cutting one edge", () 
      expect(state.undo).toHaveLength(1);
    });
 
+it("drives an individual line angle while preserving its length", () => {
+     const line: LineElement = { type: "line", id: elementId("line-angle"), layerId: layerId("default"), start: { x: 0, y: 0 }, end: { x: 10, y: 10 }, rotation: 0, style: rectangle.style };
+     const linked: DimensionElement = { type: "dimension", id: elementId("line-angle-dimension"), layerId: line.layerId, kind: "angular", references: [{ kind: "line", elementId: line.id }, { kind: "line", elementId: line.id }], offset: { x: 8, y: -8 }, precision: 2, units: "mm", rotation: 0, style: rectangle.style };
+     const state = dispatch(createEditor({ ...document, elements: [line, linked] }), updateDimensionValue(linked.id, 30));
+     const updated = state.document.elements[0] as LineElement;
+     expect(Math.hypot(updated.end.x - updated.start.x, updated.end.y - updated.start.y)).toBeCloseTo(Math.sqrt(200));
+     expect(Math.atan2(updated.end.y - updated.start.y, updated.end.x - updated.start.x) * 180 / Math.PI).toBeCloseTo(30);
+   });
+
 it("moves a dimension by changing only its placement offset and supports undo", () => {
     const dimension = { type: "dimension" as const, id: elementId("dimension-move"), layerId: rectangle.layerId, kind: "horizontal" as const, references: [{ elementId: rectangle.id, nodeIndex: 0 }, { elementId: rectangle.id, nodeIndex: 1 }] as const, offset: { x: 0, y: -8 }, precision: 2, units: "mm" as const, rotation: 0 as const, style: rectangle.style };
     const state = dispatch(createEditor({ ...document, elements: [rectangle, dimension] }), moveElements([dimension.id], { x: 3, y: 5 }));

@@ -150,7 +150,7 @@ export interface BezierHandlePoint { readonly direction: BezierHandleDirection; 
 export interface BezierGeometryNode { readonly nodeId: string; readonly anchor: PointMm; readonly handles: readonly BezierHandlePoint[] }
 export interface EditableGeometryNode { readonly kind: "anchor" | "handle"; readonly nodeId: string; readonly point: PointMm; readonly direction?: BezierHandleDirection; readonly nodeIndex: number; readonly segmentIndex?: number; readonly ringIndex?: number }
 export interface BezierHandleGuide { readonly nodeId: string; readonly anchor: PointMm; readonly point: PointMm; readonly direction: BezierHandleDirection; readonly nodeIndex: number; readonly anchorNodeIndex: number; readonly segmentIndex?: number; readonly ringIndex?: number }
-export interface LinearDimensionGeometry { readonly kind: "aligned" | "horizontal" | "vertical" | "radius" | "diameter"; readonly start: PointMm; readonly end: PointMm; readonly lineStart: PointMm; readonly lineEnd: PointMm; readonly text: PointMm; readonly value: number }
+export interface LinearDimensionGeometry { readonly kind: "aligned" | "horizontal" | "vertical" | "radius" | "diameter"; readonly start: PointMm; readonly end: PointMm; readonly lineStart: PointMm; readonly lineEnd: PointMm; readonly text: PointMm; readonly value: number; readonly leaderStart?: PointMm; readonly leaderEnd?: PointMm }
 export interface AngularDimensionGeometry { readonly kind: "angular"; readonly vertex: PointMm; readonly start: PointMm; readonly end: PointMm; readonly lineStart: PointMm; readonly lineEnd: PointMm; readonly text: PointMm; readonly value: number; readonly radius: number; readonly sweep: 0 | 1 }
 export type DimensionGeometry = LinearDimensionGeometry | AngularDimensionGeometry;
 export type SketchConstraintStatus = "underdefined" | "defined" | "conflict" | "overdefined";
@@ -307,6 +307,16 @@ export function angularDimensionGeometry(element: DimensionElement, elements: re
   if (element.kind !== "angular" || !element.references.every((reference) => "kind" in reference && reference.kind === "line")) return undefined;
   const first = lineAt(element.references[0], elements); const second = lineAt(element.references[1], elements); if (!first || !second) return undefined;
   const [firstStart, firstEnd] = rotatedLineEndpoints(first); const [secondStart, secondEnd] = rotatedLineEndpoints(second);
+  const sameLine = element.references[0].elementId === element.references[1].elementId && (element.references[0].edgeIndex ?? 0) === (element.references[1].edgeIndex ?? 0);
+  if (sameLine) {
+    const dx = firstEnd.x - firstStart.x; const dy = firstEnd.y - firstStart.y; const length = Math.hypot(dx, dy);
+    if (length === 0) return undefined;
+    const radius = Math.max(Math.hypot(element.offset.x, element.offset.y), 8);
+    const lineStart = { x: firstStart.x + radius, y: firstStart.y };
+    const lineEnd = { x: firstStart.x + dx / length * radius, y: firstStart.y + dy / length * radius };
+    const value = Math.abs(Math.atan2(dy, dx) * 180 / Math.PI);
+    return { kind: "angular", vertex: firstStart, start: lineStart, end: lineEnd, lineStart, lineEnd, text: { x: firstStart.x + element.offset.x, y: firstStart.y + element.offset.y }, value, radius, sweep: dy >= 0 ? 1 : 0 };
+  }
   const candidates: readonly [PointMm, PointMm, PointMm][] = [[firstStart, firstEnd, secondStart], [firstStart, firstEnd, secondEnd], [firstEnd, firstStart, secondStart], [firstEnd, firstStart, secondEnd]];
   const connected = candidates.find((candidate) => Math.hypot(candidate[0].x - candidate[2].x, candidate[0].y - candidate[2].y) <= 1e-6); if (!connected) return undefined;
   const vertex = connected[0]; const firstRay = { x: connected[1].x - vertex.x, y: connected[1].y - vertex.y }; const secondEndpoint = Math.hypot(vertex.x - secondStart.x, vertex.y - secondStart.y) <= 1e-6 ? secondEnd : secondStart; const secondRay = { x: secondEndpoint.x - vertex.x, y: secondEndpoint.y - vertex.y };
@@ -336,7 +346,7 @@ export function dimensionGeometry(element: DimensionElement, elements: readonly 
     if (!center || Math.hypot(rim.x - center.x, rim.y - center.y) === 0) return undefined;
     const radius = Math.hypot(rim.x - center.x, rim.y - center.y); const direction = { x: (rim.x - center.x) / radius, y: (rim.y - center.y) / radius };
     const lineStart = element.kind === "radius" ? center : { x: center.x - direction.x * radius, y: center.y - direction.y * radius }; const lineEnd = { x: center.x + direction.x * radius, y: center.y + direction.y * radius }; const text = { x: center.x + element.offset.x, y: center.y + element.offset.y };
-    return { kind: element.kind, start: lineStart, end: lineEnd, lineStart, lineEnd, text, value: element.kind === "radius" ? radius : radius * 2 };
+     return { kind: element.kind, start: lineStart, end: lineEnd, lineStart, lineEnd, text, leaderStart: center, leaderEnd: text, value: element.kind === "radius" ? radius : radius * 2 };
   }
   const text = { x: midpoint.x + element.offset.x, y: midpoint.y + element.offset.y };
   const lineStart = element.kind === "horizontal" ? { x: start.x, y: text.y } : element.kind === "vertical" ? { x: text.x, y: start.y } : alignedOffsetPoint(start, start, end, element.offset);

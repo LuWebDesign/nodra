@@ -907,6 +907,14 @@ export const updateDimensionValue = (dimensionId: ElementId, value: number): Edi
     }
     if (target?.type === "line") {
       const first = dimension.references[0]; const second = dimension.references[1];
+      if (dimension.kind === "angular") {
+        if (!("kind" in first) || !("kind" in second) || first.kind !== "line" || second.kind !== "line" || first.elementId !== target.id || second.elementId !== target.id) return { success: false, error: "Line angle dimensions require two references to the same line" };
+        const dx = target.end.x - target.start.x; const dy = target.end.y - target.start.y; const length = Math.hypot(dx, dy);
+        if (length <= 1e-9) return { success: false, error: "Cannot dimension a zero-length line" };
+        const currentAngle = Math.atan2(dy, dx); const sign = currentAngle < 0 ? -1 : 1; const angle = sign * value * Math.PI / 180;
+        const end = { x: target.start.x + length * Math.cos(angle), y: target.start.y + length * Math.sin(angle) };
+        return replaceElements(document, document.elements.map((element) => element.id === target.id && element.type === "line" ? { ...element, end } : element));
+      }
       if (!("kind" in first) || !("kind" in second) || first.kind !== "node" || second.kind !== "node") return { success: false, error: "Line driving dimensions require node references" };
       const nodes = realGeometryNodes(target);
       const firstNode = first.nodeId ? nodes.find((node) => node.nodeId === first.nodeId) : nodes[first.nodeIndex];

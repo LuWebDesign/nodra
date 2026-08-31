@@ -42,7 +42,7 @@ const dimension = z.object({ id: nonEmptyId, layerId: nonEmptyId, type: z.litera
   const [first, second] = value.references;
   if (value.kind === "angular") {
     if (first.kind !== "line" || second.kind !== "line") ctx.addIssue({ code: "custom", message: "Angular dimensions require line references", path: ["references"] });
-     if (first.kind === "line" && second.kind === "line" && first.elementId === second.elementId && (first.edgeIndex ?? 0) === (second.edgeIndex ?? 0)) ctx.addIssue({ code: "custom", message: "Angular dimension lines must differ", path: ["references"] });
+     // Two identical line references represent an angle against the horizontal axis.
   } else {
     if (first.kind !== "node" || second.kind !== "node") ctx.addIssue({ code: "custom", message: "Linear dimensions require node references", path: ["references"] });
     if (first.kind === "node" && second.kind === "node" && first.elementId === second.elementId && (first.nodeId !== undefined && second.nodeId !== undefined ? first.nodeId === second.nodeId : first.nodeIndex === second.nodeIndex)) ctx.addIssue({ code: "custom", message: "Dimension references must differ", path: ["references"] });
@@ -193,7 +193,8 @@ export const documentSchema = z.object({ schemaVersion: z.literal(CURRENT_SCHEMA
          return start && end ? [start, end] : undefined;
        };
        const points = endpoints(first, element.references[0]); const otherPoints = endpoints(second, element.references[1]);
-       if (points && otherPoints) {
+       const [firstReference, secondReference] = element.references;
+       if (points && otherPoints && !(firstReference.kind === "line" && secondReference.kind === "line" && firstReference.elementId === secondReference.elementId && (firstReference.edgeIndex ?? 0) === (secondReference.edgeIndex ?? 0))) {
          const connected = points.some((point) => otherPoints.some((other) => Math.hypot(point.x - other.x, point.y - other.y) <= 1e-6));
          if (!connected) ctx.addIssue({ code: "custom", message: "Angular dimension lines must share a visual endpoint", path: ["elements", index, "references"] });
       }
