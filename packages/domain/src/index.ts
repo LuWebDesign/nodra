@@ -81,7 +81,7 @@ export interface LineElement {
 }
 export interface SketchNode { readonly id: string; readonly point: PointMm }
 export interface SketchEdge { readonly id: string; readonly startNodeId: string; readonly endNodeId: string }
-export type SketchConstraintKind = "horizontal" | "vertical" | "coincident" | "distance-horizontal" | "distance-vertical" | "distance" | "angle" | "fixed";
+export type SketchConstraintKind = "horizontal" | "vertical" | "coincident" | "parallel" | "perpendicular" | "equal" | "distance-horizontal" | "distance-vertical" | "distance" | "angle" | "fixed";
 export interface SketchPointReference { readonly elementId: ElementId; readonly nodeId: string }
 export interface SketchConstraint { readonly id: string; readonly kind: SketchConstraintKind; readonly references: readonly [SketchPointReference, ...SketchPointReference[]]; readonly value?: number }
 export interface SketchElement { readonly type: "sketch"; readonly id: ElementId; readonly layerId: LayerId; readonly nodes: readonly SketchNode[]; readonly edges: readonly SketchEdge[]; readonly constraints?: readonly SketchConstraint[]; readonly style: VisualStyle; readonly operation?: OperationMetadata }

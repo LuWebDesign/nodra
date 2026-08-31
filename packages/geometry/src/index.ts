@@ -171,7 +171,7 @@ export function solveSketchConstraints(sketch: SketchElement): SketchConstraintS
   };
   const invalid = (constraint: SketchConstraint): boolean => {
     if (constraint.references.some((reference) => reference.elementId !== sketch.id || !nodes.has(reference.nodeId))) return true;
-    if ((constraint.kind === "fixed" && constraint.references.length !== 1) || (constraint.kind !== "fixed" && constraint.references.length !== 2)) return true;
+    if ((constraint.kind === "fixed" && constraint.references.length !== 1) || ((constraint.kind === "parallel" || constraint.kind === "perpendicular" || constraint.kind === "equal") && constraint.references.length !== 4) || (constraint.kind !== "fixed" && constraint.kind !== "parallel" && constraint.kind !== "perpendicular" && constraint.kind !== "equal" && constraint.references.length !== 2)) return true;
     if (constraint.references.length === 2 && referenceKey(constraint.references[0]!) === referenceKey(constraint.references[1]!)) return true;
     return (constraint.kind === "distance-horizontal" || constraint.kind === "distance-vertical" || constraint.kind === "distance" || constraint.kind === "angle") && (!Number.isFinite(constraint.value) || constraint.value === undefined || constraint.value <= 0);
   };
@@ -182,6 +182,12 @@ export function solveSketchConstraints(sketch: SketchElement): SketchConstraintS
     if (constraint.kind === "coincident") { second!.x = first.x; second!.y = first.y; }
     else if (constraint.kind === "horizontal") second!.y = first.y;
     else if (constraint.kind === "vertical") second!.x = first.x;
+    else if (constraint.kind === "parallel" || constraint.kind === "perpendicular" || constraint.kind === "equal") {
+      const third = points[2]!; const fourth = points[3]!; const ax = second!.x - first.x; const ay = second!.y - first.y; const length = Math.hypot(fourth.x - third.x, fourth.y - third.y);
+      if (Math.hypot(ax, ay) <= 1e-6 || length <= 1e-6) { conflicts.push(constraint.id); continue; }
+      const angle = Math.atan2(ay, ax) + (constraint.kind === "perpendicular" ? Math.PI / 2 : 0);
+      fourth.x = third.x + length * Math.cos(angle); fourth.y = third.y + length * Math.sin(angle);
+    }
     else if (constraint.kind === "distance-horizontal" || constraint.kind === "distance-vertical" || constraint.kind === "distance" || constraint.kind === "angle") {
       const dx = second!.x - first.x; const dy = second!.y - first.y;
       if ((constraint.kind === "distance-horizontal" && Math.abs(dx) <= 1e-6) || (constraint.kind === "distance-vertical" && Math.abs(dy) <= 1e-6) || (constraint.kind !== "distance-horizontal" && constraint.kind !== "distance-vertical" && Math.hypot(dx, dy) <= 1e-6)) { conflicts.push(constraint.id); continue; }
@@ -198,6 +204,11 @@ export function solveSketchConstraints(sketch: SketchElement): SketchConstraintS
     if (constraint.kind === "coincident") return first.x !== second!.x || first.y !== second!.y;
     if (constraint.kind === "horizontal") return Math.abs(first.y - second!.y) > 1e-6;
     if (constraint.kind === "vertical") return Math.abs(first.x - second!.x) > 1e-6;
+    if (constraint.kind === "parallel" || constraint.kind === "perpendicular" || constraint.kind === "equal") {
+      const third = points[2]!; const fourth = points[3]!; const ax = second!.x - first.x; const ay = second!.y - first.y; const bx = fourth.x - third.x; const by = fourth.y - third.y;
+      const cross = ax * by - ay * bx; const dot = ax * bx + ay * by;
+      return constraint.kind === "parallel" ? Math.abs(cross) > 1e-6 : constraint.kind === "perpendicular" ? Math.abs(dot) > 1e-6 : Math.abs(Math.hypot(ax, ay) - Math.hypot(bx, by)) > 1e-6;
+    }
     if (constraint.kind === "distance-horizontal") return Math.abs(Math.abs(second!.x - first.x) - constraint.value!) > 1e-6;
     if (constraint.kind === "distance-vertical") return Math.abs(Math.abs(second!.y - first.y) - constraint.value!) > 1e-6;
     if (constraint.kind === "distance") return Math.abs(Math.hypot(second!.x - first.x, second!.y - first.y) - constraint.value!) > 1e-6;

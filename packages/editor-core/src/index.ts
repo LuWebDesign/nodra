@@ -88,7 +88,14 @@ export const appendSketchEdge = (sketchId: ElementId, fromNodeId: string, point:
     const dx = Math.abs(end.x - start.x); const dy = Math.abs(end.y - start.y);
     const relationKind = dy <= dx * 0.1 ? "horizontal" : dx <= dy * 0.1 ? "vertical" : undefined;
     const relation: SketchConstraint | undefined = relationKind ? { id: `auto:${edgeId}:${relationKind}`, kind: relationKind, references: [{ elementId: sketch.id, nodeId: fromNodeId }, { elementId: sketch.id, nodeId: endNodeId }] } : undefined;
-    const next: SketchElement = { ...sketch, nodes: existingTarget ? sketch.nodes : [...sketch.nodes, { id: endNodeId, point }], edges: [...sketch.edges, { id: edgeId, startNodeId: fromNodeId, endNodeId }], ...(relation ? { constraints: [...(sketch.constraints ?? []), relation] } : {}) };
+    const previous = sketch.edges.at(-1);
+    const previousStart = previous ? sketch.nodes.find((node) => node.id === previous.startNodeId)?.point : undefined;
+    const previousEnd = previous ? sketch.nodes.find((node) => node.id === previous.endNodeId)?.point : undefined;
+    const previousDx = previousEnd && previousStart ? previousEnd.x - previousStart.x : 0; const previousDy = previousEnd && previousStart ? previousEnd.y - previousStart.y : 0;
+    const currentDx = end.x - start.x; const currentDy = end.y - start.y;
+    const perpendicular = previous && previousEnd && previousStart && Math.hypot(previousDx, previousDy) > 1e-9 && Math.hypot(currentDx, currentDy) > 1e-9 && Math.abs(previousDx * currentDx + previousDy * currentDy) <= Math.hypot(previousDx, previousDy) * Math.hypot(currentDx, currentDy) * 0.1 ? { id: `auto:${edgeId}:perpendicular`, kind: "perpendicular" as const, references: [{ elementId: sketch.id, nodeId: previous.startNodeId }, { elementId: sketch.id, nodeId: previous.endNodeId }, { elementId: sketch.id, nodeId: fromNodeId }, { elementId: sketch.id, nodeId: endNodeId }] as const } : undefined;
+    const autoRelations = [relation, perpendicular].filter((candidate): candidate is SketchConstraint => candidate !== undefined);
+    const next: SketchElement = { ...sketch, nodes: existingTarget ? sketch.nodes : [...sketch.nodes, { id: endNodeId, point }], edges: [...sketch.edges, { id: edgeId, startNodeId: fromNodeId, endNodeId }], ...(autoRelations.length ? { constraints: [...(sketch.constraints ?? []), ...autoRelations] } : {}) };
     return replaceElements(document, document.elements.map((element) => element.id === sketchId ? next : element));
   },
 });
@@ -1017,9 +1024,10 @@ export const updateDimensionValue = (dimensionId: ElementId, value: number): Edi
 
 const validateSketchConstraint = (sketch: SketchElement, constraint: SketchConstraint): string | undefined => {
   if (!constraint.references.every((reference) => reference.elementId === sketch.id && sketch.nodes.some((node) => node.id === reference.nodeId))) return "Sketch constraint references are invalid";
-  if ((constraint.kind === "horizontal" || constraint.kind === "vertical" || constraint.kind === "coincident" || constraint.kind === "distance-horizontal" || constraint.kind === "distance-vertical") && constraint.references.length !== 2) return "This sketch constraint requires two references";
+  if ((constraint.kind === "parallel" || constraint.kind === "perpendicular" || constraint.kind === "equal") && constraint.references.length !== 4) return "This sketch relation requires two line references";
+  if ((constraint.kind === "horizontal" || constraint.kind === "vertical" || constraint.kind === "coincident" || constraint.kind === "distance-horizontal" || constraint.kind === "distance-vertical" || constraint.kind === "distance" || constraint.kind === "angle") && constraint.references.length !== 2) return "This sketch constraint requires two references";
   if (constraint.kind === "fixed" && constraint.references.length !== 1) return "A fixed constraint requires one reference";
-  if ((constraint.kind === "distance-horizontal" || constraint.kind === "distance-vertical" ) && (!Number.isFinite(constraint.value) || constraint.value === undefined || constraint.value <= 0)) return "Distance constraints require a positive value";
+  if ((constraint.kind === "distance-horizontal" || constraint.kind === "distance-vertical" || constraint.kind === "distance" || constraint.kind === "angle") && (!Number.isFinite(constraint.value) || constraint.value === undefined || constraint.value <= 0)) return "Distance constraints require a positive value";
   return undefined;
 };
 

@@ -69,7 +69,7 @@ describe("editor core", () => {
     const branched = branch.document.elements[0] as SketchElement;
     const closed = dispatch(branch, appendSketchEdge(sketch.id, branched.nodes[2]!.id, branched.nodes[0]!.point, branched.nodes[0]!.id));
     expect(closed.document.elements[0]).toMatchObject({ type: "sketch", nodes: [{ id: sketch.nodes[0]!.id }, { id: sketch.nodes[1]!.id }, { point: { x: 10, y: 10 } }], edges: [{ startNodeId: sketch.nodes[0]!.id, endNodeId: sketch.nodes[1]!.id }, { startNodeId: sketch.nodes[1]!.id }, { startNodeId: branched.nodes[2]!.id, endNodeId: sketch.nodes[0]!.id }] });
-    expect((closed.document.elements[0] as SketchElement).constraints?.map((constraint) => constraint.kind)).toEqual(["horizontal", "vertical"]);
+    expect((closed.document.elements[0] as SketchElement).constraints?.map((constraint) => constraint.kind)).toEqual(["horizontal", "vertical", "perpendicular"]);
     const cut = dispatch(closed, cutSketchEdge(sketch.id, 1));
     expect(cut.document.elements[0]).toMatchObject({ type: "sketch", nodes: [{ id: sketch.nodes[0]!.id }, { id: sketch.nodes[1]!.id }, { point: { x: 10, y: 10 } }], edges: [{ startNodeId: sketch.nodes[0]!.id, endNodeId: sketch.nodes[1]!.id }, { startNodeId: branched.nodes[2]!.id, endNodeId: sketch.nodes[0]!.id }] });
   });
