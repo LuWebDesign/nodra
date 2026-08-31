@@ -377,6 +377,14 @@ it("converts a zero-radius rectangle to an open path when cutting one edge", () 
      expect(state.undo).toHaveLength(1);
    });
 
+   it("allows reference dimensions between nodes from different objects", () => {
+     const sketch = createSketchLine(elementId("reference-sketch"), layerId("default"), rectangle.style, { x: 0, y: 0 }, { x: 10, y: 10 });
+     const linked: DimensionElement = { type: "dimension", id: elementId("cross-object-dimension"), layerId: sketch.layerId, kind: "aligned", references: [{ kind: "node", elementId: sketch.id, nodeIndex: 0, nodeId: sketch.nodes[0]!.id }, { kind: "node", elementId: rectangle.id, nodeIndex: 0, nodeId: "nw" }], offset: { x: 0, y: -8 }, precision: 2, units: "mm", rotation: 0, style: rectangle.style };
+     const state = dispatch(createEditor({ ...document, elements: [sketch, rectangle, linked] }), updateDimensionValue(linked.id, 20));
+     expect(state.document.elements).toEqual([sketch, rectangle, linked]);
+     expect(state.error).toBeUndefined();
+   });
+
    it("drives the real length of an angled line while preserving its direction", () => {
      const line: LineElement = { type: "line", id: elementId("angled-line"), layerId: layerId("default"), start: { x: 10, y: 10 }, end: { x: 20, y: 20 }, rotation: 0, style: rectangle.style };
      const linked: DimensionElement = { type: "dimension", id: elementId("angled-line-dimension"), layerId: line.layerId, kind: "aligned", references: [{ kind: "node", elementId: line.id, nodeIndex: 0, nodeId: "start" }, { kind: "node", elementId: line.id, nodeIndex: 1, nodeId: "end" }], offset: { x: 0, y: -8 }, precision: 2, units: "mm", rotation: 0, style: rectangle.style };

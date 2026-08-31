@@ -885,7 +885,12 @@ export const updateDimensionValue = (dimensionId: ElementId, value: number): Edi
     const dimension = document.elements.find((element): element is DimensionElement => element.id === dimensionId && element.type === "dimension");
     if (!dimension) return { success: false, error: "Dimension not found" };
     const targetId = dimension.references[0].elementId;
-    if (dimension.references[1].elementId !== targetId) return { success: false, error: "Driving dimensions require one referenced element" };
+    // A dimension between two different objects is a driven/reference
+    // measurement. It is valid, but cannot resize either object.
+    if (dimension.references[1].elementId !== targetId) {
+      if (dimension.driving === true) return { success: false, error: "Driving dimensions require one referenced element" };
+      return { document };
+    }
     const target = document.elements.find((element) => element.id === targetId);
     if ((dimension.kind === "radius" || dimension.kind === "diameter") && dimension.driving !== true) return { success: false, error: "Only driving circular dimensions can change a circle" };
         if (dimension.kind === "radius" || dimension.kind === "diameter") {
