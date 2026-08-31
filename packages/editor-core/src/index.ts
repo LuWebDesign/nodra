@@ -66,7 +66,10 @@ const sketchNodeId = (): string => `sketch-node-${crypto.randomUUID()}`;
 const sketchEdgeId = (): string => `sketch-edge-${crypto.randomUUID()}`;
 export const createSketchLine = (sketchId: ElementId, layer: LayerId, style: VisualStyle, start: PointMm, end: PointMm): SketchElement => {
   const startNodeId = sketchNodeId(); const endNodeId = sketchNodeId();
-  return { type: "sketch", id: sketchId, layerId: layer, nodes: [{ id: startNodeId, point: start }, { id: endNodeId, point: end }], edges: [{ id: sketchEdgeId(), startNodeId, endNodeId }], style };
+  const edgeId = sketchEdgeId(); const dx = Math.abs(end.x - start.x); const dy = Math.abs(end.y - start.y);
+  const relationKind = dy <= dx * 0.1 ? "horizontal" : dx <= dy * 0.1 ? "vertical" : undefined;
+  const relation: SketchConstraint | undefined = relationKind ? { id: `auto:${edgeId}:${relationKind}`, kind: relationKind, references: [{ elementId: sketchId, nodeId: startNodeId }, { elementId: sketchId, nodeId: endNodeId }] } : undefined;
+  return { type: "sketch", id: sketchId, layerId: layer, nodes: [{ id: startNodeId, point: start }, { id: endNodeId, point: end }], edges: [{ id: edgeId, startNodeId, endNodeId }], ...(relation ? { constraints: [relation] } : {}), style };
 };
 export const appendSketchEdge = (sketchId: ElementId, fromNodeId: string, point: PointMm, toNodeId?: string): EditorCommand => ({
   name: `sketch-create-edge:${sketchId}`,
@@ -79,7 +82,13 @@ export const appendSketchEdge = (sketchId: ElementId, fromNodeId: string, point:
     if (endNodeId === fromNodeId) return { success: false, error: "Sketch edge endpoints must differ" };
     const duplicate = sketch.edges.some((edge) => (edge.startNodeId === fromNodeId && edge.endNodeId === endNodeId) || (edge.startNodeId === endNodeId && edge.endNodeId === fromNodeId));
     if (duplicate) return { success: false, error: "Sketch edge already exists" };
-    const next: SketchElement = { ...sketch, nodes: existingTarget ? sketch.nodes : [...sketch.nodes, { id: endNodeId, point }], edges: [...sketch.edges, { id: sketchEdgeId(), startNodeId: fromNodeId, endNodeId }] };
+    const edgeId = sketchEdgeId();
+    const start = sketch.nodes.find((node) => node.id === fromNodeId)!.point;
+    const end = existingTarget?.point ?? point;
+    const dx = Math.abs(end.x - start.x); const dy = Math.abs(end.y - start.y);
+    const relationKind = dy <= dx * 0.1 ? "horizontal" : dx <= dy * 0.1 ? "vertical" : undefined;
+    const relation: SketchConstraint | undefined = relationKind ? { id: `auto:${edgeId}:${relationKind}`, kind: relationKind, references: [{ elementId: sketch.id, nodeId: fromNodeId }, { elementId: sketch.id, nodeId: endNodeId }] } : undefined;
+    const next: SketchElement = { ...sketch, nodes: existingTarget ? sketch.nodes : [...sketch.nodes, { id: endNodeId, point }], edges: [...sketch.edges, { id: edgeId, startNodeId: fromNodeId, endNodeId }], ...(relation ? { constraints: [...(sketch.constraints ?? []), relation] } : {}) };
     return replaceElements(document, document.elements.map((element) => element.id === sketchId ? next : element));
   },
 });
@@ -93,9 +102,10 @@ export const cutSketchEdge = (sketchId: ElementId, segmentIndex: number): Editor
     if (edges.length === 0) return replaceElements(document, document.elements.filter((element) => element.id !== sketchId && !(element.type === "dimension" && element.references.some((reference) => reference.elementId === sketchId))));
     const usedNodeIds = new Set(edges.flatMap((edge) => [edge.startNodeId, edge.endNodeId]));
     const nodes = sketch.nodes.filter((node) => usedNodeIds.has(node.id));
+    const constraints = sketch.constraints?.filter((constraint) => constraint.references.every((reference) => usedNodeIds.has(reference.nodeId)));
     const removedNodeIds = new Set(sketch.nodes.filter((node) => !usedNodeIds.has(node.id)).map((node) => node.id));
-    const elements = document.elements.filter((element) => !(element.type === "dimension" && element.references.some((reference) => reference.elementId === sketchId && "nodeId" in reference && reference.nodeId !== undefined && removedNodeIds.has(reference.nodeId))));
-    return replaceElements(document, elements.map((element) => element.id === sketchId ? { ...sketch, nodes, edges } : element));
+    const elements = document.elements.filter((element) => !(element.type === "dimension" && element.references.some((reference) => reference.elementId === sketchId && (("nodeId" in reference && reference.nodeId !== undefined && removedNodeIds.has(reference.nodeId)) || ("nodeIndex" in reference && reference.nodeIndex >= nodes.length)))));
+    return replaceElements(document, elements.map((element) => element.id === sketchId ? { ...sketch, nodes, edges, ...(constraints ? { constraints } : {}) } : element));
   },
 });
 
