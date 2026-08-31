@@ -59,6 +59,8 @@ describe("canonical millimetre geometry", () => {
     expect(dimensionKindForPlacement(first, second, { x: midpoint.x + 40, y: midpoint.y + 4 })).toBe("horizontal");
     expect(dimensionKindForPlacement(first, second, { x: midpoint.x + 4, y: midpoint.y + 40 })).toBe("vertical");
     expect(dimensionKindForPlacement({ x: 0, y: 0 }, { x: 20, y: 0 }, { x: 10, y: 50 })).toBe("horizontal");
+    expect(dimensionKindForPlacement(first, second, { x: midpoint.x + 15, y: midpoint.y + 4 })).toBe("horizontal");
+    expect(dimensionKindForPlacement(first, second, { x: midpoint.x + 8, y: midpoint.y + 40 })).toBe("vertical");
   });
   it("uses aligned Euclidean geometry and only the perpendicular placement offset for diagonals", () => {
     const start = { x: 10, y: 10 }; const end = { x: 40, y: 40 };

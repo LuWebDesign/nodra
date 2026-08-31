@@ -173,7 +173,7 @@ export function solveSketchConstraints(sketch: SketchElement): SketchConstraintS
     if (constraint.references.some((reference) => reference.elementId !== sketch.id || !nodes.has(reference.nodeId))) return true;
     if ((constraint.kind === "fixed" && constraint.references.length !== 1) || (constraint.kind !== "fixed" && constraint.references.length !== 2)) return true;
     if (constraint.references.length === 2 && referenceKey(constraint.references[0]!) === referenceKey(constraint.references[1]!)) return true;
-    return (constraint.kind === "distance-horizontal" || constraint.kind === "distance-vertical") && (!Number.isFinite(constraint.value) || constraint.value === undefined || constraint.value <= 0);
+    return (constraint.kind === "distance-horizontal" || constraint.kind === "distance-vertical" || constraint.kind === "distance" || constraint.kind === "angle") && (!Number.isFinite(constraint.value) || constraint.value === undefined || constraint.value <= 0);
   };
   for (const constraint of [...constraints].sort((a, b) => a.id.localeCompare(b.id))) {
     if (invalid(constraint)) { conflicts.push(constraint.id); continue; }
@@ -182,11 +182,13 @@ export function solveSketchConstraints(sketch: SketchElement): SketchConstraintS
     if (constraint.kind === "coincident") { second!.x = first.x; second!.y = first.y; }
     else if (constraint.kind === "horizontal") second!.y = first.y;
     else if (constraint.kind === "vertical") second!.x = first.x;
-    else if (constraint.kind === "distance-horizontal" || constraint.kind === "distance-vertical") {
-      const delta = constraint.kind === "distance-horizontal" ? second!.x - first.x : second!.y - first.y;
-      if (Math.abs(delta) <= 1e-6) { conflicts.push(constraint.id); continue; }
-      if (constraint.kind === "distance-horizontal") second!.x = first.x + (delta < 0 ? -constraint.value! : constraint.value!);
-      else second!.y = first.y + (delta < 0 ? -constraint.value! : constraint.value!);
+    else if (constraint.kind === "distance-horizontal" || constraint.kind === "distance-vertical" || constraint.kind === "distance" || constraint.kind === "angle") {
+      const dx = second!.x - first.x; const dy = second!.y - first.y;
+      if ((constraint.kind === "distance-horizontal" && Math.abs(dx) <= 1e-6) || (constraint.kind === "distance-vertical" && Math.abs(dy) <= 1e-6) || (constraint.kind !== "distance-horizontal" && constraint.kind !== "distance-vertical" && Math.hypot(dx, dy) <= 1e-6)) { conflicts.push(constraint.id); continue; }
+      if (constraint.kind === "distance-horizontal") second!.x = first.x + (dx < 0 ? -constraint.value! : constraint.value!);
+      else if (constraint.kind === "distance-vertical") second!.y = first.y + (dy < 0 ? -constraint.value! : constraint.value!);
+      else if (constraint.kind === "distance") { const length = Math.hypot(dx, dy); second!.x = first.x + dx * constraint.value! / length; second!.y = first.y + dy * constraint.value! / length; }
+      else { const length = Math.hypot(dx, dy); const angle = constraint.value! * Math.PI / 180; second!.x = first.x + length * Math.cos(angle); second!.y = first.y + length * Math.sin(angle); }
     }
   }
   const failed = [...constraints].filter((constraint) => {
@@ -197,7 +199,10 @@ export function solveSketchConstraints(sketch: SketchElement): SketchConstraintS
     if (constraint.kind === "horizontal") return Math.abs(first.y - second!.y) > 1e-6;
     if (constraint.kind === "vertical") return Math.abs(first.x - second!.x) > 1e-6;
     if (constraint.kind === "distance-horizontal") return Math.abs(Math.abs(second!.x - first.x) - constraint.value!) > 1e-6;
-    return Math.abs(Math.abs(second!.y - first.y) - constraint.value!) > 1e-6;
+    if (constraint.kind === "distance-vertical") return Math.abs(Math.abs(second!.y - first.y) - constraint.value!) > 1e-6;
+    if (constraint.kind === "distance") return Math.abs(Math.hypot(second!.x - first.x, second!.y - first.y) - constraint.value!) > 1e-6;
+    if (constraint.kind === "angle") return Math.abs(Math.atan2(second!.y - first.y, second!.x - first.x) - constraint.value! * Math.PI / 180) > 1e-6;
+    return false;
   }).map((constraint) => constraint.id);
   conflicts.push(...failed.filter((id) => !conflicts.includes(id)));
   const duplicate = constraints.filter((constraint, index) => constraints.some((other, otherIndex) => otherIndex < index && samePair(constraint, other))).map((constraint) => constraint.id);
@@ -280,9 +285,13 @@ export const dimensionKindForPlacement = (first: PointMm, second: PointMm, place
   if (segmentDy === 0) return "horizontal";
   const midpoint = pointMidpoint(first, second);
   const intentDx = Math.abs(placement.x - midpoint.x); const intentDy = Math.abs(placement.y - midpoint.y);
-  const clearIntentRatio = 1.75;
-  if (intentDx >= intentDy * clearIntentRatio) return "horizontal";
-  if (intentDy >= intentDx * clearIntentRatio) return "vertical";
+  // Keep the aligned preview active near the segment. An axis dimension only
+  // wins after the cursor is clearly displaced and predominantly on one axis;
+  // this makes changing the measurement reference intentional and visible.
+  const clearIntentRatio = 2.5;
+  const minimumAxisDisplacement = 12;
+  if (intentDx >= minimumAxisDisplacement && intentDx >= intentDy * clearIntentRatio) return "horizontal";
+  if (intentDy >= minimumAxisDisplacement && intentDy >= intentDx * clearIntentRatio) return "vertical";
   return "aligned";
 };
 export const dimensionOffsetForPlacement = (kind: DimensionPlacementKind, midpoint: PointMm, placement: PointMm): PointMm => kind === "horizontal" ? { x: 0, y: placement.y - midpoint.y } : kind === "vertical" ? { x: placement.x - midpoint.x, y: 0 } : { x: placement.x - midpoint.x, y: placement.y - midpoint.y };

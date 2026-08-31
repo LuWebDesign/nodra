@@ -386,6 +386,14 @@ it("converts a zero-radius rectangle to an open path when cutting one edge", () 
      expect(state.undo).toHaveLength(1);
    });
 
+it("updates an angled sketch line dimension without requiring a separate constraint", () => {
+     const sketch = createSketchLine(elementId("sketch-line-dimension"), layerId("default"), rectangle.style, { x: 0, y: 0 }, { x: 10, y: 10 });
+     const linked: DimensionElement = { type: "dimension", id: elementId("sketch-line-dimension-value"), layerId: sketch.layerId, kind: "aligned", references: [{ kind: "node", elementId: sketch.id, nodeIndex: 0, nodeId: sketch.nodes[0]!.id }, { kind: "node", elementId: sketch.id, nodeIndex: 1, nodeId: sketch.nodes[1]!.id }], offset: { x: 0, y: -8 }, precision: 2, units: "mm", rotation: 0, style: rectangle.style };
+     const state = dispatch(createEditor({ ...document, elements: [sketch, linked] }), updateDimensionValue(linked.id, 20));
+     const updated = state.document.elements[0] as SketchElement;
+     expect(Math.hypot(updated.nodes[1]!.point.x - updated.nodes[0]!.point.x, updated.nodes[1]!.point.y - updated.nodes[0]!.point.y)).toBeCloseTo(20);
+   });
+
 it("drives an individual line angle while preserving its length", () => {
      const line: LineElement = { type: "line", id: elementId("line-angle"), layerId: layerId("default"), start: { x: 0, y: 0 }, end: { x: 10, y: 10 }, rotation: 0, style: rectangle.style };
      const linked: DimensionElement = { type: "dimension", id: elementId("line-angle-dimension"), layerId: line.layerId, kind: "angular", references: [{ kind: "line", elementId: line.id }, { kind: "line", elementId: line.id }], offset: { x: 8, y: -8 }, precision: 2, units: "mm", rotation: 0, style: rectangle.style };

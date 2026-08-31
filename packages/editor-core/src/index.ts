@@ -955,9 +955,19 @@ export const updateDimensionValue = (dimensionId: ElementId, value: number): Edi
       return replaceElements(document, document.elements.map((element) => element.id === target.id ? next : element));
     }
     if (target?.type === "sketch") {
-      if (!dimension.driving || !dimension.constraintId) return { success: false, error: "Sketch dimensions require an explicit driving constraint" };
       const first = dimension.references[0]; const second = dimension.references[1];
       if (!("kind" in first) || !("kind" in second) || first.kind !== "node" || second.kind !== "node" || !first.nodeId || !second.nodeId) return { success: false, error: "Sketch driving dimensions require node references" };
+      const firstNode = target.nodes.find((node) => node.id === first.nodeId);
+      const secondNode = target.nodes.find((node) => node.id === second.nodeId);
+      if (!firstNode || !secondNode || firstNode.id === secondNode.id) return { success: false, error: "Sketch driving dimension references are invalid" };
+      if (!dimension.driving || !dimension.constraintId) {
+        const dx = secondNode.point.x - firstNode.point.x; const dy = secondNode.point.y - firstNode.point.y; const currentLength = Math.hypot(dx, dy);
+        if (currentLength <= 1e-9) return { success: false, error: "Cannot dimension a zero-length sketch segment" };
+        const direction = dimension.kind === "horizontal" ? Math.sign(dx || 1) : dimension.kind === "vertical" ? Math.sign(dy || 1) : 1;
+        const point = dimension.kind === "aligned" ? { x: firstNode.point.x + dx * value / currentLength, y: firstNode.point.y + dy * value / currentLength } : dimension.kind === "horizontal" ? { x: firstNode.point.x + direction * value, y: secondNode.point.y } : { x: secondNode.point.x, y: firstNode.point.y + direction * value };
+        const next = { ...target, nodes: target.nodes.map((node) => node.id === secondNode.id ? { ...node, point } : node) };
+        return replaceElements(document, document.elements.map((element) => element.id === target.id ? next : element));
+      }
       const expectedKind = dimension.kind === "horizontal" ? "distance-horizontal" : "distance-vertical";
       const constraint = target.constraints?.find((candidate) => candidate.id === dimension.constraintId);
       const constraintReferenceIds = constraint?.references.map((reference) => `${reference.elementId}:${reference.nodeId}`).sort();
