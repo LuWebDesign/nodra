@@ -934,17 +934,23 @@ export const updateDimensionValue = (dimensionId: ElementId, value: number): Edi
       const updated = secondNode.nodeId === "start" ? { ...target, start: end } : { ...target, end };
       return replaceElements(document, document.elements.map((element) => element.id === target.id ? updated : element));
     }
-    if (dimension.kind !== "horizontal" && dimension.kind !== "vertical") return { success: false, error: "Only horizontal and vertical dimensions can drive rectangles" };
+    if (dimension.kind !== "aligned" && dimension.kind !== "horizontal" && dimension.kind !== "vertical") return { success: false, error: "This dimension kind cannot drive the referenced geometry" };
     if (target?.type === "path") {
       const first = dimension.references[0]; const second = dimension.references[1];
       if (!("kind" in first) || !("kind" in second) || first.kind !== "node" || second.kind !== "node") return { success: false, error: "Path driving dimensions require node references" };
       const firstNode = target.nodes.find((node, index) => node.id === first.nodeId || (!first.nodeId && first.nodeIndex === index));
       const secondNode = target.nodes.find((node, index) => node.id === second.nodeId || (!second.nodeId && second.nodeIndex === index));
       if (!firstNode || !secondNode || firstNode.id === secondNode.id) return { success: false, error: "Path driving dimension references are invalid" };
+      const dx = secondNode.anchor.x - firstNode.anchor.x; const dy = secondNode.anchor.y - firstNode.anchor.y;
+      const currentLength = Math.hypot(dx, dy);
+      if (currentLength <= 1e-9) return { success: false, error: "Cannot dimension a zero-length path segment" };
       const horizontal = dimension.kind === "horizontal";
-      const delta = horizontal ? secondNode.anchor.x - firstNode.anchor.x : secondNode.anchor.y - firstNode.anchor.y;
-      const direction = delta < 0 ? -1 : 1;
-      const anchor = horizontal ? { x: firstNode.anchor.x + direction * value, y: secondNode.anchor.y } : { x: secondNode.anchor.x, y: firstNode.anchor.y + direction * value };
+      const vertical = dimension.kind === "vertical";
+      const direction = (horizontal ? dx : vertical ? dy : currentLength) < 0 ? -1 : 1;
+      const anchor = dimension.kind === "aligned"
+        ? { x: firstNode.anchor.x + dx * value / currentLength, y: firstNode.anchor.y + dy * value / currentLength }
+        : horizontal ? { x: firstNode.anchor.x + direction * value, y: secondNode.anchor.y }
+          : { x: secondNode.anchor.x, y: firstNode.anchor.y + direction * value };
       const next = { ...target, nodes: target.nodes.map((node) => node.id === secondNode.id ? { ...node, anchor } : node) };
       return replaceElements(document, document.elements.map((element) => element.id === target.id ? next : element));
     }
