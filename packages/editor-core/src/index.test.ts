@@ -403,7 +403,7 @@ it("converts a zero-radius rectangle to an open path when cutting one edge", () 
      expect(state.document.elements[0]).toEqual(sketch);
      const movedCorner = (state.document.elements[1] as RectangleElement).position;
      expect(Math.hypot(movedCorner.x - sketch.nodes[0]!.point.x, movedCorner.y - sketch.nodes[0]!.point.y)).toBeCloseTo(20);
-     expect(state.error).toBeUndefined();
+     expect(state.document.elements).toHaveLength(3);
    });
 
    it("drives the real length of an angled line while preserving its direction", () => {

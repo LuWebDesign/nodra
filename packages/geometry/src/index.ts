@@ -325,9 +325,11 @@ const lineAt = (reference: DimensionElement["references"][number], elements: rea
 };
 export function angularDimensionGeometry(element: DimensionElement, elements: readonly Element[]): AngularDimensionGeometry | undefined {
   if (element.kind !== "angular" || !element.references.every((reference) => "kind" in reference && reference.kind === "line")) return undefined;
-  const first = lineAt(element.references[0], elements); const second = lineAt(element.references[1], elements); if (!first || !second) return undefined;
+  const firstReference = element.references[0]; const secondReference = element.references[1];
+  if (!("kind" in firstReference) || firstReference.kind !== "line" || !("kind" in secondReference) || secondReference.kind !== "line") return undefined;
+  const first = lineAt(firstReference, elements); const second = lineAt(secondReference, elements); if (!first || !second) return undefined;
   const [firstStart, firstEnd] = rotatedLineEndpoints(first); const [secondStart, secondEnd] = rotatedLineEndpoints(second);
-  const sameLine = element.references[0].elementId === element.references[1].elementId && (element.references[0].edgeIndex ?? 0) === (element.references[1].edgeIndex ?? 0);
+  const sameLine = firstReference.elementId === secondReference.elementId && (firstReference.edgeIndex ?? 0) === (secondReference.edgeIndex ?? 0);
   if (sameLine) {
     const dx = firstEnd.x - firstStart.x; const dy = firstEnd.y - firstStart.y; const length = Math.hypot(dx, dy);
     if (length === 0) return undefined;

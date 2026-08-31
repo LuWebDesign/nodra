@@ -930,7 +930,7 @@ export const updateDimensionValue = (dimensionId: ElementId, value: number): Edi
     if (dimension.references[1].elementId !== targetId) {
       if (dimension.driving === true) return { success: false, error: "Driving dimensions require one referenced element" };
       const first = dimension.references[0]; const second = dimension.references[1];
-      if (!("kind" in first) || !("kind" in second) || first.kind !== "node" || second.kind !== "node") return { document };
+      if (!("kind" in first) || !("kind" in second) || first.kind !== "node" || second.kind !== "node") return { success: true, document };
       if (!target) return { success: false, error: "First dimension reference element not found" };
       const firstNodes = realGeometryNodes(target);
       const secondElement = document.elements.find((element) => element.id === second.elementId);
@@ -942,7 +942,7 @@ export const updateDimensionValue = (dimensionId: ElementId, value: number): Edi
       const dx = secondNode.point.x - firstNode.point.x; const dy = secondNode.point.y - firstNode.point.y; const length = Math.hypot(dx, dy);
       if (length <= 1e-9) return { success: false, error: "Cannot dimension coincident cross-object nodes" };
       const point = dimension.kind === "aligned" ? { x: firstNode.point.x + dx * value / length, y: firstNode.point.y + dy * value / length } : dimension.kind === "horizontal" ? { x: firstNode.point.x + Math.sign(dx || 1) * value, y: secondNode.point.y } : dimension.kind === "vertical" ? { x: secondNode.point.x, y: firstNode.point.y + Math.sign(dy || 1) * value } : undefined;
-      return point ? updateElementNode(second.elementId, second.nodeIndex, point).apply(document) : { document }; 
+      return point ? updateElementNode(second.elementId, second.nodeIndex, point).apply(document) : { success: true, document }; 
     }
     if ((dimension.kind === "radius" || dimension.kind === "diameter") && dimension.driving !== true) return { success: false, error: "Only driving circular dimensions can change a circle" };
         if (dimension.kind === "radius" || dimension.kind === "diameter") {
