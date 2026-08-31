@@ -310,8 +310,7 @@ export function directionalGuide(source: PointMm, pointer: PointMm, angleIncreme
   const increment = angleIncrementDegrees * Math.PI / 180;
   const rawAngle = Math.atan2(dy, dx); const angle = Math.round(rawAngle / increment) * increment;
   const angularDistance = Math.abs(Math.atan2(Math.sin(rawAngle - angle), Math.cos(rawAngle - angle))) * 180 / Math.PI;
-  const cardinal = Math.abs(Math.sin(angle)) < 1e-10 || Math.abs(Math.cos(angle)) < 1e-10;
-  if (angularDistance > (cardinal ? Math.max(toleranceDegrees, 10) : toleranceDegrees)) return undefined;
+  if (angularDistance > toleranceDegrees) return undefined;
   const snappedPoint = { x: source.x + Math.cos(angle) * distance, y: source.y + Math.sin(angle) * distance };
   return { source, target: snappedPoint, angle: Math.round(angle * 180 / Math.PI * 1e10) / 1e10, snappedPoint };
 }
