@@ -830,6 +830,85 @@ test("creates a Cota with two nodes and a third placement click", async ({ page 
   await expect(page.locator('[data-dimension="horizontal"]')).toHaveCount(1);
 });
 
+test("creates a radius Cota from the integrated Cota modes", async ({ page }) => {
+  await page.goto("/");
+  const bounds = await page.locator(".page").boundingBox();
+  expect(bounds).not.toBeNull();
+  const start = { x: bounds!.x + 100, y: bounds!.y + 100 };
+  const end = { x: start.x + 100, y: start.y };
+  await page.getByRole("button", { name: "Círculo" }).click();
+  await page.mouse.click(start.x, start.y);
+  await page.mouse.click(end.x, end.y);
+  const ellipse = page.locator(".page-svg svg ellipse[data-element-id]");
+  await expect(ellipse).toHaveCount(1);
+  const ellipseBox = await ellipse.boundingBox();
+  expect(ellipseBox).not.toBeNull();
+  await page.getByRole("button", { name: "Cota" }).click();
+  await page.getByRole("group", { name: "Modo de cota" }).getByRole("button", { name: "Radio" }).click();
+  const center = { x: ellipseBox!.x + ellipseBox!.width / 2, y: ellipseBox!.y + ellipseBox!.height / 2 };
+  const rim = { x: ellipseBox!.x + ellipseBox!.width, y: center.y };
+  await page.mouse.click(center.x, center.y);
+  await page.mouse.click(rim.x, rim.y);
+  await page.mouse.click(ellipseBox!.x + ellipseBox!.width + 35, center.y);
+  await expect(page.locator('[data-dimension="radius"]')).toContainText("R");
+  await expect(page.locator('[data-dimension="radius"]')).toBeVisible();
+      const editor = page.locator('input[type="number"]').last();
+      await expect(editor).toBeVisible();
+      await editor.fill("80");
+      await page.getByRole("button", { name: "Confirmar", exact: true }).last().click();
+      await expect.poll(async () => (await ellipse.boundingBox())?.width ?? 0).toBeGreaterThan(80);
+    });
+    
+    test("edits a driving diameter Cota with diameter semantics", async ({ page }) => {
+  await page.goto("/");
+  const bounds = await page.locator(".page").boundingBox();
+  expect(bounds).not.toBeNull();
+  const start = { x: bounds!.x + 100, y: bounds!.y + 100 };
+  const end = { x: start.x + 100, y: start.y };
+  await page.getByRole("button", { name: "Círculo" }).click();
+  await page.mouse.click(start.x, start.y);
+  await page.mouse.click(end.x, end.y);
+  const ellipse = page.locator(".page-svg svg ellipse[data-element-id]");
+  await expect(ellipse).toHaveCount(1);
+  const ellipseBox = await ellipse.boundingBox();
+  expect(ellipseBox).not.toBeNull();
+  await page.getByRole("button", { name: "Cota" }).click();
+  await page.getByRole("group", { name: "Modo de cota" }).getByRole("button", { name: "Diámetro" }).click();
+  const center = { x: ellipseBox!.x + ellipseBox!.width / 2, y: ellipseBox!.y + ellipseBox!.height / 2 };
+  await page.mouse.click(center.x, center.y);
+  await page.mouse.click(ellipseBox!.x + ellipseBox!.width, center.y);
+  await page.mouse.click(ellipseBox!.x + ellipseBox!.width + 35, center.y);
+  await expect(page.locator('[data-dimension="diameter"]')).toContainText("Ø");
+  await page.getByRole("button", { name: "Confirmar", exact: true }).last().click();
+  const dimensionText = page.locator('[data-dimension="diameter"] text');
+  await page.getByRole("button", { name: "Seleccion" }).click();
+  await dimensionText.click({ force: true });
+  await page.locator('input[type="number"]').last().fill("160");
+  await page.getByRole("button", { name: "Confirmar", exact: true }).last().click();
+  await expect(page.locator('[data-dimension="diameter"]')).toContainText("160");
+  await expect.poll(async () => (await ellipse.boundingBox())?.width ?? 0).toBeGreaterThan(0);
+});
+
+test("creates a circular Cota from a direct contour click", async ({ page }) => {
+  await page.goto("/");
+  const bounds = await page.locator(".page").boundingBox();
+  expect(bounds).not.toBeNull();
+  const center = { x: bounds!.x + 180, y: bounds!.y + 160 };
+  await page.getByRole("button", { name: "Círculo" }).click();
+  await page.mouse.click(center.x, center.y);
+  await page.mouse.click(center.x + 90, center.y);
+  const ellipse = page.locator(".page-svg svg ellipse[data-element-id]");
+  await expect(ellipse).toHaveCount(1);
+  const box = await ellipse.boundingBox();
+  expect(box).not.toBeNull();
+  await page.getByRole("button", { name: "Cota" }).click();
+  await page.getByRole("group", { name: "Modo de cota" }).getByRole("button", { name: "Radio" }).click();
+  await page.mouse.click(box!.x + box!.width / 2, box!.y);
+  await page.mouse.click(box!.x + box!.width + 35, box!.y + box!.height / 2);
+  await expect(page.locator('[data-dimension="radius"]')).toHaveCount(1);
+  await expect(page.locator('[data-dimension="radius"]')).toContainText("R");
+});
+
 test("creates an aligned Cota for a diagonal line", async ({ page }) => {
   await page.goto("/");
   const bounds = await page.locator(".page").boundingBox();

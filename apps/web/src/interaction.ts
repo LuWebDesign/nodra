@@ -21,7 +21,8 @@ export interface AlignmentGuide {
 }
 export interface NodeHit { readonly elementId: ElementId; readonly nodeIndex: number; readonly node: RealGeometryNode }
 export interface DimensionLineHit { readonly elementId: ElementId; readonly line: LineElement; readonly distance: number; readonly edgeIndex?: number }
-export type DimensionTarget = { readonly kind: "node"; readonly hit: NodeHit } | { readonly kind: "line"; readonly hit: DimensionLineHit };
+export interface CircleDimensionHit { readonly elementId: ElementId; readonly center: NodeHit; readonly rim: NodeHit; readonly distance: number }
+export type DimensionTarget = { readonly kind: "node"; readonly hit: NodeHit } | { readonly kind: "circle"; readonly hit: CircleDimensionHit } | { readonly kind: "line"; readonly hit: DimensionLineHit };
 export interface PathNodeHit { readonly elementId: ElementId; readonly node: PathGeometryNode & { readonly ringIndex?: number } }
     export interface CuttableSegmentHit { readonly elementId: ElementId; readonly segmentIndex: number; readonly distance: number; readonly start: PointMm; readonly end: PointMm; readonly points?: readonly PointMm[] }
 export type PathGuideDirection = "incoming" | "outgoing";
@@ -237,11 +238,12 @@ export function pickNode(document: DocumentSnapshot, point: PointMm, zoom: numbe
   const visible = new Set(document.layers.filter((layer) => layer.visible).map((layer) => layer.id));
   const layerOrder = new Map(document.layers.map((layer) => [layer.id, layer.order]));
   const elements = [...document.elements].filter((element) => visible.has(element.layerId)).sort((a, b) => (layerOrder.get(b.layerId) ?? 0) - (layerOrder.get(a.layerId) ?? 0));
-  let best: { hit: NodeHit; distance: number; order: string } | undefined;
+  let best: { hit: NodeHit; distance: number; layerOrder: number; elementIndex: number; nodeIndex: number } | undefined;
   for (const element of elements) for (const [nodeIndex, node] of realGeometryNodes(element).entries()) {
     const distance = Math.hypot(node.point.x - point.x, node.point.y - point.y) * zoom;
-    const order = `${element.id}:${nodeIndex}`;
-    if (distance <= tolerancePx && (!best || distance < best.distance || distance === best.distance && order < best.order)) best = { hit: { elementId: element.id, nodeIndex, node }, distance, order };
+    const currentLayerOrder = layerOrder.get(element.layerId) ?? 0;
+    const elementIndex = document.elements.indexOf(element);
+    if (distance <= tolerancePx && (!best || distance < best.distance || distance === best.distance && (currentLayerOrder > best.layerOrder || currentLayerOrder === best.layerOrder && (elementIndex > best.elementIndex || elementIndex === best.elementIndex && nodeIndex < best.nodeIndex)))) best = { hit: { elementId: element.id, nodeIndex, node }, distance, layerOrder: currentLayerOrder, elementIndex, nodeIndex };
   }
   return best?.hit;
 }
@@ -336,7 +338,7 @@ export function hasNonCollinearPoints(points: readonly PointMm[], epsilon = 1e-9
   return false;
 }
 
-export type NodeFeedbackTool = "select" | "forma" | "pen" | "spline" | "rectangle" | "ellipse" | "line" | "cut" | "dimension";
+export type NodeFeedbackTool = "select" | "forma" | "pen" | "spline" | "rectangle" | "ellipse" | "line" | "cut" | "dimension" | "radius";
 export type HoverNode = NodeHit | FormaNodeHit;
 
 /** Snaps a Forma node drag to another visible real node within screen tolerance. */
@@ -363,8 +365,42 @@ export function pickHoverNode(document: DocumentSnapshot, point: PointMm, zoom: 
 export function pickDimensionTarget(document: DocumentSnapshot, point: PointMm, zoom: number, tolerancePx = 8): DimensionTarget | undefined {
   const node = pickNode(document, point, zoom, tolerancePx);
   const nodeElement = node ? document.elements.find((element) => element.id === node.elementId) : undefined;
+  if (node?.node.kind === "cardinal" && nodeElement?.type === "ellipse" && nodeElement.size.width === nodeElement.size.height) {
+    const nodes = realGeometryNodes(nodeElement);
+    const centerIndex = nodes.findIndex((candidate) => candidate.kind === "center");
+    const center = nodes[centerIndex];
+    if (center) return { kind: "circle", hit: { elementId: nodeElement.id, center: { elementId: nodeElement.id, nodeIndex: centerIndex, node: center }, rim: node, distance: 0 } };
+  }
   if (node && !(nodeElement?.type === "line" && node.node.kind === "center")) return { kind: "node", hit: node };
   const visible = new Set(document.layers.filter((layer) => layer.visible).map((layer) => layer.id));
+  const layerOrder = new Map(document.layers.map((layer) => [layer.id, layer.order]));
+  let bestCircle: CircleDimensionHit | undefined;
+  let bestCircleDistance = Number.POSITIVE_INFINITY;
+  let bestCircleLayerOrder = Number.NEGATIVE_INFINITY;
+  let bestCircleElementIndex = -1;
+  for (const [elementIndex, element] of document.elements.entries()) {
+    if (element.type !== "ellipse" || element.size.width !== element.size.height || !visible.has(element.layerId)) continue;
+    const center = realGeometryNodes(element).find((candidate) => candidate.kind === "center");
+    const cardinalNodes = realGeometryNodes(element).flatMap((candidate, index) => candidate.kind === "cardinal" ? [{ candidate, index }] : []);
+    if (!center || !cardinalNodes.length) continue;
+    const radius = element.size.width / 2;
+    const centerDistance = Math.hypot(point.x - center.point.x, point.y - center.point.y);
+    const distance = Math.abs(centerDistance - radius);
+    if (distance * zoom > tolerancePx) continue;
+    const rim = cardinalNodes.reduce((closest, candidate) => {
+      const candidateDistance = Math.hypot(candidate.candidate.point.x - point.x, candidate.candidate.point.y - point.y);
+      return !closest || candidateDistance < closest.distance || candidateDistance === closest.distance && candidate.index < closest.index ? { ...candidate, distance: candidateDistance } : closest;
+    }, undefined as ({ readonly candidate: RealGeometryNode; readonly index: number; readonly distance: number } | undefined));
+    if (!rim) continue;
+    const currentLayerOrder = layerOrder.get(element.layerId) ?? 0;
+    if (distance < bestCircleDistance || distance === bestCircleDistance && (currentLayerOrder > bestCircleLayerOrder || currentLayerOrder === bestCircleLayerOrder && elementIndex > bestCircleElementIndex)) {
+      bestCircle = { elementId: element.id, center: { elementId: element.id, nodeIndex: realGeometryNodes(element).indexOf(center), node: center }, rim: { elementId: element.id, nodeIndex: rim.index, node: rim.candidate }, distance };
+      bestCircleDistance = distance;
+      bestCircleLayerOrder = currentLayerOrder;
+      bestCircleElementIndex = elementIndex;
+    }
+  }
+  if (bestCircle) return { kind: "circle", hit: bestCircle };
   let best: DimensionLineHit | undefined;
   const candidates = document.elements.flatMap((element): readonly DimensionLineHit[] => {
     if (element.type === "line" && visible.has(element.layerId)) return [{ elementId: element.id, line: element, distance: Number.POSITIVE_INFINITY }];

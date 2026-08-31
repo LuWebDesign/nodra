@@ -3,6 +3,7 @@ import {
   type Element,
   type ElementId,
   type DimensionElement,
+  type CircleConstraint,
       type SketchConstraint,
   type Layer,
   type LayerId,
@@ -25,7 +26,7 @@ import {
   withElements,
 } from "@nodra/domain";
 import { validateDocument } from "@nodra/validation";
-import { boundsOfElements, contourWithPoints, directionVector, elementCenter, elementToContour, glyphGeometryNodes, groupCenter, mirrorHandleOffset, realGeometryNodes, resizeGroup, rotateElements, shapeResultContours, transformPoint, splitCuttableSegments, classifyCutGraph, cuttableSegments, solveSketchConstraints, type Direction } from "@nodra/geometry";
+import { boundsOfElements, contourWithPoints, directionVector, elementCenter, elementToContour, dimensionGeometry, glyphGeometryNodes, groupCenter, mirrorHandleOffset, realGeometryNodes, resizeGroup, rotateElements, shapeResultContours, transformPoint, splitCuttableSegments, classifyCutGraph, cuttableSegments, solveSketchConstraints, solveCircleConstraints, type Direction } from "@nodra/geometry";
 import { insertSplineNode, moveSplineHandle as moveSplineHandleData, moveSplineNode as moveSplineNodeData } from "./spline.js";
 
 export * from "./spline.js";
@@ -882,10 +883,29 @@ export const updateDimensionValue = (dimensionId: ElementId, value: number): Edi
   apply: (document) => {
     if (!Number.isFinite(value) || value <= 0) return { success: false, error: "Dimension value must be positive" };
     const dimension = document.elements.find((element): element is DimensionElement => element.id === dimensionId && element.type === "dimension");
-    if (!dimension || (dimension.kind !== "horizontal" && dimension.kind !== "vertical")) return { success: false, error: "Only horizontal and vertical dimensions can drive rectangles" };
+    if (!dimension) return { success: false, error: "Dimension not found" };
     const targetId = dimension.references[0].elementId;
-    if (dimension.references[1].elementId !== targetId) return { success: false, error: "Driving dimensions require one referenced rectangle" };
+    if (dimension.references[1].elementId !== targetId) return { success: false, error: "Driving dimensions require one referenced element" };
     const target = document.elements.find((element) => element.id === targetId);
+    if ((dimension.kind === "radius" || dimension.kind === "diameter") && dimension.driving !== true) return { success: false, error: "Only driving circular dimensions can change a circle" };
+        if (dimension.kind === "radius" || dimension.kind === "diameter") {
+      if (target?.type !== "ellipse" || target.size.width !== target.size.height) return { success: false, error: "Circular driving dimensions require a circle" };
+      const first = dimension.references[0]; const second = dimension.references[1];
+      if (!("kind" in first) || !("kind" in second) || first.kind !== "node" || second.kind !== "node" || !first.nodeId || !second.nodeId || ![first.nodeId, second.nodeId].includes("center") || first.nodeId === second.nodeId) return { success: false, error: "Radius driving references require center and rim nodes" };
+      const circleConstraint = dimension.driving && dimension.constraintId ? target.circleConstraints?.find((candidate) => candidate.id === dimension.constraintId) : undefined;
+      if (dimension.driving && (!circleConstraint || (dimension.kind === "radius" ? circleConstraint.kind !== "radius" : circleConstraint.kind !== "diameter"))) return { success: false, error: "Driving radius dimension does not match a circle size constraint" };
+      const rimId = first.nodeId === "center" ? second.nodeId : first.nodeId;
+      const center = elementCenter(target); const rim = realGeometryNodes(target).find((node) => node.nodeId === rimId)?.point;
+      if (!rim) return { success: false, error: "Radius driving rim reference is invalid" };
+      const currentRadius = Math.hypot(rim.x - center.x, rim.y - center.y);
+      if (!Number.isFinite(currentRadius) || currentRadius <= 0) return { success: false, error: "Radius driving circle is degenerate" };
+      const radius = dimension.kind === "diameter" ? value / 2 : value;
+          const position = { x: center.x - radius, y: center.y - radius };
+      const updatedConstraints = circleConstraint ? target.circleConstraints?.map((candidate) => candidate.id === circleConstraint.id ? { ...candidate, value } : candidate) : target.circleConstraints;
+      const updated = { ...target, position, size: { width: radius * 2, height: radius * 2 }, ...(updatedConstraints ? { circleConstraints: updatedConstraints } : {}) };
+      return replaceElements(document, document.elements.map((element) => element.id === target.id ? updated : element));
+    }
+    if (dimension.kind !== "horizontal" && dimension.kind !== "vertical") return { success: false, error: "Only horizontal and vertical dimensions can drive rectangles" };
     if (target?.type === "path") {
       const first = dimension.references[0]; const second = dimension.references[1];
       if (!("kind" in first) || !("kind" in second) || first.kind !== "node" || second.kind !== "node") return { success: false, error: "Path driving dimensions require node references" };
@@ -975,6 +995,73 @@ export const solveSketch = (sketchId: ElementId): EditorCommand => ({
     const result = solveSketchConstraints(sketch);
     if (result.status === "conflict" || result.status === "overdefined") return { success: false, error: `Sketch constraints are ${result.status}` };
     return replaceElements(document, document.elements.map((element) => element.id === sketchId ? result.sketch : element));
+  },
+});
+
+export const addCircleConstraint = (circleId: ElementId, constraint: CircleConstraint): EditorCommand => ({
+  name: `circle-constraint-add:${circleId}:${constraint.id}`,
+  apply: (document) => {
+    const circle = document.elements.find((element): element is Extract<Element, { type: "ellipse" }> => element.id === circleId && element.type === "ellipse");
+    if (!circle || circle.size.width !== circle.size.height) return { success: false, error: "Circle not found or is not circular" };
+    if (!constraint.id || circle.circleConstraints?.some((candidate) => candidate.id === constraint.id) || constraint.kind.endsWith("horizontal") && constraint.value === undefined || constraint.kind.endsWith("vertical") && constraint.value === undefined || (constraint.kind === "radius" || constraint.kind === "diameter") && (!Number.isFinite(constraint.value) || constraint.value === undefined || constraint.value <= 0)) return { success: false, error: "Invalid circle constraint" };
+    const result = solveCircleConstraints({ ...circle, circleConstraints: [...(circle.circleConstraints ?? []), constraint] });
+    if (result.status === "conflict") return { success: false, error: "Circle constraints are in conflict" };
+    return replaceElements(document, document.elements.map((element) => element.id === circleId ? result.circle : element));
+  },
+});
+
+export const updateCircleConstraint = (circleId: ElementId, constraintId: string, constraint: CircleConstraint): EditorCommand => ({
+  name: `circle-constraint-update:${circleId}:${constraintId}`,
+  apply: (document) => {
+    const circle = document.elements.find((element): element is Extract<Element, { type: "ellipse" }> => element.id === circleId && element.type === "ellipse");
+    if (!circle || circle.size.width !== circle.size.height) return { success: false, error: "Circle not found or is not circular" };
+    if (constraint.id !== constraintId || constraint.value === undefined || !Number.isFinite(constraint.value) || (constraint.kind === "radius" || constraint.kind === "diameter") && constraint.value <= 0) return { success: false, error: "Invalid circle constraint" };
+    if (!circle.circleConstraints?.some((candidate) => candidate.id === constraintId)) return { success: false, error: "Circle constraint not found" };
+    const constraints = circle.circleConstraints.map((candidate) => candidate.id === constraintId ? constraint : candidate);
+    const result = solveCircleConstraints({ ...circle, circleConstraints: constraints });
+    if (result.status === "conflict") return { success: false, error: "Circle constraints are in conflict" };
+    return replaceElements(document, document.elements.map((element) => element.id === circleId ? result.circle : element));
+  },
+});
+
+export const deleteCircleConstraint = (circleId: ElementId, constraintId: string): EditorCommand => ({
+  name: `circle-constraint-delete:${circleId}:${constraintId}`,
+  apply: (document) => {
+    const circle = document.elements.find((element): element is Extract<Element, { type: "ellipse" }> => element.id === circleId && element.type === "ellipse");
+    if (!circle || !circle.circleConstraints?.some((candidate) => candidate.id === constraintId)) return { success: false, error: "Circle constraint not found" };
+    const result = solveCircleConstraints({ ...circle, circleConstraints: circle.circleConstraints.filter((candidate) => candidate.id !== constraintId) });
+    return replaceElements(document, document.elements.map((element) => element.id === circleId ? result.circle : element));
+  },
+});
+
+export const setDimensionDriving = (dimensionId: ElementId, driving: boolean): EditorCommand => ({
+  name: `dimension-driving:${dimensionId}:${driving}`,
+  apply: (document) => {
+    const dimension = document.elements.find((element): element is DimensionElement => element.id === dimensionId && element.type === "dimension");
+    if (!dimension || (dimension.kind !== "radius" && dimension.kind !== "diameter")) return { success: false, error: "Only circular dimensions can be driving" };
+    const targetId = dimension.references[0].elementId;
+    const target = document.elements.find((element): element is Extract<Element, { type: "ellipse" }> => element.id === targetId && element.type === "ellipse");
+    if (!target || target.size.width !== target.size.height) return { success: false, error: "Driving dimension target is not a circle" };
+    const constraintId = dimension.constraintId ?? `dimension:${dimension.id}`;
+    const existing = target.circleConstraints ?? [];
+    const value = dimensionGeometry(dimension, document.elements)?.value;
+    if (driving && (!value || !Number.isFinite(value) || value <= 0)) return { success: false, error: "Circular dimension has no valid value" };
+    const constraints = driving ? [...existing.filter((candidate) => candidate.id !== constraintId), { id: constraintId, kind: dimension.kind, value: value as number, driving: true }] : existing.filter((candidate) => candidate.id !== constraintId);
+    const solved = solveCircleConstraints({ ...target, circleConstraints: constraints });
+    if (solved.status === "conflict") return { success: false, error: "Circle constraints are in conflict" };
+    const updatedDimension = driving ? { ...dimension, driving: true, constraintId } : Object.fromEntries(Object.entries({ ...dimension, driving: false }).filter(([key]) => key !== "constraintId")) as unknown as DimensionElement;
+    return replaceElements(document, document.elements.map((element) => element.id === dimension.id ? updatedDimension : element.id === target.id ? solved.circle : element));
+  },
+});
+
+export const solveCircle = (circleId: ElementId): EditorCommand => ({
+  name: `circle-solve:${circleId}`,
+  apply: (document) => {
+    const circle = document.elements.find((element): element is Extract<Element, { type: "ellipse" }> => element.id === circleId && element.type === "ellipse");
+    if (!circle || circle.size.width !== circle.size.height) return { success: false, error: "Circle not found or is not circular" };
+    const result = solveCircleConstraints(circle);
+    if (result.status === "conflict") return { success: false, error: "Circle constraints are in conflict" };
+    return replaceElements(document, document.elements.map((element) => element.id === circleId ? result.circle : element));
   },
 });
 

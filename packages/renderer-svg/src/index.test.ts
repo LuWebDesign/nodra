@@ -24,6 +24,14 @@ describe("SVG renderer boundary", () => {
       expect(result.renderedElementIds).toEqual(["rect", "ellipse", "line"]);
     }
   });
+  it("renders radius dimensions with an R prefix", () => {
+    const ellipse = { type: "ellipse" as const, id: elementId("circle"), layerId: layer.id, position: { x: 10, y: 10 }, size: { width: 20, height: 20 }, rotation: 0, style };
+    const radius = { type: "dimension" as const, id: elementId("radius"), layerId: layer.id, kind: "radius" as const, references: [{ kind: "node" as const, elementId: ellipse.id, nodeIndex: 0, nodeId: "center" }, { kind: "node" as const, elementId: ellipse.id, nodeIndex: 2, nodeId: "e" }] as const, offset: { x: 8, y: 0 }, precision: 2, units: "mm" as const, rotation: 0 as const, style };
+    const result = renderSvg(withElements(createDocument("radius", [layer]), [ellipse, radius]), { zoom: 1, panMm: { x: 0, y: 0 } });
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.svg).toContain("R10.00 mm");
+  });
+
   it("renders connected angular dimensions as an arc with degree text", () => {
     const first = { type: "line" as const, id: elementId("angle-first"), layerId: layer.id, start: { x: 20, y: 20 }, end: { x: 60, y: 20 }, rotation: 0, style };
     const second = { type: "line" as const, id: elementId("angle-second"), layerId: layer.id, start: { x: 20, y: 20 }, end: { x: 20, y: 60 }, rotation: 0, style };

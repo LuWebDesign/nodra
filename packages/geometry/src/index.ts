@@ -1,5 +1,6 @@
 import polygonClipping, { type MultiPolygon } from "polygon-clipping";
-import type { ConnectableNodeAddress, ContourElement, DimensionElement, Element, ElementId, EllipseElement, GlyphElement, HandleOffset, LineElement, PathCubicSegment, PathElement, PointMm, RectangleElement, SizeMm, SketchConstraint, SketchElement, SplineElement, SplineNode } from "@nodra/domain";
+import { hasBounds } from "@nodra/domain";
+    import type { ConnectableNodeAddress, ContourElement, DimensionElement, Element, ElementId, EllipseElement, GlyphElement, HandleOffset, LineElement, PathCubicSegment, PathElement, PointMm, RectangleElement, SizeMm, SketchConstraint, SketchElement, SplineElement, SplineNode } from "@nodra/domain";
 
 export interface Bounds { readonly x: number; readonly y: number; readonly width: number; readonly height: number }
 export interface Viewport { readonly zoom: number; readonly panMm: PointMm }
@@ -149,7 +150,7 @@ export interface BezierHandlePoint { readonly direction: BezierHandleDirection; 
 export interface BezierGeometryNode { readonly nodeId: string; readonly anchor: PointMm; readonly handles: readonly BezierHandlePoint[] }
 export interface EditableGeometryNode { readonly kind: "anchor" | "handle"; readonly nodeId: string; readonly point: PointMm; readonly direction?: BezierHandleDirection; readonly nodeIndex: number; readonly segmentIndex?: number; readonly ringIndex?: number }
 export interface BezierHandleGuide { readonly nodeId: string; readonly anchor: PointMm; readonly point: PointMm; readonly direction: BezierHandleDirection; readonly nodeIndex: number; readonly anchorNodeIndex: number; readonly segmentIndex?: number; readonly ringIndex?: number }
-export interface LinearDimensionGeometry { readonly kind: "aligned" | "horizontal" | "vertical" | "diameter"; readonly start: PointMm; readonly end: PointMm; readonly lineStart: PointMm; readonly lineEnd: PointMm; readonly text: PointMm; readonly value: number }
+export interface LinearDimensionGeometry { readonly kind: "aligned" | "horizontal" | "vertical" | "radius" | "diameter"; readonly start: PointMm; readonly end: PointMm; readonly lineStart: PointMm; readonly lineEnd: PointMm; readonly text: PointMm; readonly value: number }
 export interface AngularDimensionGeometry { readonly kind: "angular"; readonly vertex: PointMm; readonly start: PointMm; readonly end: PointMm; readonly lineStart: PointMm; readonly lineEnd: PointMm; readonly text: PointMm; readonly value: number; readonly radius: number; readonly sweep: 0 | 1 }
 export type DimensionGeometry = LinearDimensionGeometry | AngularDimensionGeometry;
 export type SketchConstraintStatus = "underdefined" | "defined" | "conflict" | "overdefined";
@@ -242,6 +243,26 @@ export function solveSketchConstraints(sketch: SketchElement): SketchConstraintS
   return { sketch: { ...sketch, nodes: sketch.nodes.map((node) => ({ ...node, point: nodes.get(node.id) ?? node.point })) }, status, conflicts: uniqueConflicts };
 }
 
+export type CircleConstraintStatus = "underdefined" | "defined" | "conflict";
+export interface CircleConstraintSolveResult { readonly circle: EllipseElement; readonly status: CircleConstraintStatus; readonly conflicts: readonly string[] }
+
+/** Solves the independent cx, cy, and r degrees of freedom of a circular ellipse. */
+export function solveCircleConstraints(circle: EllipseElement): CircleConstraintSolveResult {
+  const constraints = [...(circle.circleConstraints ?? [])].sort((a, b) => a.id.localeCompare(b.id));
+  const center = elementCenter(circle); const values = { x: center.x, y: center.y, radius: circle.size.width / 2 };
+  const conflicts: string[] = []; const seen = new Map<string, string>();
+  for (const constraint of constraints) {
+    const axis = constraint.kind === "center-horizontal" ? "x" : constraint.kind === "center-vertical" ? "y" : "radius";
+    if (constraint.value === undefined || !Number.isFinite(constraint.value) || constraint.value <= 0 && axis === "radius") { conflicts.push(constraint.id); continue; }
+    const value = constraint.kind === "diameter" ? constraint.value / 2 : constraint.value;
+    const previous = seen.get(axis);
+    if (previous) { conflicts.push(constraint.id); continue; }
+    seen.set(axis, constraint.id); values[axis] = value;
+  }
+  const radius = values.radius; const solved: EllipseElement = { ...circle, position: { x: values.x - radius, y: values.y - radius }, size: { width: radius * 2, height: radius * 2 } };
+  return { circle: solved, status: conflicts.length ? "conflict" : seen.size === 3 ? "defined" : "underdefined", conflicts };
+}
+
 export type DimensionPlacementKind = Extract<DimensionElement["kind"], "aligned" | "horizontal" | "vertical">;
 export const pointMidpoint = (first: PointMm, second: PointMm): PointMm => ({ x: (first.x + second.x) / 2, y: (first.y + second.y) / 2 });
 export const dimensionKindForNodes = (first: PointMm, second: PointMm): DimensionPlacementKind => {
@@ -308,14 +329,14 @@ export function dimensionGeometry(element: DimensionElement, elements: readonly 
   const end = (endReference.nodeId ? endNodes.find((node) => node.nodeId === endReference.nodeId) : endNodes[endReference.nodeIndex])?.point;
   if (!start || !end) return undefined;
   const midpoint = pointMidpoint(start, end);
-  if (element.kind === "diameter" && startElement.type === "ellipse" && endElement.id === startElement.id) {
+  if ((element.kind === "radius" || element.kind === "diameter") && startElement.type === "ellipse" && endElement.id === startElement.id) {
     const centerNode = startElement.type === "ellipse" ? realGeometryNodes(startElement).find((node) => node.kind === "center") : undefined;
     const center = centerNode?.point;
     const rim = Math.hypot(start.x - (center?.x ?? start.x), start.y - (center?.y ?? start.y)) > Math.hypot(end.x - (center?.x ?? end.x), end.y - (center?.y ?? end.y)) ? start : end;
     if (!center || Math.hypot(rim.x - center.x, rim.y - center.y) === 0) return undefined;
     const radius = Math.hypot(rim.x - center.x, rim.y - center.y); const direction = { x: (rim.x - center.x) / radius, y: (rim.y - center.y) / radius };
-    const lineStart = { x: center.x - direction.x * radius, y: center.y - direction.y * radius }; const lineEnd = { x: center.x + direction.x * radius, y: center.y + direction.y * radius }; const text = { x: center.x + element.offset.x, y: center.y + element.offset.y };
-    return { kind: "diameter", start: lineStart, end: lineEnd, lineStart, lineEnd, text, value: radius * 2 };
+    const lineStart = element.kind === "radius" ? center : { x: center.x - direction.x * radius, y: center.y - direction.y * radius }; const lineEnd = { x: center.x + direction.x * radius, y: center.y + direction.y * radius }; const text = { x: center.x + element.offset.x, y: center.y + element.offset.y };
+    return { kind: element.kind, start: lineStart, end: lineEnd, lineStart, lineEnd, text, value: element.kind === "radius" ? radius : radius * 2 };
   }
   const text = { x: midpoint.x + element.offset.x, y: midpoint.y + element.offset.y };
   const lineStart = element.kind === "horizontal" ? { x: start.x, y: text.y } : element.kind === "vertical" ? { x: text.x, y: start.y } : alignedOffsetPoint(start, start, end, element.offset);
@@ -502,7 +523,7 @@ export function elementCenter(element: Element): PointMm {
     : element.type === "spline" ? groupCenter(splineBounds(element))
     : element.type === "sketch" ? groupCenter(boundsOf(element))
     : element.type === "glyph" ? groupCenter(glyphBounds(element))
-    : { x: element.position.x + element.size.width * (element.type === "text" ? element.scaleX ?? 1 : 1) / 2, y: element.position.y + element.size.height * (element.type === "text" ? element.scaleY ?? 1 : 1) / 2 };
+    : hasBounds(element) ? { x: element.position.x + element.size.width * (element.type === "text" ? element.scaleX ?? 1 : 1) / 2, y: element.position.y + element.size.height * (element.type === "text" ? element.scaleY ?? 1 : 1) / 2 } : { x: 0, y: 0 };
 }
 
 const contourBounds = (element: ContourElement): Bounds => {
@@ -733,7 +754,8 @@ export function realGeometryNodes(element: Element): readonly RealGeometryNode[]
   if (element.type === "sketch") return element.nodes.map((node) => ({ kind: "anchor" as const, nodeId: node.id, point: node.point }));
   if (element.type === "glyph") return glyphGeometryNodes(element);
   if (element.type === "spline") return element.nodes.flatMap((node) => [{ kind: "anchor" as const, nodeId: node.id, point: node.anchor }, ...(node.inHandle ? [{ kind: "control" as const, nodeId: node.id, point: resolveHandle(node.anchor, node.inHandle), handle: "control2" as const }] : []), ...(node.outHandle ? [{ kind: "control" as const, nodeId: node.id, point: resolveHandle(node.anchor, node.outHandle), handle: "control1" as const }] : [])]);
-  const half = { x: element.size.width / 2, y: element.size.height / 2 };
+  if (!hasBounds(element)) return [];
+      const half = { x: element.size.width / 2, y: element.size.height / 2 };
   const center = { x: element.position.x + half.x, y: element.position.y + half.y };
   if (element.type === "rectangle") {
     const [nw, ne, se, sw] = rotatedCorners(element);

@@ -34,6 +34,25 @@ describe("native document validation", () => {
         expect(result.success).toBe(true);
         if (result.success) expect(result.data.elements[0]).toMatchObject({ type: "sketch", nodes: legacy.elements[0]!.nodes, constraints: [] });
       });
+      it("accepts explicit radius and diameter dimensions on circle nodes", () => {
+        const base = createDocument("radius-doc", [{ id: layerId("layer-1"), name: "Design", visible: true, order: 0 }]);
+        const ellipse = { type: "ellipse" as const, id: "circle", layerId: "layer-1", position: { x: 10, y: 10 }, size: { width: 20, height: 20 }, rotation: 0, style: { stroke: "#000", strokeWidth: 1 }, circleConstraints: [{ id: "cx", kind: "center-horizontal" as const, value: 0 }, { id: "cy", kind: "center-vertical" as const, value: -5 }] };
+        const reference = [{ kind: "node" as const, elementId: "circle", nodeIndex: 0, nodeId: "center" }, { kind: "node" as const, elementId: "circle", nodeIndex: 2, nodeId: "e" }] as const;
+        const radius = { type: "dimension" as const, id: "radius", layerId: "layer-1", kind: "radius" as const, references: reference, offset: { x: 8, y: 0 }, precision: 2, units: "mm" as const, rotation: 0 as const, style: { stroke: "#2563eb", strokeWidth: 0.45 } };
+        const diameter = { ...radius, id: "diameter", kind: "diameter" as const };
+        expect(validateDocument({ ...base, elements: [ellipse, radius] }).success).toBe(true);
+        expect(validateDocument({ ...base, elements: [ellipse, diameter] }).success).toBe(true);
+      });
+
+      it("rejects invalid circular constraints and non-circular diameter targets", () => {
+        const base = createDocument("circle-invalid", [{ id: layerId("layer-1"), name: "Design", visible: true, order: 0 }]);
+        const ellipse = { type: "ellipse" as const, id: "ellipse", layerId: "layer-1", position: { x: 0, y: 0 }, size: { width: 20, height: 10 }, rotation: 0, style: { stroke: "#000", strokeWidth: 1 }, circleConstraints: [{ id: "radius", kind: "radius" as const, value: 5 }] };
+        const diameter = { type: "dimension" as const, id: "diameter", layerId: "layer-1", kind: "diameter" as const, references: [{ kind: "node" as const, elementId: "ellipse", nodeIndex: 0, nodeId: "center" }, { kind: "node" as const, elementId: "ellipse", nodeIndex: 1, nodeId: "n" }] as const, offset: { x: 0, y: -8 }, precision: 2, units: "mm" as const, rotation: 0 as const, style: { stroke: "#2563eb", strokeWidth: 0.45 } };
+        expect(validateDocument({ ...base, elements: [ellipse] }).success).toBe(false);
+        expect(validateDocument({ ...base, elements: [{ ...ellipse, size: { width: 20, height: 20 }, circleConstraints: [{ id: "center", kind: "center-horizontal" as const }] }] }).success).toBe(false);
+        expect(validateDocument({ ...base, elements: [ellipse, diameter] }).success).toBe(false);
+      });
+
       it("validates a project with stable page ids, including duplicate sizes", () => {
     const document = createDocument("doc-1", []);
     const project = { ...({ schemaVersion: 5, id: document.id, revision: document.revision, origin: document.origin, units: document.units } as const), pages: [{ id: "page-a", page: document.page, layers: [], elements: [] }, { id: "page-b", page: document.page, layers: [], elements: [] }], activePageId: "page-b" };
@@ -46,6 +65,13 @@ describe("native document validation", () => {
     expect(validateDocument({ ...base, elements: [line, dimension] }).success).toBe(true);
     expect(validateDocument({ ...base, elements: [dimension] }).success).toBe(false);
   });
+  it("accepts explicit radius dimensions on circle nodes", () => {
+    const base = createDocument("radius-doc", [{ id: layerId("layer-1"), name: "Design", visible: true, order: 0 }]);
+    const ellipse = { type: "ellipse" as const, id: "circle", layerId: "layer-1", position: { x: 10, y: 10 }, size: { width: 20, height: 20 }, rotation: 0, style: { stroke: "#000", strokeWidth: 1 }, circleConstraints: [{ id: "cx", kind: "center-horizontal" as const, value: 0 }, { id: "cy", kind: "center-vertical" as const, value: -5 }] };
+    const radius = { type: "dimension" as const, id: "radius", layerId: "layer-1", kind: "radius" as const, references: [{ kind: "node" as const, elementId: "circle", nodeIndex: 0, nodeId: "center" }, { kind: "node" as const, elementId: "circle", nodeIndex: 2, nodeId: "e" }] as const, offset: { x: 8, y: 0 }, precision: 2, units: "mm" as const, rotation: 0 as const, style: { stroke: "#2563eb", strokeWidth: 0.45 } };
+    expect(validateDocument({ ...base, elements: [ellipse, radius] }).success).toBe(true);
+  });
+
   it("normalizes legacy node references and validates connected angular lines", () => {
     const base = createDocument("angular-doc", [{ id: layerId("layer-1"), name: "Design", visible: true, order: 0 }]);
     const first = { type: "line" as const, id: "first", layerId: "layer-1", start: { x: 20, y: 20 }, end: { x: 60, y: 20 }, rotation: 0, style: { stroke: "#000", strokeWidth: 1 } };
