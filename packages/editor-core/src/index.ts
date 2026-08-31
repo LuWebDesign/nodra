@@ -1066,7 +1066,7 @@ export const addSketchConstraint = (sketchId: ElementId, constraint: SketchConst
     const sketch = document.elements.find((element): element is SketchElement => element.id === sketchId && element.type === "sketch");
     if (!sketch || sketch.constraints?.some((current) => current.id === constraint.id)) return { success: false, error: "Sketch constraint cannot be added" };
     const sameReferences = (first: SketchConstraint, second: SketchConstraint) => first.kind === second.kind && first.references.length === second.references.length && first.references.every((reference, index) => reference.elementId === second.references[index]?.elementId && reference.nodeId === second.references[index]?.nodeId);
-    const constraints = (sketch.constraints ?? []).filter((current) => !(current.id.startsWith("auto:") && sameReferences(current, constraint)));
+    const constraints = (sketch.constraints ?? []).filter((current) => !(current.id.startsWith("auto:") && (sameReferences(current, constraint) || constraint.references.every((reference) => current.references.some((candidate) => `${candidate.elementId}:${candidate.nodeId}` === `${reference.elementId}:${reference.nodeId}`)))));
     return solveSketchCandidate(document, sketch, [...constraints, constraint]);
   },
 });
