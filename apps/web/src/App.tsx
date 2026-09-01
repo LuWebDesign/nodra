@@ -885,6 +885,7 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
       const contourNodeHit = formaNodeHit?.contourNode;
       const nodeHit = tool !== "forma" && transformMode === "resize" ? pickNode(editorRef.current.document, point, zoom) : undefined;
       const pathSegmentHit = tool === "forma" && !formaNodeHit ? (() => { const hit = pickPathSegment(editorRef.current.document, point, zoom); return hit && editModeElementIds.includes(hit.elementId) ? hit : undefined; })() : undefined;
+      const sketchSegmentHit = tool === "forma" && !formaNodeHit && !pathSegmentHit ? (() => { const hit = pickFormaSegment(editorRef.current.document, point, zoom); const element = hit ? editorRef.current.document.elements.find((candidate) => candidate.id === hit.elementId) : undefined; return hit && element?.type === "sketch" ? hit : undefined; })() : undefined;
         if ((tool === "dimension" || tool === "radius")) {
            if (dimensionDraft?.phase === "first" && dimensionDraft.first.kind === "circle") {
              const placement = pointAt(event);
@@ -943,7 +944,7 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
          }
        }
           const domDimensionId = (event.target as unknown as globalThis.Element).closest("[data-dimension]")?.getAttribute("data-element-id") as ElementId | null;
-          const hit = domDimensionId ?? formaNodeHit?.elementId ?? pathSegmentHit?.elementId ?? nodeHit?.elementId ?? pickElement(editorRef.current.document, point, zoom);
+          const hit = domDimensionId ?? formaNodeHit?.elementId ?? pathSegmentHit?.elementId ?? sketchSegmentHit?.elementId ?? nodeHit?.elementId ?? pickElement(editorRef.current.document, point, zoom);
     if (isDrawingTool(tool) && pointerDownIntent(tool, hit) === "draw") {
       event.currentTarget.setPointerCapture(event.pointerId);
       setEditorState(beginGesture(editorRef.current));
@@ -960,16 +961,26 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
           return;
         }
       }
-      const next = selectForPointerDown(editorRef.current, hit, event.shiftKey);
+      const next = tool === "forma" && (formaNodeHit || pathSegmentHit || sketchSegmentHit) && editModeElementIds.includes(hit) ? editorRef.current : selectForPointerDown(editorRef.current, hit, event.shiftKey);
       setEditorState(next);
       if (!next.selection.includes(hit)) return;
       event.currentTarget.setPointerCapture(event.pointerId);
         if (tool === "forma") {
            const hitElement = editorRef.current.document.elements.find((element) => element.id === hit);
+           const sketchSegmentNodeKeys = hitElement?.type === "sketch" && sketchSegmentHit?.elementId === hitElement.id ? (() => { const edge = hitElement.edges[sketchSegmentHit.segmentIndex]; if (!edge) return []; return [edge.startNodeId, edge.endNodeId].flatMap((nodeId) => { const nodeIndex = hitElement.nodes.findIndex((node) => node.id === nodeId); return nodeIndex >= 0 ? [`${hitElement.id}:p:${nodeIndex}`] : []; }); })() : [];
            if (hitElement && hitElement.type !== "text" && hitElement.type !== "dimension" && !editModeElementIds.includes(hitElement.id)) {
-             setSelectedFormaNodeKeys([]);
+             setSelectedFormaNodeKeys(sketchSegmentNodeKeys);
              setSelectedPathSegment(undefined);
              setEditModeElementIds([hitElement.id]);
+             return;
+           }
+           if (sketchSegmentNodeKeys.length === 2) {
+             setSelectedPathSegment(undefined);
+             setSelectedFormaNodeKeys((current) => {
+               if (!event.shiftKey) return sketchSegmentNodeKeys;
+               const selected = sketchSegmentNodeKeys.every((key) => current.includes(key));
+               return selected ? current.filter((key) => !sketchSegmentNodeKeys.includes(key)) : [...new Set([...current, ...sketchSegmentNodeKeys])];
+             });
              return;
            }
            if (formaNodeHit && next.selection.includes(formaNodeHit.elementId)) {

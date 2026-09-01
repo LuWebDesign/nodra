@@ -382,6 +382,13 @@ describe("drag geometry", () => {
     }
   });
 
+  it("picks sketch segments for direct Forma relation selection", () => {
+    const layer = { id: layerId("sketch-segment-hit"), name: "Sketch", visible: true, order: 0 };
+    const sketch = { type: "sketch" as const, id: elementId("forma-sketch-segment"), layerId: layer.id, nodes: [{ id: "a", point: { x: 0, y: 0 } }, { id: "b", point: { x: 10, y: 0 } }, { id: "c", point: { x: 10, y: 10 } }], edges: [{ id: "ab", startNodeId: "a", endNodeId: "b" }, { id: "bc", startNodeId: "b", endNodeId: "c" }], style: { stroke: "#000", strokeWidth: 1 } };
+    const hit = pickFormaSegment({ ...createDocument("sketch-segment-hit", [layer]), elements: [sketch] }, { x: 5, y: 0.5 }, 1);
+    expect(hit).toMatchObject({ elementId: sketch.id, segmentIndex: 0 });
+  });
+
   it("prioritizes real nodes and applies a zoom-aware tolerance", () => {
     const layer = { id: layerId("node-hit"), name: "Node hit", visible: true, order: 0 };
     const document = createDocument("node-hit", [layer]);
