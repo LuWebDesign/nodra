@@ -362,6 +362,27 @@ export function pickHoverNode(document: DocumentSnapshot, point: PointMm, zoom: 
 
 /** Picks endpoints first, then the body of a visible native line or sketch edge. */
 export function pickDimensionTarget(document: DocumentSnapshot, point: PointMm, zoom: number, tolerancePx = 8): DimensionTarget | undefined {
+  if (![point.x, point.y, zoom, tolerancePx].every(Number.isFinite) || zoom <= 0 || tolerancePx < 0) return undefined;
+  const visible = new Set(document.layers.filter((layer) => layer.visible).map((layer) => layer.id));
+  let bestLine: DimensionLineHit | undefined;
+  for (const element of document.elements) {
+    if (!visible.has(element.layerId) || (element.type !== "line" && element.type !== "sketch")) continue;
+    const hit = elementSegmentAt(element, point, tolerancePx / zoom);
+    if (!hit || (element.type === "sketch" && element.edges[hit.segmentIndex] === undefined)) continue;
+    const line = element.type === "line" ? element : (() => {
+      const edge = element.edges[hit.segmentIndex];
+      const nodes = new Map(element.nodes.map((node) => [node.id, node.point]));
+      const start = edge ? nodes.get(edge.startNodeId) : undefined;
+      const end = edge ? nodes.get(edge.endNodeId) : undefined;
+      return start && end ? { type: "line" as const, id: element.id, layerId: element.layerId, start, end, rotation: 0, style: element.style } : undefined;
+    })();
+    if (line) {
+      const dx = line.end.x - line.start.x; const dy = line.end.y - line.start.y; const lengthSquared = dx * dx + dy * dy;
+      const t = lengthSquared > 0 ? ((point.x - line.start.x) * dx + (point.y - line.start.y) * dy) / lengthSquared : 0;
+      if (t > 1e-6 && t < 1 - 1e-6 && (!bestLine || hit.distance < bestLine.distance)) bestLine = { elementId: element.id, line, distance: hit.distance, ...(element.type === "sketch" ? { edgeIndex: hit.segmentIndex } : {}) };
+    }
+  }
+  if (bestLine) return { kind: "line", hit: bestLine };
   const node = pickNode(document, point, zoom, tolerancePx);
   const nodeElement = node ? document.elements.find((element) => element.id === node.elementId) : undefined;
   if (node?.node.kind === "cardinal" && nodeElement?.type === "ellipse" && nodeElement.size.width === nodeElement.size.height) {
@@ -371,7 +392,6 @@ export function pickDimensionTarget(document: DocumentSnapshot, point: PointMm, 
     if (center) return { kind: "circle", hit: { elementId: nodeElement.id, center: { elementId: nodeElement.id, nodeIndex: centerIndex, node: center }, rim: node, distance: 0 } };
   }
   if (node && !(nodeElement?.type === "line" && node.node.kind === "center")) return { kind: "node", hit: node };
-  const visible = new Set(document.layers.filter((layer) => layer.visible).map((layer) => layer.id));
   const layerOrder = new Map(document.layers.map((layer) => [layer.id, layer.order]));
   let bestCircle: CircleDimensionHit | undefined;
   let bestCircleDistance = Number.POSITIVE_INFINITY;

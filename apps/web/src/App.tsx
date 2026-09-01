@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent, type PointerEvent, type ReactNode, type WheelEvent } from "react";
 import { createProject, elementId, layerId, pageId, projectFromDocument, revision, type DocumentSnapshot, hasRotation, type DimensionElement, type Element, type SketchConstraint, type ElementId, type PointMm, type ProjectSnapshot, type SplineElement, type TextElement, type ExplicitConnection } from "@nodra/domain";
-import { addSketchConstraint, addToSelection, appendSketchEdge, appendSplineNode, beginGesture, cancelGesture, clearSelection, closePath, cutLineAtPoint, cutPathSegment, cutSketchEdge, closeSplineElement, commitGesture, convertTextToGlyphs, createElement, createPathCubicNode, createPathNode, createSketchLine, deleteContourNodes, deleteElement, deleteElementNodes, deletePathNodes, deleteSketchConstraint, dispatch, duplicateElements, flipElements, insertFormaNode, invalidDimensionIdsForShapeOperation, moveElements, movePathHandle, movePathNode, openPath, updateSplineNode, previewGesture, previewGestureFromBase, redo, resizeElement, resizeElementToDimensions, resizeElements, resizeElementsToDimensions, rotateElement, updateDimensionValue, setDimensionDriving, rotateElementsAroundCenter, select, selectForPointerDown, setPathJoin, shapeOperation, splitPathSegment, undo, updateContourNode, updateElement, updateElementNode, updateElementStyles, updatePage, updateSketchConstraint, updateSplineHandle, type FlipAxis, type ShapeOperation } from "@nodra/editor-core";
+import { addSketchConstraint, addSketchSegmentRelation, addToSelection, appendSketchEdge, appendSplineNode, beginGesture, cancelGesture, clearSelection, closePath, cutLineAtPoint, cutPathSegment, cutSketchEdge, closeSplineElement, commitGesture, convertTextToGlyphs, createElement, createPathCubicNode, createPathNode, createSketchLine, deleteContourNodes, deleteElement, deleteElementNodes, deletePathNodes, deleteSketchConstraint, dispatch, duplicateElements, flipElements, insertFormaNode, invalidDimensionIdsForShapeOperation, moveElements, movePathHandle, movePathNode, openPath, updateSplineNode, previewGesture, previewGestureFromBase, redo, resizeElement, resizeElementToDimensions, resizeElements, resizeElementsToDimensions, rotateElement, updateDimensionValue, setDimensionDriving, rotateElementsAroundCenter, select, selectForPointerDown, setPathJoin, shapeOperation, splitPathSegment, undo, updateContourNode, updateElement, updateElementNode, updateElementStyles, updatePage, updateSketchConstraint, updateSplineHandle, type FlipAxis, type ShapeOperation } from "@nodra/editor-core";
 import { boundsOfElements, connectableNodeAddress, contourVertexNodes, dimensionKindForPlacement, dimensionOffsetForAlignedPlacement, dimensionOffsetForPlacement, elementCenter, editableGeometryNodes, glyphGeometryNodes, groupCenter, groupHandlePoints, pathGeometryNodes, pointMidpoint, dimensionGeometry, realGeometryNodes, solveSketchConstraints, resizeHandle, rotatedResizeHandles, rotationFromDrag, rotationHandlePoints, visibleBezierHandleGuides, type Direction, type GroupHandle, type ResizeHandle } from "@nodra/geometry";
 import { DebouncedAutosave, DexieProjectRepository, requestStoragePersistence, type FontRecord } from "@nodra/persistence";
 import { validateDesign, validateProject } from "@nodra/validation";
@@ -182,6 +182,7 @@ export function App() {
       const [creationDraft, setCreationDraft] = useState<CreationDraft>();
   const [dimensionNodeHover, setDimensionNodeHover] = useState<NodeHit>();
   const [nodeHover, setNodeHover] = useState<HoverNode>();
+  const [formaSegmentHover, setFormaSegmentHover] = useState<{ readonly elementId: ElementId; readonly segmentIndex: number }>();
   const [cutSegmentHover, setCutSegmentHover] = useState<CuttableSegmentHit>();
   const [pendingShapeOperation, setPendingShapeOperation] = useState<{ readonly operation: "weld" | "subtract"; readonly ids: readonly ElementId[]; readonly invalidDimensionCount: number }>();
   const textDraftRef = useRef(textDraft);
@@ -313,7 +314,7 @@ export function App() {
   }, []);
 
   const selectedElements = selection.map((selectedId) => document.elements.find((element) => element.id === selectedId)).filter((element): element is Element => Boolean(element));
-  const selectedElement = selectedElements.length === 1 ? selectedElements[0] : undefined;
+  const selectedElement = selectedElements.length === 1 ? selectedElements[0] : selectedElements.find((element) => element.type === "sketch" && editModeElementIds.includes(element.id));
   const selectedBounds = selectedElements.length ? boundsOfElements(selectedElements) : undefined;
   const propertyElement = selectedElements.length > 1 && selectedBounds
     ? { type: "rectangle" as const, id: selectedElements[0]!.id, layerId: selectedElements[0]!.layerId, position: { x: selectedBounds.x, y: selectedBounds.y }, size: { width: selectedBounds.width, height: selectedBounds.height }, cornerRadius: 0, rotation: 0, style: selectedElements[0]!.style }
@@ -880,12 +881,26 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
       }
       return;
     }
-      const rawFormaNodeHit = tool === "forma" ? pickFormaNode(editorRef.current.document, point, zoom) : undefined;
+      const pickedFormaNode = tool === "forma" && picked && picked.type !== "text" && picked.type !== "dimension" ? realGeometryNodes(picked).map((node, nodeIndex) => ({ node, nodeIndex, distance: Math.hypot(node.point.x - point.x, node.point.y - point.y) * zoom })).filter((candidate) => candidate.distance <= 20).sort((first, second) => first.distance - second.distance)[0] : undefined;
+      const rawFormaNodeHit = tool === "forma" ? pickedFormaNode && picked ? { elementId: picked.id, nodeIndex: pickedFormaNode.nodeIndex, point: pickedFormaNode.node.point } : pickFormaNode(editorRef.current.document, point, zoom, 14) : undefined;
       const formaNodeHit = rawFormaNodeHit && editModeElementIds.includes(rawFormaNodeHit.elementId) ? rawFormaNodeHit : undefined;
       const contourNodeHit = formaNodeHit?.contourNode;
       const nodeHit = tool !== "forma" && transformMode === "resize" ? pickNode(editorRef.current.document, point, zoom) : undefined;
       const pathSegmentHit = tool === "forma" && !formaNodeHit ? (() => { const hit = pickPathSegment(editorRef.current.document, point, zoom); return hit && editModeElementIds.includes(hit.elementId) ? hit : undefined; })() : undefined;
-      const sketchSegmentHit = tool === "forma" && !formaNodeHit && !pathSegmentHit ? (() => { const hit = pickFormaSegment(editorRef.current.document, point, zoom); const element = hit ? editorRef.current.document.elements.find((candidate) => candidate.id === hit.elementId) : undefined; return hit && element?.type === "sketch" ? hit : undefined; })() : undefined;
+      const formaLineSegmentHit = tool === "forma" && !formaNodeHit ? (() => { const hit = pickFormaSegment(editorRef.current.document, point, zoom); const element = hit ? editorRef.current.document.elements.find((candidate) => candidate.id === hit.elementId) : undefined; return hit && (element?.type === "sketch" || element?.type === "line") ? hit : undefined; })() : undefined;
+      if (tool === "forma" && rawFormaNodeHit) {
+        const nodeElement = editorRef.current.document.elements.find((element) => element.id === rawFormaNodeHit.elementId);
+        if (!nodeElement || nodeElement.type === "text" || nodeElement.type === "dimension") return;
+        const next = editorRef.current.selection.includes(rawFormaNodeHit.elementId) ? editorRef.current : selectForPointerDown(editorRef.current, rawFormaNodeHit.elementId, event.shiftKey);
+        setEditorState(next);
+        setEditModeElementIds((current) => current.includes(rawFormaNodeHit.elementId) ? current : [...current, rawFormaNodeHit.elementId]);
+        const key = formaNodeKey(rawFormaNodeHit);
+        setSelectedFormaNodeKeys((current) => event.shiftKey ? current.includes(key) ? current.filter((value) => value !== key) : [...current, key] : [key]);
+        event.currentTarget.setPointerCapture(event.pointerId);
+        setEditorState(beginGesture(next));
+        interaction.current = { pointerId: event.pointerId, lastX: event.clientX, lastY: event.clientY, kind: "contour-node", ...(rawFormaNodeHit.contourNode ? { contourNode: rawFormaNodeHit.contourNode } : {}), formaNode: rawFormaNodeHit, startClient: { x: event.clientX, y: event.clientY }, dragged: false };
+        return;
+      }
         if ((tool === "dimension" || tool === "radius")) {
            if (dimensionDraft?.phase === "first" && dimensionDraft.first.kind === "circle") {
              const placement = pointAt(event);
@@ -944,7 +959,7 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
          }
        }
           const domDimensionId = (event.target as unknown as globalThis.Element).closest("[data-dimension]")?.getAttribute("data-element-id") as ElementId | null;
-          const hit = domDimensionId ?? formaNodeHit?.elementId ?? pathSegmentHit?.elementId ?? sketchSegmentHit?.elementId ?? nodeHit?.elementId ?? pickElement(editorRef.current.document, point, zoom);
+          const hit = domDimensionId ?? formaNodeHit?.elementId ?? pathSegmentHit?.elementId ?? formaLineSegmentHit?.elementId ?? nodeHit?.elementId ?? pickElement(editorRef.current.document, point, zoom);
     if (isDrawingTool(tool) && pointerDownIntent(tool, hit) === "draw") {
       event.currentTarget.setPointerCapture(event.pointerId);
       setEditorState(beginGesture(editorRef.current));
@@ -961,17 +976,24 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
           return;
         }
       }
-      const next = tool === "forma" && (formaNodeHit || pathSegmentHit || sketchSegmentHit) && editModeElementIds.includes(hit) ? editorRef.current : selectForPointerDown(editorRef.current, hit, event.shiftKey);
+      const next = tool === "forma" && (formaNodeHit || pathSegmentHit || formaLineSegmentHit) && editModeElementIds.includes(hit) && editorRef.current.selection.includes(hit) ? editorRef.current : selectForPointerDown(editorRef.current, hit, event.shiftKey);
       setEditorState(next);
       if (!next.selection.includes(hit)) return;
       event.currentTarget.setPointerCapture(event.pointerId);
         if (tool === "forma") {
            const hitElement = editorRef.current.document.elements.find((element) => element.id === hit);
-           const sketchSegmentNodeKeys = hitElement?.type === "sketch" && sketchSegmentHit?.elementId === hitElement.id ? (() => { const edge = hitElement.edges[sketchSegmentHit.segmentIndex]; if (!edge) return []; return [edge.startNodeId, edge.endNodeId].flatMap((nodeId) => { const nodeIndex = hitElement.nodes.findIndex((node) => node.id === nodeId); return nodeIndex >= 0 ? [`${hitElement.id}:p:${nodeIndex}`] : []; }); })() : [];
+           const sketchSegmentNodeKeys = (() => {
+             if (!hitElement || !formaLineSegmentHit || formaLineSegmentHit.elementId !== hitElement.id) return [];
+             if (hitElement.type === "line") return [0, 1].map((nodeIndex) => `${hitElement.id}:p:${nodeIndex}`);
+             if (hitElement.type !== "sketch") return [];
+             const edge = hitElement.edges[formaLineSegmentHit.segmentIndex];
+             if (!edge) return [];
+             return [edge.startNodeId, edge.endNodeId].flatMap((nodeId) => { const nodeIndex = hitElement.nodes.findIndex((node) => node.id === nodeId); return nodeIndex >= 0 ? [`${hitElement.id}:p:${nodeIndex}`] : []; });
+           })();
            if (hitElement && hitElement.type !== "text" && hitElement.type !== "dimension" && !editModeElementIds.includes(hitElement.id)) {
-             setSelectedFormaNodeKeys(sketchSegmentNodeKeys);
+             setSelectedFormaNodeKeys((current) => event.shiftKey ? [...new Set([...current, ...sketchSegmentNodeKeys])] : sketchSegmentNodeKeys);
              setSelectedPathSegment(undefined);
-             setEditModeElementIds([hitElement.id]);
+             setEditModeElementIds((current) => event.shiftKey ? [...new Set([...current, hitElement.id])] : [hitElement.id]);
              return;
            }
            if (sketchSegmentNodeKeys.length === 2) {
@@ -1081,6 +1103,11 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
       const feedbackTool = tool === "text" || tool === "pan" ? undefined : tool;
      if (tool === "cut" && !interaction.current) setCutSegmentHover(pickCuttableSegment(editorRef.current.document, pointAt(event), zoom));
      else setCutSegmentHover(undefined);
+     if ((tool === "forma" || tool === "dimension") && !interaction.current) {
+       const hit = pickFormaSegment(editorRef.current.document, pointAt(event), zoom);
+       const element = hit ? editorRef.current.document.elements.find((candidate) => candidate.id === hit.elementId) : undefined;
+       setFormaSegmentHover(hit && (element?.type === "sketch" || element?.type === "line") ? { elementId: hit.elementId, segmentIndex: hit.segmentIndex } : undefined);
+     } else setFormaSegmentHover(undefined);
      if (feedbackTool && !interaction.current && (tool !== "dimension" && tool !== "radius" || dimensionDraft?.phase !== "placement")) setNodeHover(pickHoverNode(editorRef.current.document, pointAt(event), zoom, feedbackTool));
      else setNodeHover(undefined);
      if ((tool === "dimension" || tool === "radius") && dimensionDraft?.phase !== "placement" && !interaction.current) setDimensionNodeHover(pickNode(editorRef.current.document, pointAt(event), zoom));
@@ -1182,7 +1209,10 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
           const nextIds = marqueeSelection(active.document, active.start, pointAt(event));
           setEditorState(active.shiftKey ? addToSelection(editorRef.current, nextIds) : select(editorRef.current, nextIds));
         }
-      } else if (!cancelled && !active.dragged) setEditorState(clearSelection(editorRef.current));
+      } else if (!cancelled && !active.dragged) {
+        setEditorState(clearSelection(editorRef.current));
+        if (tool === "forma") { setEditModeElementIds([]); setSelectedFormaNodeKeys([]); }
+      }
       setMarquee(undefined);
     } else if (active.kind === "resize" && active.ids && active.handle && active.handle !== "center" && !cancelled) {
       const element = active.element;
@@ -1286,8 +1316,9 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
         setEditorState(next);
       }
       if (event.metaKey || event.ctrlKey) {
-        if (event.key === "z") setEditorState(event.shiftKey ? redo(editorRef.current) : undo(editorRef.current));
-        if (event.key === "y") setEditorState(redo(editorRef.current));
+        const key = event.key.toLowerCase();
+        if (key === "z") { event.preventDefault(); setEditorState(event.shiftKey ? redo(editorRef.current) : undo(editorRef.current)); }
+        if (key === "y") { event.preventDefault(); setEditorState(redo(editorRef.current)); }
       }
     };
     addEventListener("keydown", onKey);
@@ -1316,19 +1347,22 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
       const selectedPathAnchor = selectedElement?.type === "path"
        ? (() => { const selectedPathOverlay = formaNodes.find((node): node is Extract<FormaNodeOverlay, { readonly kind: "path" }> => node.kind === "path" && "pathNode" in node && node.pathNode?.node.kind === "anchor" && selectedFormaNodeKeys.includes(node.key)); const anchor = selectedPathOverlay?.pathNode?.node; return anchor?.kind === "anchor" ? selectedElement.nodes.find((node) => node.id === anchor.nodeId) : undefined; })()
         : undefined;
-    const selectedSketchConstraintNodes = selectedElement?.type === "sketch" ? selectedFormaNodeKeys.flatMap((key) => { const match = key.match(new RegExp(`^${selectedElement.id}:p:(\\d+)$`)); const node = match ? selectedElement.nodes[Number(match[1])] : undefined; return node ? [{ elementId: selectedElement.id, nodeId: node.id }] : []; }) : [];
-    const selectedSketchRelationEdges = selectedElement?.type === "sketch" ? selectedElement.edges.filter((edge) => selectedSketchConstraintNodes.some((node) => node.nodeId === edge.startNodeId) && selectedSketchConstraintNodes.some((node) => node.nodeId === edge.endNodeId)) : [];
+    const selectedSketchElements = selectedElements.filter((element): element is Extract<Element, { type: "sketch" }> => element.type === "sketch" && editModeElementIds.includes(element.id));
+    const selectedSketchConstraintNodes = selectedSketchElements.flatMap((sketch) => selectedFormaNodeKeys.flatMap((key) => { const match = key.match(new RegExp(`^${sketch.id}:p:(\\d+)$`)); const node = match ? sketch.nodes[Number(match[1])] : undefined; return node ? [{ elementId: sketch.id, nodeId: node.id }] : []; }));
+    const selectedSketchRelationEdges = selectedSketchElements.flatMap((sketch) => sketch.edges.flatMap((edge) => selectedSketchConstraintNodes.some((node) => node.elementId === sketch.id && node.nodeId === edge.startNodeId) && selectedSketchConstraintNodes.some((node) => node.elementId === sketch.id && node.nodeId === edge.endNodeId) ? [{ elementId: sketch.id, edge }] : []));
         const addRelationToSelectedSketch = (kind: SketchConstraint["kind"], value?: number) => {
-          if (selectedElement?.type !== "sketch" || constraintDraft) return;
+          const targetSketch = selectedSketchElements[0];
+          if (!targetSketch || constraintDraft) return;
           const references = kind === "parallel" || kind === "perpendicular" || kind === "equal"
-            ? selectedSketchRelationEdges.length === 2 ? selectedSketchRelationEdges.flatMap((edge) => [{ elementId: selectedElement.id, nodeId: edge.startNodeId }, { elementId: selectedElement.id, nodeId: edge.endNodeId }]) : []
+            ? selectedSketchRelationEdges.length === 2 ? selectedSketchRelationEdges.flatMap(({ elementId, edge }) => [{ elementId, nodeId: edge.startNodeId }, { elementId, nodeId: edge.endNodeId }]) : []
             : selectedSketchConstraintNodes;
           const required = kind === "fixed" ? 1 : kind === "parallel" || kind === "perpendicular" || kind === "equal" ? 4 : 2;
           if (references.length !== required) return;
           const constraint: SketchConstraint = { id: `constraint-${crypto.randomUUID()}`, kind, references: references as unknown as SketchConstraint["references"], ...(value !== undefined ? { value } : {}) };
-          const preview = previewGesture(beginGesture(editorRef.current), addSketchConstraint(selectedElement.id, constraint));
+          const command = (kind === "parallel" || kind === "perpendicular" || kind === "equal" || kind === "coincident") && new Set(references.map((reference) => reference.elementId)).size > 1 ? addSketchSegmentRelation(constraint) : addSketchConstraint(targetSketch.id, constraint);
+          const preview = previewGesture(beginGesture(editorRef.current), command);
            if (!preview.gesture || preview.document === editorRef.current.document) return;
-           setConstraintDraft({ sketchId: selectedElement.id, constraint });
+           setConstraintDraft({ sketchId: targetSketch.id, constraint });
            setEditorState(preview);
         };
         const confirmConstraintDraft = () => { if (!constraintDraft) return; setEditorState(commitGesture(editorRef.current)); setConstraintDraft(undefined); };
@@ -1402,6 +1436,7 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
         return <svg className="dimension-pending-overlay" aria-hidden="true"><line x1={start.x} y1={start.y} x2={end.x} y2={end.y} /></svg>;
    })() : undefined;
      const cutSegmentHoverOverlay = tool === "cut" && cutSegmentHover ? <svg className="cut-segment-hover-overlay" viewBox={`0 0 ${document.page.width} ${document.page.height}`} style={{ left: pageStyle.left + 1, top: pageStyle.top + 1, width: document.page.width * zoom, height: document.page.height * zoom, right: "auto", bottom: "auto" }} aria-label="Segmento de corte bajo el puntero">{cutSegmentHover.points ? <polyline points={cutSegmentHover.points.map((point) => `${point.x},${point.y}`).join(" ")} /> : <line x1={cutSegmentHover.start.x} y1={cutSegmentHover.start.y} x2={cutSegmentHover.end.x} y2={cutSegmentHover.end.y} />}</svg> : undefined;
+     const formaSegmentHoverOverlay = (tool === "forma" || tool === "dimension") && formaSegmentHover ? (() => { const element = document.elements.find((candidate) => candidate.id === formaSegmentHover.elementId); const segment = element?.type === "line" ? { start: element.start, end: element.end } : element?.type === "sketch" ? (() => { const edge = element.edges[formaSegmentHover.segmentIndex]; const nodes = new Map(element.nodes.map((node) => [node.id, node.point])); const start = edge ? nodes.get(edge.startNodeId) : undefined; const end = edge ? nodes.get(edge.endNodeId) : undefined; return start && end ? { start, end } : undefined; })() : undefined; return segment ? <svg className="forma-segment-hover-overlay" viewBox={`0 0 ${document.page.width} ${document.page.height}`} style={{ left: pageStyle.left + 1, top: pageStyle.top + 1, width: document.page.width * zoom, height: document.page.height * zoom, right: "auto", bottom: "auto" }} aria-label="Segmento bajo el puntero"><line x1={segment.start.x} y1={segment.start.y} x2={segment.end.x} y2={segment.end.y} /></svg> : undefined; })() : undefined;
      const cursorNodeGuideOverlay = tool === "line" && documentCursorPoint ? (() => { const guides = cursorNodeGuides(document, documentCursorPoint, zoom, 5); return guides.length ? <svg className="node-guide-overlay" viewBox={`0 0 ${document.page.width} ${document.page.height}`} style={{ left: pageStyle.left + 1, top: pageStyle.top + 1, width: document.page.width * zoom, height: document.page.height * zoom, right: "auto", bottom: "auto" }} aria-label="Guía de nodo">{guides.map((guide, index) => <line key={`cursor-node-guide-${index}`} className="creation-guide creation-guide-node-alignment" x1={guide.source.x} y1={guide.source.y} x2={guide.target.x} y2={guide.target.y} />)}</svg> : undefined; })() : undefined;
          const pendingCreationOverlay = creationDraft && creationPoint ? (() => {
       const start = creationDraft.tool === "line" ? creationDraft.points.at(-1)! : creationDraft.points[0]!;
@@ -1715,7 +1750,7 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
          <aside className="workspace-tools"><div className="tool-column" role="toolbar" aria-label="Herramientas de diseño">{(["select", "forma", "pen", "spline", "text", "rectangle", "ellipse", "line", "cut", "dimension", "pan"] as const).map((item) => <ToolButton key={item} label={toolCursorLabels[item]} icon={item} active={tool === item} onClick={() => { setTransformMode("resize"); setPenDraftPoint(undefined); creationDraftRef.current = undefined; setCreationDraft(undefined); if (item === "forma" && selectedElements.some((element) => element.type === "text")) setEditorState(clearSelection(editorRef.current)); if (item !== "forma") setEditModeElementIds([]); setTool(item); }} />)}</div></aside>
       <section className="canvas-area">
         <header className="canvas-header"><span>DISEÑO / SIN TÍTULO</span><span>{document.elements.length} objetos · {document.page.width} × {document.page.height} mm</span><div className="zoom-controls"><button aria-label="Alejar" onClick={() => setZoom(zoom - 0.5)}>−</button><span className="zoom-label">{Math.round(zoom * 100 / 3)}%</span><button aria-label="Acercar" onClick={() => setZoom(zoom + 0.5)}>+</button></div></header>
-             <div ref={canvas} className={`${grid ? "canvas" : "canvas no-grid"}${isDrawingTool(tool) ? " drawing-tool" : ""}`} onPointerDown={onCanvasPointerDown} onPointerMove={onCanvasPointerMove} onPointerUp={(event) => finishPointer(event, false)} onPointerCancel={(event) => finishPointer(event, true)} onLostPointerCapture={cancelPointerInteraction} onPointerLeave={() => { setCursorPoint(undefined); setNodeHover(undefined); setCutSegmentHover(undefined); setDimensionNodeHover(undefined); }} onDoubleClick={onCanvasDoubleClick} onWheel={onWheel}>
+             <div ref={canvas} className={`${grid ? "canvas" : "canvas no-grid"}${isDrawingTool(tool) ? " drawing-tool" : ""}`} onPointerDown={onCanvasPointerDown} onPointerMove={onCanvasPointerMove} onPointerUp={(event) => finishPointer(event, false)} onPointerCancel={(event) => finishPointer(event, true)} onLostPointerCapture={cancelPointerInteraction} onPointerLeave={() => { setCursorPoint(undefined); setNodeHover(undefined); setCutSegmentHover(undefined); setDimensionNodeHover(undefined); setFormaSegmentHover(undefined); }} onDoubleClick={onCanvasDoubleClick} onWheel={onWheel}>
             {rulerHorizontal}{rulerVertical}<span className="ruler-corner" aria-hidden="true" />
             <div className="page" style={pageStyle}>{/* SAFETY: renderSvg emits allowlisted SVG from validated document data. */}<div className={`page-svg${textDraft ? " editing-text" : ""}`} dangerouslySetInnerHTML={{ __html: rendered.success ? rendered.svg : "" }} />{(alignmentGuideOverlay.length > 0 || splineOverlay.length > 0 || selectedEditOverlay.length > 0 || pathGuideOverlay.length > 0) && <svg data-spline-overlay-layer="true" viewBox={`0 0 ${document.page.width} ${document.page.height}`} style={{ position: "absolute", inset: 0, width: "100%", height: "100%", pointerEvents: "none", overflow: "visible", zIndex: 5 }}><defs><marker id="forma-handle-arrow" markerWidth="5" markerHeight="5" refX="4" refY="2.5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0,0 L5,2.5 L0,5 Z" fill="#1683ff" /></marker></defs>{alignmentGuideOverlay}{selectedEditOverlay}{pathGuideOverlay}{splineOverlay}</svg>}</div>
               {textDraft && (() => {
@@ -1731,7 +1766,7 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
             {tool === "select" && transformMode === "resize" && (handlePoints || groupPoints) && <div className="resize-handles">{handleNames.map((handle) => <button key={handle} type="button" className={`resize-handle resize-handle-${handle}`} data-resize-handle={handle} aria-label={`Redimensionar ${handle}`} style={handleStyle(handle)} onPointerDown={(event) => resizePointerDown(event, handle)} onPointerUp={(event) => finishPointer(event, false)} onPointerCancel={(event) => finishPointer(event, true)} />)}{groupPoints && !isDrawingTool(tool) && <button type="button" className="resize-handle resize-handle-center" data-resize-handle="center" aria-label="Centro del grupo" style={handleStyle("center")} onPointerDown={(event) => event.stopPropagation()} />}</div>}
            {transformMode === "rotate" && selectedElements.length > 0 && <div className="rotation-controls" aria-label="Controles de rotación"><span className="rotation-center" style={selectedElements.length > 1 && selectedBounds ? { left: pagePointToCanvas(groupCenter(selectedBounds), zoom, panMm).x, top: pagePointToCanvas(groupCenter(selectedBounds), zoom, panMm).y } : centerStyle} aria-hidden="true" />{rotationPoints.map((point, index) => { const screen = pagePointToCanvas(point, zoom, panMm); return <button key={index} type="button" className="rotation-handle" aria-label={`Rotar objeto, control ${index + 1}`} style={{ left: screen.x, top: screen.y }} onPointerDown={rotationPointerDown} onPointerUp={(event) => finishPointer(event, false)} onPointerCancel={(event) => finishPointer(event, true)}><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M15.5 8A6 6 0 1 0 16 12" /><path d="m12.5 4 3 4-5 .5" /></svg></button>; })}</div>}
           {marqueeStyle && <div className="marquee" style={marqueeStyle} />}
-           {pendingDimensionOverlay}{pendingCreationOverlay}{cursorNodeGuideOverlay}{cutSegmentHoverOverlay}{dimensionEditDraft && <form className="dimension-value-editor dimension-value-modal" role="dialog" aria-label="Modificar cota" style={{ left: dimensionEditDraft.position.x + 12, top: dimensionEditDraft.position.y - 18 }} onPointerDown={(event) => event.stopPropagation()} onKeyDown={(event) => { if (event.key === "Escape") { event.preventDefault(); setDimensionEditDraft(undefined); } }} onSubmit={(event) => { event.preventDefault(); const command = updateDimensionValue(dimensionEditDraft.id, Number(dimensionEditDraft.value)); const applied = command.apply(editorRef.current.document); if (!applied.success) { setDimensionEditError(applied.error); return; } const next = dispatch(editorRef.current, command); if (next !== editorRef.current) { setEditorState(next); setDimensionEditError(undefined); setDimensionEditDraft(undefined); } else setDimensionEditError("La cota no produjo cambios."); }}>{dimensionEditError && <div role="alert" className="dimension-edit-error">{dimensionEditError}</div>}<label>Valor<input ref={dimensionInputRef} autoFocus type="number" onFocus={(event) => event.currentTarget.select()} min="0.01" step="0.01" value={dimensionEditDraft.value} onChange={(event) => setDimensionEditDraft((current) => current ? { ...current, value: event.target.value } : current)} /></label><button type="submit">Confirmar</button><button type="button" onClick={() => setDimensionEditDraft(undefined)}>Cancelar</button></form>}
+           {pendingDimensionOverlay}{pendingCreationOverlay}{cursorNodeGuideOverlay}{cutSegmentHoverOverlay}{formaSegmentHoverOverlay}{dimensionEditDraft && <form className="dimension-value-editor dimension-value-modal" role="dialog" aria-label="Modificar cota" style={{ left: dimensionEditDraft.position.x + 12, top: dimensionEditDraft.position.y - 18 }} onPointerDown={(event) => event.stopPropagation()} onKeyDown={(event) => { if (event.key === "Escape") { event.preventDefault(); setDimensionEditDraft(undefined); } }} onSubmit={(event) => { event.preventDefault(); const command = updateDimensionValue(dimensionEditDraft.id, Number(dimensionEditDraft.value)); const applied = command.apply(editorRef.current.document); if (!applied.success) { setDimensionEditError(applied.error); return; } const next = dispatch(editorRef.current, command); if (next !== editorRef.current) { setEditorState(next); setDimensionEditError(undefined); setDimensionEditDraft(undefined); } else setDimensionEditError("La cota no produjo cambios."); }}>{dimensionEditError && <div role="alert" className="dimension-edit-error">{dimensionEditError}</div>}<label>Valor<input ref={dimensionInputRef} autoFocus type="number" onFocus={(event) => event.currentTarget.select()} min="0.01" step="0.01" value={dimensionEditDraft.value} onChange={(event) => setDimensionEditDraft((current) => current ? { ...current, value: event.target.value } : current)} /></label><button type="submit">Confirmar</button><button type="button" onClick={() => setDimensionEditDraft(undefined)}>Cancelar</button></form>}
               {constraintValueDraft && <form className="dimension-value-editor constraint-value-editor" onPointerDown={(event) => event.stopPropagation()} onKeyDown={(event) => { if (event.key === "Escape") { event.preventDefault(); setConstraintValueDraft(undefined); } }} onSubmit={(event) => { event.preventDefault(); const value = Number(constraintValueDraft.value); if (Number.isFinite(value) && value > 0) { addRelationToSelectedSketch(constraintValueDraft.kind, value); setConstraintValueDraft(undefined); } }}><label>Distancia en mm<input autoFocus type="number" min="0.01" step="0.01" value={constraintValueDraft.value} onFocus={(event) => event.currentTarget.select()} onChange={(event) => setConstraintValueDraft((current) => current ? { ...current, value: event.target.value } : current)} /></label><button type="submit">Confirmar</button><button type="button" onClick={() => setConstraintValueDraft(undefined)}>Cancelar</button></form>}{cursorPoint && <span className="tool-cursor" style={{ left: cursorPoint.x, top: cursorPoint.y }} aria-label={`Herramienta activa: ${toolCursorLabels[tool]}`} title={dimensionNodeHover && (tool === "dimension" || tool === "radius") ? "Nodo de dimensión" : tool === "forma" && documentCursorPoint && pickFormaSegment(document, documentCursorPoint, zoom) ? "Doble clic para insertar un nodo" : undefined}>{toolCursorIcons[tool]}{tool === "line" && creationDraft && lineCursorAngle !== undefined && <span className="line-guide-cursor-hud" data-line-guide-hud="true"><span aria-hidden="true">{Math.abs(lineCursorAngle) < 0.1 ? "↔" : Math.abs(Math.abs(lineCursorAngle) - 90) < 0.1 ? "↕" : "↗"}</span><span>{lineCursorAngle.toFixed(1)}°</span></span>}</span>}
             {nodeHover && tool !== "dimension" && tool !== "radius" && !interaction.current && (() => { const point = "node" in nodeHover ? nodeHover.node.point : nodeHover.point; const screen = pagePointToCanvas(point, zoom, panMm); return <span className="node-hover-feedback" data-node-hover-feedback={`${nodeHover.elementId}:${nodeHover.nodeIndex ?? "forma"}`} style={{ left: screen.x, top: screen.y }} aria-label="Nodo bajo el puntero" />; })()}
            {dimensionHoverStyle && <span className="node-hover-feedback" data-dimension-node-target={`${dimensionNodeHover!.elementId}:${dimensionNodeHover!.nodeIndex}`} style={dimensionHoverStyle} aria-label="Nodo de dimensión bajo el puntero" title="Nodo de dimensión" />}
@@ -1760,7 +1795,7 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
   </main>;
 }
 
-const toolDescriptions: Record<string, string> = { Seleccion: "Seleccione, coloque o transforme objetos.", Forma: "Editar la forma mediante sus nodos.", Pluma: "Cree un trazado Bézier con clics y arrastre para editar sus controles.", Spline: "Cree curvas con nodos y handles. Haga clic en el primer nodo para cerrarla; arrastre nodos y controles para editarla.", Texto: "Escriba texto editable sobre la hoja.", Rectángulo: "Dibuje formas rectangulares.", Círculo: "Fije el centro, defina el radio y haga clic para crear un círculo.", Línea: "Cree líneas por segmentos con clics; haga clic en el primer nodo para cerrar.", Desplazar: "Desplace el espacio de trabajo.", Cota: "Mida y cree cotas asociativas entre nodos.", Radio: "Cree una cota radial explícita desde el centro hasta el borde de un círculo." };
+const toolDescriptions: Record<string, string> = { Seleccion: "Seleccione, coloque o transforme objetos.", Forma: "Editar la forma mediante sus nodos.", Pluma: "Cree un trazado Bézier con clics y arrastre para editar sus controles.", Spline: "Cree curvas con nodos y handles. Haga clic en el primer nodo para cerrarla; arrastre nodos y controles para editarla.", Texto: "Escriba texto editable sobre la hoja.", Rectángulo: "Dibuje formas rectangulares.", Círculo: "Fije el centro, defina el radio y haga clic para crear un círculo.", Línea: "Cree líneas por segmentos con clics; haga clic en el primer nodo para cerrar.", Desplazar: "Desplace el espacio de trabajo.", Cota: "Mida y cree cotas asociativas entre nodos y líneas.", Radio: "Cree una cota radial explícita desde el centro hasta el borde de un círculo." };
 function ToolIcon({ icon }: { icon: Tool }) {
   const shape = icon === "select" ? <path d="m5 3 13 8-6 2-3 6z" /> : icon === "text" ? <><path d="M6 5h12M12 5v14M8 19h8" /><path d="M5 5h2M17 5h2" /></> : icon === "forma" ? <><rect x="5" y="5" width="14" height="14" rx="1" /><circle cx="5" cy="5" r="1.5" fill="currentColor" /><circle cx="12" cy="5" r="1.5" fill="currentColor" /><circle cx="19" cy="5" r="1.5" fill="currentColor" /><circle cx="5" cy="12" r="1.5" fill="currentColor" /><circle cx="19" cy="12" r="1.5" fill="currentColor" /><circle cx="5" cy="19" r="1.5" fill="currentColor" /><circle cx="12" cy="19" r="1.5" fill="currentColor" /><circle cx="19" cy="19" r="1.5" fill="currentColor" /></> : icon === "pen" ? <><path d="M4 19 9 14" /><path d="M9 14c3-5 6-7 11-8" /><path d="M14 8 18 4" /><path d="M5 19h4" /><rect x="3" y="17" width="4" height="4" /><rect x="18" y="3" width="4" height="4" /><circle cx="9" cy="14" r="1.5" fill="currentColor" /></> : icon === "spline" ? <><path d="M4 18c4 0 4-10 9-10 3 0 3 4 7 0" /><path d="M4 18 9 14M13 8 18 6" /><circle cx="4" cy="18" r="2" fill="currentColor" /><circle cx="13" cy="8" r="2" fill="currentColor" /><circle cx="20" cy="8" r="2" fill="currentColor" /></> : icon === "rectangle" ? <rect x="5" y="5" width="14" height="14" rx="1" /> : icon === "ellipse" || icon === "radius" ? <circle cx="12" cy="12" r="7" /> : icon === "line" ? <path d="M5 19 19 5" /> : icon === "dimension" ? <><path d="M5 7h14M5 17h14" /><path d="M5 4v16M19 4v16" /><path d="m8 4-3 3 3 3M16 14l3 3-3 3" /></> : <><path d="M12 4v16M4 12h16" /><path d="m9 7 3-3 3 3M9 17l3 3 3-3M7 9l-3 3 3 3M17 9l3 3-3 3" /></>;
   return <svg className="tool-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{shape}</svg>;

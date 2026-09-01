@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createDocument, elementId, layerId, type DimensionElement, type Element, type EllipseElement, type LineElement, type GlyphElement, type PathElement, type PointMm, type RectangleElement, type SketchElement, type SplineElement, type TextElement } from "@nodra/domain";
-import { addSketchConstraint, addToSelection, appendSketchEdge, appendSplineNode, beginGesture, cancelGesture, clearSelection, closePath, closeSplineElement, commitGesture, createEditor, createElement, createPathCubicNode, createSketchLine, cutLineAtPoint, cutPathSegment, cutSketchEdge, splitPathLineAt, deleteContourNodes, deleteElement, deleteElementNodes, deletePathNodes, deleteSketchConstraint, dispatch, duplicateElements, flipElements, insertContourNode, invalidDimensionIdsForShapeOperation, moveElement, moveElements, movePathNode, movePathHandle, openPath, previewGesture, previewGestureFromBase, redo, removeFromSelection, reorderLayer, resizeElement, resizeElementToDimensions, resizeElements, resizeElementsToDimensions, rotateElementsAroundCenter, select, selectForPointerDown, setDimensionDriving, updateCircleConstraint, deleteCircleConstraint, solveCircle, setLayerVisibility, setPathJoin, shapeOperation, splitPathSegment, toggleSelection, undo, updateContourNode, updateDimensionValue, updateElement, updateElementNode, updateElementStyles, updateSketchConstraint, updateSplineHandle, updateSplineNode } from "./index.js";
+import { addSketchConstraint, addSketchSegmentRelation, addToSelection, appendSketchEdge, appendSplineNode, beginGesture, cancelGesture, clearSelection, closePath, closeSplineElement, commitGesture, createEditor, createElement, createPathCubicNode, createSketchLine, cutLineAtPoint, cutPathSegment, cutSketchEdge, splitPathLineAt, deleteContourNodes, deleteElement, deleteElementNodes, deletePathNodes, deleteSketchConstraint, dispatch, duplicateElements, flipElements, insertContourNode, invalidDimensionIdsForShapeOperation, moveElement, moveElements, movePathNode, movePathHandle, openPath, previewGesture, previewGestureFromBase, redo, removeFromSelection, reorderLayer, resizeElement, resizeElementToDimensions, resizeElements, resizeElementsToDimensions, rotateElementsAroundCenter, select, selectForPointerDown, setDimensionDriving, updateCircleConstraint, deleteCircleConstraint, solveCircle, setLayerVisibility, setPathJoin, shapeOperation, splitPathSegment, toggleSelection, undo, updateContourNode, updateDimensionValue, updateElement, updateElementNode, updateElementStyles, updateSketchConstraint, updateSplineHandle, updateSplineNode } from "./index.js";
 import { boundsOfElements } from "@nodra/geometry";
 import type { Direction } from "@nodra/geometry";
 import { appendLinePoint } from "./index.js";
@@ -59,6 +59,29 @@ describe("editor core", () => {
         expect((parallel.document.elements[0] as SketchElement).nodes[3]?.point.y).toBeCloseTo(10);
         const perpendicular = dispatch(createEditor({ ...document, elements: [sketch] }), addSketchConstraint(sketch.id, { id: "perpendicular", kind: "perpendicular", references }));
         expect((perpendicular.document.elements[0] as SketchElement).nodes[3]?.point.x).toBeCloseTo(0);
+      });
+
+      it("merges two sketches when adding an explicit relation between their segments", () => {
+        const first = createSketchLine(elementId("first-relation-sketch"), layerId("default"), rectangle.style, { x: 0, y: 0 }, { x: 10, y: 0 });
+        const second = createSketchLine(elementId("second-relation-sketch"), layerId("default"), rectangle.style, { x: 0, y: 10 }, { x: 3, y: 14 });
+        const relation = { id: "parallel", kind: "parallel" as const, references: [{ elementId: first.id, nodeId: first.nodes[0]!.id }, { elementId: first.id, nodeId: first.nodes[1]!.id }, { elementId: second.id, nodeId: second.nodes[0]!.id }, { elementId: second.id, nodeId: second.nodes[1]!.id }] as const };
+        const state = dispatch(createEditor({ ...document, elements: [first, second] }), addSketchSegmentRelation(relation));
+        expect(state.document.elements).toHaveLength(1);
+        const merged = state.document.elements[0] as SketchElement;
+        expect(merged.edges).toHaveLength(2);
+        expect(merged.constraints?.some((constraint) => constraint.kind === "parallel")).toBe(true);
+        expect(merged.nodes[3]?.point.y).toBeCloseTo(10);
+      });
+
+      it("merges two sketches for an explicit coincident node relation", () => {
+        const first = createSketchLine(elementId("first-coincident-sketch"), layerId("default"), rectangle.style, { x: 0, y: 0 }, { x: 10, y: 0 });
+        const second = createSketchLine(elementId("second-coincident-sketch"), layerId("default"), rectangle.style, { x: 20, y: 10 }, { x: 20, y: 20 });
+        const relation = { id: "coincident-cross", kind: "coincident" as const, references: [{ elementId: first.id, nodeId: first.nodes[1]!.id }, { elementId: second.id, nodeId: second.nodes[0]!.id }] as const };
+        const state = dispatch(createEditor({ ...document, elements: [first, second] }), addSketchSegmentRelation(relation));
+        expect(state.document.elements).toHaveLength(1);
+        const merged = state.document.elements[0] as SketchElement;
+        expect(merged.constraints).toContainEqual(expect.objectContaining({ kind: "coincident" }));
+        expect(merged.nodes.find((node) => node.id === `${second.id}:${second.nodes[0]!.id}`)?.point).toEqual(merged.nodes.find((node) => node.id === first.nodes[1]!.id)?.point);
       });
 
       it("deletes sketch nodes with their attached constraints while preserving the sketch model", () => {
@@ -458,6 +481,26 @@ it("updates an angled sketch line dimension without requiring a separate constra
      const state = dispatch(createEditor({ ...document, elements: [sketch, linked] }), updateDimensionValue(linked.id, 20));
      const updated = state.document.elements[0] as SketchElement;
      expect(Math.hypot(updated.nodes[1]!.point.x - updated.nodes[0]!.point.x, updated.nodes[1]!.point.y - updated.nodes[0]!.point.y)).toBeCloseTo(20);
+   });
+
+it("preserves a horizontal sketch relation while changing an angular dimension", () => {
+     const sketch: SketchElement = { type: "sketch", id: elementId("constrained-angular-sketch"), layerId: layerId("default"), nodes: [{ id: "a", point: { x: 0, y: 0 } }, { id: "b", point: { x: 10, y: 0 } }, { id: "c", point: { x: 10, y: 10 } }], edges: [{ id: "ab", startNodeId: "a", endNodeId: "b" }, { id: "bc", startNodeId: "b", endNodeId: "c" }], constraints: [{ id: "horizontal", kind: "horizontal", references: [{ elementId: elementId("constrained-angular-sketch"), nodeId: "a" }, { elementId: elementId("constrained-angular-sketch"), nodeId: "b" }] }], style: rectangle.style };
+     const angle: DimensionElement = { type: "dimension", id: elementId("constrained-angular-dimension"), layerId: sketch.layerId, kind: "angular", references: [{ kind: "line", elementId: sketch.id, edgeIndex: 0 }, { kind: "line", elementId: sketch.id, edgeIndex: 1 }], offset: { x: 5, y: -5 }, precision: 2, units: "mm", rotation: 0, style: rectangle.style };
+     const state = dispatch(createEditor({ ...document, elements: [sketch, angle] }), updateDimensionValue(angle.id, 30));
+     const updated = state.document.elements[0] as SketchElement;
+     expect(updated.nodes[0]?.point.y).toBe(0);
+     expect(updated.nodes[1]?.point.y).toBe(0);
+   });
+
+it("drives the angle between two connected lines while preserving the second length", () => {
+     const first: LineElement = { type: "line", id: elementId("first-angle-line"), layerId: layerId("default"), start: { x: 0, y: 0 }, end: { x: 10, y: 0 }, rotation: 0, style: rectangle.style };
+     const second: LineElement = { type: "line", id: elementId("second-angle-line"), layerId: layerId("default"), start: { x: 0, y: 0 }, end: { x: 0, y: 10 }, rotation: 0, style: rectangle.style };
+     const linked: DimensionElement = { type: "dimension", id: elementId("two-line-angle-dimension"), layerId: first.layerId, kind: "angular", references: [{ kind: "line", elementId: first.id }, { kind: "line", elementId: second.id }], offset: { x: 5, y: -5 }, precision: 2, units: "mm", rotation: 0, style: rectangle.style };
+     const state = dispatch(createEditor({ ...document, elements: [first, second, linked] }), updateDimensionValue(linked.id, 30));
+     const updated = state.document.elements.find((element): element is LineElement => element.id === second.id)!;
+     expect(updated.start).toEqual(second.start);
+     expect(Math.hypot(updated.end.x - updated.start.x, updated.end.y - updated.start.y)).toBeCloseTo(10);
+     expect(Math.atan2(updated.end.y - updated.start.y, updated.end.x - updated.start.x) * 180 / Math.PI).toBeCloseTo(30);
    });
 
 it("drives an individual line angle while preserving its length", () => {
