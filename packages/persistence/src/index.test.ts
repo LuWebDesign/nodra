@@ -1,6 +1,6 @@
 import "fake-indexeddb/auto";
 import { afterEach, describe, expect, it } from "vitest";
-import { createDocument, createProject, elementId, layerId, revision } from "@nodra/domain";
+import { CURRENT_SCHEMA_VERSION, createDocument, createProject, elementId, layerId, revision } from "@nodra/domain";
 import { DebouncedAutosave, DexieProjectRepository, MigrationRegistry, type ProjectRepository } from "./index.js";
 
 const metadata = { id: "project-1", name: "Offline project", updatedAt: 0 };
@@ -65,6 +65,18 @@ describe("DexieProjectRepository", () => {
     const recovered = await db.getProject(metadata.id);
     expect(recovered.ok).toBe(true);
     expect(recovered.ok && recovered.skipped).toBe(1);
+  });
+
+  it("migrates legacy path segment identities while recovering a revision", async () => {
+    db = await repository();
+    const base = document();
+    await db.saveProject(metadata, base);
+    const legacyPath = { type: "path", id: "legacy-path", layerId: "layer-1", nodes: [{ id: "a", anchor: { x: 0, y: 0 }, join: "corner" }, { id: "b", anchor: { x: 10, y: 0 }, join: "corner" }], segments: [{ type: "line", startNodeId: "a", endNodeId: "b" }], closed: false, style: { stroke: "#000", strokeWidth: 1 } };
+    const rawDb = (db as unknown as { db: { revisions: { put: (value: unknown) => Promise<void> } } }).db;
+    await rawDb.revisions.put({ key: `${metadata.id}:2`, recordVersion: 1, projectId: metadata.id, revision: 2, savedAt: 2, document: { ...base, schemaVersion: 6, revision: 2, elements: [legacyPath] } });
+
+    const recovered = await db.getProject(metadata.id);
+    expect(recovered.ok && recovered.revision.document).toMatchObject({ schemaVersion: CURRENT_SCHEMA_VERSION, elements: [{ type: "path", segments: [{ id: "legacy-path:segment:0" }] }] });
   });
 
   it("deletes project metadata and all revisions", async () => {

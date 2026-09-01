@@ -2,7 +2,9 @@
 
 ## Estado
 
-Propuesta arquitectónica para implementación incremental.
+Implementación incremental en curso.
+
+Entregas aplicadas: límite compartido `@nodra/constraints`, referencias estables `edgeId` para cotas de aristas de sketch y, desde schema 7, IDs obligatorios para segmentos de path/glifo con migración determinista y contrato explícito `TopologyEditResult` en editor-core.
 
 Este documento define la base técnica para ampliar el sistema de croquis de Nodra sin introducir lógica específica por herramienta. No autoriza implementar de una sola vez todas las entidades y relaciones de un CAD profesional.
 
@@ -953,11 +955,14 @@ La base se considera preparada para escalar cuando:
 
 ## 24. Decisiones pendientes antes de implementar
 
-1. Nombre definitivo del paquete: se propone `@nodra/constraints`.
-2. Forma final de IDs para segmentos de `PathElement` y curvas futuras.
-3. Política de una cota cuando su arista se divide en dos.
-4. Periodo de convivencia de `connections` y restricciones coincidentes.
-5. Primer conjunto exacto de relaciones externas admitidas.
-6. Si el renderer recibe estados precalculados o una consulta pura por documento; no debe recalcular el solver por cada elemento.
-7. Política configurable de inferencias automáticas.
-8. Representación futura de operaciones derivadas para desfases, patrones y simetrías.
+1. Periodo de convivencia de `connections` y restricciones coincidentes.
+2. Primer conjunto exacto de relaciones externas admitidas.
+3. Si el renderer recibe estados precalculados o una consulta pura por documento; no debe recalcular el solver por cada elemento.
+4. Política configurable de inferencias automáticas.
+5. Representación futura de operaciones derivadas para desfases, patrones y simetrías.
+
+Decisiones resueltas durante la implementación:
+
+- el paquete compartido se denomina `@nodra/constraints`;
+- cada `PathSegment` persistido usa un `id` estable obligatorio; los segmentos legacy reciben IDs deterministas por elemento, contorno e índice durante la migración a schema 7;
+- al dividir una arista de sketch, la cota angular existente sigue la primera pieza colineal y el cambio topológico declara ambas piezas como reemplazos.

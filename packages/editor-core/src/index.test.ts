@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createDocument, elementId, layerId, type DimensionElement, type Element, type EllipseElement, type LineElement, type GlyphElement, type PathElement, type PointMm, type RectangleElement, type SketchElement, type SplineElement, type TextElement } from "@nodra/domain";
-import { addSketchConstraint, addSketchSegmentRelation, addToSelection, appendSketchEdge, appendSplineNode, beginGesture, cancelGesture, clearSelection, closePath, closeSplineElement, commitGesture, createEditor, createElement, createPathCubicNode, createSketchLine, cutLineAtPoint, cutPathSegment, cutSketchEdge, splitPathLineAt, deleteContourNodes, deleteElement, deleteElementNodes, deletePathNodes, deleteSketchConstraint, dispatch, duplicateElements, flipElements, insertContourNode, invalidDimensionIdsForShapeOperation, moveElement, moveElements, movePathNode, movePathHandle, openPath, previewGesture, previewGestureFromBase, redo, removeFromSelection, reorderLayer, resizeElement, resizeElementToDimensions, resizeElements, resizeElementsToDimensions, rotateElementsAroundCenter, select, selectForPointerDown, setDimensionDriving, updateCircleConstraint, deleteCircleConstraint, solveCircle, setLayerVisibility, setPathJoin, shapeOperation, splitPathSegment, toggleSelection, undo, updateContourNode, updateDimensionValue, updateElement, updateElementNode, updateElementStyles, updateSketchConstraint, updateSplineHandle, updateSplineNode } from "./index.js";
+import { addSketchConstraint, addSketchSegmentRelation, addToSelection, appendSketchEdge, appendSplineNode, beginGesture, cancelGesture, clearSelection, closePath, closeSplineElement, commitGesture, createEditor, createElement, createPathCubicNode, createSketchLine, cutLineAtPoint, cutPathSegment, cutSketchEdge, splitPathLineAt, deleteContourNodes, deleteElement, deleteElementNodes, deletePathNodes, deleteSketchConstraint, dispatch, duplicateElements, flipElements, insertContourNode, invalidDimensionIdsForShapeOperation, moveElement, moveElements, movePathNode, movePathHandle, openPath, previewGesture, previewGestureFromBase, redo, reversePath, removeFromSelection, reorderLayer, resizeElement, resizeElementToDimensions, resizeElements, resizeElementsToDimensions, rotateElementsAroundCenter, select, selectForPointerDown, setDimensionDriving, updateCircleConstraint, deleteCircleConstraint, solveCircle, setLayerVisibility, setPathJoin, shapeOperation, splitPathSegment, toggleSelection, topologyEditForPathSegmentReplacement, topologyReferenceKey, undo, updateContourNode, updateDimensionValue, updateElement, updateElementNode, updateElementStyles, updateSketchConstraint, updateSplineHandle, updateSplineNode } from "./index.js";
 import { boundsOfElements } from "@nodra/geometry";
 import type { Direction } from "@nodra/geometry";
 import { appendLinePoint } from "./index.js";
@@ -8,13 +8,23 @@ import { appendLinePoint } from "./index.js";
 const rectangle: RectangleElement = { type: "rectangle", id: elementId("r1"), layerId: layerId("default"), position: { x: 1, y: 2 }, size: { width: 10, height: 5 }, cornerRadius: 0, rotation: 0, style: { stroke: "#000", strokeWidth: 1 } };
 const ellipse: EllipseElement = { type: "ellipse", id: elementId("ellipse"), layerId: layerId("default"), position: { x: 11, y: 12 }, size: { width: 20, height: 10 }, rotation: 0, style: rectangle.style };
 const document = createDocument("doc", [{ id: layerId("default"), name: "Default", visible: true, order: 0 }]);
-const path: PathElement = { type: "path", id: elementId("path"), layerId: layerId("default"), nodes: [{ id: "a", anchor: { x: 0, y: 0 }, join: "corner" }, { id: "b", anchor: { x: 10, y: 0 }, join: "corner" }], segments: [{ type: "cubicBezier", startNodeId: "a", endNodeId: "b", control1: { x: 2, y: 4 }, control2: { x: 8, y: 4 } }], closed: false, style: rectangle.style };
+const path: PathElement = { type: "path", id: elementId("path"), layerId: layerId("default"), nodes: [{ id: "a", anchor: { x: 0, y: 0 }, join: "corner" }, { id: "b", anchor: { x: 10, y: 0 }, join: "corner" }], segments: [{ id: "fixture-segment-1", type: "cubicBezier", startNodeId: "a", endNodeId: "b", control1: { x: 2, y: 4 }, control2: { x: 8, y: 4 } }], closed: false, style: rectangle.style };
 const spline: SplineElement = { type: "spline", id: elementId("spline"), layerId: layerId("default"), nodes: [{ id: "a", anchor: { x: 0, y: 0 }, continuity: "smooth" }, { id: "b", anchor: { x: 10, y: 0 }, continuity: "smooth" }, { id: "c", anchor: { x: 10, y: 10 }, continuity: "smooth" }], closed: false, style: rectangle.style };
 const text: TextElement = { type: "text", id: elementId("text"), layerId: layerId("default"), position: { x: 12, y: 18 }, size: { width: 32, height: 14 }, text: "Keep formatting", fontFamily: "Times New Roman", fontSize: 18, fontWeight: "bold", fontStyle: "italic", textAlign: "left", lineHeight: 1.2, rotation: 0, style: { stroke: "#123456", fill: "#654321", strokeWidth: 0.5 } };
 const dimension: DimensionElement = { type: "dimension", id: elementId("dimension"), layerId: layerId("default"), kind: "horizontal", references: [{ kind: "node", elementId: rectangle.id, nodeIndex: 0 }, { kind: "node", elementId: rectangle.id, nodeIndex: 1 }], offset: { x: 0, y: -10 }, precision: 2, units: "mm", rotation: 0, style: rectangle.style };
-const glyph: GlyphElement = { type: "glyph", id: elementId("glyph"), layerId: layerId("default"), position: { x: 0, y: 0 }, size: { width: 20, height: 20 }, glyph: "O", fillRule: "evenodd", rotation: 0, style: rectangle.style, contours: [{ nodes: [{ id: "ga", anchor: { x: 0, y: 0 }, join: "smooth" }, { id: "gb", anchor: { x: 10, y: 0 }, join: "smooth" }, { id: "gc", anchor: { x: 10, y: 10 }, join: "smooth" }, { id: "gd", anchor: { x: 0, y: 10 }, join: "smooth" }], segments: [{ type: "cubicBezier", startNodeId: "ga", endNodeId: "gb", control1: { x: 3, y: -2 }, control2: { x: 7, y: -2 } }, { type: "cubicBezier", startNodeId: "gb", endNodeId: "gc", control1: { x: 12, y: 3 }, control2: { x: 12, y: 7 } }, { type: "cubicBezier", startNodeId: "gc", endNodeId: "gd", control1: { x: 7, y: 12 }, control2: { x: 3, y: 12 } }, { type: "cubicBezier", startNodeId: "gd", endNodeId: "ga", control1: { x: -2, y: 7 }, control2: { x: -2, y: 3 } }] }] };
+const glyph: GlyphElement = { type: "glyph", id: elementId("glyph"), layerId: layerId("default"), position: { x: 0, y: 0 }, size: { width: 20, height: 20 }, glyph: "O", fillRule: "evenodd", rotation: 0, style: rectangle.style, contours: [{ nodes: [{ id: "ga", anchor: { x: 0, y: 0 }, join: "smooth" }, { id: "gb", anchor: { x: 10, y: 0 }, join: "smooth" }, { id: "gc", anchor: { x: 10, y: 10 }, join: "smooth" }, { id: "gd", anchor: { x: 0, y: 10 }, join: "smooth" }], segments: [{ id: "fixture-segment-2", type: "cubicBezier", startNodeId: "ga", endNodeId: "gb", control1: { x: 3, y: -2 }, control2: { x: 7, y: -2 } }, { id: "fixture-segment-3", type: "cubicBezier", startNodeId: "gb", endNodeId: "gc", control1: { x: 12, y: 3 }, control2: { x: 12, y: 7 } }, { id: "fixture-segment-4", type: "cubicBezier", startNodeId: "gc", endNodeId: "gd", control1: { x: 7, y: 12 }, control2: { x: 3, y: 12 } }, { id: "fixture-segment-5", type: "cubicBezier", startNodeId: "gd", endNodeId: "ga", control1: { x: -2, y: 7 }, control2: { x: -2, y: 3 } }] }] };
 
 describe("editor core", () => {
+  it("keys stable topology references without conflating edge and segment identities", () => {
+    expect(topologyReferenceKey({ kind: "sketch-edge", elementId: elementId("shape"), edgeId: "shared" })).toBe("shape:edge:shared");
+    expect(topologyReferenceKey({ kind: "path-segment", elementId: elementId("shape"), segmentId: "shared" })).toBe("shape:segment:shared");
+  });
+  it("reports path segment replacements through the shared topology contract", () => {
+    const replacements = [{ id: "first", type: "line" as const, startNodeId: "a", endNodeId: "middle" }, { id: "second", type: "line" as const, startNodeId: "middle", endNodeId: "b" }];
+    const edit = topologyEditForPathSegmentReplacement([path], path.id, path.segments[0]!.id, replacements);
+    expect(edit.referenceMap.get(`${path.id}:segment:${path.segments[0]!.id}`)).toEqual({ kind: "replaced", references: [{ kind: "path-segment", elementId: path.id, segmentId: "first" }, { kind: "path-segment", elementId: path.id, segmentId: "second" }] });
+    expect(edit.elements).toEqual([path]);
+  });
   it("previews, commits, cancels, and undoes a sketch constraint as one transaction", () => {
         const sketch = createSketchLine(elementId("transaction-sketch"), layerId("default"), rectangle.style, { x: 0, y: 0 }, { x: 7, y: 4 });
         const [first, second] = sketch.nodes;
@@ -163,12 +173,12 @@ it("converts a zero-radius rectangle to an open path when cutting one edge", () 
     expect(state.document.elements[1]).toMatchObject({ type: "dimension", references: [{ kind: "node", elementId: rectangle.id }, { kind: "node", elementId: rectangle.id }] });
   });
   it("splits a straight path segment at an arbitrary parameter", () => {
-    const cutPath: PathElement = { ...path, nodes: [...path.nodes, { id: "c", anchor: { x: 10, y: 10 }, join: "corner" }], segments: [...path.segments, { type: "line", startNodeId: "b", endNodeId: "c" }] };
+    const cutPath: PathElement = { ...path, nodes: [...path.nodes, { id: "c", anchor: { x: 10, y: 10 }, join: "corner" }], segments: [...path.segments, { id: "fixture-segment-6", type: "line", startNodeId: "b", endNodeId: "c" }] };
     const state = dispatch(createEditor({ ...document, elements: [cutPath] }), splitPathLineAt(cutPath.id, 1, 0.25));
     expect(state.document.elements[0]).toMatchObject({ type: "path", nodes: [{ id: "a" }, { id: "b" }, { anchor: { x: 10, y: 2.5 } }, { id: "c" }] });
   });
   it("removes a single-segment path when it is cut", () => {
-    const single: PathElement = { ...path, nodes: path.nodes.slice(0, 2), segments: [{ type: "line", startNodeId: "a", endNodeId: "b" }] };
+    const single: PathElement = { ...path, nodes: path.nodes.slice(0, 2), segments: [{ id: "fixture-segment-7", type: "line", startNodeId: "a", endNodeId: "b" }] };
     expect(dispatch(createEditor({ ...document, elements: [single] }), cutPathSegment(single.id, 0)).document.elements).toEqual([]);
   });
   it("rejects a curved cut atomically", () => {
@@ -267,24 +277,25 @@ it("converts a zero-radius rectangle to an open path when cutting one edge", () 
       });
 
       it("splits a straight path segment at an arbitrary parameter", () => {
-        const cutPath: PathElement = { ...path, nodes: [...path.nodes, { id: "c", anchor: { x: 10, y: 10 }, join: "corner" }], segments: [...path.segments, { type: "line", startNodeId: "b", endNodeId: "c" }] };
+        const cutPath: PathElement = { ...path, nodes: [...path.nodes, { id: "c", anchor: { x: 10, y: 10 }, join: "corner" }], segments: [...path.segments, { id: "fixture-segment-8", type: "line", startNodeId: "b", endNodeId: "c" }] };
         const state = dispatch(createEditor({ ...document, elements: [cutPath] }), splitPathLineAt(cutPath.id, 1, 0.25));
         const result = state.document.elements[0];
         expect(result).toMatchObject({ type: "path", nodes: [{ id: "a" }, { id: "b" }, { anchor: { x: 10, y: 2.5 } }, { id: "c" }] });
-        expect(result?.type === "path" ? result.segments.slice(1) : []).toEqual([{ type: "line", startNodeId: "b", endNodeId: result?.type === "path" ? result.nodes[2]!.id : "" }, { type: "line", startNodeId: result?.type === "path" ? result.nodes[2]!.id : "", endNodeId: "c" }]);
+        expect(result?.type === "path" ? result.segments.slice(1) : []).toMatchObject([{ type: "line", startNodeId: "b", endNodeId: result?.type === "path" ? result.nodes[2]!.id : "" }, { type: "line", startNodeId: result?.type === "path" ? result.nodes[2]!.id : "", endNodeId: "c" }]);
+        if (result?.type === "path") expect(result.segments.slice(1).every((segment) => segment.id !== "fixture-segment-8")).toBe(true);
       });
 
       it("removes a single-segment path when it is cut", () => {
-        const single: PathElement = { ...path, nodes: path.nodes.slice(0, 2), segments: [{ type: "line", startNodeId: "a", endNodeId: "b" }] };
+        const single: PathElement = { ...path, nodes: path.nodes.slice(0, 2), segments: [{ id: "fixture-segment-11", type: "line", startNodeId: "a", endNodeId: "b" }] };
         const state = dispatch(createEditor({ ...document, elements: [single] }), cutPathSegment(single.id, 0));
         expect(state.document.elements).toEqual([]);
         expect(state.undo).toHaveLength(1);
       });
 
       it("cuts an isolated straight path segment without removing the path", () => {
-        const cutPath: PathElement = { ...path, nodes: [...path.nodes, { id: "c", anchor: { x: 10, y: 10 }, join: "corner" }], segments: [...path.segments, { type: "line", startNodeId: "b", endNodeId: "c" }] };
+        const cutPath: PathElement = { ...path, nodes: [...path.nodes, { id: "c", anchor: { x: 10, y: 10 }, join: "corner" }], segments: [...path.segments, { id: "fixture-segment-12", type: "line", startNodeId: "b", endNodeId: "c" }] };
         const state = dispatch(createEditor({ ...document, elements: [cutPath] }), cutPathSegment(cutPath.id, 1));
-        expect(state.document.elements[0]).toMatchObject({ type: "path", closed: false, nodes: [{ id: "a" }, { id: "b" }], segments: [{ type: "cubicBezier", startNodeId: "a", endNodeId: "b" }] });
+        expect(state.document.elements[0]).toMatchObject({ type: "path", closed: false, nodes: [{ id: "a" }, { id: "b" }], segments: [{ id: path.segments[0]!.id, type: "cubicBezier", startNodeId: "a", endNodeId: "b" }] });
         expect(state.undo).toHaveLength(1);
       });
       it("generalizes a committed native line when a third node is added", () => {
@@ -610,9 +621,9 @@ it("moves a dimension by changing only its placement offset and supports undo", 
       ...path,
       nodes: [{ id: "a", anchor: { x: 0, y: 0 }, join: "symmetric" }, { id: "b", anchor: { x: 10, y: 0 }, join: "corner" }, { id: "c", anchor: { x: 0, y: 10 }, join: "corner" }],
       segments: [
-        { type: "cubicBezier", startNodeId: "a", endNodeId: "b", control1: { x: 2, y: 0 }, control2: { x: 8, y: 0 } },
-        { type: "cubicBezier", startNodeId: "b", endNodeId: "c", control1: { x: 8, y: 4 }, control2: { x: 2, y: 8 } },
-        { type: "cubicBezier", startNodeId: "c", endNodeId: "a", control1: { x: 0, y: 8 }, control2: { x: 0, y: 2 } },
+        { id: "fixture-segment-14", type: "cubicBezier", startNodeId: "a", endNodeId: "b", control1: { x: 2, y: 0 }, control2: { x: 8, y: 0 } },
+        { id: "fixture-segment-15", type: "cubicBezier", startNodeId: "b", endNodeId: "c", control1: { x: 8, y: 4 }, control2: { x: 2, y: 8 } },
+        { id: "fixture-segment-16", type: "cubicBezier", startNodeId: "c", endNodeId: "a", control1: { x: 0, y: 8 }, control2: { x: 0, y: 2 } },
       ],
       closed: true,
     };
@@ -627,9 +638,17 @@ it("moves a dimension by changing only its placement offset and supports undo", 
     expect(result?.type).toBe("glyph");
     if (result?.type === "glyph") expect(result.contours[0]?.segments[3]).toMatchObject({ control2: { x: -4, y: -3 } });
   });
+  it("reverses a path while preserving stable segment identities", () => {
+    const reversible: PathElement = { ...path, nodes: [...path.nodes, { id: "c", anchor: { x: 20, y: 0 }, join: "corner" }], segments: [path.segments[0]!, { id: "reverse-bc", type: "line", startNodeId: "b", endNodeId: "c" }] };
+    const state = dispatch(createEditor({ ...document, elements: [reversible] }), reversePath(reversible.id));
+    const reversed = state.document.elements[0];
+    expect(reversed?.type === "path" ? reversed.segments.map((segment) => segment.id) : []).toEqual(["reverse-bc", path.segments[0]!.id]);
+    expect(reversed).toMatchObject({ nodes: [{ id: "c" }, { id: "b" }, { id: "a" }], segments: [{ startNodeId: "c", endNodeId: "b" }, { startNodeId: "b", endNodeId: "a" }] });
+    expect(undo(state).document.elements).toEqual([reversible]);
+  });
   it("closes and reopens a path as independent undoable commands", () => {
     let state = dispatch(createEditor({ ...document, elements: [path] }), closePath(path.id));
-    expect(state.document.elements[0]).toMatchObject({ closed: true, segments: [{ type: "cubicBezier" }, { type: "line", startNodeId: "b", endNodeId: "a" }] });
+    expect(state.document.elements[0]).toMatchObject({ closed: true, segments: [{ id: path.segments[0]!.id, type: "cubicBezier" }, { type: "line", startNodeId: "b", endNodeId: "a" }] });
     expect(state.undo).toHaveLength(1);
     state = dispatch(state, openPath(path.id));
     expect(state.document.elements[0]).toMatchObject({ closed: false, segments: [{ type: "cubicBezier" }] });
@@ -637,16 +656,18 @@ it("moves a dimension by changing only its placement offset and supports undo", 
     expect(redo(undo(state)).document.elements).toEqual(state.document.elements);
   });
   it("deletes an open interior anchor and preserves neighboring cubic endpoint controls", () => {
-    const three: PathElement = { ...path, nodes: [...path.nodes, { id: "c", anchor: { x: 20, y: 0 }, join: "corner" }], segments: [...path.segments, { type: "cubicBezier", startNodeId: "b", endNodeId: "c", control1: { x: 12, y: -4 }, control2: { x: 18, y: -4 } }] };
+    const three: PathElement = { ...path, nodes: [...path.nodes, { id: "c", anchor: { x: 20, y: 0 }, join: "corner" }], segments: [...path.segments, { id: "fixture-segment-19", type: "cubicBezier", startNodeId: "b", endNodeId: "c", control1: { x: 12, y: -4 }, control2: { x: 18, y: -4 } }] };
     const state = dispatch(createEditor({ ...document, elements: [three] }), deletePathNodes(three.id, ["b"]));
     expect(state.document.elements[0]).toMatchObject({ nodes: [{ id: "a" }, { id: "c" }], segments: [{ type: "cubicBezier", startNodeId: "a", endNodeId: "c", control1: { x: 2, y: 4 }, control2: { x: 18, y: -4 } }] });
+    const rebuilt = state.document.elements[0];
+    if (rebuilt?.type === "path") expect(three.segments.some((segment) => segment.id === rebuilt.segments[0]?.id)).toBe(false);
     expect(state.undo).toHaveLength(1);
     expect(undo(state).document.elements).toEqual([three]);
   });
   it("deletes a closed anchor across the closing join and rejects minimums atomically", () => {
-    const closed: PathElement = { ...path, closed: true, nodes: [...path.nodes, { id: "c", anchor: { x: 5, y: 10 }, join: "smooth" }, { id: "d", anchor: { x: -5, y: 10 }, join: "corner" }], segments: [{ type: "line", startNodeId: "a", endNodeId: "b" }, { type: "line", startNodeId: "b", endNodeId: "c" }, { type: "line", startNodeId: "c", endNodeId: "d" }, { type: "cubicBezier", startNodeId: "d", endNodeId: "a", control1: { x: -4, y: 8 }, control2: { x: -1, y: 2 } }] };
+    const closed: PathElement = { ...path, closed: true, nodes: [...path.nodes, { id: "c", anchor: { x: 5, y: 10 }, join: "smooth" }, { id: "d", anchor: { x: -5, y: 10 }, join: "corner" }], segments: [{ id: "fixture-segment-21", type: "line", startNodeId: "a", endNodeId: "b" }, { id: "fixture-segment-22", type: "line", startNodeId: "b", endNodeId: "c" }, { id: "fixture-segment-23", type: "line", startNodeId: "c", endNodeId: "d" }, { id: "fixture-segment-24", type: "cubicBezier", startNodeId: "d", endNodeId: "a", control1: { x: -4, y: 8 }, control2: { x: -1, y: 2 } }] };
     const state = dispatch(createEditor({ ...document, elements: [closed] }), deletePathNodes(closed.id, ["a"]));
-    expect(state.document.elements[0]).toMatchObject({ nodes: [{ id: "b" }, { id: "c" }, { id: "d" }], segments: [{ type: "line", startNodeId: "b", endNodeId: "c" }, { type: "line", startNodeId: "c", endNodeId: "d" }, { type: "cubicBezier", startNodeId: "d", endNodeId: "b", control1: { x: -4, y: 8 }, control2: { x: 5, y: 3.333333333333333 } }] });
+    expect(state.document.elements[0]).toMatchObject({ nodes: [{ id: "b" }, { id: "c" }, { id: "d" }], segments: [{ id: "fixture-segment-22", type: "line", startNodeId: "b", endNodeId: "c" }, { id: "fixture-segment-23", type: "line", startNodeId: "c", endNodeId: "d" }, { type: "cubicBezier", startNodeId: "d", endNodeId: "b", control1: { x: -4, y: 8 }, control2: { x: 5, y: 3.333333333333333 } }] });
     expect(dispatch(state, deletePathNodes(closed.id, ["b"]))).toBe(state);
   });
   it("changes each path join mode as one undoable command", () => {
@@ -663,14 +684,18 @@ it("moves a dimension by changing only its placement offset and supports undo", 
     }
   });
   it("splits line and cubic path segments at their midpoint as one undoable command", () => {
-    const linePath: PathElement = { ...path, id: elementId("line-path"), nodes: [{ id: "a", anchor: { x: 0, y: 0 }, join: "smooth" }, { id: "b", anchor: { x: 10, y: 0 }, join: "symmetric" }], segments: [{ type: "line", startNodeId: "a", endNodeId: "b" }, { type: "line", startNodeId: "b", endNodeId: "a" }], closed: true };
+    const linePath: PathElement = { ...path, id: elementId("line-path"), nodes: [{ id: "a", anchor: { x: 0, y: 0 }, join: "smooth" }, { id: "b", anchor: { x: 10, y: 0 }, join: "symmetric" }], segments: [{ id: "fixture-segment-28", type: "line", startNodeId: "a", endNodeId: "b" }, { id: "fixture-segment-29", type: "line", startNodeId: "b", endNodeId: "a" }], closed: true };
     let state = dispatch(createEditor({ ...document, elements: [linePath] }), splitPathSegment(linePath.id, 0, "mid-line"));
-    expect(state.document.elements[0]).toMatchObject({ type: "path", nodes: [{ id: "a", join: "smooth" }, { id: "mid-line", anchor: { x: 5, y: 0 }, join: "corner" }, { id: "b", join: "symmetric" }], segments: [{ type: "line", startNodeId: "a", endNodeId: "mid-line" }, { type: "line", startNodeId: "mid-line", endNodeId: "b" }, { type: "line", startNodeId: "b", endNodeId: "a" }], closed: true });
+    expect(state.document.elements[0]).toMatchObject({ type: "path", nodes: [{ id: "a", join: "smooth" }, { id: "mid-line", anchor: { x: 5, y: 0 }, join: "corner" }, { id: "b", join: "symmetric" }], segments: [{ type: "line", startNodeId: "a", endNodeId: "mid-line" }, { type: "line", startNodeId: "mid-line", endNodeId: "b" }, { id: "fixture-segment-29", type: "line", startNodeId: "b", endNodeId: "a" }], closed: true });
+    const splitLine = state.document.elements[0];
+    if (splitLine?.type === "path") expect(splitLine.segments.slice(0, 2).every((segment) => segment.id !== "fixture-segment-28")).toBe(true);
     expect(state.undo).toHaveLength(1);
     expect(redo(undo(state)).document.elements).toEqual(state.document.elements);
 
     state = dispatch(createEditor({ ...document, elements: [path] }), splitPathSegment(path.id, 0, "mid-cubic"));
     expect(state.document.elements[0]).toMatchObject({ segments: [{ type: "cubicBezier", endNodeId: "mid-cubic" }, { type: "cubicBezier", startNodeId: "mid-cubic", endNodeId: "b" }] });
+    const splitCubic = state.document.elements[0];
+    if (splitCubic?.type === "path") expect(splitCubic.segments.every((segment) => segment.id !== path.segments[0]!.id)).toBe(true);
     const splitPath = state.document.elements[0];
     expect(splitPath?.type === "path" ? splitPath.nodes.find((node) => node.id === "mid-cubic")?.anchor : undefined).toEqual({ x: 5, y: 3 });
   });

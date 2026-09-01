@@ -597,7 +597,7 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
     }
     const firstId = `path-node-${crypto.randomUUID()}`;
     const secondId = `path-node-${crypto.randomUUID()}`;
-    const path = { type: "path" as const, id: id(), layerId: layerId(current.document.layers[0]?.id ?? "layer-1"), nodes: [{ id: firstId, anchor: penDraftPoint, join: "corner" as const }, { id: secondId, anchor: point, join: "corner" as const }], segments: [{ type: "line" as const, startNodeId: firstId, endNodeId: secondId }], closed: false, style: defaultStyle };
+    const path = { type: "path" as const, id: id(), layerId: layerId(current.document.layers[0]?.id ?? "layer-1"), nodes: [{ id: firstId, anchor: penDraftPoint, join: "corner" as const }, { id: secondId, anchor: point, join: "corner" as const }], segments: [{ id: `path-segment-${crypto.randomUUID()}`, type: "line" as const, startNodeId: firstId, endNodeId: secondId }], closed: false, style: defaultStyle };
     const next = dispatch(current, createElement(path));
     setPenDraftPoint(undefined);
     setEditorState(select(next, [path.id]));
@@ -1233,7 +1233,8 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
            setEditorState(commitGesture(previewGestureFromBase(editorRef.current, command)));
          } else {
            const firstId = `path-node-${crypto.randomUUID()}`;
-           const segment = active.dragged ? (() => { const controls = cubicPlacementControls(active.start!, end, pointAt(event)); return { type: "cubicBezier" as const, startNodeId: firstId, endNodeId: node.id, control1: controls.control1, control2: controls.control2 }; })() : { type: "line" as const, startNodeId: firstId, endNodeId: node.id };
+           const segmentId = `path-segment-${crypto.randomUUID()}`;
+           const segment = active.dragged ? (() => { const controls = cubicPlacementControls(active.start!, end, pointAt(event)); return { id: segmentId, type: "cubicBezier" as const, startNodeId: firstId, endNodeId: node.id, control1: controls.control1, control2: controls.control2 }; })() : { id: segmentId, type: "line" as const, startNodeId: firstId, endNodeId: node.id };
            const path = { type: "path" as const, id: id(), layerId: layerId(editorRef.current.document.layers[0]?.id ?? "layer-1"), nodes: [{ id: firstId, anchor: active.start, join: "corner" as const }, node], segments: [segment], closed: false, style: defaultStyle };
            const next = dispatch(editorRef.current, createElement(path));
            setPenDraftPoint(undefined);

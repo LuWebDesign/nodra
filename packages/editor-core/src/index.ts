@@ -29,8 +29,10 @@ import {
 import { validateDocument } from "@nodra/validation";
 import { boundsOfElements, contourWithPoints, directionVector, elementCenter, elementToContour, dimensionGeometry, glyphGeometryNodes, groupCenter, mirrorHandleOffset, realGeometryNodes, resizeGroup, rotateElements, shapeResultContours, transformPoint, splitCuttableSegments, classifyCutGraph, cuttableSegments, lineSegmentIntersection, sketchEdgeAtAddress, sketchEdgeIndexAtAddress, solveSketchConstraints, solveCircleConstraints, type Direction } from "@nodra/geometry";
 import { insertSplineNode, moveSplineHandle as moveSplineHandleData, moveSplineNode as moveSplineNodeData } from "./spline.js";
+import { topologyReferenceKey, type ReferenceResolution, type TopologyEditResult, type TopologyReference } from "./topology.js";
 
 export * from "./spline.js";
+export * from "./topology.js";
 
 export type ElementPatch = { readonly position?: PointMm; readonly size?: SizeMm; readonly rotation?: number; readonly cornerRadius?: number; readonly cornerRadii?: { readonly topLeft: number; readonly topRight: number; readonly bottomRight: number; readonly bottomLeft: number }; readonly style?: VisualStyle; readonly operation?: OperationMetadata; readonly start?: PointMm; readonly end?: PointMm; readonly text?: string; readonly fontFamily?: string; readonly fontSize?: number; readonly fontWeight?: "normal" | "bold"; readonly fontStyle?: "normal" | "italic"; readonly textAlign?: "left" | "center" | "right"; readonly lineHeight?: number; readonly scaleX?: number; readonly scaleY?: number };
 export interface ContourNodeAddress { readonly ringIndex: number; readonly pointIndex: number }
@@ -65,6 +67,17 @@ export const createElement = (element: Element, connections: readonly ExplicitCo
 
 const sketchNodeId = (): string => `sketch-node-${crypto.randomUUID()}`;
 const sketchEdgeId = (): string => `sketch-edge-${crypto.randomUUID()}`;
+const pathSegmentId = (): string => `path-segment-${crypto.randomUUID()}`;
+const sketchEdgeReference = (elementIdValue: ElementId, edgeId: string): TopologyReference => ({ kind: "sketch-edge", elementId: elementIdValue, edgeId });
+const pathSegmentReference = (elementIdValue: ElementId, segmentId: string): TopologyReference => ({ kind: "path-segment", elementId: elementIdValue, segmentId });
+export const topologyEditForPathSegmentReplacement = (elements: readonly Element[], pathId: ElementId, originalSegmentId: string, replacements: readonly PathSegment[]): TopologyEditResult => {
+  const originalReference = pathSegmentReference(pathId, originalSegmentId);
+  return {
+    elements,
+    referenceMap: new Map([[topologyReferenceKey(originalReference), { kind: "replaced", references: replacements.map((segment) => pathSegmentReference(pathId, segment.id)) }]]),
+    diagnostics: [],
+  };
+};
 export const createSketchLine = (sketchId: ElementId, layer: LayerId, style: VisualStyle, start: PointMm, end: PointMm): SketchElement => {
   const startNodeId = sketchNodeId(); const endNodeId = sketchNodeId();
   const edgeId = sketchEdgeId(); const dx = Math.abs(end.x - start.x); const dy = Math.abs(end.y - start.y);
@@ -100,17 +113,18 @@ export const appendSketchEdge = (sketchId: ElementId, fromNodeId: string, point:
     return replaceElements(document, document.elements.map((element) => element.id === sketchId ? next : element));
   },
 });
-const remapSketchEdgeDimensionReferences = (elements: readonly Element[], sketchId: ElementId, beforeEdges: SketchElement["edges"], afterEdges: SketchElement["edges"], replacements: ReadonlyMap<string, string | undefined>): readonly Element[] => elements.flatMap<Element>((element) => {
+const remapSketchEdgeDimensionReferences = (edit: TopologyEditResult, sketchId: ElementId, beforeEdges: SketchElement["edges"], afterEdges: SketchElement["edges"]): readonly Element[] => edit.elements.flatMap<Element>((element) => {
   if (element.type !== "dimension") return [element];
   const remap = (reference: DimensionElement["references"][number]): DimensionElement["references"][number] | undefined => {
     if (!("kind" in reference) || reference.kind !== "line" || reference.elementId !== sketchId) return reference;
     const oldIndex = reference.edgeId !== undefined ? beforeEdges.findIndex((edge) => edge.id === reference.edgeId) : reference.edgeIndex ?? 0;
     const oldEdge = beforeEdges[oldIndex];
     if (!oldEdge) return undefined;
-    const nextEdgeId = replacements.has(oldEdge.id) ? replacements.get(oldEdge.id) : oldEdge.id;
-    if (nextEdgeId === undefined) return undefined;
-    const nextEdgeIndex = afterEdges.findIndex((edge) => edge.id === nextEdgeId);
-    return nextEdgeIndex < 0 ? undefined : { ...reference, edgeId: nextEdgeId, edgeIndex: nextEdgeIndex };
+    const resolution = edit.referenceMap.get(topologyReferenceKey(sketchEdgeReference(sketchId, oldEdge.id)));
+    const nextReference = resolution?.kind === "replaced" ? resolution.references[0] : resolution?.kind === "preserved" ? resolution.reference : resolution?.kind === "removed" ? undefined : sketchEdgeReference(sketchId, oldEdge.id);
+    if (!nextReference || nextReference.kind !== "sketch-edge") return undefined;
+    const nextEdgeIndex = afterEdges.findIndex((edge) => edge.id === nextReference.edgeId);
+    return nextEdgeIndex < 0 ? undefined : { ...reference, edgeId: nextReference.edgeId, edgeIndex: nextEdgeIndex };
   };
   const first = remap(element.references[0]); const second = remap(element.references[1]);
   return first && second ? [{ ...element, references: [first, second] }] : [];
@@ -142,7 +156,10 @@ export const cutSketchEdge = (sketchId: ElementId, segmentIndex: number, cutPoin
       const edges = sketch.edges.flatMap((candidate, index) => index === segmentIndex ? [splitEdgeA, splitEdgeB] : [candidate]);
       const nodes = [...sketch.nodes, { id: splitNodeId, point: splitPoint }];
       const nextSketch = { ...sketch, nodes, edges };
-      const elements = remapSketchEdgeDimensionReferences(document.elements.map((element) => element.id === sketchId ? nextSketch : element), sketchId, sketch.edges, edges, new Map([[edge.id, splitEdgeA.id]]));
+      const originalReference = sketchEdgeReference(sketchId, edge.id);
+      const referenceMap = new Map<string, ReferenceResolution>([[topologyReferenceKey(originalReference), { kind: "replaced", references: [sketchEdgeReference(sketchId, splitEdgeA.id), sketchEdgeReference(sketchId, splitEdgeB.id)] }]]);
+      const edit: TopologyEditResult = { elements: document.elements.map((element) => element.id === sketchId ? nextSketch : element), referenceMap, diagnostics: [] };
+      const elements = remapSketchEdgeDimensionReferences(edit, sketchId, sketch.edges, edges);
       return replaceElements(document, elements);
     }
     const edges = sketch.edges.filter((_, index) => index !== segmentIndex);
@@ -153,7 +170,11 @@ export const cutSketchEdge = (sketchId: ElementId, segmentIndex: number, cutPoin
     const removedNodeIds = new Set(sketch.nodes.filter((node) => !usedNodeIds.has(node.id)).map((node) => node.id));
     const nextSketch = { ...sketch, nodes, edges, ...(constraints ? { constraints } : {}) };
     const withoutRemovedNodeDimensions = document.elements.filter((element) => !(element.type === "dimension" && element.references.some((reference) => reference.elementId === sketchId && (("nodeId" in reference && reference.nodeId !== undefined && removedNodeIds.has(reference.nodeId)) || ("nodeIndex" in reference && reference.nodeIndex >= nodes.length)))));
-    const elements = remapSketchEdgeDimensionReferences(withoutRemovedNodeDimensions.map((element) => element.id === sketchId ? nextSketch : element), sketchId, sketch.edges, edges, new Map([[edge.id, undefined]]));
+    const originalReference = sketchEdgeReference(sketchId, edge.id);
+    const referenceKey = topologyReferenceKey(originalReference);
+    const referenceMap = new Map<string, ReferenceResolution>([[referenceKey, { kind: "removed", reason: "Sketch edge was deleted" }]]);
+    const edit: TopologyEditResult = { elements: withoutRemovedNodeDimensions.map((element) => element.id === sketchId ? nextSketch : element), referenceMap, diagnostics: [{ code: "reference-removed", referenceKey, message: "Sketch edge was deleted" }] };
+    const elements = remapSketchEdgeDimensionReferences(edit, sketchId, sketch.edges, edges);
     return replaceElements(document, elements);
   },
 });
@@ -167,7 +188,7 @@ export const appendLinePoint = (lineId: ElementId, point: PointMm): EditorComman
     const startId = `${line.id}:start`;
     const endId = `${line.id}:end`;
     const nodeId = `${line.id}:node:${crypto.randomUUID()}`;
-    const path: PathElement = { type: "path", id: line.id, layerId: line.layerId, nodes: [{ id: startId, anchor: line.start, join: "corner" }, { id: endId, anchor: line.end, join: "corner" }, { id: nodeId, anchor: point, join: "corner" }], segments: [{ type: "line", startNodeId: startId, endNodeId: endId }, { type: "line", startNodeId: endId, endNodeId: nodeId }], closed: false, style: line.style, ...(line.operation ? { operation: line.operation } : {}) };
+    const path: PathElement = { type: "path", id: line.id, layerId: line.layerId, nodes: [{ id: startId, anchor: line.start, join: "corner" }, { id: endId, anchor: line.end, join: "corner" }, { id: nodeId, anchor: point, join: "corner" }], segments: [{ id: pathSegmentId(), type: "line", startNodeId: startId, endNodeId: endId }, { id: pathSegmentId(), type: "line", startNodeId: endId, endNodeId: nodeId }], closed: false, style: line.style, ...(line.operation ? { operation: line.operation } : {}) };
     return replaceElements(document, document.elements.map((element) => element.id === line.id ? path : element));
   },
 });
@@ -470,7 +491,7 @@ const contourToEditableGlyphContour = (contour: { readonly points: readonly Poin
     const edgeLength = Math.hypot(edge.x, edge.y);
     const sourceControl1 = sourceSegment ? { x: node.anchor.x + sourceSegment.p1.x - sourceSegment.p0.x, y: node.anchor.y + sourceSegment.p1.y - sourceSegment.p0.y } : sourceTangent ? { x: node.anchor.x + sourceTangent.x * edgeLength / 3, y: node.anchor.y + sourceTangent.y * edgeLength / 3 } : undefined;
     const sourceControl2 = sourceSegment ? { x: end.anchor.x + sourceSegment.p2.x - sourceSegment.p3.x, y: end.anchor.y + sourceSegment.p2.y - sourceSegment.p3.y } : sourceTangent ? { x: end.anchor.x - sourceTangent.x * edgeLength / 3, y: end.anchor.y - sourceTangent.y * edgeLength / 3 } : undefined;
-    return { type: "cubicBezier" as const, startNodeId: node.id, endNodeId: end.id, control1: corners[nodeIndex] ? node.anchor : sourceControl1 ?? { x: node.anchor.x + (end.anchor.x - previous.anchor.x) / 6, y: node.anchor.y + (end.anchor.y - previous.anchor.y) / 6 }, control2: corners[(nodeIndex + 1) % corners.length] ? end.anchor : sourceControl2 ?? { x: end.anchor.x - (afterEnd.anchor.x - node.anchor.x) / 6, y: end.anchor.y - (afterEnd.anchor.y - node.anchor.y) / 6 } };
+    return { id: pathSegmentId(), type: "cubicBezier" as const, startNodeId: node.id, endNodeId: end.id, control1: corners[nodeIndex] ? node.anchor : sourceControl1 ?? { x: node.anchor.x + (end.anchor.x - previous.anchor.x) / 6, y: node.anchor.y + (end.anchor.y - previous.anchor.y) / 6 }, control2: corners[(nodeIndex + 1) % corners.length] ? end.anchor : sourceControl2 ?? { x: end.anchor.x - (afterEnd.anchor.x - node.anchor.x) / 6, y: end.anchor.y - (afterEnd.anchor.y - node.anchor.y) / 6 } };
   });
   return { nodes, segments };
 };
@@ -612,8 +633,8 @@ const updateGlyphNodeData = (glyph: GlyphElement, nodeIndex: number, point: Poin
   }) };
 };
 
-export const createPathNode = (pathId: ElementId, node: PathElement["nodes"][number], afterNodeId?: string): EditorCommand => ({ name: `path-create-node:${pathId}`, apply: (document) => { const path = pathAt(document, pathId); if (!path || path.closed || path.nodes.some((current) => current.id === node.id)) return { success: false, error: "Invalid path or duplicate node" }; if (afterNodeId !== undefined && afterNodeId !== path.nodes.at(-1)?.id) return { success: false, error: "Only appending path nodes is supported" }; const last = path.nodes.at(-1)!; return updatePath(document, { ...path, nodes: [...path.nodes, node], segments: [...path.segments, { type: "line", startNodeId: last.id, endNodeId: node.id }] }); } });
-export const createPathCubicNode = (pathId: ElementId, node: PathElement["nodes"][number], control1: PointMm, control2: PointMm, afterNodeId?: string): EditorCommand => ({ name: `path-create-cubic-node:${pathId}`, apply: (document) => { const path = pathAt(document, pathId); if (!path || path.closed || path.nodes.some((current) => current.id === node.id)) return { success: false, error: "Invalid path or duplicate node" }; if (afterNodeId !== undefined && afterNodeId !== path.nodes.at(-1)?.id) return { success: false, error: "Only appending path nodes is supported" }; const last = path.nodes.at(-1)!; return updatePath(document, { ...path, nodes: [...path.nodes, node], segments: [...path.segments, { type: "cubicBezier", startNodeId: last.id, endNodeId: node.id, control1, control2 }] }); } });
+export const createPathNode = (pathId: ElementId, node: PathElement["nodes"][number], afterNodeId?: string): EditorCommand => ({ name: `path-create-node:${pathId}`, apply: (document) => { const path = pathAt(document, pathId); if (!path || path.closed || path.nodes.some((current) => current.id === node.id)) return { success: false, error: "Invalid path or duplicate node" }; if (afterNodeId !== undefined && afterNodeId !== path.nodes.at(-1)?.id) return { success: false, error: "Only appending path nodes is supported" }; const last = path.nodes.at(-1)!; return updatePath(document, { ...path, nodes: [...path.nodes, node], segments: [...path.segments, { id: pathSegmentId(), type: "line", startNodeId: last.id, endNodeId: node.id }] }); } });
+export const createPathCubicNode = (pathId: ElementId, node: PathElement["nodes"][number], control1: PointMm, control2: PointMm, afterNodeId?: string): EditorCommand => ({ name: `path-create-cubic-node:${pathId}`, apply: (document) => { const path = pathAt(document, pathId); if (!path || path.closed || path.nodes.some((current) => current.id === node.id)) return { success: false, error: "Invalid path or duplicate node" }; if (afterNodeId !== undefined && afterNodeId !== path.nodes.at(-1)?.id) return { success: false, error: "Only appending path nodes is supported" }; const last = path.nodes.at(-1)!; return updatePath(document, { ...path, nodes: [...path.nodes, node], segments: [...path.segments, { id: pathSegmentId(), type: "cubicBezier", startNodeId: last.id, endNodeId: node.id, control1, control2 }] }); } });
 export const movePathNode = (pathId: ElementId, nodeId: string, anchor: PointMm): EditorCommand => ({ name: `path-move-node:${pathId}:${nodeId}`, apply: (document) => {
   const path = pathAt(document, pathId);
   if (path) { const node = path.nodes.find((current) => current.id === nodeId); if (!node) return { success: false, error: "Path node not found" }; const delta = { x: anchor.x - node.anchor.x, y: anchor.y - node.anchor.y }; return updatePath(document, { ...path, nodes: path.nodes.map((current) => current.id === nodeId ? { ...current, anchor } : current), segments: path.segments.map((segment) => segment.type === "cubicBezier" && (segment.startNodeId === nodeId || segment.endNodeId === nodeId) ? { ...segment, ...(segment.startNodeId === nodeId ? { control1: { x: segment.control1.x + delta.x, y: segment.control1.y + delta.y } } : {}), ...(segment.endNodeId === nodeId ? { control2: { x: segment.control2.x + delta.x, y: segment.control2.y + delta.y } } : {}) } : segment) }); }
@@ -685,8 +706,11 @@ export const splitPathLineAt = (pathId: ElementId, segmentIndex: number, paramet
   if (!start || !end || endIndex < 0) return { success: false, error: "Path segment nodes are invalid" };
   const node = { id: newNodeId, anchor: { x: start.anchor.x + (end.anchor.x - start.anchor.x) * parameter, y: start.anchor.y + (end.anchor.y - start.anchor.y) * parameter }, join: "corner" as const };
   const nodes = [...path.nodes]; nodes.splice(endIndex, 0, node);
-  const segments = [...path.segments]; segments.splice(segmentIndex, 1, { type: "line", startNodeId: segment.startNodeId, endNodeId: node.id }, { type: "line", startNodeId: node.id, endNodeId: segment.endNodeId });
-  return updatePath(document, { ...path, nodes, segments });
+  const replacements: PathElement["segments"] = [{ id: pathSegmentId(), type: "line", startNodeId: segment.startNodeId, endNodeId: node.id }, { id: pathSegmentId(), type: "line", startNodeId: node.id, endNodeId: segment.endNodeId }];
+  const segments = [...path.segments]; segments.splice(segmentIndex, 1, ...replacements);
+  const nextPath = { ...path, nodes, segments };
+  const edit = topologyEditForPathSegmentReplacement(document.elements.map((element) => element.id === path.id ? nextPath : element), path.id, segment.id, replacements);
+  return replaceElements(document, edit.elements);
 } });
 
 interface CutPieceGraph { readonly piece: ReturnType<typeof splitCuttableSegments>[number]; readonly source: Element }
@@ -742,7 +766,7 @@ const cutStraightComponent = (document: DocumentSnapshot, elementIdToCut: Elemen
       const sourcePathSegment = first.source.type === "path" ? first.source.segments[first.piece.segmentIndex] : undefined;
       while (lastIndex + 1 < pieces.length && (first.source.type === "ellipse" || sourcePathSegment?.type === "cubicBezier") && pieces[lastIndex + 1]!.piece.elementId === first.piece.elementId && pieces[lastIndex + 1]!.piece.segmentIndex === first.piece.segmentIndex) lastIndex += 1;
       const last = pieces[lastIndex]!; const startNodeId = appendNode(first.piece.start); const endNodeId = appendNode(last.piece.end);
-      segments.push(first.source.type === "ellipse" ? { type: "cubicBezier", startNodeId, endNodeId, ...ellipseCubic(first.source, first.piece.start, last.piece.end) } : sourcePathSegment?.type === "cubicBezier" ? { type: "cubicBezier", startNodeId, endNodeId, control1: sourcePathSegment.control1, control2: sourcePathSegment.control2 } : { type: "line", startNodeId, endNodeId });
+      segments.push(first.source.type === "ellipse" ? { id: pathSegmentId(), type: "cubicBezier", startNodeId, endNodeId, ...ellipseCubic(first.source, first.piece.start, last.piece.end) } : sourcePathSegment?.type === "cubicBezier" ? { id: pathSegmentId(), type: "cubicBezier", startNodeId, endNodeId, control1: sourcePathSegment.control1, control2: sourcePathSegment.control2 } : { id: pathSegmentId(), type: "line", startNodeId, endNodeId });
       pieceIndex = lastIndex + 1;
     }
     if (closed && segments.length && nodes.length > 1 && key(nodes[0]!.anchor) === key(nodes.at(-1)!.anchor)) { nodes.pop(); const last = segments.at(-1)!; segments[segments.length - 1] = { ...last, endNodeId: nodes[0]!.id } as PathSegment; }
@@ -815,16 +839,18 @@ export const splitPathSegment = (pathId: ElementId, segmentIndex: number, newNod
   if (segment.type === "cubicBezier") {
     const a = lerp(start.anchor, segment.control1); const b = lerp(segment.control1, segment.control2); const c = lerp(segment.control2, end.anchor); const d = lerp(a, b); const e = lerp(b, c); const midpoint = lerp(d, e);
     nodes.splice(endIndex, 0, { id: newNodeId, anchor: midpoint, join: "corner" });
-    inserted = [{ type: "cubicBezier", startNodeId: segment.startNodeId, endNodeId: newNodeId, control1: a, control2: d }, { type: "cubicBezier", startNodeId: newNodeId, endNodeId: segment.endNodeId, control1: e, control2: c }];
+    inserted = [{ id: pathSegmentId(), type: "cubicBezier", startNodeId: segment.startNodeId, endNodeId: newNodeId, control1: a, control2: d }, { id: pathSegmentId(), type: "cubicBezier", startNodeId: newNodeId, endNodeId: segment.endNodeId, control1: e, control2: c }];
   } else {
     nodes.splice(endIndex, 0, { id: newNodeId, anchor: { x: (start.anchor.x + end.anchor.x) / 2, y: (start.anchor.y + end.anchor.y) / 2 }, join: "corner" });
-    inserted = [{ type: "line", startNodeId: segment.startNodeId, endNodeId: newNodeId }, { type: "line", startNodeId: newNodeId, endNodeId: segment.endNodeId }];
+    inserted = [{ id: pathSegmentId(), type: "line", startNodeId: segment.startNodeId, endNodeId: newNodeId }, { id: pathSegmentId(), type: "line", startNodeId: newNodeId, endNodeId: segment.endNodeId }];
   }
   const segments = [...path.segments]; segments.splice(segmentIndex, 1, ...inserted);
-  return updatePath(document, { ...path, nodes, segments });
+  const nextPath = { ...path, nodes, segments };
+  const edit = topologyEditForPathSegmentReplacement(document.elements.map((element) => element.id === path.id ? nextPath : element), path.id, segment.id, inserted);
+  return replaceElements(document, edit.elements);
 } });
 const DEFAULT_CLOSED_FILL = "rgba(101,217,255,0.22)";
-export const closePath = (pathId: ElementId): EditorCommand => ({ name: `path-close:${pathId}`, apply: (document) => { const path = pathAt(document, pathId); if (!path || path.closed) return { success: false, error: "Path is already closed" }; const first = path.nodes[0]!; const last = path.nodes.at(-1)!; return updatePath(document, { ...path, style: { ...path.style, fill: path.style.fill ?? DEFAULT_CLOSED_FILL }, closed: true, segments: [...path.segments, { type: "line", startNodeId: last.id, endNodeId: first.id }] }); } });
+export const closePath = (pathId: ElementId): EditorCommand => ({ name: `path-close:${pathId}`, apply: (document) => { const path = pathAt(document, pathId); if (!path || path.closed) return { success: false, error: "Path is already closed" }; const first = path.nodes[0]!; const last = path.nodes.at(-1)!; return updatePath(document, { ...path, style: { ...path.style, fill: path.style.fill ?? DEFAULT_CLOSED_FILL }, closed: true, segments: [...path.segments, { id: pathSegmentId(), type: "line", startNodeId: last.id, endNodeId: first.id }] }); } });
 export const openPath = (pathId: ElementId): EditorCommand => ({ name: `path-open:${pathId}`, apply: (document) => { const path = pathAt(document, pathId); if (!path || !path.closed) return { success: false, error: "Path is already open" }; return updatePath(document, { ...path, closed: false, segments: path.segments.slice(0, -1) }); } });
 export const reversePath = (pathId: ElementId): EditorCommand => ({ name: `path-reverse:${pathId}`, apply: (document) => { const path = pathAt(document, pathId); if (!path) return { success: false, error: "Path not found" }; const nodes = [...path.nodes].reverse(); const segments = [...path.segments].reverse().map((segment) => segment.type === "line" ? { ...segment, startNodeId: segment.endNodeId, endNodeId: segment.startNodeId } : { ...segment, startNodeId: segment.endNodeId, endNodeId: segment.startNodeId, control1: segment.control2, control2: segment.control1 }); return updatePath(document, { ...path, nodes, segments }); } });
 
@@ -878,9 +904,11 @@ function rebuildPathSegment(start: PathElement["nodes"][number], end: PathElemen
   const lastSegment = source.at(-1);
   const firstCubic = firstSegment?.type === "cubicBezier" ? firstSegment : undefined;
   const lastCubic = lastSegment?.type === "cubicBezier" ? lastSegment : undefined;
-  if (!firstCubic && !lastCubic) return { type: "line", startNodeId: start.id, endNodeId: end.id };
+  const preservedId = source.length === 1 && firstSegment?.startNodeId === start.id && firstSegment.endNodeId === end.id ? firstSegment.id : pathSegmentId();
+  if (!firstCubic && !lastCubic) return { id: preservedId, type: "line", startNodeId: start.id, endNodeId: end.id };
   const fallback = lineControls(start.anchor, end.anchor);
   return {
+    id: preservedId,
     type: "cubicBezier",
     startNodeId: start.id,
     endNodeId: end.id,

@@ -52,6 +52,7 @@ describe("spline editing commands", () => {
       ],
     });
     expect(path.segments[0]).toEqual({
+      id: "spline-segment:a:b",
       type: "cubicBezier",
       startNodeId: "a",
       endNodeId: "b",

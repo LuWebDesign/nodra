@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { createDocument, elementId, layerId } from "@nodra/domain";
 import { parseDocument, serializeDocument, validateDocument } from "./index.js";
 
-const glyph = { type: "glyph" as const, id: elementId("g"), layerId: layerId("layer"), position: { x: 0, y: 0 }, size: { width: 10, height: 10 }, glyph: "O", fillRule: "evenodd" as const, rotation: 0, style: { stroke: "#000", fill: "#000", strokeWidth: 1 }, contours: [{ nodes: [{ id: "a", anchor: { x: 0, y: 0 }, join: "corner" as const }, { id: "b", anchor: { x: 10, y: 0 }, join: "corner" as const }, { id: "c", anchor: { x: 10, y: 10 }, join: "corner" as const }], segments: [{ type: "line" as const, startNodeId: "a", endNodeId: "b" }, { type: "line" as const, startNodeId: "b", endNodeId: "c" }, { type: "line" as const, startNodeId: "c", endNodeId: "a" }] }] };
+const glyph = { type: "glyph" as const, id: elementId("g"), layerId: layerId("layer"), position: { x: 0, y: 0 }, size: { width: 10, height: 10 }, glyph: "O", fillRule: "evenodd" as const, rotation: 0, style: { stroke: "#000", fill: "#000", strokeWidth: 1 }, contours: [{ nodes: [{ id: "a", anchor: { x: 0, y: 0 }, join: "corner" as const }, { id: "b", anchor: { x: 10, y: 0 }, join: "corner" as const }, { id: "c", anchor: { x: 10, y: 10 }, join: "corner" as const }], segments: [{ id: "fixture-segment-1", type: "line" as const, startNodeId: "a", endNodeId: "b" }, { id: "fixture-segment-2", type: "line" as const, startNodeId: "b", endNodeId: "c" }, { id: "fixture-segment-3", type: "line" as const, startNodeId: "c", endNodeId: "a" }] }] };
 
 describe("glyph persistence validation", () => {
   it("accepts and round-trips cubic compound glyph data", () => {

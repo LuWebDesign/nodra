@@ -1,4 +1,4 @@
-export const CURRENT_SCHEMA_VERSION = 6 as const;
+export const CURRENT_SCHEMA_VERSION = 7 as const;
 
 export type SchemaVersion = typeof CURRENT_SCHEMA_VERSION;
 export type DocumentId = string & { readonly __brand: "DocumentId" };
@@ -130,11 +130,13 @@ export interface PathNode {
   readonly join: PathJoin;
 }
 export interface PathLineSegment {
+  readonly id: string;
   readonly type: "line";
   readonly startNodeId: string;
   readonly endNodeId: string;
 }
 export interface PathCubicSegment {
+  readonly id: string;
   readonly type: "cubicBezier";
   readonly startNodeId: string;
   readonly endNodeId: string;

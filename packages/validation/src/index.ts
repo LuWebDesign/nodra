@@ -79,12 +79,13 @@ const sketch = z.object({ id: nonEmptyId, layerId: nonEmptyId, type: z.literal("
   });
 });
 const pathNode = z.object({ id: nonEmptyId, anchor: point, join: z.enum(["corner", "smooth", "symmetric"]) }).strict();
-const pathLineSegment = z.object({ type: z.literal("line"), startNodeId: nonEmptyId, endNodeId: nonEmptyId }).strict();
-const pathCubicSegment = z.object({ type: z.literal("cubicBezier"), startNodeId: nonEmptyId, endNodeId: nonEmptyId, control1: point, control2: point }).strict();
+const pathLineSegment = z.object({ id: nonEmptyId, type: z.literal("line"), startNodeId: nonEmptyId, endNodeId: nonEmptyId }).strict();
+const pathCubicSegment = z.object({ id: nonEmptyId, type: z.literal("cubicBezier"), startNodeId: nonEmptyId, endNodeId: nonEmptyId, control1: point, control2: point }).strict();
 const pathSegment = z.discriminatedUnion("type", [pathLineSegment, pathCubicSegment]);
 const path = z.object({ id: nonEmptyId, layerId: nonEmptyId, type: z.literal("path"), nodes: z.array(pathNode).min(2), segments: z.array(pathSegment).min(1), closed: z.boolean(), rotation: finite.optional(), flipX: z.boolean().optional(), flipY: z.boolean().optional(), style, operation: operation.optional() }).strict().superRefine((value, ctx) => {
-  const nodeIds = value.nodes.map((node) => node.id);
+  const nodeIds = value.nodes.map((node) => node.id); const segmentIds = value.segments.map((segment) => segment.id);
   if (new Set(nodeIds).size !== nodeIds.length) ctx.addIssue({ code: "custom", message: "Path node IDs must be unique", path: ["nodes"] });
+  if (new Set(segmentIds).size !== segmentIds.length) ctx.addIssue({ code: "custom", message: "Path segment IDs must be unique", path: ["segments"] });
   const expectedCount = value.closed ? value.nodes.length : value.nodes.length - 1;
   if (value.segments.length !== expectedCount) ctx.addIssue({ code: "custom", message: "Path segment count does not match topology", path: ["segments"] });
   const known = new Set(nodeIds);
@@ -114,7 +115,9 @@ const glyphContour = z.object({ nodes: z.array(pathNode).min(2), segments: z.arr
 });
 const glyph = z.object({ ...common, type: z.literal("glyph"), position: point, size, glyph: z.string().min(1), contours: z.array(glyphContour).min(1), fillRule: z.literal("evenodd") }).strict().superRefine((value, ctx) => {
   const ids = value.contours.flatMap((contour) => contour.nodes.map((node) => node.id));
+  const segmentIds = value.contours.flatMap((contour) => contour.segments.map((segment) => segment.id));
   if (new Set(ids).size !== ids.length) ctx.addIssue({ code: "custom", message: "Glyph node IDs must be unique across contours", path: ["contours"] });
+  if (new Set(segmentIds).size !== segmentIds.length) ctx.addIssue({ code: "custom", message: "Glyph segment IDs must be unique across contours", path: ["contours"] });
 });
 export const elementSchema = z.discriminatedUnion("type", [rectangle, ellipse, line, sketch, dimension, contour, path, splineElementSchema, textElement, glyph]);
 export const layerSchema = z.object({ id: nonEmptyId, name: z.string().min(1), visible: z.boolean(), order: finite.int().nonnegative() }).strict();
@@ -152,6 +155,8 @@ const validateConnections = (elements: readonly z.infer<typeof elementSchema>[],
 export const documentSchema = z.object({ schemaVersion: z.literal(CURRENT_SCHEMA_VERSION), ...documentFields, capabilities: z.object({ spline: z.literal(1).optional() }).strict().optional() }).strict().superRefine((value, ctx) => {
   const layerIds = new Set(value.layers.map((layer) => layer.id));
   const elementIds = new Set(value.elements.map((element) => element.id));
+  if (layerIds.size !== value.layers.length) ctx.addIssue({ code: "custom", message: "Layer IDs must be unique", path: ["layers"] });
+  if (elementIds.size !== value.elements.length) ctx.addIssue({ code: "custom", message: "Element IDs must be unique", path: ["elements"] });
   for (const [index, element] of value.elements.entries()) {
     if (!layerIds.has(element.layerId)) ctx.addIssue({ code: "custom", message: "Element references an unknown layer", path: ["elements", index, "layerId"] });
     if (element.type === "dimension") for (const [referenceIndex, reference] of element.references.entries()) {
@@ -219,19 +224,51 @@ const pageSchema = z.object({ id: nonEmptyId, page: size, layers: z.array(layerS
 const projectPreferencesSchema = z.object({ lineGuidesEnabled: z.boolean().default(true), lineGuideAngle: z.union([z.literal(15), z.literal(45)]).default(45).transform(() => 45) }).strict().default({ lineGuidesEnabled: true, lineGuideAngle: 45 });
 export const projectSchema = z.object({ schemaVersion: z.literal(CURRENT_SCHEMA_VERSION), id: nonEmptyId, revision: finite.int().nonnegative(), origin: z.literal("top-left"), units: z.literal("mm"), capabilities: z.object({ spline: z.literal(1).optional() }).strict().optional(), preferences: projectPreferencesSchema, pages: z.array(pageSchema).min(1), activePageId: nonEmptyId }).strict().superRefine((value, ctx) => {
   if (!value.pages.some((page) => page.id === value.activePageId)) ctx.addIssue({ code: "custom", message: "Active page does not exist", path: ["activePageId"] });
-  const layerIds = new Set(value.pages.flatMap((page) => page.layers.map((layer) => layer.id)));
-  value.pages.forEach((page, pageIndex) => { page.elements.forEach((element, elementIndex) => { if (!layerIds.has(element.layerId)) ctx.addIssue({ code: "custom", message: "Element references an unknown layer", path: ["pages", pageIndex, "elements", elementIndex, "layerId"] }); }); validateConnections(page.elements, page.connections, ctx, ["pages", pageIndex, "connections"]); });
+  const pageIds = new Set(value.pages.map((page) => page.id));
+  if (pageIds.size !== value.pages.length) ctx.addIssue({ code: "custom", message: "Page IDs must be unique", path: ["pages"] });
+  value.pages.forEach((page, pageIndex) => {
+    const layerIds = new Set(page.layers.map((layer) => layer.id)); const elementIds = new Set(page.elements.map((element) => element.id));
+    if (layerIds.size !== page.layers.length) ctx.addIssue({ code: "custom", message: "Layer IDs must be unique within a page", path: ["pages", pageIndex, "layers"] });
+    if (elementIds.size !== page.elements.length) ctx.addIssue({ code: "custom", message: "Element IDs must be unique within a page", path: ["pages", pageIndex, "elements"] });
+    page.elements.forEach((element, elementIndex) => { if (!layerIds.has(element.layerId)) ctx.addIssue({ code: "custom", message: "Element references an unknown layer", path: ["pages", pageIndex, "elements", elementIndex, "layerId"] }); });
+    validateConnections(page.elements, page.connections, ctx, ["pages", pageIndex, "connections"]);
+  });
 });
 export type ValidationIssue = { readonly path: readonly (string | number)[]; readonly message: string };
 export type ValidationResult = { readonly success: true; readonly data: DocumentSnapshot } | { readonly success: false; readonly issues: readonly ValidationIssue[]; readonly error: string };
 
 export type JsonValue = object | boolean | number | string | null;
+const migrateLegacySegments = (segments: unknown, prefix: string): unknown => {
+  if (!Array.isArray(segments)) return segments;
+  const used = new Set(segments.flatMap((segment) => {
+    if (typeof segment !== "object" || segment === null || Array.isArray(segment)) return [];
+    const id = (segment as Record<string, unknown>).id;
+    return typeof id === "string" ? [id] : [];
+  }));
+  return segments.map((segment, index) => {
+    if (typeof segment !== "object" || segment === null || Array.isArray(segment)) return segment;
+    const candidate = segment as Record<string, unknown>;
+    if (typeof candidate.id === "string") return segment;
+    const base = `${prefix}:segment:${index}`;
+    let id = base; let suffix = 1;
+    while (used.has(id)) id = `${base}:${suffix++}`;
+    used.add(id);
+    return { ...candidate, id };
+  });
+};
 const migrateLegacyElements = (elements: unknown): unknown => {
   if (!Array.isArray(elements)) return elements;
   const normalized = elements.map((element) => {
     if (typeof element !== "object" || element === null || Array.isArray(element)) return element;
     const candidate = element as Record<string, unknown>;
-    return candidate.type === "sketch" && candidate.constraints === undefined ? { ...candidate, constraints: [] } : element;
+    if (candidate.type === "sketch" && candidate.constraints === undefined) return { ...candidate, constraints: [] };
+    if (candidate.type === "path" && typeof candidate.id === "string") return { ...candidate, segments: migrateLegacySegments(candidate.segments, candidate.id) };
+    if (candidate.type === "glyph" && typeof candidate.id === "string" && Array.isArray(candidate.contours)) return { ...candidate, contours: candidate.contours.map((contour, contourIndex) => {
+      if (typeof contour !== "object" || contour === null || Array.isArray(contour)) return contour;
+      const current = contour as Record<string, unknown>;
+      return { ...current, segments: migrateLegacySegments(current.segments, `${candidate.id}:contour:${contourIndex}`) };
+    }) };
+    return element;
   });
   const byId = new Map(normalized.flatMap((element) => {
     if (typeof element !== "object" || element === null || Array.isArray(element)) return [];
@@ -265,7 +302,7 @@ export function migrateDocument(input: JsonValue): JsonValue {
   if (typeof input !== "object" || input === null || Array.isArray(input)) return input;
   const candidate = input as Record<string, unknown>;
   if (candidate.schemaVersion === 1) return { ...candidate, schemaVersion: CURRENT_SCHEMA_VERSION, page: { width: 1200, height: 900 }, elements: migrateLegacyElements(candidate.elements), connections: [] };
-  if (candidate.schemaVersion === 2 || candidate.schemaVersion === 3 || candidate.schemaVersion === 4 || candidate.schemaVersion === 5) {
+  if (candidate.schemaVersion === 2 || candidate.schemaVersion === 3 || candidate.schemaVersion === 4 || candidate.schemaVersion === 5 || candidate.schemaVersion === 6) {
     return { ...candidate, schemaVersion: CURRENT_SCHEMA_VERSION, page: candidate.page ?? { width: 1200, height: 900 }, elements: migrateLegacyElements(candidate.elements), connections: candidate.connections ?? [] };
   }
   return input;
@@ -296,7 +333,7 @@ export function validateProject(input: unknown): { readonly success: true; reado
 export function migrateProject(input: unknown): unknown {
   if (typeof input !== "object" || input === null || Array.isArray(input)) return input;
   const candidate = input as Record<string, unknown>;
-  if (candidate.schemaVersion !== 1 && candidate.schemaVersion !== 2 && candidate.schemaVersion !== 3 && candidate.schemaVersion !== 4 && candidate.schemaVersion !== 5) return input;
+  if (candidate.schemaVersion !== 1 && candidate.schemaVersion !== 2 && candidate.schemaVersion !== 3 && candidate.schemaVersion !== 4 && candidate.schemaVersion !== 5 && candidate.schemaVersion !== 6) return input;
   const pages = migrateLegacyPages(candidate.pages);
   return { ...candidate, schemaVersion: CURRENT_SCHEMA_VERSION, pages };
 }

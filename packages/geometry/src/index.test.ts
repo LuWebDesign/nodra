@@ -231,7 +231,7 @@ describe("canonical millimetre geometry", () => {
     expect(() => hitTest({ type: "line", id: elementId("line"), layerId: layerId("l"), start: { x: 0, y: 0 }, end: { x: 0, y: 0 }, rotation: 0, style }, { x: 0, y: 0 })).toThrow();
   });
   it("projects paths into shared anchors and directional handles", () => {
-    const path = { type: "path" as const, id: elementId("projection-path"), layerId: layerId("l"), nodes: [{ id: "a", anchor: { x: 0, y: 0 }, join: "symmetric" as const }, { id: "b", anchor: { x: 10, y: 0 }, join: "corner" as const }], segments: [{ type: "cubicBezier" as const, startNodeId: "a", endNodeId: "b", control1: { x: 3, y: 2 }, control2: { x: 7, y: 2 } }], closed: false, rotation: 0, style };
+    const path = { type: "path" as const, id: elementId("projection-path"), layerId: layerId("l"), nodes: [{ id: "a", anchor: { x: 0, y: 0 }, join: "symmetric" as const }, { id: "b", anchor: { x: 10, y: 0 }, join: "corner" as const }], segments: [{ id: "fixture-segment-1", type: "cubicBezier" as const, startNodeId: "a", endNodeId: "b", control1: { x: 3, y: 2 }, control2: { x: 7, y: 2 } }], closed: false, rotation: 0, style };
     expect(editableGeometryNodes(path).map((node) => node.kind)).toEqual(["anchor", "anchor", "handle", "handle"]);
     const active = visibleBezierHandleGuides(path, [0]);
     expect(active).toHaveLength(1);

@@ -135,8 +135,8 @@ function splineToPathElement(element: SplineElement): PathElement {
     const control1 = start.outHandle ? { x: start.anchor.x + start.outHandle.dx, y: start.anchor.y + start.outHandle.dy } : start.anchor;
     const control2 = end.inHandle ? { x: end.anchor.x + end.inHandle.dx, y: end.anchor.y + end.inHandle.dy } : end.anchor;
     return start.outHandle || end.inHandle
-      ? { type: "cubicBezier" as const, startNodeId: start.id, endNodeId: end.id, control1, control2 }
-      : { type: "line" as const, startNodeId: start.id, endNodeId: end.id };
+      ? { id: `spline-segment:${start.id}:${end.id}`, type: "cubicBezier" as const, startNodeId: start.id, endNodeId: end.id, control1, control2 }
+      : { id: `spline-segment:${start.id}:${end.id}`, type: "line" as const, startNodeId: start.id, endNodeId: end.id };
   };
   const segments = element.nodes.slice(1).map((_, index) => segmentFor(index, index + 1));
   if (element.closed) segments.push(segmentFor(element.nodes.length - 1, 0));

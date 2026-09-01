@@ -34,7 +34,7 @@ const cubicPoint = (start: PointMm, control1: PointMm, control2: PointMm, end: P
     y: mt ** 3 * start.y + 3 * mt ** 2 * t * control1.y + 3 * mt * t ** 2 * control2.y + t ** 3 * end.y,
   };
 };
-const replacementLine = (startNodeId: string, endNodeId: string): PathLineSegment => ({ type: "line", startNodeId, endNodeId });
+const replacementLine = (startNodeId: string, endNodeId: string): PathLineSegment => ({ id: `glyph-segment:${startNodeId}:${endNodeId}`, type: "line", startNodeId, endNodeId });
 const canRemoveLinearNode = (contour: GlyphOutlineData["contours"][number], index: number, tolerance: number): boolean => {
   const previousIndex = (index - 1 + contour.nodes.length) % contour.nodes.length;
   const previous = contour.nodes[previousIndex];
@@ -119,6 +119,7 @@ const smoothContourFromSamples = (samples: readonly SamplePoint[], smoothness: n
     const next = nodes[(index + 1) % nodes.length]!;
     const afterNext = nodes[(index + 2) % nodes.length]!;
     return {
+      id: `glyph-segment:${node.id}:${next.id}`,
       type: "cubicBezier" as const,
       startNodeId: node.id,
       endNodeId: next.id,
@@ -185,12 +186,12 @@ export function extractTextGlyphOutlines(text: TextElement, resolveFont: FontSou
     let nodes: { id: string; anchor: PointMm; join: "corner" }[] = [];
     let segments: GlyphOutlineData["contours"][number]["segments"] = [];
     let start: string | undefined; let previous: string | undefined; let nodeCount = 0;
-    const finish = () => { if (nodes.length >= 2 && start && previous) { if (previous !== start) segments = [...segments, { type: "line", startNodeId: previous, endNodeId: start }]; contours.push({ nodes, segments }); } nodes = []; segments = []; start = undefined; previous = undefined; };
+    const finish = () => { if (nodes.length >= 2 && start && previous) { if (previous !== start) segments = [...segments, replacementLine(previous, start)]; contours.push({ nodes, segments }); } nodes = []; segments = []; start = undefined; previous = undefined; };
     for (const command of commands) {
       if (command.type === "M") { finish(); const node = { id: `glyph-${index}-node-${nodeCount++}`, anchor: transform({ x: command.x, y: command.y }), join: "corner" as const }; nodes = [node]; start = node.id; previous = node.id; }
       else if ((command.type === "L" || command.type === "C") && previous) {
         const end = { id: `glyph-${index}-node-${nodeCount++}`, anchor: transform({ x: command.x, y: command.y }), join: "corner" as const };
-        segments = [...segments, command.type === "C" ? { type: "cubicBezier" as const, startNodeId: previous, endNodeId: end.id, control1: transform({ x: command.x1, y: command.y1 }), control2: transform({ x: command.x2, y: command.y2 }) } : { type: "line" as const, startNodeId: previous, endNodeId: end.id }];
+        segments = [...segments, command.type === "C" ? { id: `glyph-segment:${previous}:${end.id}`, type: "cubicBezier" as const, startNodeId: previous, endNodeId: end.id, control1: transform({ x: command.x1, y: command.y1 }), control2: transform({ x: command.x2, y: command.y2 }) } : replacementLine(previous, end.id)];
         nodes = [...nodes, end]; previous = end.id;
       } else if (command.type === "Q" && previous) {
         const end = { id: `glyph-${index}-node-${nodeCount++}`, anchor: transform({ x: command.x, y: command.y }), join: "corner" as const };
@@ -198,7 +199,7 @@ export function extractTextGlyphOutlines(text: TextElement, resolveFont: FontSou
         const quadratic = transform({ x: command.x1, y: command.y1 });
         const c1 = { x: start.x + (quadratic.x - start.x) * 2 / 3, y: start.y + (quadratic.y - start.y) * 2 / 3 };
         const c2 = { x: end.anchor.x + (quadratic.x - end.anchor.x) * 2 / 3, y: end.anchor.y + (quadratic.y - end.anchor.y) * 2 / 3 };
-        segments = [...segments, { type: "cubicBezier" as const, startNodeId: previous, endNodeId: end.id, control1: c1, control2: c2 }];
+        segments = [...segments, { id: `glyph-segment:${previous}:${end.id}`, type: "cubicBezier" as const, startNodeId: previous, endNodeId: end.id, control1: c1, control2: c2 }];
         nodes = [...nodes, end]; previous = end.id;
       } else if (command.type === "Z") finish();
     }

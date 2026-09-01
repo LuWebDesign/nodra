@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { createDocument, layerId } from "@nodra/domain";
+import { CURRENT_SCHEMA_VERSION, createDocument, layerId } from "@nodra/domain";
 import { migrateDocument, parseDocument, serializeDocument, validateDocument, validateProject } from "./index.js";
 
 describe("native document validation", () => {
   it("validates ordered open cubic path topology", () => {
     const document = createDocument("doc-1", [{ id: layerId("layer-1"), name: "Design", visible: true, order: 0 }]);
-    const path = { type: "path", id: "bezier", layerId: "layer-1", nodes: [{ id: "a", anchor: { x: 0, y: 0 }, join: "corner" }, { id: "b", anchor: { x: 10, y: 0 }, join: "corner" }], segments: [{ type: "cubicBezier", startNodeId: "a", endNodeId: "b", control1: { x: 2, y: 5 }, control2: { x: 8, y: -5 } }], closed: false, rotation: 0, style: { stroke: "#000", strokeWidth: 1 } };
+    const path = { type: "path", id: "bezier", layerId: "layer-1", nodes: [{ id: "a", anchor: { x: 0, y: 0 }, join: "corner" }, { id: "b", anchor: { x: 10, y: 0 }, join: "corner" }], segments: [{ id: "fixture-segment-1", type: "cubicBezier", startNodeId: "a", endNodeId: "b", control1: { x: 2, y: 5 }, control2: { x: 8, y: -5 } }], closed: false, rotation: 0, style: { stroke: "#000", strokeWidth: 1 } };
     expect(validateDocument({ ...document, elements: [path] }).success).toBe(true);
     expect(validateDocument({ ...document, elements: [{ ...path, segments: [] }] }).success).toBe(false);
   });
@@ -26,7 +26,40 @@ describe("native document validation", () => {
     const result = validateDocument(oldDocument);
     expect(result.success).toBe(true);
     if (result.success) expect(result.data.page).toEqual({ width: 1200, height: 900 });
-    expect(migrateDocument(oldDocument)).toMatchObject({ schemaVersion: 6, page: { width: 1200, height: 900 }, connections: [] });
+    expect(migrateDocument(oldDocument)).toMatchObject({ schemaVersion: CURRENT_SCHEMA_VERSION, page: { width: 1200, height: 900 }, connections: [] });
+  });
+  it("migrates schema 6 path and glyph segments to deterministic stable IDs", () => {
+    const base = createDocument("legacy-segments", [{ id: layerId("layer-1"), name: "Design", visible: true, order: 0 }]);
+    const path = { type: "path", id: "path", layerId: "layer-1", nodes: [{ id: "a", anchor: { x: 0, y: 0 }, join: "corner" }, { id: "b", anchor: { x: 10, y: 0 }, join: "corner" }, { id: "c", anchor: { x: 20, y: 0 }, join: "corner" }], segments: [{ id: "kept-segment", type: "line", startNodeId: "a", endNodeId: "b" }, { type: "line", startNodeId: "b", endNodeId: "c" }], closed: false, style: { stroke: "#000", strokeWidth: 1 } };
+    const glyph = { type: "glyph", id: "glyph", layerId: "layer-1", position: { x: 0, y: 0 }, size: { width: 10, height: 10 }, glyph: "A", contours: [{ nodes: [{ id: "ga", anchor: { x: 0, y: 0 }, join: "corner" }, { id: "gb", anchor: { x: 10, y: 0 }, join: "corner" }], segments: [{ type: "line", startNodeId: "ga", endNodeId: "gb" }, { type: "line", startNodeId: "gb", endNodeId: "ga" }] }], fillRule: "evenodd", rotation: 0, style: { stroke: "#000", strokeWidth: 1 } };
+    const legacy = { ...base, schemaVersion: 6, elements: [path, glyph] };
+
+    const first = validateDocument(legacy); const second = validateDocument(legacy);
+    expect(first.success).toBe(true); expect(second.success).toBe(true);
+    if (first.success && second.success) {
+      expect(first.data).toEqual(second.data);
+      expect(first.data.elements[0]).toMatchObject({ segments: [{ id: "kept-segment" }, { id: "path:segment:1" }] });
+      expect(first.data.elements[1]).toMatchObject({ contours: [{ segments: [{ id: "glyph:contour:0:segment:0" }, { id: "glyph:contour:0:segment:1" }] }] });
+    }
+    const project = validateProject({ schemaVersion: 6, id: base.id, revision: 0, origin: "top-left", units: "mm", preferences: { lineGuidesEnabled: true, lineGuideAngle: 45 }, pages: [{ id: "page-1", page: base.page, layers: base.layers, elements: [path], connections: [] }], activePageId: "page-1" });
+    expect(project.success).toBe(true);
+    if (project.success) expect(project.data.pages[0]?.elements[0]).toMatchObject({ segments: [{ id: "kept-segment" }, { id: "path:segment:1" }] });
+  });
+  it("rejects duplicate path segment IDs in current documents", () => {
+    const base = createDocument("duplicate-segments", [{ id: layerId("layer-1"), name: "Design", visible: true, order: 0 }]);
+    const path = { type: "path", id: "path", layerId: "layer-1", nodes: [{ id: "a", anchor: { x: 0, y: 0 }, join: "corner" }, { id: "b", anchor: { x: 10, y: 0 }, join: "corner" }, { id: "c", anchor: { x: 20, y: 0 }, join: "corner" }], segments: [{ id: "same", type: "line", startNodeId: "a", endNodeId: "b" }, { id: "same", type: "line", startNodeId: "b", endNodeId: "c" }], closed: false, style: { stroke: "#000", strokeWidth: 1 } };
+    expect(validateDocument({ ...base, elements: [path] }).success).toBe(false);
+    expect(validateDocument({ ...base, elements: [{ ...path, segments: [{ type: "line", startNodeId: "a", endNodeId: "b" }, { id: "bc", type: "line", startNodeId: "b", endNodeId: "c" }] }] }).success).toBe(false);
+  });
+  it("rejects ambiguous element, layer, and page identities", () => {
+    const base = createDocument("identity", [{ id: layerId("layer-1"), name: "Design", visible: true, order: 0 }]);
+    const rectangle = { type: "rectangle", id: "same", layerId: "layer-1", position: { x: 0, y: 0 }, size: { width: 10, height: 10 }, cornerRadius: 0, rotation: 0, style: { stroke: "#000", strokeWidth: 1 } };
+    expect(validateDocument({ ...base, elements: [rectangle, { ...rectangle, position: { x: 20, y: 0 } }] }).success).toBe(false);
+    expect(validateDocument({ ...base, layers: [...base.layers, { ...base.layers[0] }] }).success).toBe(false);
+    const page = { id: "page-1", page: base.page, layers: base.layers, elements: [rectangle], connections: [] };
+    const projectBase = { schemaVersion: CURRENT_SCHEMA_VERSION, id: base.id, revision: 0, origin: "top-left", units: "mm", preferences: { lineGuidesEnabled: true, lineGuideAngle: 45 }, pages: [page], activePageId: "page-1" };
+    expect(validateProject({ ...projectBase, pages: [page, { ...page }] }).success).toBe(false);
+    expect(validateProject({ ...projectBase, pages: [{ ...page, layers: [{ id: "other", name: "Other", visible: true, order: 0 }] }] }).success).toBe(false);
   });
   it("migrates legacy sketches with no constraints without changing their geometry", () => {
         const legacy = { ...createDocument("legacy-sketch", [{ id: layerId("layer-1"), name: "Design", visible: true, order: 0 }]), schemaVersion: 4 as const, elements: [{ type: "sketch" as const, id: "sketch", layerId: "layer-1", nodes: [{ id: "a", point: { x: 1, y: 2 } }, { id: "b", point: { x: 8, y: 2 } }], edges: [{ id: "ab", startNodeId: "a", endNodeId: "b" }], style: { stroke: "#000", strokeWidth: 1 } }] };
@@ -125,7 +158,7 @@ describe("native document validation", () => {
   });
   it("rejects path and spline connection handles that are not present on the referenced node", () => {
     const base = createDocument("handles", [{ id: layerId("layer-1"), name: "Design", visible: true, order: 0 }]);
-    const path = { type: "path" as const, id: "path", layerId: "layer-1", nodes: [{ id: "a", anchor: { x: 0, y: 0 }, join: "smooth" as const }, { id: "b", anchor: { x: 10, y: 0 }, join: "smooth" as const }], segments: [{ type: "cubicBezier" as const, startNodeId: "a", endNodeId: "b", control1: { x: 3, y: 0 }, control2: { x: 7, y: 0 } }], closed: false, style: { stroke: "#000", strokeWidth: 1 } };
+    const path = { type: "path" as const, id: "path", layerId: "layer-1", nodes: [{ id: "a", anchor: { x: 0, y: 0 }, join: "smooth" as const }, { id: "b", anchor: { x: 10, y: 0 }, join: "smooth" as const }], segments: [{ id: "fixture-segment-2", type: "cubicBezier" as const, startNodeId: "a", endNodeId: "b", control1: { x: 3, y: 0 }, control2: { x: 7, y: 0 } }], closed: false, style: { stroke: "#000", strokeWidth: 1 } };
     const spline = { type: "spline" as const, id: "spline", layerId: "layer-1", nodes: [{ id: "a", anchor: { x: 20, y: 0 }, continuity: "smooth" as const, outHandle: { dx: 3, dy: 0 } }, { id: "b", anchor: { x: 30, y: 0 }, continuity: "smooth" as const, inHandle: { dx: -3, dy: 0 } }], closed: false, style: { stroke: "#000", strokeWidth: 1 } };
     const other = { type: "rectangle" as const, id: "other", layerId: "layer-1", position: { x: 40, y: 0 }, size: { width: 10, height: 10 }, cornerRadius: 0, rotation: 0, style: { stroke: "#000", strokeWidth: 1 } };
     const connection = (first: { elementId: string; node: { kind: "path" | "spline"; nodeId: string; handle?: "in" | "out" } }) => ({ id: `${first.elementId}-${first.node.nodeId}-${first.node.handle ?? "anchor"}`, first, second: { elementId: "other", node: { kind: "named" as const, name: "w" as const } } });
