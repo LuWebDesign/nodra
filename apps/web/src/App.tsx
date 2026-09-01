@@ -1299,7 +1299,7 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
         }
         if (changed) setEditorState(next);
         setSelectedFormaNodeKeys([]);
-      } else if ((event.key === "Delete" || event.key === "Backspace") && tool === "forma" && selectedFormaNodeKeys.length) {
+      } else if ((event.key === "Delete" || event.key === "Backspace") && tool === "forma" && selectedFormaNodeKeys.length && selectedElements.some((element) => element.type !== "spline")) {
         event.preventDefault();
         let next = editorRef.current;
         for (const element of selectedElements) {
