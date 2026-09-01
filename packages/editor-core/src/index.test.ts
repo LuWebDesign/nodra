@@ -49,6 +49,18 @@ describe("editor core", () => {
         expect(redo(undo(removed)).document).toEqual(removed.document);
       });
 
+      it("adds explicit relations between two selected sketch segments", () => {
+        const sketch: SketchElement = { type: "sketch", id: elementId("segment-relations"), layerId: layerId("default"), nodes: [{ id: "a", point: { x: 0, y: 0 } }, { id: "b", point: { x: 10, y: 0 } }, { id: "c", point: { x: 0, y: 10 } }, { id: "d", point: { x: 3, y: 14 } }], edges: [{ id: "ab", startNodeId: "a", endNodeId: "b" }, { id: "cd", startNodeId: "c", endNodeId: "d" }], style: rectangle.style };
+        const references = [{ elementId: sketch.id, nodeId: "a" }, { elementId: sketch.id, nodeId: "b" }, { elementId: sketch.id, nodeId: "c" }, { elementId: sketch.id, nodeId: "d" }] as const;
+        const equal = dispatch(createEditor({ ...document, elements: [sketch] }), addSketchConstraint(sketch.id, { id: "equal", kind: "equal", references }));
+        const equalSketch = equal.document.elements[0] as SketchElement;
+        expect(Math.hypot(equalSketch.nodes[3]!.point.x - equalSketch.nodes[2]!.point.x, equalSketch.nodes[3]!.point.y - equalSketch.nodes[2]!.point.y)).toBeCloseTo(10);
+        const parallel = dispatch(createEditor({ ...document, elements: [sketch] }), addSketchConstraint(sketch.id, { id: "parallel", kind: "parallel", references }));
+        expect((parallel.document.elements[0] as SketchElement).nodes[3]?.point.y).toBeCloseTo(10);
+        const perpendicular = dispatch(createEditor({ ...document, elements: [sketch] }), addSketchConstraint(sketch.id, { id: "perpendicular", kind: "perpendicular", references }));
+        expect((perpendicular.document.elements[0] as SketchElement).nodes[3]?.point.x).toBeCloseTo(0);
+      });
+
       it("deletes sketch nodes with their attached constraints while preserving the sketch model", () => {
         const baseSketch = createSketchLine(elementId("delete-constraint-sketch"), layerId("default"), rectangle.style, { x: 0, y: 0 }, { x: 10, y: 0 });
             const sketch = { ...baseSketch, nodes: [...baseSketch.nodes, { id: "third", point: { x: 10, y: 10 } }], edges: [...baseSketch.edges, { id: "second-third", startNodeId: baseSketch.nodes[1]!.id, endNodeId: "third" }] };

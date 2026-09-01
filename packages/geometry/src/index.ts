@@ -183,10 +183,11 @@ export function solveSketchConstraints(sketch: SketchElement): SketchConstraintS
     else if (constraint.kind === "horizontal") second!.y = first.y;
     else if (constraint.kind === "vertical") second!.x = first.x;
     else if (constraint.kind === "parallel" || constraint.kind === "perpendicular" || constraint.kind === "equal") {
-      const third = points[2]!; const fourth = points[3]!; const ax = second!.x - first.x; const ay = second!.y - first.y; const length = Math.hypot(fourth.x - third.x, fourth.y - third.y);
-      if (Math.hypot(ax, ay) <= 1e-6 || length <= 1e-6) { conflicts.push(constraint.id); continue; }
-      const angle = Math.atan2(ay, ax) + (constraint.kind === "perpendicular" ? Math.PI / 2 : 0);
-      fourth.x = third.x + length * Math.cos(angle); fourth.y = third.y + length * Math.sin(angle);
+      const third = points[2]!; const fourth = points[3]!; const ax = second!.x - first.x; const ay = second!.y - first.y; const bx = fourth.x - third.x; const by = fourth.y - third.y;
+      const firstLength = Math.hypot(ax, ay); const secondLength = Math.hypot(bx, by);
+      if (firstLength <= 1e-6 || secondLength <= 1e-6) { conflicts.push(constraint.id); continue; }
+      if (constraint.kind === "equal") { const angle = Math.atan2(by, bx); fourth.x = third.x + firstLength * Math.cos(angle); fourth.y = third.y + firstLength * Math.sin(angle); }
+      else { const angle = Math.atan2(ay, ax) + (constraint.kind === "perpendicular" ? Math.PI / 2 : 0); fourth.x = third.x + secondLength * Math.cos(angle); fourth.y = third.y + secondLength * Math.sin(angle); }
     }
     else if (constraint.kind === "distance-horizontal" || constraint.kind === "distance-vertical" || constraint.kind === "distance" || constraint.kind === "angle") {
       const dx = second!.x - first.x; const dy = second!.y - first.y;
