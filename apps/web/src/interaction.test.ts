@@ -39,11 +39,11 @@ describe("canvas coordinates", () => {
     expect(pickDimensionTarget(checked, { x: 10, y: 10 }, 1)?.kind).toBe("node");
     expect(pickNode(checked, { x: 30, y: 10 }, 1)).toMatchObject({ node: { kind: "center" } });
   });
-  it("picks a sketch edge body while preserving sketch node precedence", () => {
+  it("does not pick sketch edge bodies for angular dimensions", () => {
     const layer = { id: layerId("sketch-dimension-pick"), name: "Sketches", visible: true, order: 0 };
     const sketch = { type: "sketch" as const, id: elementId("sketch-dimension-pick"), layerId: layer.id, nodes: [{ id: "a", point: { x: 10, y: 10 } }, { id: "b", point: { x: 50, y: 10 } }], edges: [{ id: "ab", startNodeId: "a", endNodeId: "b" }], style: { stroke: "#000", strokeWidth: 1 } };
     const checked = { ...createDocument("sketch-dimension-pick-doc", [layer]), elements: [sketch] };
-    expect(pickDimensionTarget(checked, { x: 30, y: 10 }, 1)).toMatchObject({ kind: "line", hit: { elementId: sketch.id, edgeIndex: 0, line: { start: { x: 10, y: 10 }, end: { x: 50, y: 10 } } } });
+    expect(pickDimensionTarget(checked, { x: 30, y: 10 }, 1)).toBeUndefined();
     expect(pickDimensionTarget(checked, { x: 10, y: 10 }, 1)).toMatchObject({ kind: "node", hit: { elementId: sketch.id } });
   });
   it("centers the default 1200x900 page in a measured canvas", () => {
