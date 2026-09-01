@@ -117,6 +117,19 @@ describe("editor core", () => {
      expect(result.nodes.find((node) => node.point.x === 8)?.point).toEqual({ x: 8, y: 0 });
    });
 
+  it("remaps stable sketch-edge dimension references when splitting an edge", () => {
+     const sketch = createSketchLine(elementId("split-reference-sketch"), layerId("default"), rectangle.style, { x: 0, y: 0 }, { x: 20, y: 0 });
+     const originalEdge = sketch.edges[0]!;
+     const angle: DimensionElement = { type: "dimension", id: elementId("split-reference-angle"), layerId: sketch.layerId, kind: "angular", references: [{ kind: "line", elementId: sketch.id, edgeId: originalEdge.id, edgeIndex: 0 }, { kind: "line", elementId: sketch.id, edgeId: originalEdge.id, edgeIndex: 0 }], offset: { x: 8, y: -8 }, precision: 2, units: "mm", rotation: 0, style: rectangle.style };
+     const state = dispatch(createEditor({ ...document, elements: [sketch, angle] }), cutSketchEdge(sketch.id, 0, { x: 8, y: 0 }));
+     const result = state.document.elements.find((element): element is SketchElement => element.id === sketch.id)!;
+     const remapped = state.document.elements.find((element): element is DimensionElement => element.id === angle.id)!;
+
+     expect(result.edges).toHaveLength(2);
+     expect(remapped.references).toEqual([{ kind: "line", elementId: sketch.id, edgeId: result.edges[0]!.id, edgeIndex: 0 }, { kind: "line", elementId: sketch.id, edgeId: result.edges[0]!.id, edgeIndex: 0 }]);
+     expect(undo(state).document.elements).toEqual([sketch, angle]);
+   });
+
   it("cuts a sketch segment at a crossing rectangle intersection instead of the click point", () => {
      const sketch = createSketchLine(elementId("intersection-sketch"), layerId("default"), rectangle.style, { x: 0, y: 0 }, { x: 20, y: 0 });
      const cutter = { ...rectangle, id: elementId("intersection-rectangle"), position: { x: 8, y: -5 }, size: { width: 4, height: 10 } };
@@ -132,6 +145,16 @@ describe("editor core", () => {
      const state = dispatch(createEditor({ ...document, elements: [sketch, linked] }), cutSketchEdge(sketch.id, 1));
      expect(state.document.elements).toHaveLength(1);
      expect(state.document.elements[0]).toMatchObject({ type: "sketch", nodes: [{ id: "a" }, { id: "b" }] });
+   });
+
+  it("removes a dimension whose stable sketch edge is deleted", () => {
+     const base = createSketchLine(elementId("delete-edge-reference"), layerId("default"), rectangle.style, { x: 0, y: 0 }, { x: 10, y: 0 });
+     const sketch: SketchElement = { ...base, nodes: [...base.nodes, { id: "c", point: { x: 20, y: 0 } }], edges: [...base.edges, { id: "bc", startNodeId: base.nodes[1]!.id, endNodeId: "c" }] };
+     const angle: DimensionElement = { type: "dimension", id: elementId("deleted-edge-angle"), layerId: sketch.layerId, kind: "angular", references: [{ kind: "line", elementId: sketch.id, edgeId: "bc", edgeIndex: 1 }, { kind: "line", elementId: sketch.id, edgeId: "bc", edgeIndex: 1 }], offset: { x: 8, y: -8 }, precision: 2, units: "mm", rotation: 0, style: rectangle.style };
+     const state = dispatch(createEditor({ ...document, elements: [sketch, angle] }), cutSketchEdge(sketch.id, 1));
+
+     expect(state.document.elements).toHaveLength(1);
+     expect(state.document.elements[0]).toMatchObject({ type: "sketch", edges: [{ id: base.edges[0]!.id }] });
    });
 
 it("converts a zero-radius rectangle to an open path when cutting one edge", () => {

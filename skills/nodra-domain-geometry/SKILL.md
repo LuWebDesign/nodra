@@ -12,7 +12,7 @@ Load for model fields, coordinates, transforms, bounds, rotation, hit testing, h
 
 ## Hard Rules
 - Use mm coordinates with a top-left origin; do not silently convert model units.
-- Keep stable branded IDs, schemaVersion 3, revisions, pages/layers, and element discriminants intact.
+- Keep stable branded IDs, schemaVersion 6, revisions, pages/layers, and element discriminants intact.
 - Keep domain != geometry != renderer/UI responsibilities.
 - Do not install or infer libraries; candidates are not selected dependencies.
 - Preview != persistent document and no premature spatial index/worker abstraction.

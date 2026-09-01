@@ -4,7 +4,7 @@ import { dimensionGeometry, mmToScreen, sketchClosedContours, type Viewport } fr
 import { validateDocument } from "@nodra/validation";
 
 const MAX_ISSUES = 8;
-const SUPPORTED_SCHEMA_VERSIONS = new Set([1, 2, 3, CURRENT_SCHEMA_VERSION]);
+const SUPPORTED_SCHEMA_VERSIONS = new Set(Array.from({ length: CURRENT_SCHEMA_VERSION }, (_, index) => index + 1));
 
 export interface SvgRenderer {
   render(document: unknown, viewport: unknown): RenderResult;

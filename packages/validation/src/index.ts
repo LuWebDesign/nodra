@@ -35,7 +35,7 @@ const connectableAddress = z.union([
 const connectionReference = z.object({ elementId: nonEmptyId, node: connectableAddress }).strict();
 const explicitConnection = z.object({ id: nonEmptyId, first: connectionReference, second: connectionReference }).strict();
 const nodeReference = z.object({ kind: z.literal("node"), elementId: nonEmptyId, nodeIndex: finite.int().nonnegative(), nodeId: nonEmptyId.optional() }).strict();
-const lineReference = z.object({ kind: z.literal("line"), elementId: nonEmptyId, edgeIndex: finite.int().nonnegative().optional() }).strict();
+const lineReference = z.object({ kind: z.literal("line"), elementId: nonEmptyId, edgeId: nonEmptyId.optional(), edgeIndex: finite.int().nonnegative().optional() }).strict();
 const legacyNodeReference = z.object({ elementId: nonEmptyId, nodeIndex: finite.int().nonnegative(), nodeId: nonEmptyId.optional() }).strict().transform((reference) => ({ kind: "node" as const, ...reference }));
 const dimensionReference = z.union([z.discriminatedUnion("kind", [nodeReference, lineReference]), legacyNodeReference]);
 const dimension = z.object({ id: nonEmptyId, layerId: nonEmptyId, type: z.literal("dimension"), kind: z.enum(["aligned", "horizontal", "vertical", "angular", "radius", "diameter"]), references: z.tuple([dimensionReference, dimensionReference]), offset: point, precision: finite.int().min(0).max(6), units: z.literal("mm"), rotation: z.literal(0), style, driving: z.boolean().optional(), constraintId: nonEmptyId.optional() }).strict().superRefine((value, ctx) => {
@@ -158,11 +158,15 @@ export const documentSchema = z.object({ schemaVersion: z.literal(CURRENT_SCHEMA
       const target = value.elements.find((candidate) => candidate.id === reference.elementId);
       if (!elementIds.has(reference.elementId)) ctx.addIssue({ code: "custom", message: "Dimension references an unknown element", path: ["elements", index, "references", referenceIndex, "elementId"] });
        else if (reference.kind === "line") {
-         const validSketchEdge = target?.type === "sketch" && (reference.edgeIndex ?? 0) < target.edges.length;
+         const stableEdgeIndex = target?.type === "sketch" && reference.edgeId !== undefined ? target.edges.findIndex((edge) => edge.id === reference.edgeId) : undefined;
+         const resolvedEdgeIndex = stableEdgeIndex ?? reference.edgeIndex ?? 0;
+         const validSketchEdge = target?.type === "sketch" && resolvedEdgeIndex >= 0 && resolvedEdgeIndex < target.edges.length;
          if (target?.type !== "line" && !validSketchEdge) ctx.addIssue({ code: "custom", message: "Line dimension references require line or sketch-edge elements", path: ["elements", index, "references", referenceIndex] });
+         else if (target.type === "line" && reference.edgeId !== undefined) ctx.addIssue({ code: "custom", message: "Native line references must not include a sketch edge ID", path: ["elements", index, "references", referenceIndex, "edgeId"] });
          else if (target.type === "line" && target.start.x === target.end.x && target.start.y === target.end.y) ctx.addIssue({ code: "custom", message: "Dimension line references must not be degenerate", path: ["elements", index, "references", referenceIndex] });
          else if (target?.type === "sketch") {
-           const edge = target.edges[reference.edgeIndex ?? 0]; const nodes = new Map(target.nodes.map((node) => [node.id, node.point]));
+           if (reference.edgeId !== undefined && reference.edgeIndex !== undefined && reference.edgeIndex !== stableEdgeIndex) ctx.addIssue({ code: "custom", message: "Dimension sketch-edge ID and legacy index must identify the same edge", path: ["elements", index, "references", referenceIndex] });
+           const edge = target.edges[resolvedEdgeIndex]; const nodes = new Map(target.nodes.map((node) => [node.id, node.point]));
            const start = edge ? nodes.get(edge.startNodeId) : undefined; const end = edge ? nodes.get(edge.endNodeId) : undefined;
            if (!start || !end || (start.x === end.x && start.y === end.y)) ctx.addIssue({ code: "custom", message: "Dimension sketch-edge references must not be degenerate", path: ["elements", index, "references", referenceIndex] });
          }
@@ -184,17 +188,26 @@ export const documentSchema = z.object({ schemaVersion: z.literal(CURRENT_SCHEMA
     if (element.type === "dimension" && element.kind === "angular" && element.references.every((reference) => reference.kind === "line")) {
       const first = value.elements.find((candidate) => candidate.id === element.references[0].elementId);
       const second = value.elements.find((candidate) => candidate.id === element.references[1].elementId);
-       const endpoints = (element: (typeof value.elements)[number] | undefined, reference: { readonly kind?: string; readonly edgeIndex?: number | undefined }): readonly [PointMm, PointMm] | undefined => {
+       const endpoints = (element: (typeof value.elements)[number] | undefined, reference: { readonly kind?: string; readonly edgeId?: string | undefined; readonly edgeIndex?: number | undefined }): readonly [PointMm, PointMm] | undefined => {
          if (reference.kind !== "line") return undefined;
          if (element?.type === "line") return visualLineEndpoints(element);
          if (element?.type !== "sketch") return undefined;
-         const edge = element.edges[reference.edgeIndex ?? 0]; const nodes = new Map(element.nodes.map((node) => [node.id, node.point]));
+         const edge = reference.edgeId !== undefined ? element.edges.find((candidate) => candidate.id === reference.edgeId) : element.edges[reference.edgeIndex ?? 0]; const nodes = new Map(element.nodes.map((node) => [node.id, node.point]));
          const start = edge ? nodes.get(edge.startNodeId) : undefined; const end = edge ? nodes.get(edge.endNodeId) : undefined;
          return start && end ? [start, end] : undefined;
        };
        const points = endpoints(first, element.references[0]); const otherPoints = endpoints(second, element.references[1]);
        const [firstReference, secondReference] = element.references;
-       if (points && otherPoints && !(firstReference.kind === "line" && secondReference.kind === "line" && firstReference.elementId === secondReference.elementId && (firstReference.edgeIndex ?? 0) === (secondReference.edgeIndex ?? 0))) {
+       const lineKey = (target: (typeof value.elements)[number] | undefined, reference: typeof firstReference): string | undefined => {
+         if (reference.kind !== "line" || !target) return undefined;
+         if (target.type === "line") return target.id;
+         if (target.type !== "sketch") return undefined;
+         const edge = reference.edgeId !== undefined ? target.edges.find((candidate) => candidate.id === reference.edgeId) : target.edges[reference.edgeIndex ?? 0];
+         return edge ? `${target.id}:${edge.id}` : undefined;
+       };
+       const firstLineKey = lineKey(first, firstReference); const secondLineKey = lineKey(second, secondReference);
+       const sameLineReference = firstLineKey !== undefined && firstLineKey === secondLineKey;
+       if (points && otherPoints && !sameLineReference) {
          const connected = points.some((point) => otherPoints.some((other) => Math.hypot(point.x - other.x, point.y - other.y) <= 1e-6));
          if (!connected) ctx.addIssue({ code: "custom", message: "Angular dimension lines must share a visual endpoint", path: ["elements", index, "references"] });
       }
@@ -213,11 +226,36 @@ export type ValidationIssue = { readonly path: readonly (string | number)[]; rea
 export type ValidationResult = { readonly success: true; readonly data: DocumentSnapshot } | { readonly success: false; readonly issues: readonly ValidationIssue[]; readonly error: string };
 
 export type JsonValue = object | boolean | number | string | null;
-const migrateLegacyElements = (elements: unknown): unknown => Array.isArray(elements) ? elements.map((element) => {
-  if (typeof element !== "object" || element === null || Array.isArray(element)) return element;
-  const candidate = element as Record<string, unknown>;
-  return candidate.type === "sketch" && candidate.constraints === undefined ? { ...candidate, constraints: [] } : element;
-}) : elements;
+const migrateLegacyElements = (elements: unknown): unknown => {
+  if (!Array.isArray(elements)) return elements;
+  const normalized = elements.map((element) => {
+    if (typeof element !== "object" || element === null || Array.isArray(element)) return element;
+    const candidate = element as Record<string, unknown>;
+    return candidate.type === "sketch" && candidate.constraints === undefined ? { ...candidate, constraints: [] } : element;
+  });
+  const byId = new Map(normalized.flatMap((element) => {
+    if (typeof element !== "object" || element === null || Array.isArray(element)) return [];
+    const candidate = element as Record<string, unknown>;
+    return typeof candidate.id === "string" ? [[candidate.id, candidate] as const] : [];
+  }));
+  return normalized.map((element) => {
+    if (typeof element !== "object" || element === null || Array.isArray(element)) return element;
+    const candidate = element as Record<string, unknown>;
+    if (candidate.type !== "dimension" || !Array.isArray(candidate.references)) return element;
+    const references = candidate.references.map((reference) => {
+      if (typeof reference !== "object" || reference === null || Array.isArray(reference)) return reference;
+      const current = reference as Record<string, unknown>;
+      if (current.kind !== "line" || typeof current.elementId !== "string" || current.edgeId !== undefined) return reference;
+      const target = byId.get(current.elementId);
+      if (target?.type !== "sketch" || !Array.isArray(target.edges)) return reference;
+      const edgeIndex = typeof current.edgeIndex === "number" ? current.edgeIndex : 0;
+      const edge = target.edges[edgeIndex];
+      if (typeof edge !== "object" || edge === null || Array.isArray(edge) || typeof (edge as Record<string, unknown>).id !== "string") return reference;
+      return { ...current, edgeId: (edge as Record<string, unknown>).id, edgeIndex };
+    });
+    return { ...candidate, references };
+  });
+};
 const migrateLegacyPages = (pages: unknown): unknown => Array.isArray(pages) ? pages.map((page) => {
   if (typeof page !== "object" || page === null || Array.isArray(page)) return page;
   const candidate = page as Record<string, unknown>;
@@ -227,7 +265,7 @@ export function migrateDocument(input: JsonValue): JsonValue {
   if (typeof input !== "object" || input === null || Array.isArray(input)) return input;
   const candidate = input as Record<string, unknown>;
   if (candidate.schemaVersion === 1) return { ...candidate, schemaVersion: CURRENT_SCHEMA_VERSION, page: { width: 1200, height: 900 }, elements: migrateLegacyElements(candidate.elements), connections: [] };
-  if (candidate.schemaVersion === 2 || candidate.schemaVersion === 3 || candidate.schemaVersion === 4) {
+  if (candidate.schemaVersion === 2 || candidate.schemaVersion === 3 || candidate.schemaVersion === 4 || candidate.schemaVersion === 5) {
     return { ...candidate, schemaVersion: CURRENT_SCHEMA_VERSION, page: candidate.page ?? { width: 1200, height: 900 }, elements: migrateLegacyElements(candidate.elements), connections: candidate.connections ?? [] };
   }
   return input;
@@ -258,7 +296,7 @@ export function validateProject(input: unknown): { readonly success: true; reado
 export function migrateProject(input: unknown): unknown {
   if (typeof input !== "object" || input === null || Array.isArray(input)) return input;
   const candidate = input as Record<string, unknown>;
-  if (candidate.schemaVersion !== 1 && candidate.schemaVersion !== 2 && candidate.schemaVersion !== 3 && candidate.schemaVersion !== 4) return input;
+  if (candidate.schemaVersion !== 1 && candidate.schemaVersion !== 2 && candidate.schemaVersion !== 3 && candidate.schemaVersion !== 4 && candidate.schemaVersion !== 5) return input;
   const pages = migrateLegacyPages(candidate.pages);
   return { ...candidate, schemaVersion: CURRENT_SCHEMA_VERSION, pages };
 }

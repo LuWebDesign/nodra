@@ -313,12 +313,22 @@ export const dimensionOffsetForAlignedPlacement = (start: PointMm, end: PointMm,
   return { x: -(end.y - start.y) / length * signed, y: (end.x - start.x) / length * signed };
 };
 const nodeReference = (reference: DimensionElement["references"][number]): reference is Extract<DimensionElement["references"][number], { nodeIndex: number }> => "nodeIndex" in reference;
+export interface SketchEdgeAddress { readonly edgeId?: string; readonly edgeIndex?: number }
+/** Resolves stable edge identity first and only falls back to a legacy index when no ID exists. */
+export const sketchEdgeIndexAtAddress = (sketch: SketchElement, address: SketchEdgeAddress): number | undefined => {
+  const index = address.edgeId !== undefined ? sketch.edges.findIndex((edge) => edge.id === address.edgeId) : address.edgeIndex ?? 0;
+  return index >= 0 && index < sketch.edges.length ? index : undefined;
+};
+export const sketchEdgeAtAddress = (sketch: SketchElement, address: SketchEdgeAddress): SketchElement["edges"][number] | undefined => {
+  const index = sketchEdgeIndexAtAddress(sketch, address);
+  return index === undefined ? undefined : sketch.edges[index];
+};
 const lineAt = (reference: DimensionElement["references"][number], elements: readonly Element[]): LineElement | undefined => {
   if (!("kind" in reference) || reference.kind !== "line") return undefined;
   const element = elements.find((candidate) => candidate.id === reference.elementId);
   if (element?.type === "line") return element;
   if (element?.type !== "sketch") return undefined;
-  const edge = element.edges[reference.edgeIndex ?? 0];
+  const edge = sketchEdgeAtAddress(element, reference);
   const nodes = new Map(element.nodes.map((node) => [node.id, node.point]));
   const start = edge ? nodes.get(edge.startNodeId) : undefined;
   const end = edge ? nodes.get(edge.endNodeId) : undefined;
@@ -330,7 +340,10 @@ export function angularDimensionGeometry(element: DimensionElement, elements: re
   if (!("kind" in firstReference) || firstReference.kind !== "line" || !("kind" in secondReference) || secondReference.kind !== "line") return undefined;
   const first = lineAt(firstReference, elements); const second = lineAt(secondReference, elements); if (!first || !second) return undefined;
   const [firstStart, firstEnd] = rotatedLineEndpoints(first); const [secondStart, secondEnd] = rotatedLineEndpoints(second);
-  const sameLine = firstReference.elementId === secondReference.elementId && (firstReference.edgeIndex ?? 0) === (secondReference.edgeIndex ?? 0);
+  const referencedElement = firstReference.elementId === secondReference.elementId ? elements.find((candidate) => candidate.id === firstReference.elementId) : undefined;
+  const firstEdgeIndex = referencedElement?.type === "sketch" ? sketchEdgeIndexAtAddress(referencedElement, firstReference) : undefined;
+  const secondEdgeIndex = referencedElement?.type === "sketch" ? sketchEdgeIndexAtAddress(referencedElement, secondReference) : undefined;
+  const sameLine = referencedElement?.type === "line" || referencedElement?.type === "sketch" && firstEdgeIndex !== undefined && firstEdgeIndex === secondEdgeIndex;
   if (sameLine) {
     const dx = firstEnd.x - firstStart.x; const dy = firstEnd.y - firstStart.y; const length = Math.hypot(dx, dy);
     if (length === 0) return undefined;

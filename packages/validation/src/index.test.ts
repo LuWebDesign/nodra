@@ -26,7 +26,7 @@ describe("native document validation", () => {
     const result = validateDocument(oldDocument);
     expect(result.success).toBe(true);
     if (result.success) expect(result.data.page).toEqual({ width: 1200, height: 900 });
-    expect(migrateDocument(oldDocument)).toMatchObject({ schemaVersion: 5, page: { width: 1200, height: 900 }, connections: [] });
+    expect(migrateDocument(oldDocument)).toMatchObject({ schemaVersion: 6, page: { width: 1200, height: 900 }, connections: [] });
   });
   it("migrates legacy sketches with no constraints without changing their geometry", () => {
         const legacy = { ...createDocument("legacy-sketch", [{ id: layerId("layer-1"), name: "Design", visible: true, order: 0 }]), schemaVersion: 4 as const, elements: [{ type: "sketch" as const, id: "sketch", layerId: "layer-1", nodes: [{ id: "a", point: { x: 1, y: 2 } }, { id: "b", point: { x: 8, y: 2 } }], edges: [{ id: "ab", startNodeId: "a", endNodeId: "b" }], style: { stroke: "#000", strokeWidth: 1 } }] };
@@ -85,12 +85,22 @@ describe("native document validation", () => {
     expect(validateDocument({ ...base, elements: [first, { ...angular, references: [{ kind: "line", elementId: "first" }, { kind: "line", elementId: "missing" }] } as typeof angular] }).success).toBe(false);
     expect(validateDocument({ ...base, elements: [first, { ...angular, references: [{ kind: "line", elementId: "first" }, { kind: "line", elementId: "first" }] } as typeof angular] }).success).toBe(true);
   });
+  it("migrates legacy sketch edge indexes to stable edge IDs", () => {
+    const base = createDocument("stable-sketch-edge", [{ id: layerId("layer-1"), name: "Design", visible: true, order: 0 }]);
+    const sketch = { type: "sketch" as const, id: "sketch", layerId: "layer-1", nodes: [{ id: "a", point: { x: 0, y: 0 } }, { id: "b", point: { x: 20, y: 0 } }], edges: [{ id: "edge-ab", startNodeId: "a", endNodeId: "b" }], constraints: [], style: { stroke: "#000", strokeWidth: 1 } };
+    const dimension = { type: "dimension" as const, id: "angle", layerId: "layer-1", kind: "angular" as const, references: [{ kind: "line" as const, elementId: "sketch", edgeIndex: 0 }, { kind: "line" as const, elementId: "sketch", edgeIndex: 0 }] as const, offset: { x: 10, y: 10 }, precision: 2, units: "mm" as const, rotation: 0 as const, style: { stroke: "#2563eb", strokeWidth: 0.45 } };
+    const result = validateDocument({ ...base, schemaVersion: 5, elements: [sketch, dimension] });
+
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data.elements[1]).toMatchObject({ references: [{ edgeId: "edge-ab", edgeIndex: 0 }, { edgeId: "edge-ab", edgeIndex: 0 }] });
+  });
   it("validates angular references to connected sketch edges", () => {
     const base = createDocument("sketch-angular-doc", [{ id: layerId("layer-1"), name: "Design", visible: true, order: 0 }]);
     const first = { type: "sketch" as const, id: "first-sketch", layerId: "layer-1", nodes: [{ id: "a", point: { x: 20, y: 20 } }, { id: "b", point: { x: 60, y: 20 } }], edges: [{ id: "ab", startNodeId: "a", endNodeId: "b" }], style: { stroke: "#000", strokeWidth: 1 } };
     const second = { type: "sketch" as const, id: "second-sketch", layerId: "layer-1", nodes: [{ id: "c", point: { x: 20, y: 20 } }, { id: "d", point: { x: 20, y: 60 } }], edges: [{ id: "cd", startNodeId: "c", endNodeId: "d" }], style: { stroke: "#000", strokeWidth: 1 } };
     const angular = { type: "dimension" as const, id: "sketch-angular", layerId: "layer-1", kind: "angular" as const, references: [{ kind: "line" as const, elementId: first.id, edgeIndex: 0 }, { kind: "line" as const, elementId: second.id, edgeIndex: 0 }] as const, offset: { x: 10, y: 10 }, precision: 2, units: "mm" as const, rotation: 0 as const, style: { stroke: "#2563eb", strokeWidth: 0.45 } };
     expect(validateDocument({ ...base, elements: [first, second, angular] }).success).toBe(true);
+    expect(validateDocument({ ...base, elements: [first, second, { ...angular, references: [{ kind: "line", elementId: first.id, edgeId: "missing", edgeIndex: 0 }, angular.references[1]] }] }).success).toBe(false);
   });
   it("rejects duplicate and dangling sketch constraints", () => {
         const base = createDocument("constraint-validation", [{ id: layerId("layer-1"), name: "Design", visible: true, order: 0 }]);

@@ -1,4 +1,4 @@
-export const CURRENT_SCHEMA_VERSION = 5 as const;
+export const CURRENT_SCHEMA_VERSION = 6 as const;
 
 export type SchemaVersion = typeof CURRENT_SCHEMA_VERSION;
 export type DocumentId = string & { readonly __brand: "DocumentId" };
@@ -88,7 +88,7 @@ export interface SketchElement { readonly type: "sketch"; readonly id: ElementId
 export type DimensionKind = "aligned" | "horizontal" | "vertical" | "angular" | "radius" | "diameter";
 export type DimensionReference =
   | { readonly kind: "node"; readonly elementId: ElementId; readonly nodeIndex: number; readonly nodeId?: string }
-  | { readonly kind: "line"; readonly elementId: ElementId; readonly edgeIndex?: number }
+  | { readonly kind: "line"; readonly elementId: ElementId; readonly edgeId?: string; readonly edgeIndex?: number }
   /** Legacy node references are accepted at the boundary and normalized by validation. */
   | { readonly elementId: ElementId; readonly nodeIndex: number; readonly nodeId?: string };
 export interface DimensionElement {

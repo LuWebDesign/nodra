@@ -20,7 +20,7 @@ export interface AlignmentGuide {
   readonly target: PointMm;
 }
 export interface NodeHit { readonly elementId: ElementId; readonly nodeIndex: number; readonly node: RealGeometryNode }
-export interface DimensionLineHit { readonly elementId: ElementId; readonly line: LineElement; readonly distance: number; readonly edgeIndex?: number }
+export interface DimensionLineHit { readonly elementId: ElementId; readonly line: LineElement; readonly distance: number; readonly edgeId?: string; readonly edgeIndex?: number }
 export interface CircleDimensionHit { readonly elementId: ElementId; readonly center: NodeHit; readonly rim: NodeHit; readonly distance: number }
 export type DimensionTarget = { readonly kind: "node"; readonly hit: NodeHit } | { readonly kind: "circle"; readonly hit: CircleDimensionHit } | { readonly kind: "line"; readonly hit: DimensionLineHit };
 export interface PathNodeHit { readonly elementId: ElementId; readonly node: PathGeometryNode & { readonly ringIndex?: number } }

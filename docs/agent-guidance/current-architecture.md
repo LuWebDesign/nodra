@@ -29,7 +29,7 @@ Node >=24; pnpm 10.15.1; TypeScript 5.9.2; React 19.1.1; Vite 7.1.3; Vitest 3.2.
 ## Strengths
 
 - Explicit package boundaries and source exports.
-- Domain schemaVersion 3, branded IDs, mm/top-left coordinates, pages/layers, revisions, and typed elements.
+- Domain schemaVersion 6, branded IDs, mm/top-left coordinates, pages/layers, revisions, typed elements, and stable sketch-edge dimension references.
 - Zod validation/migrations, command-driven editing, gesture transaction semantics, escaped non-mutating SVG, and revision-aware local recovery.
 
 ## Risks and gaps
@@ -40,7 +40,7 @@ Node >=24; pnpm 10.15.1; TypeScript 5.9.2; React 19.1.1; Vite 7.1.3; Vitest 3.2.
 
 ### Important
 - `App.tsx` is a large composition hotspot.
-- Renderer schema classification needs an explicit schema 3 versus invalid-input policy.
+- Schema migrations and renderer support classification must remain aligned as the document model evolves.
 - `packages/ui` contains contracts only.
 - This audit is the current architecture documentation; ADRs and prior developer architecture documentation are still missing.
 
