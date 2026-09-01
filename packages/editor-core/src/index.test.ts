@@ -389,6 +389,31 @@ it("converts a zero-radius rectangle to an open path when cutting one edge", () 
     expect((updated.document.elements[0] as EllipseElement).circleConstraints?.[0]?.value).toBe(15);
   });
 
+  it("converts a sketch length dimension to a persistent driving constraint", () => {
+    const sketch = createSketchLine(elementId("sketch-driving-length"), layerId("default"), rectangle.style, { x: 0, y: 0 }, { x: 10, y: 10 });
+    const length: DimensionElement = { type: "dimension", id: elementId("sketch-driving-length-dimension"), layerId: sketch.layerId, kind: "aligned", references: [{ kind: "node", elementId: sketch.id, nodeIndex: 0, nodeId: sketch.nodes[0]!.id }, { kind: "node", elementId: sketch.id, nodeIndex: 1, nodeId: sketch.nodes[1]!.id }], offset: { x: 0, y: -8 }, precision: 2, units: "mm", rotation: 0, style: rectangle.style };
+    const state = dispatch(createEditor({ ...document, elements: [sketch, length] }), setDimensionDriving(length.id, true));
+    const constrained = state.document.elements[0] as SketchElement;
+    expect(state.document.elements[1]).toMatchObject({ driving: true, constraintId: "dimension:" + length.id });
+    expect(constrained.constraints?.[0]).toMatchObject({ kind: "distance", value: Math.sqrt(200) });
+    const updated = dispatch(state, updateDimensionValue(length.id, 20));
+    const solved = updated.document.elements[0] as SketchElement;
+    expect(solved.constraints?.[0]?.value).toBe(20);
+    expect(Math.hypot(solved.nodes[1]!.point.x - solved.nodes[0]!.point.x, solved.nodes[1]!.point.y - solved.nodes[0]!.point.y)).toBeCloseTo(20);
+  });
+
+  it("converts a sketch angle dimension to a persistent driving constraint", () => {
+    const sketch = createSketchLine(elementId("sketch-driving-angle"), layerId("default"), rectangle.style, { x: 0, y: 0 }, { x: 10, y: 10 });
+    const angle: DimensionElement = { type: "dimension", id: elementId("sketch-driving-angle-dimension"), layerId: sketch.layerId, kind: "angular", references: [{ kind: "line", elementId: sketch.id, edgeIndex: 0 }, { kind: "line", elementId: sketch.id, edgeIndex: 0 }], offset: { x: 8, y: -8 }, precision: 2, units: "mm", rotation: 0, style: rectangle.style };
+    const state = dispatch(createEditor({ ...document, elements: [sketch, angle] }), setDimensionDriving(angle.id, true));
+    expect((state.document.elements[0] as SketchElement).constraints?.[0]).toMatchObject({ kind: "angle", value: 45 });
+    const updated = dispatch(state, updateDimensionValue(angle.id, 30));
+    const solved = updated.document.elements[0] as SketchElement;
+    expect(solved.constraints?.[0]?.value).toBe(30);
+    const first = solved.nodes[0]!.point; const second = solved.nodes[1]!.point;
+    expect(Math.atan2(second.y - first.y, second.x - first.x) * 180 / Math.PI).toBeCloseTo(30);
+  });
+
   it("drives an edited path through explicit node references", () => {
      const linked: DimensionElement = { ...dimension, id: elementId("path-dimension"), references: [{ kind: "node", elementId: path.id, nodeIndex: 0, nodeId: "a" }, { kind: "node", elementId: path.id, nodeIndex: 1, nodeId: "b" }] };
      const state = dispatch(createEditor({ ...document, elements: [path, linked] }), updateDimensionValue(linked.id, 25));

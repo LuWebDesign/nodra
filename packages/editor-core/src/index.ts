@@ -916,6 +916,28 @@ export const insertFormaNode = (id: ElementId, address: ContourSegmentAddress, p
   },
 });
 
+const sketchConstraintForDimension = (dimension: DimensionElement, sketch: SketchElement, elements: readonly Element[], value?: number): SketchConstraint | undefined => {
+  const measuredValue = value ?? dimensionGeometry(dimension, elements)?.value;
+  if (!Number.isFinite(measuredValue) || measuredValue === undefined || measuredValue <= 0) return undefined;
+  const constraintId = dimension.constraintId ?? `dimension:${dimension.id}`;
+  const first = dimension.references[0]; const second = dimension.references[1];
+  if (first.elementId !== sketch.id || second.elementId !== sketch.id) return undefined;
+  if (dimension.kind === "aligned" || dimension.kind === "horizontal" || dimension.kind === "vertical") {
+    if (!("kind" in first) || !("kind" in second) || first.kind !== "node" || second.kind !== "node" || !first.nodeId || !second.nodeId) return undefined;
+    const kind = dimension.kind === "aligned" ? "distance" : dimension.kind === "horizontal" ? "distance-horizontal" : "distance-vertical";
+    return { id: constraintId, kind, references: [{ elementId: sketch.id, nodeId: first.nodeId }, { elementId: sketch.id, nodeId: second.nodeId }], value: measuredValue };
+  }
+  if (dimension.kind === "angular") {
+    if (!("kind" in first) || !("kind" in second) || first.kind !== "line" || second.kind !== "line") return undefined;
+    const firstEdgeIndex = first.edgeIndex ?? 0; const secondEdgeIndex = second.edgeIndex ?? 0;
+    if (firstEdgeIndex !== secondEdgeIndex) return undefined;
+    const edge = sketch.edges[firstEdgeIndex];
+    if (!edge) return undefined;
+    return { id: constraintId, kind: "angle", references: [{ elementId: sketch.id, nodeId: edge.startNodeId }, { elementId: sketch.id, nodeId: edge.endNodeId }], value: measuredValue };
+  }
+  return undefined;
+};
+
 export const updateDimensionValue = (dimensionId: ElementId, value: number): EditorCommand => ({
   name: `dimension-value:${dimensionId}`,
   apply: (document) => {
@@ -991,7 +1013,7 @@ export const updateDimensionValue = (dimensionId: ElementId, value: number): Edi
       const updated = secondNode.nodeId === "start" ? { ...target, start: end } : { ...target, end };
       return replaceElements(document, document.elements.map((element) => element.id === target.id ? updated : element));
     }
-    if (dimension.kind !== "aligned" && dimension.kind !== "horizontal" && dimension.kind !== "vertical") return { success: false, error: "This dimension kind cannot drive the referenced geometry" };
+    if (dimension.kind !== "aligned" && dimension.kind !== "horizontal" && dimension.kind !== "vertical" && target?.type !== "sketch") return { success: false, error: "This dimension kind cannot drive the referenced geometry" };
     if (target?.type === "path") {
       const first = dimension.references[0]; const second = dimension.references[1];
       if (!("kind" in first) || !("kind" in second) || first.kind !== "node" || second.kind !== "node") return { success: false, error: "Path driving dimensions require node references" };
@@ -1012,28 +1034,29 @@ export const updateDimensionValue = (dimensionId: ElementId, value: number): Edi
       return replaceElements(document, document.elements.map((element) => element.id === target.id ? next : element));
     }
     if (target?.type === "sketch") {
+      if (dimension.driving && dimension.constraintId) {
+        const nextConstraint = sketchConstraintForDimension(dimension, target, document.elements, value);
+        const constraint = target.constraints?.find((candidate) => candidate.id === dimension.constraintId);
+        if (!constraint || !nextConstraint || constraint.kind !== nextConstraint.kind) return { success: false, error: "Driving dimension constraint does not match its references" };
+        const constraintReferenceIds = constraint.references.map((reference) => `${reference.elementId}:${reference.nodeId}`).sort();
+        const dimensionReferenceIds = nextConstraint.references.map((reference) => `${reference.elementId}:${reference.nodeId}`).sort();
+        const matches = constraintReferenceIds.length === dimensionReferenceIds.length && constraintReferenceIds.every((reference, index) => reference === dimensionReferenceIds[index]);
+        if (!matches) return { success: false, error: "Driving dimension constraint does not match its references" };
+        const solved = solveSketchConstraints({ ...target, constraints: target.constraints!.map((candidate) => candidate.id === constraint.id ? nextConstraint : candidate) });
+        if (solved.status === "conflict" || solved.status === "overdefined") return { success: false, error: `Sketch constraints are ${solved.status}` };
+        return replaceElements(document, document.elements.map((element) => element.id === target.id ? solved.sketch : element));
+      }
       const first = dimension.references[0]; const second = dimension.references[1];
       if (!("kind" in first) || !("kind" in second) || first.kind !== "node" || second.kind !== "node" || !first.nodeId || !second.nodeId) return { success: false, error: "Sketch driving dimensions require node references" };
       const firstNode = target.nodes.find((node) => node.id === first.nodeId);
       const secondNode = target.nodes.find((node) => node.id === second.nodeId);
       if (!firstNode || !secondNode || firstNode.id === secondNode.id) return { success: false, error: "Sketch driving dimension references are invalid" };
-      if (!dimension.driving || !dimension.constraintId) {
-        const dx = secondNode.point.x - firstNode.point.x; const dy = secondNode.point.y - firstNode.point.y; const currentLength = Math.hypot(dx, dy);
-        if (currentLength <= 1e-9) return { success: false, error: "Cannot dimension a zero-length sketch segment" };
-        const direction = dimension.kind === "horizontal" ? Math.sign(dx || 1) : dimension.kind === "vertical" ? Math.sign(dy || 1) : 1;
-        const point = dimension.kind === "aligned" ? { x: firstNode.point.x + dx * value / currentLength, y: firstNode.point.y + dy * value / currentLength } : dimension.kind === "horizontal" ? { x: firstNode.point.x + direction * value, y: secondNode.point.y } : { x: secondNode.point.x, y: firstNode.point.y + direction * value };
-        const next = { ...target, nodes: target.nodes.map((node) => node.id === secondNode.id ? { ...node, point } : node) };
-        return replaceElements(document, document.elements.map((element) => element.id === target.id ? next : element));
-      }
-      const expectedKind = dimension.kind === "horizontal" ? "distance-horizontal" : "distance-vertical";
-      const constraint = target.constraints?.find((candidate) => candidate.id === dimension.constraintId);
-      const constraintReferenceIds = constraint?.references.map((reference) => `${reference.elementId}:${reference.nodeId}`).sort();
-          const dimensionReferenceIds = [`${first.elementId}:${first.nodeId}`, `${second.elementId}:${second.nodeId}`].sort();
-          const matches = constraint?.kind === expectedKind && constraintReferenceIds?.every((reference, index) => reference === dimensionReferenceIds[index]);
-      if (!matches || !constraint) return { success: false, error: "Driving dimension constraint does not match its references" };
-      const solved = solveSketchConstraints({ ...target, constraints: target.constraints!.map((candidate) => candidate.id === constraint.id ? { ...candidate, value } : candidate) });
-      if (solved.status === "conflict" || solved.status === "overdefined") return { success: false, error: `Sketch constraints are ${solved.status}` };
-      return replaceElements(document, document.elements.map((element) => element.id === target.id ? solved.sketch : element));
+      const dx = secondNode.point.x - firstNode.point.x; const dy = secondNode.point.y - firstNode.point.y; const currentLength = Math.hypot(dx, dy);
+      if (currentLength <= 1e-9) return { success: false, error: "Cannot dimension a zero-length sketch segment" };
+      const direction = dimension.kind === "horizontal" ? Math.sign(dx || 1) : dimension.kind === "vertical" ? Math.sign(dy || 1) : 1;
+      const point = dimension.kind === "aligned" ? { x: firstNode.point.x + dx * value / currentLength, y: firstNode.point.y + dy * value / currentLength } : dimension.kind === "horizontal" ? { x: firstNode.point.x + direction * value, y: secondNode.point.y } : { x: secondNode.point.x, y: firstNode.point.y + direction * value };
+      const next = { ...target, nodes: target.nodes.map((node) => node.id === secondNode.id ? { ...node, point } : node) };
+      return replaceElements(document, document.elements.map((element) => element.id === target.id ? next : element));
     }
     if (!target || target.type !== "rectangle" || target.rotation !== 0) return { success: false, error: "Driving dimensions currently require an unrotated rectangle" };
     const center = { x: target.position.x + target.size.width / 2, y: target.position.y + target.size.height / 2 };
@@ -1143,19 +1166,30 @@ export const setDimensionDriving = (dimensionId: ElementId, driving: boolean): E
   name: `dimension-driving:${dimensionId}:${driving}`,
   apply: (document) => {
     const dimension = document.elements.find((element): element is DimensionElement => element.id === dimensionId && element.type === "dimension");
-    if (!dimension || (dimension.kind !== "radius" && dimension.kind !== "diameter")) return { success: false, error: "Only circular dimensions can be driving" };
+    if (!dimension) return { success: false, error: "Dimension not found" };
     const targetId = dimension.references[0].elementId;
-    const target = document.elements.find((element): element is Extract<Element, { type: "ellipse" }> => element.id === targetId && element.type === "ellipse");
-    if (!target || target.size.width !== target.size.height) return { success: false, error: "Driving dimension target is not a circle" };
     const constraintId = dimension.constraintId ?? `dimension:${dimension.id}`;
-    const existing = target.circleConstraints ?? [];
-    const value = dimensionGeometry(dimension, document.elements)?.value;
-    if (driving && (!value || !Number.isFinite(value) || value <= 0)) return { success: false, error: "Circular dimension has no valid value" };
-    const constraints = driving ? [...existing.filter((candidate) => candidate.id !== constraintId), { id: constraintId, kind: dimension.kind, value: value as number, driving: true }] : existing.filter((candidate) => candidate.id !== constraintId);
-    const solved = solveCircleConstraints({ ...target, circleConstraints: constraints });
-    if (solved.status === "conflict") return { success: false, error: "Circle constraints are in conflict" };
     const updatedDimension = driving ? { ...dimension, driving: true, constraintId } : Object.fromEntries(Object.entries({ ...dimension, driving: false }).filter(([key]) => key !== "constraintId")) as unknown as DimensionElement;
-    return replaceElements(document, document.elements.map((element) => element.id === dimension.id ? updatedDimension : element.id === target.id ? solved.circle : element));
+    if (dimension.kind === "radius" || dimension.kind === "diameter") {
+      const target = document.elements.find((element): element is Extract<Element, { type: "ellipse" }> => element.id === targetId && element.type === "ellipse");
+      if (!target || target.size.width !== target.size.height) return { success: false, error: "Driving dimension target is not a circle" };
+      const existing = target.circleConstraints ?? [];
+      const value = dimensionGeometry(dimension, document.elements)?.value;
+      if (driving && (!value || !Number.isFinite(value) || value <= 0)) return { success: false, error: "Circular dimension has no valid value" };
+      const constraints = driving ? [...existing.filter((candidate) => candidate.id !== constraintId), { id: constraintId, kind: dimension.kind, value: value as number, driving: true }] : existing.filter((candidate) => candidate.id !== constraintId);
+      const solved = solveCircleConstraints({ ...target, circleConstraints: constraints });
+      if (solved.status === "conflict") return { success: false, error: "Circle constraints are in conflict" };
+      return replaceElements(document, document.elements.map((element) => element.id === dimension.id ? updatedDimension : element.id === target.id ? solved.circle : element));
+    }
+    const target = document.elements.find((element): element is SketchElement => element.id === targetId && element.type === "sketch");
+    if (!target) return { success: false, error: "Only sketch or circular dimensions can be driving" };
+    const existing = target.constraints ?? [];
+    const constraint = sketchConstraintForDimension({ ...dimension, constraintId }, target, document.elements);
+    if (driving && !constraint) return { success: false, error: "Sketch dimension cannot create a driving constraint" };
+    const constraints = driving ? [...existing.filter((candidate) => candidate.id !== constraintId), constraint!] : existing.filter((candidate) => candidate.id !== constraintId);
+    const solved = solveSketchConstraints({ ...target, constraints });
+    if (solved.status === "conflict" || solved.status === "overdefined") return { success: false, error: `Sketch constraints are ${solved.status}` };
+    return replaceElements(document, document.elements.map((element) => element.id === dimension.id ? updatedDimension : element.id === target.id ? solved.sketch : element));
   },
 });
 
