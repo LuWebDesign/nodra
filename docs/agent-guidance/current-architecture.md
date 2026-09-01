@@ -10,8 +10,9 @@ Nodra is a pnpm workspace over `apps/*` and `packages/*`. `apps/web/src/main.tsx
 
 ```text
 web -> domain, geometry, editor-core, persistence, renderer-svg
-editor-core -> domain, validation
-renderer-svg -> domain, geometry, validation
+editor-core -> domain, geometry, validation
+renderer-svg -> domain, geometry, constraints, validation
+constraints -> domain, geometry
 persistence -> domain, validation, Dexie
 geometry -> domain
 validation -> domain, Zod
@@ -19,7 +20,7 @@ domain -> no dependencies
 ui -> no dependencies; standalone boundary, not declared by apps/web
 ```
 
-Packages are `domain`, `geometry`, `validation`, `editor-core`, `renderer-svg`, `persistence`, and `ui`; each exports from `src/index.ts`. `ui` is stateless contracts, not React components, and no package manifest currently declares it as a dependency.
+Packages are `domain`, `geometry`, `constraints`, `validation`, `editor-core`, `renderer-svg`, `persistence`, and `ui`; each exports from `src/index.ts`. `constraints` centralizes parametric capabilities and derived entity state, initially through adapters for sketches and circles. `ui` is stateless contracts, not React components, and no package manifest currently declares it as a dependency.
 
 ## Technologies actually installed
 

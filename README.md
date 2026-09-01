@@ -54,6 +54,7 @@ corepack pnpm --filter @nodra/web dev
 | `apps/web` | React/Vite/PWA composition root |
 | `packages/domain` | Versioned document, project, page, layer, and element models |
 | `packages/geometry` | Bounds, hit testing, geometry nodes, and transformations |
+| `packages/constraints` | Parametric capabilities and derived constraint state |
 | `packages/validation` | Runtime schemas, validation, and migrations |
 | `packages/editor-core` | Immutable commands, gestures, selection, and history |
 | `packages/renderer-svg` | SVG projection and rendering |
@@ -66,8 +67,9 @@ The dependency direction is intentionally one-way:
 
 ```text
 web -> domain, geometry, editor-core, persistence, renderer-svg
-editor-core -> domain, validation
-renderer-svg -> domain, geometry, validation
+editor-core -> domain, geometry, validation
+renderer-svg -> domain, geometry, constraints, validation
+constraints -> domain, geometry
 persistence -> domain, validation
 geometry -> domain
 validation -> domain

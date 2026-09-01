@@ -3,6 +3,7 @@ import { configDefaults, defineConfig } from "vitest/config";
 export default defineConfig({
   resolve: {
     alias: {
+      "@nodra/constraints": new URL("./packages/constraints/src/index.ts", import.meta.url).pathname,
       "@nodra/domain": new URL("./packages/domain/src/index.ts", import.meta.url).pathname,
       "@nodra/geometry": new URL("./packages/geometry/src/index.ts", import.meta.url).pathname,
       "@nodra/validation": new URL("./packages/validation/src/index.ts", import.meta.url).pathname,

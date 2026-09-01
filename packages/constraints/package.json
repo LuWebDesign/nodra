@@ -1,14 +1,12 @@
 {
-  "name": "@nodra/renderer-svg",
+  "name": "@nodra/constraints",
   "version": "0.1.0",
   "private": true,
   "type": "module",
   "scripts": { "test": "vitest run" },
   "dependencies": {
-    "@nodra/constraints": "workspace:*",
     "@nodra/domain": "workspace:*",
-    "@nodra/geometry": "workspace:*",
-    "@nodra/validation": "workspace:*"
+    "@nodra/geometry": "workspace:*"
   },
   "exports": { ".": "./src/index.ts" }
 }

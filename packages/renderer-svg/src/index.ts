@@ -1,5 +1,6 @@
-import { CURRENT_SCHEMA_VERSION, isLineElement, type Element, type PathElement, type SplineElement } from "@nodra/domain";
-import { dimensionGeometry, mmToScreen, sketchClosedContours, solveSketchConstraints, type Viewport } from "@nodra/geometry";
+import { CURRENT_SCHEMA_VERSION, isLineElement, type DocumentSnapshot, type Element, type PathElement, type SplineElement } from "@nodra/domain";
+import { constraintStateForElement } from "@nodra/constraints";
+import { dimensionGeometry, mmToScreen, sketchClosedContours, type Viewport } from "@nodra/geometry";
 import { validateDocument } from "@nodra/validation";
 
 const MAX_ISSUES = 8;
@@ -41,7 +42,7 @@ function visualAttributes(element: Element): string {
   return `stroke="${escapeAttribute(element.style.stroke)}" stroke-width="${number(element.style.strokeWidth)}" fill="${fill}"${closed ? ` fill-opacity="${DEFAULT_FILL_OPACITY}"` : ""}`;
 }
 
-function renderElement(element: Element, viewport: Viewport): string {
+function renderElement(element: Element, viewport: Viewport, document: DocumentSnapshot): string {
   const screen = (point: { x: number; y: number }) => mmToScreen(point, viewport);
   if (element.type === "dimension") {
     const geometry = dimensionGeometry(element, []);
@@ -75,8 +76,8 @@ function renderElement(element: Element, viewport: Viewport): string {
   if (element.type === "sketch") {
     const nodes = new Map(element.nodes.map((node) => [node.id, screen(node.point)]));
     const fill = escapeAttribute(element.style.fill ?? element.style.stroke);
-        const constraintStatus = solveSketchConstraints(element).status;
-        const constraintStroke = constraintStatus === "defined" ? "#111827" : constraintStatus === "conflict" ? "#ef4444" : constraintStatus === "overdefined" ? "#f59e0b" : "#2563eb";
+        const constraintStatus = constraintStateForElement(document, element.id).state;
+        const constraintStroke = constraintStatus === "fully-defined" ? "#111827" : constraintStatus === "conflict" || constraintStatus === "invalid" ? "#ef4444" : constraintStatus === "overdefined" ? "#f59e0b" : "#2563eb";
         const sketchAttributes = visualAttributes(element).replace(`stroke="${escapeAttribute(element.style.stroke)}"`, `stroke="${constraintStroke}"`);
     const contours = sketchClosedContours(element).map((contour) => contour.map((point, index) => { const current = screen(point); return `${index === 0 ? "M" : "L"}${number(current.x)} ${number(current.y)}`; }).join(" ") + " Z").join(" ");
     const faces = contours ? `<path data-sketch-fill="true" d="${escapeAttribute(contours)}" fill="${fill}" fill-opacity="${DEFAULT_FILL_OPACITY}" stroke="none" fill-rule="evenodd" />` : "";
@@ -179,7 +180,7 @@ export function renderSvg(document: unknown, viewport: unknown): RenderResult {
   const elements = [...checked.data.elements].filter((element) => visibleLayers.has(element.layerId));
   const orderedLayers = new Map([...checked.data.layers].sort((a, b) => a.order - b.order).map((layer, index) => [layer.id, index]));
   elements.sort((a, b) => (orderedLayers.get(a.layerId) ?? 0) - (orderedLayers.get(b.layerId) ?? 0));
-  const contents = elements.map((element) => element.type === "dimension" ? renderDimension(element, checkedViewport.data, checked.data.elements) : renderElement(element, checkedViewport.data)).join("");
+  const contents = elements.map((element) => element.type === "dimension" ? renderDimension(element, checkedViewport.data, checked.data.elements) : renderElement(element, checkedViewport.data, checked.data)).join("");
   return { success: true, svg: `<svg xmlns="http://www.w3.org/2000/svg" data-units="mm" width="${number(checked.data.page.width)}" height="${number(checked.data.page.height)}" viewBox="0 0 ${number(checked.data.page.width)} ${number(checked.data.page.height)}"><g>${contents}</g></svg>`, renderedElementIds: elements.map((element) => element.id) };
 }
 

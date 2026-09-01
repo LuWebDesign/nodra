@@ -146,6 +146,15 @@ importers:
         specifier: 19.1.7
         version: 19.1.7(@types/react@19.1.10)
 
+  packages/constraints:
+    dependencies:
+      '@nodra/domain':
+        specifier: workspace:*
+        version: link:../domain
+      '@nodra/geometry':
+        specifier: workspace:*
+        version: link:../geometry
+
   packages/domain: {}
 
   packages/editor-core:
@@ -187,6 +196,9 @@ importers:
 
   packages/renderer-svg:
     dependencies:
+      '@nodra/constraints':
+        specifier: workspace:*
+        version: link:../constraints
       '@nodra/domain':
         specifier: workspace:*
         version: link:../domain
