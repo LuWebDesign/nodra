@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createDocument, elementId, layerId, withElements, type Element, type SketchElement } from "@nodra/domain";
-import { constraintStateForElement, parametricCapabilitiesForElement } from "./index.js";
+import { constraintComponentsForDocument, constraintStateForElement, parametricCapabilitiesForElement } from "./index.js";
 
 const layer = { id: layerId("constraints"), name: "Croquis", visible: true, order: 0 } as const;
 const style = { stroke: "#111827", strokeWidth: 1 } as const;
@@ -55,6 +55,22 @@ describe("parametric constraint boundary", () => {
 
     expect(constraintStateForElement(document, definedSketch.id)).toEqual({ elementId: definedSketch.id, entityKind: "sketch", state: "fully-defined", conflicts: [] });
     expect(constraintStateForElement(document, circle.id)).toEqual({ elementId: circle.id, entityKind: "circle", state: "fully-defined", conflicts: [] });
+  });
+
+  it("groups local and page-level constraints into connected components", () => {
+    const first = sketch([{ id: "local", kind: "horizontal", references: [{ elementId: elementId("sketch"), nodeId: "a" }, { elementId: elementId("sketch"), nodeId: "b" }] }]);
+    const second: SketchElement = { ...sketch(), id: elementId("second"), nodes: [{ id: "c", point: { x: 10, y: 10 } }, { id: "d", point: { x: 30, y: 10 } }], edges: [{ id: "cd", startNodeId: "c", endNodeId: "d" }] };
+    const global = { id: "connect", kind: "coincident" as const, references: [{ elementId: first.id, nodeId: "b" }, { elementId: second.id, nodeId: "c" }] as const };
+    const components = constraintComponentsForDocument({ ...documentWith([first, second]), constraints: [global] });
+    expect(components).toHaveLength(2);
+    const connected = components.find((component) => component.nodeKeys.length === 3);
+    expect(connected?.nodeKeys.map((key) => JSON.parse(key) as string[])).toEqual([["second", "c"], ["sketch", "a"], ["sketch", "b"]]);
+    expect(connected?.constraintIds).toEqual([JSON.stringify(["document", null, "connect"]), JSON.stringify(["local", "sketch", "local"])]);
+    expect(components.find((component) => component.nodeKeys.length === 1)?.constraintIds).toEqual([]);
+    const invalid = { ...global, id: "invalid", references: [global.references[0]!, { elementId: first.id, nodeId: "missing" }] as const };
+    const crossSketchLocal = { ...global, id: "cross-local", references: [global.references[0]!, { elementId: second.id, nodeId: "d" }] as const };
+    const withoutInvalid = constraintComponentsForDocument({ ...documentWith([{ ...first, constraints: [...(first.constraints ?? []), crossSketchLocal] }, second]), constraints: [invalid] });
+    expect(withoutInvalid.every((component) => !component.constraintIds.some((id) => id.includes("invalid") || id.includes("cross-local")))).toBe(true);
   });
 
   it("keeps unsupported and missing entities distinguishable", () => {

@@ -23,6 +23,19 @@ export interface ElementConstraintState {
   readonly conflicts: readonly string[];
 }
 
+export interface ConstraintNodeReference {
+  readonly elementId: ElementId;
+  readonly nodeId: string;
+}
+
+export interface ConstraintComponent {
+  readonly nodeKeys: readonly string[];
+  readonly constraintIds: readonly string[];
+}
+
+const constraintNodeKey = (reference: ConstraintNodeReference): string => JSON.stringify([reference.elementId, reference.nodeId]);
+const constraintIdentity = (scope: "local" | "document", elementId: ElementId | undefined, id: string): string => JSON.stringify([scope, elementId ?? null, id]);
+
 interface AdapterState {
   readonly state: ConstraintState;
   readonly conflicts: readonly string[];
@@ -72,6 +85,50 @@ const circleAdapter: ParametricAdapter = {
 
 const adapters: readonly ParametricAdapter[] = [sketchAdapter, circleAdapter];
 const adapterFor = (element: Element): ParametricAdapter | undefined => adapters.find((adapter) => adapter.supports(element));
+
+/** Groups sketch nodes connected by local or page-level constraints. */
+export function constraintComponentsForDocument(document: DocumentSnapshot): readonly ConstraintComponent[] {
+  const sketches = document.elements.filter((element): element is Extract<Element, { type: "sketch" }> => element.type === "sketch");
+  const known = new Set(sketches.flatMap((sketch) => sketch.nodes.map((node) => constraintNodeKey({ elementId: sketch.id, nodeId: node.id }))));
+  const parent = new Map<string, string>([...known].map((key) => [key, key]));
+  const find = (key: string): string => {
+    const current = parent.get(key);
+    if (!current || current === key) return key;
+    const root = find(current);
+    parent.set(key, root);
+    return root;
+  };
+  const union = (first: string, second: string): void => {
+    const firstRoot = find(first); const secondRoot = find(second);
+    if (firstRoot !== secondRoot) parent.set(secondRoot, firstRoot);
+  };
+  const constraints = [
+    ...sketches.flatMap((sketch) => (sketch.constraints ?? []).map((constraint) => ({ id: constraintIdentity("local", sketch.id, constraint.id), ownerId: sketch.id, references: constraint.references }))),
+    ...(document.constraints ?? []).map((constraint) => ({ id: constraintIdentity("document", undefined, constraint.id), ownerId: undefined, references: constraint.references })),
+  ];
+  const constraintKeys = new Map<string, string[]>();
+  for (const constraint of constraints) {
+    if (constraint.ownerId !== undefined && constraint.references.some((reference) => reference.elementId !== constraint.ownerId)) continue;
+    const keys = constraint.references.map((reference) => constraintNodeKey(reference));
+    if (!keys.length || keys.some((key) => !known.has(key))) continue;
+    for (const key of keys.slice(1)) union(keys[0]!, key);
+    const root = find(keys[0]!);
+    constraintKeys.set(root, [...(constraintKeys.get(root) ?? []), constraint.id]);
+  }
+  const components = new Map<string, { readonly nodeKeys: string[]; readonly constraintIds: string[] }>();
+  for (const key of known) {
+    const root = find(key); const current = components.get(root) ?? { nodeKeys: [], constraintIds: [] };
+    current.nodeKeys.push(key);
+    components.set(root, current);
+  }
+  for (const [root, ids] of constraintKeys) {
+    const component = components.get(find(root));
+    if (component) component.constraintIds.push(...ids);
+  }
+  return [...components.values()]
+    .map((component) => ({ nodeKeys: [...component.nodeKeys].sort(), constraintIds: [...component.constraintIds].sort() }))
+    .sort((first, second) => first.nodeKeys[0]! < second.nodeKeys[0]! ? -1 : first.nodeKeys[0]! > second.nodeKeys[0]! ? 1 : 0);
+}
 
 /** Returns the parametric operations currently supported by an element. */
 export function parametricCapabilitiesForElement(element: Element): ParametricEntityCapabilities | undefined {
