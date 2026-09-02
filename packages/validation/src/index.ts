@@ -121,7 +121,7 @@ const glyph = z.object({ ...common, type: z.literal("glyph"), position: point, s
 });
 export const elementSchema = z.discriminatedUnion("type", [rectangle, ellipse, line, sketch, dimension, contour, path, splineElementSchema, textElement, glyph]);
 export const layerSchema = z.object({ id: nonEmptyId, name: z.string().min(1), visible: z.boolean(), order: finite.int().nonnegative() }).strict();
-const documentFields = { id: nonEmptyId, revision: finite.int().nonnegative(), origin: z.literal("top-left"), units: z.literal("mm"), page: size, layers: z.array(layerSchema), elements: z.array(elementSchema), connections: z.array(explicitConnection).default([]) };
+const documentFields = { id: nonEmptyId, revision: finite.int().nonnegative(), origin: z.literal("top-left"), units: z.literal("mm"), page: size, layers: z.array(layerSchema), elements: z.array(elementSchema), constraints: z.array(sketchConstraint).optional(), connections: z.array(explicitConnection).default([]) };
 const validateConnections = (elements: readonly z.infer<typeof elementSchema>[], connections: readonly z.infer<typeof explicitConnection>[], ctx: z.RefinementCtx, path: (string | number)[] = []) => {
   const byId = new Map(elements.map((element) => [element.id, element]));
   const ids = new Set<string>();
@@ -153,7 +153,25 @@ const validateConnections = (elements: readonly z.infer<typeof elementSchema>[],
     });
   });
 };
-export const documentSchema = z.object({ schemaVersion: z.literal(CURRENT_SCHEMA_VERSION), ...documentFields, capabilities: z.object({ spline: z.literal(1).optional() }).strict().optional() }).strict().superRefine((value, ctx) => {
+export const validateDocumentConstraints = (elements: readonly z.infer<typeof elementSchema>[], constraints: readonly z.infer<typeof sketchConstraint>[], ctx: z.RefinementCtx, path: readonly (string | number)[]) => {
+  const sketches = new Map(elements.filter((element): element is Extract<typeof element, { type: "sketch" }> => element.type === "sketch").map((element) => [element.id, element]));
+  const ids = new Set<string>();
+  constraints.forEach((constraint, index) => {
+    if (ids.has(constraint.id)) ctx.addIssue({ code: "custom", message: "Document constraint IDs must be unique", path: [...path, index, "id"] });
+    ids.add(constraint.id);
+    const expectedReferences = constraint.kind === "fixed" ? 1 : constraint.kind === "parallel" || constraint.kind === "perpendicular" || constraint.kind === "equal" ? 4 : 2;
+    if (constraint.references.length !== expectedReferences) ctx.addIssue({ code: "custom", message: constraint.kind + " constraints require " + expectedReferences + " reference" + (expectedReferences === 1 ? "" : "s"), path: [...path, index, "references"] });
+    const usesValue = constraint.kind === "distance-horizontal" || constraint.kind === "distance-vertical" || constraint.kind === "distance" || constraint.kind === "angle";
+    if (usesValue && (constraint.value === undefined || constraint.value <= 0)) ctx.addIssue({ code: "custom", message: "Distance constraints require a positive value", path: [...path, index, "value"] });
+    if (!usesValue && constraint.value !== undefined) ctx.addIssue({ code: "custom", message: "This constraint kind must not define a value", path: [...path, index, "value"] });
+    if (constraint.references.some((reference, referenceIndex) => constraint.references.slice(0, referenceIndex).some((previous) => previous.elementId === reference.elementId && previous.nodeId === reference.nodeId))) ctx.addIssue({ code: "custom", message: "Document constraint references must identify different nodes", path: [...path, index, "references"] });
+    constraint.references.forEach((reference, referenceIndex) => {
+      const target = sketches.get(reference.elementId);
+      if (!target || !target.nodes.some((node) => node.id === reference.nodeId)) ctx.addIssue({ code: "custom", message: "Document constraint references an unknown sketch node", path: [...path, index, "references", referenceIndex] });
+    });
+  });
+};
+const documentSchema = z.object({ schemaVersion: z.literal(CURRENT_SCHEMA_VERSION), ...documentFields, capabilities: z.object({ spline: z.literal(1).optional() }).strict().optional() }).strict().superRefine((value, ctx) => {
   const layerIds = new Set(value.layers.map((layer) => layer.id));
   const elementIds = new Set(value.elements.map((element) => element.id));
   if (layerIds.size !== value.layers.length) ctx.addIssue({ code: "custom", message: "Layer IDs must be unique", path: ["layers"] });
@@ -225,9 +243,10 @@ export const documentSchema = z.object({ schemaVersion: z.literal(CURRENT_SCHEMA
       }
     }
   }
+  validateDocumentConstraints(value.elements, value.constraints ?? [], ctx, ["constraints"]);
   validateConnections(value.elements, value.connections, ctx, ["connections"]);
 });
-const pageSchema = z.object({ id: nonEmptyId, page: size, layers: z.array(layerSchema), elements: z.array(elementSchema), connections: z.array(explicitConnection).default([]) }).strict();
+const pageSchema = z.object({ id: nonEmptyId, page: size, layers: z.array(layerSchema), elements: z.array(elementSchema), constraints: z.array(sketchConstraint).optional(), connections: z.array(explicitConnection).default([]) }).strict();
 const projectPreferencesSchema = z.object({ lineGuidesEnabled: z.boolean().default(true), lineGuideAngle: z.union([z.literal(15), z.literal(45)]).default(45).transform(() => 45) }).strict().default({ lineGuidesEnabled: true, lineGuideAngle: 45 });
 export const projectSchema = z.object({ schemaVersion: z.literal(CURRENT_SCHEMA_VERSION), id: nonEmptyId, revision: finite.int().nonnegative(), origin: z.literal("top-left"), units: z.literal("mm"), capabilities: z.object({ spline: z.literal(1).optional() }).strict().optional(), preferences: projectPreferencesSchema, pages: z.array(pageSchema).min(1), activePageId: nonEmptyId }).strict().superRefine((value, ctx) => {
   if (!value.pages.some((page) => page.id === value.activePageId)) ctx.addIssue({ code: "custom", message: "Active page does not exist", path: ["activePageId"] });
@@ -238,6 +257,7 @@ export const projectSchema = z.object({ schemaVersion: z.literal(CURRENT_SCHEMA_
     if (layerIds.size !== page.layers.length) ctx.addIssue({ code: "custom", message: "Layer IDs must be unique within a page", path: ["pages", pageIndex, "layers"] });
     if (elementIds.size !== page.elements.length) ctx.addIssue({ code: "custom", message: "Element IDs must be unique within a page", path: ["pages", pageIndex, "elements"] });
     page.elements.forEach((element, elementIndex) => { if (!layerIds.has(element.layerId)) ctx.addIssue({ code: "custom", message: "Element references an unknown layer", path: ["pages", pageIndex, "elements", elementIndex, "layerId"] }); });
+    validateDocumentConstraints(page.elements, page.constraints ?? [], ctx, ["pages", pageIndex, "constraints"]);
     validateConnections(page.elements, page.connections, ctx, ["pages", pageIndex, "connections"]);
   });
 });

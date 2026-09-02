@@ -157,6 +157,14 @@ describe("native document validation", () => {
         expect(validateDocument({ ...base, elements: [sketch] }).success).toBe(false);
         expect(validateDocument({ ...base, elements: [{ ...sketch, constraints: [{ ...sketch.constraints[0], references: [{ elementId: "sketch", nodeId: "missing" }, { elementId: "sketch", nodeId: "b" }] }] }] }).success).toBe(false);
       });
+      it("validates page-level constraints across sketch elements", () => {
+    const base = createDocument("global-constraints", [{ id: layerId("layer-1"), name: "Design", visible: true, order: 0 }]);
+    const first = { type: "sketch" as const, id: "first", layerId: "layer-1", nodes: [{ id: "a", point: { x: 0, y: 0 } }, { id: "b", point: { x: 10, y: 0 } }], edges: [{ id: "ab", startNodeId: "a", endNodeId: "b" }], style: { stroke: "#000", strokeWidth: 1 } };
+    const second = { type: "sketch" as const, id: "second", layerId: "layer-1", nodes: [{ id: "c", point: { x: 0, y: 10 } }, { id: "d", point: { x: 10, y: 10 } }], edges: [{ id: "cd", startNodeId: "c", endNodeId: "d" }], style: { stroke: "#000", strokeWidth: 1 } };
+    const constraint = { id: "global-horizontal", kind: "horizontal" as const, references: [{ elementId: first.id, nodeId: "a" }, { elementId: second.id, nodeId: "c" }] as const };
+    expect(validateDocument({ ...base, elements: [first, second], constraints: [constraint] }).success).toBe(true);
+    expect(validateDocument({ ...base, elements: [first, second], constraints: [{ ...constraint, references: [{ elementId: first.id, nodeId: "missing" }, constraint.references[1]] }] }).success).toBe(false);
+  });
       it("rejects non-finite and non-positive page dimensions", () => {
     const result = validateDocument({ ...createDocument("doc-1"), page: { width: 0, height: Number.NaN } });
     expect(result.success).toBe(false);
