@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createDocument, elementId, layerId, withElements, type Element, type SketchElement } from "@nodra/domain";
-import { constraintComponentsForDocument, constraintStateForElement, parametricCapabilitiesForElement } from "./index.js";
+import { constraintComponentsForDocument, constraintDofMetadataForDocument, constraintStateForElement, normalizedConstraintsForDocument, parametricCapabilitiesForElement } from "./index.js";
 
 const layer = { id: layerId("constraints"), name: "Croquis", visible: true, order: 0 } as const;
 const style = { stroke: "#111827", strokeWidth: 1 } as const;
@@ -67,6 +67,8 @@ describe("parametric constraint boundary", () => {
     expect(connected?.nodeKeys.map((key) => JSON.parse(key) as string[])).toEqual([["second", "c"], ["sketch", "a"], ["sketch", "b"]]);
     expect(connected?.constraintIds).toEqual([JSON.stringify(["document", null, "connect"]), JSON.stringify(["local", "sketch", "local"])]);
     expect(components.find((component) => component.nodeKeys.length === 1)?.constraintIds).toEqual([]);
+    expect(normalizedConstraintsForDocument({ ...documentWith([first, second]), constraints: [global] }).map((constraint) => constraint.scope)).toEqual(["document", "local"]);
+    expect(constraintDofMetadataForDocument({ ...documentWith([first, second]), constraints: [global] })).toEqual(expect.arrayContaining([{ nodeKeys: expect.any(Array), coordinateCount: 6, constraintCount: 2, status: "pending-solver" }]));
     const invalid = { ...global, id: "invalid", references: [global.references[0]!, { elementId: first.id, nodeId: "missing" }] as const };
     const crossSketchLocal = { ...global, id: "cross-local", references: [global.references[0]!, { elementId: second.id, nodeId: "d" }] as const };
     const withoutInvalid = constraintComponentsForDocument({ ...documentWith([{ ...first, constraints: [...(first.constraints ?? []), crossSketchLocal] }, second]), constraints: [invalid] });

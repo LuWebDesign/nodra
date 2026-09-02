@@ -33,6 +33,22 @@ export interface ConstraintComponent {
   readonly constraintIds: readonly string[];
 }
 
+export interface NormalizedConstraint {
+  readonly id: string;
+  readonly scope: "local" | "document";
+  readonly ownerId?: ElementId;
+  readonly references: readonly ConstraintNodeReference[];
+  readonly kind: SketchConstraintKind;
+  readonly value?: number;
+}
+
+export interface ConstraintDofMetadata {
+  readonly nodeKeys: readonly string[];
+  readonly coordinateCount: number;
+  readonly constraintCount: number;
+  readonly status: "pending-solver";
+}
+
 const constraintNodeKey = (reference: ConstraintNodeReference): string => JSON.stringify([reference.elementId, reference.nodeId]);
 const constraintIdentity = (scope: "local" | "document", elementId: ElementId | undefined, id: string): string => JSON.stringify([scope, elementId ?? null, id]);
 
@@ -86,6 +102,16 @@ const circleAdapter: ParametricAdapter = {
 const adapters: readonly ParametricAdapter[] = [sketchAdapter, circleAdapter];
 const adapterFor = (element: Element): ParametricAdapter | undefined => adapters.find((adapter) => adapter.supports(element));
 
+/** Returns a stable, namespaced structural view; callers must validate references before solving. */
+export function normalizedConstraintsForDocument(document: DocumentSnapshot): readonly NormalizedConstraint[] {
+  const sketches = document.elements.filter((element): element is Extract<Element, { type: "sketch" }> => element.type === "sketch");
+  return [
+    ...sketches.flatMap((sketch) => (sketch.constraints ?? []).map((constraint) => ({ id: constraintIdentity("local", sketch.id, constraint.id), scope: "local" as const, ownerId: sketch.id, references: constraint.references, kind: constraint.kind, ...(constraint.value !== undefined ? { value: constraint.value } : {}) }))),
+    ...(document.constraints ?? []).map((constraint) => ({ id: constraintIdentity("document", undefined, constraint.id), scope: "document" as const, references: constraint.references, kind: constraint.kind, ...(constraint.value !== undefined ? { value: constraint.value } : {}) })),
+  ].sort((first, second) => first.id < second.id ? -1 : first.id > second.id ? 1 : 0);
+
+}
+
 /** Groups sketch nodes connected by local or page-level constraints. */
 export function constraintComponentsForDocument(document: DocumentSnapshot): readonly ConstraintComponent[] {
   const sketches = document.elements.filter((element): element is Extract<Element, { type: "sketch" }> => element.type === "sketch");
@@ -102,10 +128,7 @@ export function constraintComponentsForDocument(document: DocumentSnapshot): rea
     const firstRoot = find(first); const secondRoot = find(second);
     if (firstRoot !== secondRoot) parent.set(secondRoot, firstRoot);
   };
-  const constraints = [
-    ...sketches.flatMap((sketch) => (sketch.constraints ?? []).map((constraint) => ({ id: constraintIdentity("local", sketch.id, constraint.id), ownerId: sketch.id, references: constraint.references }))),
-    ...(document.constraints ?? []).map((constraint) => ({ id: constraintIdentity("document", undefined, constraint.id), ownerId: undefined, references: constraint.references })),
-  ];
+  const constraints = normalizedConstraintsForDocument(document);
   const constraintKeys = new Map<string, string[]>();
   for (const constraint of constraints) {
     if (constraint.ownerId !== undefined && constraint.references.some((reference) => reference.elementId !== constraint.ownerId)) continue;
@@ -128,6 +151,11 @@ export function constraintComponentsForDocument(document: DocumentSnapshot): rea
   return [...components.values()]
     .map((component) => ({ nodeKeys: [...component.nodeKeys].sort(), constraintIds: [...component.constraintIds].sort() }))
     .sort((first, second) => first.nodeKeys[0]! < second.nodeKeys[0]! ? -1 : first.nodeKeys[0]! > second.nodeKeys[0]! ? 1 : 0);
+}
+
+/** Reports input coordinates and constraint-record counts without pretending to solve degrees of freedom. */
+export function constraintDofMetadataForDocument(document: DocumentSnapshot): readonly ConstraintDofMetadata[] {
+  return constraintComponentsForDocument(document).map((component) => ({ nodeKeys: component.nodeKeys, coordinateCount: component.nodeKeys.length * 2, constraintCount: component.constraintIds.length, status: "pending-solver" }));
 }
 
 /** Returns the parametric operations currently supported by an element. */
