@@ -72,14 +72,14 @@ La unificación ocurre en el contrato paramétrico, no en el formato geométrico
 
 ## 5. Límites entre paquetes
 
-Se añadirá un paquete público `@nodra/constraints`.
+Se añadirá un paquete público `@nodra/constraints`. En esta fase el paquete existe y el renderer consume su estado derivado; la integración directa de `editor-core` con el solver queda planificada para una fase posterior.
 
 ```text
 domain      → sin dependencias
 geometry    → domain
 validation  → domain
 constraints → domain, geometry
-editor-core → domain, geometry, validation, constraints
+editor-core → domain, geometry, validation
 renderer-svg→ domain, geometry, validation, constraints
 persistence → domain, validation
 web         → domain, geometry, validation, constraints,

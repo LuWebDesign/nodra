@@ -188,7 +188,6 @@ export const documentSchema = z.object({ schemaVersion: z.literal(CURRENT_SCHEMA
                         : target?.type === "spline" ? target.nodes.flatMap((node) => [node.id, ...(node.inHandle ? [undefined] : []), ...(node.outHandle ? [undefined] : [])])
                           : target?.type === "glyph" ? target.contours.flatMap((contour) => [...contour.nodes.map((node) => node.id), ...contour.segments.flatMap((segment) => segment.type === "cubicBezier" ? [undefined, undefined] : [])]) : [];
               if (!stableNodeIdsByIndex.includes(reference.nodeId)) ctx.addIssue({ code: "custom", message: "Dimension node reference id is unknown", path: ["elements", index, "references", referenceIndex, "nodeId"] });
-              else if (stableNodeIdsByIndex[reference.nodeIndex] !== reference.nodeId) ctx.addIssue({ code: "custom", message: "Dimension node ID and legacy index must identify the same node", path: ["elements", index, "references", referenceIndex] });
             }
       }
     }
@@ -334,6 +333,46 @@ const migrateLegacyElements = (elements: unknown): unknown => {
     return { ...candidate, references };
   });
 };
+const normalizeStableDimensionReferences = (input: unknown): unknown => {
+  if (typeof input !== "object" || input === null || Array.isArray(input)) return input;
+  const candidate = input as Record<string, unknown>;
+  const normalizeElements = (elements: unknown): unknown => {
+    if (!Array.isArray(elements)) return elements;
+    const byId = new Map(elements.flatMap((element) => {
+      if (typeof element !== "object" || element === null || Array.isArray(element)) return [];
+      const id = (element as Record<string, unknown>).id;
+      return typeof id === "string" ? [[id, element as Record<string, unknown>] as const] : [];
+    }));
+    return elements.map((element) => {
+      if (typeof element !== "object" || element === null || Array.isArray(element)) return element;
+      const current = element as Record<string, unknown>;
+      if (current.type !== "dimension" || !Array.isArray(current.references)) return element;
+      const references = current.references.map((reference) => {
+        if (typeof reference !== "object" || reference === null || Array.isArray(reference)) return reference;
+        const currentReference = reference as Record<string, unknown>;
+        const target = byId.get(currentReference.elementId as string);
+        if (!target) return reference;
+        if (currentReference.kind === "line" && typeof currentReference.edgeId === "string" && target.type === "sketch" && Array.isArray(target.edges)) {
+          const edgeIndex = target.edges.findIndex((edge) => typeof edge === "object" && edge !== null && !Array.isArray(edge) && (edge as Record<string, unknown>).id === currentReference.edgeId);
+          return edgeIndex >= 0 ? { ...currentReference, edgeIndex } : reference;
+        }
+        if ((currentReference.kind === "node" || currentReference.kind === undefined) && typeof currentReference.nodeId === "string") {
+          const nodeIndex = legacyStableNodeIndex(target, currentReference.nodeId);
+          return nodeIndex === undefined ? reference : { ...currentReference, nodeIndex };
+        }
+        return reference;
+      });
+      return { ...current, references };
+    });
+  };
+  if (Array.isArray(candidate.elements)) return { ...candidate, elements: normalizeElements(candidate.elements) };
+  if (Array.isArray(candidate.pages)) return { ...candidate, pages: candidate.pages.map((page) => {
+    if (typeof page !== "object" || page === null || Array.isArray(page)) return page;
+    const currentPage = page as Record<string, unknown>;
+    return { ...currentPage, elements: normalizeElements(currentPage.elements) };
+  }) };
+  return input;
+};
 const migrateLegacyPages = (pages: unknown): unknown => Array.isArray(pages) ? pages.map((page) => {
   if (typeof page !== "object" || page === null || Array.isArray(page)) return page;
   const candidate = page as Record<string, unknown>;
@@ -352,7 +391,7 @@ export function migrateDocument(input: JsonValue): JsonValue {
 export type DocumentLoadResult = { readonly mode: "editable"; readonly document: DocumentSnapshot; readonly issues: readonly [] } | { readonly mode: "diagnostic" | "recovery"; readonly raw: unknown; readonly issues: readonly ValidationIssue[]; readonly error: string };
 export function loadDocument(input: unknown): DocumentLoadResult { const checked = validateDocument(input); if (checked.success) return { mode: "editable", document: checked.data, issues: [] }; const candidate = typeof input === "object" && input !== null && !Array.isArray(input) ? input as Record<string, unknown> : undefined; const capabilities = candidate?.capabilities; const unknown = typeof capabilities === "object" && capabilities !== null && !Array.isArray(capabilities) && Object.keys(capabilities).some((key) => key !== "spline"); return { mode: unknown ? "diagnostic" : "recovery", raw: input, issues: checked.issues, error: checked.error }; }
 export function validateDocument(input: unknown): ValidationResult {
-  const migrated = migrateDocument(input as JsonValue);
+  const migrated = normalizeStableDimensionReferences(migrateDocument(input as JsonValue));
   const result = documentSchema.safeParse(migrated);
   if (result.success) { // SAFETY: documentSchema validated the complete shape; branded IDs are runtime strings.
     return { success: true, data: result.data as unknown as DocumentSnapshot };
@@ -362,7 +401,7 @@ export function validateDocument(input: unknown): ValidationResult {
 }
 
 export function validateProject(input: unknown): { readonly success: true; readonly data: ProjectSnapshot } | { readonly success: false; readonly issues: readonly ValidationIssue[]; readonly error: string } {
-  const migrated = migrateProject(input);
+  const migrated = normalizeStableDimensionReferences(migrateProject(input));
   const result = projectSchema.safeParse(migrated);
   if (result.success) { // SAFETY: projectSchema validated the complete shape; branded IDs are runtime strings.
     return { success: true, data: result.data as unknown as ProjectSnapshot };

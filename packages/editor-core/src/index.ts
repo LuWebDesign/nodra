@@ -1048,7 +1048,24 @@ export const openPath = (pathId: ElementId): EditorCommand => ({ name: `path-ope
   });
   return replaceTopology({ ...document, connections }, { ...edit, elements: remapPathDimensionElements(baseElements, path, [nextPath], edit.referenceMap) });
 } });
-export const reversePath = (pathId: ElementId): EditorCommand => ({ name: `path-reverse:${pathId}`, apply: (document) => { const path = pathAt(document, pathId); if (!path) return { success: false, error: "Path not found" }; const nodes = [...path.nodes].reverse(); const segments = [...path.segments].reverse().map((segment) => segment.type === "line" ? { ...segment, startNodeId: segment.endNodeId, endNodeId: segment.startNodeId } : { ...segment, startNodeId: segment.endNodeId, endNodeId: segment.startNodeId, control1: segment.control2, control2: segment.control1 }); return updatePath(document, { ...path, nodes, segments }); } });
+export const reversePath = (pathId: ElementId): EditorCommand => ({ name: `path-reverse:${pathId}`, apply: (document) => {
+  const path = pathAt(document, pathId);
+  if (!path) return { success: false, error: "Path not found" };
+  const nodes = [...path.nodes].reverse();
+  const segments = [...path.segments].reverse().map((segment) => segment.type === "line"
+    ? { ...segment, startNodeId: segment.endNodeId, endNodeId: segment.startNodeId }
+    : { ...segment, startNodeId: segment.endNodeId, endNodeId: segment.startNodeId, control1: segment.control2, control2: segment.control1 });
+  const nextPath = { ...path, nodes, segments };
+  const sources = path.segments.map((segment) => pathSegmentReference(path.id, segment.id));
+  const elements = document.elements.map((element) => element.id === path.id ? nextPath : element);
+  const referenceMap = new Map(sources.map((source) => [topologyReferenceKey(source), { kind: "preserved", reference: source } as ReferenceResolution]));
+  const remapConnectionReference = (reference: ExplicitConnection["first"]): ExplicitConnection["first"] => {
+    if (reference.elementId !== path.id || reference.node.kind !== "path" || reference.node.handle === undefined) return reference;
+    return { ...reference, node: { ...reference.node, handle: reference.node.handle === "in" ? "out" : "in" } };
+  };
+  const connections = (document.connections ?? []).map((connection) => ({ ...connection, first: remapConnectionReference(connection.first), second: remapConnectionReference(connection.second) }));
+  return replaceTopology({ ...document, connections }, { elements: remapPathDimensionElements(elements, path, [nextPath], referenceMap), referenceMap, diagnostics: [] });
+} });
 
 const lineControls = (start: PointMm, end: PointMm): { readonly control1: PointMm; readonly control2: PointMm } => ({
   control1: { x: start.x + (end.x - start.x) / 3, y: start.y + (end.y - start.y) / 3 },

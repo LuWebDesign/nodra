@@ -127,11 +127,11 @@ describe("native document validation", () => {
     expect(result.success).toBe(true);
     if (result.success) expect(result.data.elements[1]).toMatchObject({ references: [{ edgeId: "edge-ab", edgeIndex: 0 }, { edgeId: "edge-ab", edgeIndex: 0 }] });
   });
-  it("keeps stable node IDs consistent with legacy indexes and repairs schema 6 records", () => {
+  it("uses stable node IDs as the source of truth and repairs legacy indexes", () => {
     const base = createDocument("stable-node-index", [{ id: layerId("layer-1"), name: "Design", visible: true, order: 0 }]);
     const path = { type: "path" as const, id: "path", layerId: "layer-1", nodes: [{ id: "a", anchor: { x: 0, y: 0 }, join: "corner" as const }, { id: "b", anchor: { x: 10, y: 0 }, join: "corner" as const }], segments: [{ id: "ab", type: "line" as const, startNodeId: "a", endNodeId: "b" }], closed: false, style: { stroke: "#000", strokeWidth: 1 } };
     const dimension = { type: "dimension" as const, id: "dimension", layerId: "layer-1", kind: "horizontal" as const, references: [{ kind: "node" as const, elementId: "path", nodeIndex: 0, nodeId: "a" }, { kind: "node" as const, elementId: "path", nodeIndex: 0, nodeId: "b" }] as const, offset: { x: 0, y: -5 }, precision: 2, units: "mm" as const, rotation: 0 as const, style: { stroke: "#2563eb", strokeWidth: 0.45 } };
-    expect(validateDocument({ ...base, elements: [path, dimension] }).success).toBe(false);
+    expect(validateDocument({ ...base, elements: [path, dimension] }).success).toBe(true);
     const migrated = validateDocument({ ...base, schemaVersion: 6, elements: [path, dimension] });
     expect(migrated.success).toBe(true);
     if (migrated.success) expect(migrated.data.elements[1]).toMatchObject({ references: [{ nodeId: "a", nodeIndex: 0 }, { nodeId: "b", nodeIndex: 1 }] });

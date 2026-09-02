@@ -709,6 +709,17 @@ it("moves a dimension by changing only its placement offset and supports undo", 
     expect(result?.type).toBe("glyph");
     if (result?.type === "glyph") expect(result.contours[0]?.segments[3]).toMatchObject({ control2: { x: -4, y: -3 } });
   });
+  it("remaps path dimension indexes when reversing stable nodes", () => {
+    const linked: DimensionElement = { ...dimension, id: elementId("reverse-dimension"), references: [{ kind: "node", elementId: path.id, nodeIndex: 0, nodeId: "a" }, { kind: "node", elementId: path.id, nodeIndex: 1, nodeId: "b" }] };
+    const connection = { id: "reverse-connection", first: { elementId: path.id, node: { kind: "path" as const, nodeId: "a", handle: "out" as const } }, second: { elementId: rectangle.id, node: { kind: "named" as const, name: "nw" as const } } };
+    const initial = createEditor({ ...document, elements: [path, linked, rectangle], connections: [connection] });
+    const applied = reversePath(path.id).apply(initial.document);
+    if (!applied.success) throw new Error(applied.error);
+    const state = dispatch(initial, reversePath(path.id));
+    expect(state.undo).toHaveLength(1);
+    expect(state.document.elements[1]).toMatchObject({ references: [{ nodeId: "a", nodeIndex: 1 }, { nodeId: "b", nodeIndex: 0 }] });
+    expect(state.document.connections?.[0]?.first.node).toMatchObject({ nodeId: "a", handle: "in" });
+  });
   it("reverses a path while preserving stable segment identities", () => {
     const reversible: PathElement = { ...path, nodes: [...path.nodes, { id: "c", anchor: { x: 20, y: 0 }, join: "corner" }], segments: [path.segments[0]!, { id: "reverse-bc", type: "line", startNodeId: "b", endNodeId: "c" }] };
     const state = dispatch(createEditor({ ...document, elements: [reversible] }), reversePath(reversible.id));

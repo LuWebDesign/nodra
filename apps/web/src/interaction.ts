@@ -364,6 +364,15 @@ export function pickHoverNode(document: DocumentSnapshot, point: PointMm, zoom: 
 export function pickDimensionTarget(document: DocumentSnapshot, point: PointMm, zoom: number, tolerancePx = 8): DimensionTarget | undefined {
   if (![point.x, point.y, zoom, tolerancePx].every(Number.isFinite) || zoom <= 0 || tolerancePx < 0) return undefined;
   const visible = new Set(document.layers.filter((layer) => layer.visible).map((layer) => layer.id));
+  const priorityNode = pickNode(document, point, zoom, tolerancePx);
+  const priorityElement = priorityNode ? document.elements.find((element) => element.id === priorityNode.elementId) : undefined;
+  if (priorityNode?.node.kind === "cardinal" && priorityElement?.type === "ellipse" && priorityElement.size.width === priorityElement.size.height) {
+    const nodes = realGeometryNodes(priorityElement);
+    const centerIndex = nodes.findIndex((candidate) => candidate.kind === "center");
+    const center = nodes[centerIndex];
+    if (center) return { kind: "circle", hit: { elementId: priorityElement.id, center: { elementId: priorityElement.id, nodeIndex: centerIndex, node: center }, rim: priorityNode, distance: 0 } };
+  }
+  if (priorityNode && !(priorityElement?.type === "line" && priorityNode.node.kind === "center")) return { kind: "node", hit: priorityNode };
   let bestLine: DimensionLineHit | undefined;
   for (const element of document.elements) {
     if (!visible.has(element.layerId) || element.type !== "line") continue;
