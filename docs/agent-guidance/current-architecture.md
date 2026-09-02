@@ -30,7 +30,7 @@ Node >=24; pnpm 10.15.1; TypeScript 5.9.2; React 19.1.1; Vite 7.1.3; Vitest 3.2.
 
 - Explicit package boundaries and source exports.
 - Domain schemaVersion 7, branded IDs, mm/top-left coordinates, pages/layers, revisions, typed elements, stable sketch-edge dimension references, and stable path/glyph segment IDs.
-- Zod validation/migrations, command-driven editing, gesture transaction semantics, escaped non-mutating SVG, and revision-aware local recovery.
+- Zod validation/migrations, command-driven editing, gesture transaction semantics, explicit ephemeral topology maps on topology-changing command results, escaped non-mutating SVG, and revision-aware local recovery.
 
 ## Risks and gaps
 

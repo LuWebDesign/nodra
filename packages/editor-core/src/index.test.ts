@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createDocument, elementId, layerId, type DimensionElement, type Element, type EllipseElement, type LineElement, type GlyphElement, type PathElement, type PointMm, type RectangleElement, type SketchElement, type SplineElement, type TextElement } from "@nodra/domain";
 import { addSketchConstraint, addSketchSegmentRelation, addToSelection, appendSketchEdge, appendSplineNode, beginGesture, cancelGesture, clearSelection, closePath, closeSplineElement, commitGesture, createEditor, createElement, createPathCubicNode, createSketchLine, cutLineAtPoint, cutPathSegment, cutSketchEdge, splitPathLineAt, deleteContourNodes, deleteElement, deleteElementNodes, deletePathNodes, deleteSketchConstraint, dispatch, duplicateElements, flipElements, insertContourNode, invalidDimensionIdsForShapeOperation, moveElement, moveElements, movePathNode, movePathHandle, openPath, previewGesture, previewGestureFromBase, redo, reversePath, removeFromSelection, reorderLayer, resizeElement, resizeElementToDimensions, resizeElements, resizeElementsToDimensions, rotateElementsAroundCenter, select, selectForPointerDown, setDimensionDriving, updateCircleConstraint, deleteCircleConstraint, solveCircle, setLayerVisibility, setPathJoin, shapeOperation, splitPathSegment, toggleSelection, topologyEditForPathSegmentReplacement, topologyReferenceKey, undo, updateContourNode, updateDimensionValue, updateElement, updateElementNode, updateElementStyles, updateSketchConstraint, updateSplineHandle, updateSplineNode } from "./index.js";
-import { boundsOfElements } from "@nodra/geometry";
+import { boundsOfElements, realGeometryNodes } from "@nodra/geometry";
 import type { Direction } from "@nodra/geometry";
 import { appendLinePoint } from "./index.js";
 
@@ -23,6 +23,8 @@ describe("editor core", () => {
     const replacements = [{ id: "first", type: "line" as const, startNodeId: "a", endNodeId: "middle" }, { id: "second", type: "line" as const, startNodeId: "middle", endNodeId: "b" }];
     const edit = topologyEditForPathSegmentReplacement([path], path.id, path.segments[0]!.id, replacements);
     expect(edit.referenceMap.get(`${path.id}:segment:${path.segments[0]!.id}`)).toEqual({ kind: "replaced", references: [{ kind: "path-segment", elementId: path.id, segmentId: "first" }, { kind: "path-segment", elementId: path.id, segmentId: "second" }] });
+    const deduplicated = topologyEditForPathSegmentReplacement([path], path.id, path.segments[0]!.id, [replacements[0]!, replacements[0]!]);
+    expect(deduplicated.referenceMap.get(`${path.id}:segment:${path.segments[0]!.id}`)).toMatchObject({ references: [{ segmentId: "first" }] });
     expect(edit.elements).toEqual([path]);
   });
   it("previews, commits, cancels, and undoes a sketch constraint as one transaction", () => {
@@ -287,16 +289,85 @@ it("converts a zero-radius rectangle to an open path when cutting one edge", () 
 
       it("removes a single-segment path when it is cut", () => {
         const single: PathElement = { ...path, nodes: path.nodes.slice(0, 2), segments: [{ id: "fixture-segment-11", type: "line", startNodeId: "a", endNodeId: "b" }] };
-        const state = dispatch(createEditor({ ...document, elements: [single] }), cutPathSegment(single.id, 0));
+        const source = { ...document, elements: [single] };
+        const applied = cutPathSegment(single.id, 0).apply(source);
+        expect(applied.success && applied.topology?.referenceMap.get(`${single.id}:segment:fixture-segment-11`)).toEqual({ kind: "removed", reason: "Path segment was removed while rebuilding the cut component" });
+        expect(applied.success && applied.topology?.diagnostics).toHaveLength(1);
+        const state = dispatch(createEditor(source), cutPathSegment(single.id, 0));
         expect(state.document.elements).toEqual([]);
         expect(state.undo).toHaveLength(1);
       });
 
       it("cuts an isolated straight path segment without removing the path", () => {
         const cutPath: PathElement = { ...path, nodes: [...path.nodes, { id: "c", anchor: { x: 10, y: 10 }, join: "corner" }], segments: [...path.segments, { id: "fixture-segment-12", type: "line", startNodeId: "b", endNodeId: "c" }] };
-        const state = dispatch(createEditor({ ...document, elements: [cutPath] }), cutPathSegment(cutPath.id, 1));
+        const source = { ...document, elements: [cutPath] };
+        const applied = cutPathSegment(cutPath.id, 1).apply(source);
+        expect(applied.success && applied.topology?.referenceMap.get(`${cutPath.id}:segment:${path.segments[0]!.id}`)).toEqual({ kind: "preserved", reference: { kind: "path-segment", elementId: cutPath.id, segmentId: path.segments[0]!.id } });
+        expect(applied.success && applied.topology?.referenceMap.get(`${cutPath.id}:segment:fixture-segment-12`)).toEqual({ kind: "removed", reason: "Path segment was cut" });
+        const state = dispatch(createEditor(source), cutPathSegment(cutPath.id, 1));
         expect(state.document.elements[0]).toMatchObject({ type: "path", closed: false, nodes: [{ id: "a" }, { id: "b" }], segments: [{ id: path.segments[0]!.id, type: "cubicBezier", startNodeId: "a", endNodeId: "b" }] });
         expect(state.undo).toHaveLength(1);
+      });
+      it("remaps or removes explicit connections when a mixed path becomes pieces", () => {
+        const mixed: PathElement = { ...path, id: elementId("mixed-connections"), nodes: [{ id: "a", anchor: { x: 0, y: 0 }, join: "corner" }, { id: "b", anchor: { x: 10, y: 0 }, join: "corner" }, { id: "c", anchor: { x: 20, y: 0 }, join: "corner" }, { id: "d", anchor: { x: 30, y: 0 }, join: "corner" }], segments: [{ id: "cubic-a", type: "cubicBezier", startNodeId: "a", endNodeId: "b", control1: { x: 3, y: 2 }, control2: { x: 7, y: 2 } }, { id: "line-cut", type: "line", startNodeId: "b", endNodeId: "c" }, { id: "cubic-d", type: "cubicBezier", startNodeId: "c", endNodeId: "d", control1: { x: 23, y: -2 }, control2: { x: 27, y: -2 } }], closed: false };
+        const blocker = { ...rectangle, id: elementId(`${mixed.id}:piece:1`) };
+        const connections = [{ id: "at-a", first: { elementId: mixed.id, node: { kind: "path" as const, nodeId: "a" } }, second: { elementId: blocker.id, node: { kind: "named" as const, name: "w" as const } } }, { id: "at-d", first: { elementId: mixed.id, node: { kind: "path" as const, nodeId: "d" } }, second: { elementId: blocker.id, node: { kind: "named" as const, name: "e" as const } } }, { id: "at-c-out", first: { elementId: mixed.id, node: { kind: "path" as const, nodeId: "c", handle: "out" as const } }, second: { elementId: blocker.id, node: { kind: "named" as const, name: "n" as const } } }];
+        const linked: DimensionElement = { ...dimension, id: elementId("mixed-piece-dimension"), references: [{ kind: "node", elementId: mixed.id, nodeIndex: 0, nodeId: "a" }, { kind: "node", elementId: mixed.id, nodeIndex: 3, nodeId: "d" }] };
+        const applied = cutPathSegment(mixed.id, 1).apply({ ...document, elements: [mixed, blocker, linked], connections });
+        expect(applied.success).toBe(true);
+        if (!applied.success) return;
+        expect(applied.document.connections).toMatchObject([{ id: "at-a", first: { elementId: mixed.id } }, { id: "at-d", first: { elementId: `${mixed.id}:piece:1:1` } }, { id: "at-c-out", first: { elementId: `${mixed.id}:piece:1:1`, node: { handle: "out" } } }]);
+        expect(applied.document.elements.find((element) => element.id === linked.id)).toMatchObject({ references: [{ elementId: mixed.id, nodeId: "a" }, { elementId: `${mixed.id}:piece:1:1`, nodeId: "d" }] });
+        expect(applied.topology?.referenceMap.get(`${mixed.id}:segment:cubic-d`)).toEqual({ kind: "replaced", references: [{ kind: "path-segment", elementId: elementId(`${mixed.id}:piece:1:1`), segmentId: "cubic-d" }] });
+      });
+      it("preserves surviving Bézier handles and their dependents during planar reconstruction", () => {
+        const curved: PathElement = { ...path, id: elementId("curve-handle-cut"), nodes: [{ id: "a", anchor: { x: 0, y: 0 }, join: "smooth" }, { id: "b", anchor: { x: 10, y: 0 }, join: "smooth" }, { id: "c", anchor: { x: 10, y: 10 }, join: "corner" }, { id: "d", anchor: { x: 0, y: 10 }, join: "corner" }], segments: [{ id: "curve", type: "cubicBezier", startNodeId: "b", endNodeId: "a", control1: { x: 7, y: -2 }, control2: { x: 3, y: -2 } }, { id: "bc", type: "line", startNodeId: "b", endNodeId: "c" }, { id: "cd", type: "line", startNodeId: "c", endNodeId: "d" }, { id: "da", type: "line", startNodeId: "d", endNodeId: "a" }], closed: true };
+        const anchor = { ...rectangle, id: elementId("curve-handle-anchor"), position: { x: 100, y: 100 } };
+        const connection = { id: "curve-out", first: { elementId: curved.id, node: { kind: "path" as const, nodeId: "b", handle: "out" as const } }, second: { elementId: anchor.id, node: { kind: "named" as const, name: "w" as const } } };
+        const linked: DimensionElement = { ...dimension, id: elementId("curve-control-dimension"), references: [{ kind: "node", elementId: curved.id, nodeIndex: 4 }, { kind: "node", elementId: curved.id, nodeIndex: 3, nodeId: "d" }] };
+        const applied = cutPathSegment(curved.id, 1).apply({ ...document, elements: [curved, anchor, linked], connections: [connection] });
+        expect(applied.success).toBe(true);
+        if (!applied.success) return;
+        expect(applied.document.connections).toMatchObject([{ id: connection.id, first: { node: { kind: "path", handle: "in" } } }]);
+        const remappedDimension = applied.document.elements.find((element): element is DimensionElement => element.id === linked.id && element.type === "dimension");
+        const controlReference = remappedDimension?.references[0];
+        const controlPath = controlReference && "nodeIndex" in controlReference ? applied.document.elements.find((element): element is PathElement => element.id === controlReference.elementId && element.type === "path") : undefined;
+        expect(controlReference && "nodeIndex" in controlReference && controlPath ? realGeometryNodes(controlPath)[controlReference.nodeIndex]?.point : undefined).toEqual({ x: 7, y: -2 });
+        const outputPath = applied.document.elements.find((element): element is PathElement => element.type === "path" && element.segments.some((candidate) => candidate.type === "cubicBezier"));
+        const outputCurve = outputPath?.segments.find((candidate) => candidate.type === "cubicBezier");
+        const outputStart = outputPath?.nodes.find((node) => node.id === outputCurve?.startNodeId)?.anchor;
+        expect(outputCurve).toMatchObject(outputStart?.x === 0 ? { control1: { x: 3, y: -2 }, control2: { x: 7, y: -2 } } : { control1: { x: 7, y: -2 }, control2: { x: 3, y: -2 } });
+      });
+      it("does not remove an atomic Bézier that shares endpoints with the cut line", () => {
+        const straight: PathElement = { ...path, id: elementId("coincident-line"), nodes: path.nodes.slice(0, 2), segments: [{ id: "straight", type: "line", startNodeId: "a", endNodeId: "b" }], closed: false };
+        const curved: PathElement = { ...straight, id: elementId("coincident-curve"), segments: [{ id: "curve", type: "cubicBezier", startNodeId: "a", endNodeId: "b", control1: { x: 3, y: 2 }, control2: { x: 7, y: 2 } }] };
+        const applied = cutPathSegment(straight.id, 0).apply({ ...document, elements: [straight, curved] });
+        expect(applied.success).toBe(true);
+        expect(applied.success && applied.document.elements.some((element) => element.type === "path" && element.segments.some((candidate) => candidate.type === "cubicBezier"))).toBe(true);
+      });
+      it("reports replacement destinations when rebuilding a cut line path", () => {
+        const linePath: PathElement = { ...path, id: elementId("cut-topology"), nodes: [{ id: "a", anchor: { x: 0, y: 0 }, join: "corner" }, { id: "b", anchor: { x: 10, y: 0 }, join: "corner" }, { id: "c", anchor: { x: 20, y: 0 }, join: "corner" }, { id: "d", anchor: { x: 30, y: 0 }, join: "corner" }], segments: [{ id: "ab", type: "line", startNodeId: "a", endNodeId: "b" }, { id: "bc", type: "line", startNodeId: "b", endNodeId: "c" }, { id: "cd", type: "line", startNodeId: "c", endNodeId: "d" }], closed: false };
+        const applied = cutPathSegment(linePath.id, 1).apply({ ...document, elements: [linePath] });
+        expect(applied.success).toBe(true);
+        if (!applied.success) return;
+        expect(applied.document.revision).toBe(document.revision + 1);
+        expect(applied.topology?.referenceMap.get(`${linePath.id}:segment:bc`)).toMatchObject({ kind: "removed" });
+        expect(applied.topology?.referenceMap.get(`${linePath.id}:segment:ab`)).toMatchObject({ kind: "replaced", references: [{ kind: "path-segment" }] });
+        expect(applied.topology?.referenceMap.get(`${linePath.id}:segment:cd`)).toMatchObject({ kind: "replaced", references: [{ kind: "path-segment" }] });
+        expect(applied.topology?.diagnostics).toHaveLength(1);
+      });
+      it("remaps dimensions by source node identity during planar reconstruction", () => {
+        const linePath: PathElement = { ...path, id: elementId("cut-dimension-identity"), nodes: [{ id: "a", anchor: { x: 0, y: 0 }, join: "corner" }, { id: "b", anchor: { x: 10, y: 0 }, join: "corner" }, { id: "c", anchor: { x: 20, y: 0 }, join: "corner" }, { id: "d", anchor: { x: 30, y: 0 }, join: "corner" }], segments: [{ id: "ab", type: "line", startNodeId: "a", endNodeId: "b" }, { id: "bc", type: "line", startNodeId: "b", endNodeId: "c" }, { id: "cd", type: "line", startNodeId: "c", endNodeId: "d" }], closed: false };
+        const linked: DimensionElement = { ...dimension, id: elementId("path-node-identity-dimension"), references: [{ kind: "node", elementId: linePath.id, nodeIndex: 0, nodeId: "b" }, { kind: "node", elementId: linePath.id, nodeIndex: 1, nodeId: "d" }] };
+        const connection = { id: "path-node-b", first: { elementId: linePath.id, node: { kind: "path" as const, nodeId: "b" } }, second: { elementId: rectangle.id, node: { kind: "named" as const, name: "w" as const } } };
+        const applied = cutPathSegment(linePath.id, 0).apply({ ...document, elements: [linePath, linked, rectangle], connections: [connection] });
+        expect(applied.success).toBe(true);
+        if (!applied.success) return;
+        const migrated = applied.document.elements.find((element) => element.id === linked.id);
+        expect(migrated).toMatchObject({ type: "dimension", references: [{ kind: "node", elementId: linePath.id }, { kind: "node", elementId: linePath.id }] });
+        expect(migrated?.type === "dimension" ? migrated.references.map((reference) => "nodeId" in reference ? reference.nodeId : undefined) : []).not.toEqual(["a", "b"]);
+        expect(applied.document.connections).toMatchObject([{ id: connection.id, first: { elementId: linePath.id, node: { kind: "path" } } }]);
+        expect(applied.document.connections?.[0]?.first.node).not.toMatchObject({ nodeId: "b" });
       });
       it("generalizes a committed native line when a third node is added", () => {
     const line = { type: "line" as const, id: elementId("click-line"), layerId: layerId("default"), start: { x: 0, y: 0 }, end: { x: 10, y: 0 }, rotation: 0, style: rectangle.style };
@@ -502,7 +573,7 @@ it("converts a zero-radius rectangle to an open path when cutting one edge", () 
 
    it("drives the real length of an angled line while preserving its direction", () => {
      const line: LineElement = { type: "line", id: elementId("angled-line"), layerId: layerId("default"), start: { x: 10, y: 10 }, end: { x: 20, y: 20 }, rotation: 0, style: rectangle.style };
-     const linked: DimensionElement = { type: "dimension", id: elementId("angled-line-dimension"), layerId: line.layerId, kind: "aligned", references: [{ kind: "node", elementId: line.id, nodeIndex: 0, nodeId: "start" }, { kind: "node", elementId: line.id, nodeIndex: 1, nodeId: "end" }], offset: { x: 0, y: -8 }, precision: 2, units: "mm", rotation: 0, style: rectangle.style };
+     const linked: DimensionElement = { type: "dimension", id: elementId("angled-line-dimension"), layerId: line.layerId, kind: "aligned", references: [{ kind: "node", elementId: line.id, nodeIndex: 0, nodeId: "start" }, { kind: "node", elementId: line.id, nodeIndex: 2, nodeId: "end" }], offset: { x: 0, y: -8 }, precision: 2, units: "mm", rotation: 0, style: rectangle.style };
      const state = dispatch(createEditor({ ...document, elements: [line, linked] }), updateDimensionValue(linked.id, 20));
      expect((state.document.elements[0] as LineElement).start).toEqual(line.start);
      expect((state.document.elements[0] as LineElement).end).toEqual({ x: 10 + Math.sqrt(200), y: 10 + Math.sqrt(200) });
@@ -647,22 +718,64 @@ it("moves a dimension by changing only its placement offset and supports undo", 
     expect(undo(state).document.elements).toEqual([reversible]);
   });
   it("closes and reopens a path as independent undoable commands", () => {
+    const closed = closePath(path.id).apply({ ...document, elements: [path] });
+    expect(closed.success && closed.topology?.referenceMap.get(`${path.id}:segment:${path.segments[0]!.id}`)).toEqual({ kind: "preserved", reference: { kind: "path-segment", elementId: path.id, segmentId: path.segments[0]!.id } });
     let state = dispatch(createEditor({ ...document, elements: [path] }), closePath(path.id));
     expect(state.document.elements[0]).toMatchObject({ closed: true, segments: [{ id: path.segments[0]!.id, type: "cubicBezier" }, { type: "line", startNodeId: "b", endNodeId: "a" }] });
     expect(state.undo).toHaveLength(1);
+    const closedPath = state.document.elements[0];
+    const closingId = closedPath?.type === "path" ? closedPath.segments.at(-1)?.id : undefined;
+    const opened = openPath(path.id).apply(state.document);
+    expect(opened.success && closingId ? opened.topology?.referenceMap.get(`${path.id}:segment:${closingId}`) : undefined).toMatchObject({ kind: "removed" });
+    expect(opened.success ? opened.topology?.referenceMap.get(`${path.id}:segment:${path.segments[0]!.id}`) : undefined).toEqual({ kind: "preserved", reference: { kind: "path-segment", elementId: path.id, segmentId: path.segments[0]!.id } });
     state = dispatch(state, openPath(path.id));
     expect(state.document.elements[0]).toMatchObject({ closed: false, segments: [{ type: "cubicBezier" }] });
     expect(state.undo).toHaveLength(2);
     expect(redo(undo(state)).document.elements).toEqual(state.document.elements);
   });
+  it("removes dependents of a cubic closing handle when opening a path", () => {
+    const closable: PathElement = { ...path, id: elementId("cubic-closing"), segments: [{ id: "forward", type: "line", startNodeId: "a", endNodeId: "b" }, { id: "closing-curve", type: "cubicBezier", startNodeId: "b", endNodeId: "a", control1: { x: 7, y: 2 }, control2: { x: 3, y: 2 } }], closed: true };
+    const anchor = { ...rectangle, id: elementId("opening-anchor"), position: { x: 100, y: 100 } };
+    const linked: DimensionElement = { ...dimension, id: elementId("closing-handle-dimension"), references: [{ kind: "node", elementId: closable.id, nodeIndex: 2 }, { kind: "node", elementId: closable.id, nodeIndex: 0, nodeId: "a" }] };
+    const connection = { id: "closing-handle", first: { elementId: closable.id, node: { kind: "path" as const, nodeId: "b", handle: "out" as const } }, second: { elementId: anchor.id, node: { kind: "named" as const, name: "w" as const } } };
+    const applied = openPath(closable.id).apply({ ...document, elements: [closable, anchor, linked], connections: [connection] });
+    expect(applied.success).toBe(true);
+    if (!applied.success) return;
+    expect(applied.document.connections).toEqual([]);
+    expect(applied.document.elements.some((element) => element.id === linked.id)).toBe(false);
+  });
   it("deletes an open interior anchor and preserves neighboring cubic endpoint controls", () => {
     const three: PathElement = { ...path, nodes: [...path.nodes, { id: "c", anchor: { x: 20, y: 0 }, join: "corner" }], segments: [...path.segments, { id: "fixture-segment-19", type: "cubicBezier", startNodeId: "b", endNodeId: "c", control1: { x: 12, y: -4 }, control2: { x: 18, y: -4 } }] };
-    const state = dispatch(createEditor({ ...document, elements: [three] }), deletePathNodes(three.id, ["b"]));
+    const source = { ...document, elements: [three] };
+    const applied = deletePathNodes(three.id, ["b"]).apply(source);
+    expect(applied.success).toBe(true);
+    if (applied.success) {
+      const first = applied.topology?.referenceMap.get(`${three.id}:segment:${three.segments[0]!.id}`); const second = applied.topology?.referenceMap.get(`${three.id}:segment:${three.segments[1]!.id}`);
+      expect(first).toMatchObject({ kind: "replaced", references: [{ kind: "path-segment" }] });
+      expect(second).toEqual(first);
+      expect(applied.topology?.diagnostics).toEqual([]);
+    }
+    const state = dispatch(createEditor(source), deletePathNodes(three.id, ["b"]));
     expect(state.document.elements[0]).toMatchObject({ nodes: [{ id: "a" }, { id: "c" }], segments: [{ type: "cubicBezier", startNodeId: "a", endNodeId: "c", control1: { x: 2, y: 4 }, control2: { x: 18, y: -4 } }] });
     const rebuilt = state.document.elements[0];
     if (rebuilt?.type === "path") expect(three.segments.some((segment) => segment.id === rebuilt.segments[0]?.id)).toBe(false);
     expect(state.undo).toHaveLength(1);
     expect(undo(state).document.elements).toEqual([three]);
+  });
+  it("distinguishes removed and preserved segments when deleting an open endpoint", () => {
+    const open: PathElement = { ...path, nodes: [{ id: "a", anchor: { x: 0, y: 0 }, join: "corner" }, { id: "b", anchor: { x: 10, y: 0 }, join: "corner" }, { id: "c", anchor: { x: 20, y: 0 }, join: "corner" }], segments: [{ id: "ab", type: "line", startNodeId: "a", endNodeId: "b" }, { id: "bc", type: "line", startNodeId: "b", endNodeId: "c" }] };
+    const connections = [{ id: "removed-a", first: { elementId: open.id, node: { kind: "path" as const, nodeId: "a" } }, second: { elementId: rectangle.id, node: { kind: "named" as const, name: "w" as const } } }, { id: "kept-b", first: { elementId: open.id, node: { kind: "path" as const, nodeId: "b" } }, second: { elementId: rectangle.id, node: { kind: "named" as const, name: "e" as const } } }];
+    const removedDimension: DimensionElement = { ...dimension, id: elementId("removed-node-dimension"), references: [{ kind: "node", elementId: open.id, nodeIndex: 0, nodeId: "a" }, { kind: "node", elementId: open.id, nodeIndex: 1, nodeId: "b" }] };
+    const keptDimension: DimensionElement = { ...dimension, id: elementId("kept-node-dimension"), references: [{ kind: "node", elementId: open.id, nodeIndex: 0, nodeId: "b" }, { kind: "node", elementId: open.id, nodeIndex: 1, nodeId: "c" }] };
+    const applied = deletePathNodes(open.id, ["a"]).apply({ ...document, elements: [open, rectangle, removedDimension, keptDimension], connections });
+    expect(applied.success && applied.topology?.referenceMap.get(`${open.id}:segment:ab`)).toMatchObject({ kind: "removed" });
+    expect(applied.success && applied.topology?.referenceMap.get(`${open.id}:segment:bc`)).toEqual({ kind: "preserved", reference: { kind: "path-segment", elementId: open.id, segmentId: "bc" } });
+    expect(applied.success && applied.topology?.diagnostics).toHaveLength(1);
+    expect(applied.success ? applied.document.connections : []).toMatchObject([{ id: "kept-b", first: { elementId: open.id, node: { nodeId: "b" } } }]);
+    if (applied.success) {
+      expect(applied.document.elements.some((element) => element.id === removedDimension.id)).toBe(false);
+      expect(applied.document.elements.find((element) => element.id === keptDimension.id)).toMatchObject({ references: [{ nodeId: "b", nodeIndex: 0 }, { nodeId: "c", nodeIndex: 1 }] });
+    }
   });
   it("deletes a closed anchor across the closing join and rejects minimums atomically", () => {
     const closed: PathElement = { ...path, closed: true, nodes: [...path.nodes, { id: "c", anchor: { x: 5, y: 10 }, join: "smooth" }, { id: "d", anchor: { x: -5, y: 10 }, join: "corner" }], segments: [{ id: "fixture-segment-21", type: "line", startNodeId: "a", endNodeId: "b" }, { id: "fixture-segment-22", type: "line", startNodeId: "b", endNodeId: "c" }, { id: "fixture-segment-23", type: "line", startNodeId: "c", endNodeId: "d" }, { id: "fixture-segment-24", type: "cubicBezier", startNodeId: "d", endNodeId: "a", control1: { x: -4, y: 8 }, control2: { x: -1, y: 2 } }] };
@@ -685,11 +798,16 @@ it("moves a dimension by changing only its placement offset and supports undo", 
   });
   it("splits line and cubic path segments at their midpoint as one undoable command", () => {
     const linePath: PathElement = { ...path, id: elementId("line-path"), nodes: [{ id: "a", anchor: { x: 0, y: 0 }, join: "smooth" }, { id: "b", anchor: { x: 10, y: 0 }, join: "symmetric" }], segments: [{ id: "fixture-segment-28", type: "line", startNodeId: "a", endNodeId: "b" }, { id: "fixture-segment-29", type: "line", startNodeId: "b", endNodeId: "a" }], closed: true };
+    const linked: DimensionElement = { ...dimension, id: elementId("split-path-dimension"), references: [{ kind: "node", elementId: linePath.id, nodeIndex: 0, nodeId: "a" }, { kind: "node", elementId: linePath.id, nodeIndex: 1, nodeId: "b" }] };
+    const applied = splitPathSegment(linePath.id, 0, "mid-line-applied").apply({ ...document, elements: [linePath, linked] });
+    expect(applied.success && applied.topology?.referenceMap.get(`${linePath.id}:segment:fixture-segment-28`)).toMatchObject({ kind: "replaced", references: [{ kind: "path-segment" }, { kind: "path-segment" }] });
+    expect(applied.success ? applied.document.elements.find((element) => element.id === linked.id) : undefined).toMatchObject({ references: [{ nodeId: "a", nodeIndex: 0 }, { nodeId: "b", nodeIndex: 2 }] });
     let state = dispatch(createEditor({ ...document, elements: [linePath] }), splitPathSegment(linePath.id, 0, "mid-line"));
     expect(state.document.elements[0]).toMatchObject({ type: "path", nodes: [{ id: "a", join: "smooth" }, { id: "mid-line", anchor: { x: 5, y: 0 }, join: "corner" }, { id: "b", join: "symmetric" }], segments: [{ type: "line", startNodeId: "a", endNodeId: "mid-line" }, { type: "line", startNodeId: "mid-line", endNodeId: "b" }, { id: "fixture-segment-29", type: "line", startNodeId: "b", endNodeId: "a" }], closed: true });
     const splitLine = state.document.elements[0];
     if (splitLine?.type === "path") expect(splitLine.segments.slice(0, 2).every((segment) => segment.id !== "fixture-segment-28")).toBe(true);
     expect(state.undo).toHaveLength(1);
+    expect(state.undo[0]).not.toHaveProperty("topology");
     expect(redo(undo(state)).document.elements).toEqual(state.document.elements);
 
     state = dispatch(createEditor({ ...document, elements: [path] }), splitPathSegment(path.id, 0, "mid-cubic"));

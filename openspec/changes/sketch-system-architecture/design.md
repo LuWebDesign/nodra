@@ -561,6 +561,14 @@ Reglas:
 - el comando aplica geometría, remapeo, restricciones y cotas atómicamente;
 - undo restaura exactamente topología y referencias anteriores.
 
+Estado implementado de este contrato:
+
+- los resultados exitosos de comandos topológicos exponen el mapa y los diagnósticos como metadata efímera; no se persisten ni forman parte de las transacciones de historial;
+- partir segmentos declara reemplazos, borrar nodos conserva segmentos intactos y agrupa los segmentos reconstruidos como reemplazos;
+- abrir un path y cortar geometría declaran referencias eliminadas;
+- la reconstrucción planar deriva destinos desde la identidad del segmento fuente y sus piezas, no mediante una reparación posterior global por coordenadas;
+- cotas de nodo y conexiones explícitas se remapean por identidad cuando su destino sobrevive; si el nodo o handle desaparece, el dependiente se elimina dentro de la misma transacción.
+
 ## 13. Herramientas
 
 Las categorías organizan interacción y UI, no crean una jerarquía persistida:

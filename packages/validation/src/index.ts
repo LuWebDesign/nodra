@@ -133,7 +133,8 @@ const validateConnections = (elements: readonly z.infer<typeof elementSchema>[],
     refs.forEach((reference, referenceIndex) => {
       const element = byId.get(reference.elementId);
       const address = reference.node;
-      const valid = element && ((address.kind === "named" && (element.type === "rectangle" || element.type === "ellipse")) || (address.kind === "line" && element.type === "line") || (address.kind === "path" && element.type === "path") || (address.kind === "spline" && element.type === "spline") || (address.kind === "sketch" && element.type === "sketch"));
+      const validNamed = address.kind === "named" && (element?.type === "rectangle" || element?.type === "ellipse" && ["center", "n", "e", "s", "w"].includes(address.name));
+      const valid = element && (validNamed || (address.kind === "line" && element.type === "line") || (address.kind === "path" && element.type === "path") || (address.kind === "spline" && element.type === "spline") || (address.kind === "sketch" && element.type === "sketch"));
       if (!element) ctx.addIssue({ code: "custom", message: "Connection references an unknown element", path: [...path, index, referenceIndex === 0 ? "first" : "second", "elementId"] });
       else if (!valid) ctx.addIssue({ code: "custom", message: "Connection node address is invalid for its element", path: [...path, index, referenceIndex === 0 ? "first" : "second", "node"] });
       if ((address.kind === "path" || address.kind === "spline" || address.kind === "sketch") && element) {
@@ -176,11 +177,18 @@ export const documentSchema = z.object({ schemaVersion: z.literal(CURRENT_SCHEMA
            if (!start || !end || (start.x === end.x && start.y === end.y)) ctx.addIssue({ code: "custom", message: "Dimension sketch-edge references must not be degenerate", path: ["elements", index, "references", referenceIndex] });
          }
       } else {
-        const nodeCount = target?.type === "line" ? 3 : target?.type === "sketch" ? target.nodes.length : target?.type === "rectangle" ? 9 : target?.type === "ellipse" || target?.type === "text" ? 5 : target?.type === "contour" ? target.contours.reduce((count, contour) => count + Math.max(0, contour.points.length - 1) * 2, 0) : target?.type === "path" ? target.nodes.length + target.segments.filter((segment) => segment.type === "cubicBezier").length * 2 : target?.type === "spline" ? target.nodes.length + target.nodes.filter((node) => node.inHandle || node.outHandle).length : target?.type === "glyph" ? target.contours.reduce((count, contour) => count + contour.nodes.length + contour.segments.filter((segment) => segment.type === "cubicBezier").length * 2, 0) : undefined;
+        const nodeCount = target?.type === "line" ? 3 : target?.type === "sketch" ? target.nodes.length : target?.type === "rectangle" ? 9 : target?.type === "ellipse" || target?.type === "text" ? 5 : target?.type === "contour" ? target.contours.reduce((count, contour) => count + Math.max(0, contour.points.length - 1) * 2, 0) : target?.type === "path" ? target.nodes.length + target.segments.filter((segment) => segment.type === "cubicBezier").length * 2 : target?.type === "spline" ? target.nodes.reduce((count, node) => count + 1 + Number(node.inHandle !== undefined) + Number(node.outHandle !== undefined), 0) : target?.type === "glyph" ? target.contours.reduce((count, contour) => count + contour.nodes.length + contour.segments.filter((segment) => segment.type === "cubicBezier").length * 2, 0) : undefined;
         if (nodeCount === undefined || reference.nodeIndex >= nodeCount) ctx.addIssue({ code: "custom", message: "Dimension node reference is out of range", path: ["elements", index, "references", referenceIndex, "nodeIndex"] });
             if (reference.nodeId !== undefined) {
-              const stableNodeIds = target?.type === "line" ? ["start", "center", "end"] : target?.type === "rectangle" || target?.type === "ellipse" ? ["nw", "ne", "se", "sw", "center", "n", "e", "s", "w"] : target?.type === "sketch" || target?.type === "spline" || target?.type === "path" ? target.nodes.map((node) => node.id) : target?.type === "glyph" ? target.contours.flatMap((contour) => contour.nodes.map((node) => node.id)) : [];
-              if (!stableNodeIds.includes(reference.nodeId)) ctx.addIssue({ code: "custom", message: "Dimension node reference id is unknown", path: ["elements", index, "references", referenceIndex, "nodeId"] });
+              const stableNodeIdsByIndex: readonly (string | undefined)[] = target?.type === "line" ? ["start", "center", "end"]
+                : target?.type === "rectangle" ? ["nw", "ne", "se", "sw", "center", "n", "e", "s", "w"]
+                  : target?.type === "ellipse" ? ["center", "n", "e", "s", "w"]
+                    : target?.type === "sketch" ? target.nodes.map((node) => node.id)
+                      : target?.type === "path" ? [...target.nodes.map((node) => node.id), ...target.segments.flatMap((segment) => segment.type === "cubicBezier" ? [undefined, undefined] : [])]
+                        : target?.type === "spline" ? target.nodes.flatMap((node) => [node.id, ...(node.inHandle ? [undefined] : []), ...(node.outHandle ? [undefined] : [])])
+                          : target?.type === "glyph" ? target.contours.flatMap((contour) => [...contour.nodes.map((node) => node.id), ...contour.segments.flatMap((segment) => segment.type === "cubicBezier" ? [undefined, undefined] : [])]) : [];
+              if (!stableNodeIdsByIndex.includes(reference.nodeId)) ctx.addIssue({ code: "custom", message: "Dimension node reference id is unknown", path: ["elements", index, "references", referenceIndex, "nodeId"] });
+              else if (stableNodeIdsByIndex[reference.nodeIndex] !== reference.nodeId) ctx.addIssue({ code: "custom", message: "Dimension node ID and legacy index must identify the same node", path: ["elements", index, "references", referenceIndex] });
             }
       }
     }
@@ -256,6 +264,34 @@ const migrateLegacySegments = (segments: unknown, prefix: string): unknown => {
     return { ...candidate, id };
   });
 };
+const legacyStableNodeIndex = (target: Record<string, unknown>, nodeId: string): number | undefined => {
+  const named = target.type === "line" ? ["start", "center", "end"] : target.type === "rectangle" ? ["nw", "ne", "se", "sw", "center", "n", "e", "s", "w"] : target.type === "ellipse" ? ["center", "n", "e", "s", "w"] : undefined;
+  if (named) { const index = named.indexOf(nodeId); return index >= 0 ? index : undefined; }
+  if (target.type === "sketch" || target.type === "path") {
+    const nodes = Array.isArray(target.nodes) ? target.nodes : []; const index = nodes.findIndex((node) => typeof node === "object" && node !== null && !Array.isArray(node) && (node as Record<string, unknown>).id === nodeId);
+    return index >= 0 ? index : undefined;
+  }
+  if (target.type === "spline") {
+    const nodes = Array.isArray(target.nodes) ? target.nodes : []; let index = 0;
+    for (const node of nodes) {
+      if (typeof node !== "object" || node === null || Array.isArray(node)) continue;
+      const candidate = node as Record<string, unknown>; if (candidate.id === nodeId) return index;
+      index += 1 + Number(candidate.inHandle !== undefined) + Number(candidate.outHandle !== undefined);
+    }
+  }
+  if (target.type === "glyph" && Array.isArray(target.contours)) {
+    let index = 0;
+    for (const contour of target.contours) {
+      if (typeof contour !== "object" || contour === null || Array.isArray(contour)) continue;
+      const current = contour as Record<string, unknown>; const nodes = Array.isArray(current.nodes) ? current.nodes : [];
+      const nodeIndex = nodes.findIndex((node) => typeof node === "object" && node !== null && !Array.isArray(node) && (node as Record<string, unknown>).id === nodeId);
+      if (nodeIndex >= 0) return index + nodeIndex;
+      const segments = Array.isArray(current.segments) ? current.segments : [];
+      index += nodes.length + segments.filter((segment) => typeof segment === "object" && segment !== null && !Array.isArray(segment) && (segment as Record<string, unknown>).type === "cubicBezier").length * 2;
+    }
+  }
+  return undefined;
+};
 const migrateLegacyElements = (elements: unknown): unknown => {
   if (!Array.isArray(elements)) return elements;
   const normalized = elements.map((element) => {
@@ -282,8 +318,13 @@ const migrateLegacyElements = (elements: unknown): unknown => {
     const references = candidate.references.map((reference) => {
       if (typeof reference !== "object" || reference === null || Array.isArray(reference)) return reference;
       const current = reference as Record<string, unknown>;
-      if (current.kind !== "line" || typeof current.elementId !== "string" || current.edgeId !== undefined) return reference;
+      if (typeof current.elementId !== "string") return reference;
       const target = byId.get(current.elementId);
+      if ((current.kind === "node" || current.kind === undefined) && typeof current.nodeId === "string" && target) {
+        const nodeIndex = legacyStableNodeIndex(target, current.nodeId);
+        return nodeIndex === undefined ? reference : { ...current, nodeIndex };
+      }
+      if (current.kind !== "line" || current.edgeId !== undefined) return reference;
       if (target?.type !== "sketch" || !Array.isArray(target.edges)) return reference;
       const edgeIndex = typeof current.edgeIndex === "number" ? current.edgeIndex : 0;
       const edge = target.edges[edgeIndex];
