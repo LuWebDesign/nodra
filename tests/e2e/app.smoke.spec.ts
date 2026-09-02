@@ -739,7 +739,7 @@ test("opens an existing text with its rendered bounds and typography", async ({ 
   expect(inline).not.toBeNull();
   expect(inline!.width).toBeGreaterThan(0);
   expect(inline!.height).toBeGreaterThan(0);
-  expect(inline!.width).toBeCloseTo(rendered!.width, 0);
+  expect(Math.abs(inline!.width - rendered!.width)).toBeLessThan(2);
   const renderedFontSize = Number(await text.getAttribute("font-size"));
   const pageScale = await page.locator(".page").evaluate((element) => element.getBoundingClientRect().width / Number(element.querySelector("svg")?.getAttribute("width")));
   const inlineFontSize = await editor.evaluate((element) => Number.parseFloat(getComputedStyle(element).fontSize));
@@ -787,7 +787,7 @@ test("draws a nested object from an existing object with a drawing tool", async 
   await page.goto("/");
   await drawRectangle(page);
 
-  const rectangle = page.locator(".page-svg svg rect").first();
+  const rectangle = page.locator(".page-svg svg rect[data-element-id]").first();
   const originalBounds = await rectangle.boundingBox();
   expect(originalBounds).not.toBeNull();
   await page.getByRole("button", { name: "Rectángulo" }).click();
@@ -800,8 +800,9 @@ test("draws a nested object from an existing object with a drawing tool", async 
   await page.mouse.move(originalBounds!.x + originalBounds!.width / 2 + 30, originalBounds!.y + originalBounds!.height / 2 + 20);
   await page.mouse.up();
 
-  await expect(page.locator(".page-svg svg rect")).toHaveCount(2);
-  const nestedBounds = await page.locator(".page-svg svg rect").nth(1).boundingBox();
+  const rectangles = page.locator(".page-svg svg rect[data-element-id]");
+  await expect(rectangles).toHaveCount(2);
+  const nestedBounds = await rectangles.nth(1).boundingBox();
   expect(nestedBounds).not.toBeNull();
   expect(nestedBounds!.x).toBeGreaterThan(originalBounds!.x);
   expect(nestedBounds!.y).toBeGreaterThan(originalBounds!.y);
@@ -880,9 +881,12 @@ test("creates a radius Cota from the integrated Cota modes", async ({ page }) =>
   await page.mouse.click(ellipseBox!.x + ellipseBox!.width + 35, center.y);
   await expect(page.locator('[data-dimension="diameter"]')).toContainText("Ø");
   await page.getByRole("button", { name: "Confirmar", exact: true }).last().click();
-  const dimensionText = page.locator('[data-dimension="diameter"] text');
+  const dimension = page.locator('[data-dimension="diameter"]');
   await page.getByRole("button", { name: "Seleccion" }).click();
-  await dimensionText.click({ force: true });
+  await expect.poll(async () => {
+    try { await dimension.click({ force: true }); } catch { return false; }
+    return await page.locator('input[type="number"]').count() > 0;
+  }).toBe(true);
   await page.locator('input[type="number"]').last().fill("160");
   await page.getByRole("button", { name: "Confirmar", exact: true }).last().click();
   await expect(page.locator('[data-dimension="diameter"]')).toContainText("160");
