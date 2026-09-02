@@ -49,6 +49,12 @@ export interface ConstraintDofMetadata {
   readonly status: "pending-solver";
 }
 
+export interface ConstraintComponentState {
+  readonly nodeKeys: readonly string[];
+  readonly state: ConstraintState;
+  readonly diagnostics: readonly string[];
+}
+
 const constraintNodeKey = (reference: ConstraintNodeReference): string => JSON.stringify([reference.elementId, reference.nodeId]);
 const constraintIdentity = (scope: "local" | "document", elementId: ElementId | undefined, id: string): string => JSON.stringify([scope, elementId ?? null, id]);
 
@@ -156,6 +162,22 @@ export function constraintComponentsForDocument(document: DocumentSnapshot): rea
 /** Reports input coordinates and constraint-record counts without pretending to solve degrees of freedom. */
 export function constraintDofMetadataForDocument(document: DocumentSnapshot): readonly ConstraintDofMetadata[] {
   return constraintComponentsForDocument(document).map((component) => ({ nodeKeys: component.nodeKeys, coordinateCount: component.nodeKeys.length * 2, constraintCount: component.constraintIds.length, status: "pending-solver" }));
+}
+
+/** Derives component diagnostics from native sketch solvers without persisting solver output. */
+export function constraintComponentStatesForDocument(document: DocumentSnapshot): readonly ConstraintComponentState[] {
+  const sketches = document.elements.filter((element): element is Extract<Element, { type: "sketch" }> => element.type === "sketch");
+  const normalized = normalizedConstraintsForDocument(document);
+  return constraintComponentsForDocument(document).map((component) => {
+    const nodeKeys = new Set(component.nodeKeys);
+    const involved = sketches.filter((sketch) => sketch.nodes.some((node) => nodeKeys.has(constraintNodeKey({ elementId: sketch.id, nodeId: node.id }))));
+    const globalIds = normalized.filter((constraint) => constraint.scope === "document" && constraint.references.some((reference) => nodeKeys.has(constraintNodeKey(reference)))).map((constraint) => constraint.id);
+    const canUseNativeSolver = globalIds.length === 0 && involved.length === 1 && involved[0]!.nodes.length === component.nodeKeys.length;
+    const localStates = canUseNativeSolver ? [sketchAdapter.state(involved[0]!)] : [];
+    const diagnostics = [...localStates.flatMap((state) => state.conflicts.map((conflict) => `${involved[0]!.id}:${conflict}`)), ...(globalIds.length ? globalIds.map((id) => `global-constraint-requires-component-solver:${id}`) : []), ...(!canUseNativeSolver && component.constraintIds.length ? ["component-solver-pending"] : [])].sort();
+    const state = localStates.some((value) => value.state === "conflict") ? "conflict" : localStates.some((value) => value.state === "overdefined") ? "overdefined" : localStates.some((value) => value.state === "invalid") ? "invalid" : localStates.every((value) => value.state === "fully-defined") && canUseNativeSolver ? "fully-defined" : "underdefined";
+    return { nodeKeys: component.nodeKeys, state, diagnostics };
+  });
 }
 
 /** Returns the parametric operations currently supported by an element. */

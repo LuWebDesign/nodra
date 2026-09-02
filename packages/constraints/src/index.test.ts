@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createDocument, elementId, layerId, withElements, type Element, type SketchElement } from "@nodra/domain";
-import { constraintComponentsForDocument, constraintDofMetadataForDocument, constraintStateForElement, normalizedConstraintsForDocument, parametricCapabilitiesForElement } from "./index.js";
+import { constraintComponentStatesForDocument, constraintComponentsForDocument, constraintDofMetadataForDocument, constraintStateForElement, normalizedConstraintsForDocument, parametricCapabilitiesForElement } from "./index.js";
 
 const layer = { id: layerId("constraints"), name: "Croquis", visible: true, order: 0 } as const;
 const style = { stroke: "#111827", strokeWidth: 1 } as const;
@@ -55,6 +55,7 @@ describe("parametric constraint boundary", () => {
 
     expect(constraintStateForElement(document, definedSketch.id)).toEqual({ elementId: definedSketch.id, entityKind: "sketch", state: "fully-defined", conflicts: [] });
     expect(constraintStateForElement(document, circle.id)).toEqual({ elementId: circle.id, entityKind: "circle", state: "fully-defined", conflicts: [] });
+    expect(constraintComponentStatesForDocument(document)).toEqual([{ nodeKeys: [JSON.stringify(["sketch", "a"]), JSON.stringify(["sketch", "b"])], state: "fully-defined", diagnostics: [] }]);
   });
 
   it("groups local and page-level constraints into connected components", () => {
