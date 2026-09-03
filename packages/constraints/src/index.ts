@@ -50,6 +50,13 @@ export interface ConstraintDofMetadata {
   readonly status: "pending-solver";
 }
 
+export interface ConstraintResidual {
+  readonly constraintId: string;
+  readonly residual: number;
+  readonly satisfied: boolean;
+  readonly supported: boolean;
+}
+
 export interface ConstraintComponentState {
   readonly nodeKeys: readonly string[];
   readonly state: ConstraintState;
@@ -188,6 +195,35 @@ export function constraintInputsForDocument(document: DocumentSnapshot): readonl
       return point;
     });
     return { nodeKeys: component.nodeKeys, nodes: componentNodes, coordinates, constraints, coordinateCount: coordinates.length * 2 };
+  });
+}
+
+/** Calculates normalized geometric residuals for every structural constraint record. */
+export function constraintResidualsForDocument(document: DocumentSnapshot, tolerance = 1e-6): readonly ConstraintResidual[] {
+  if (!Number.isFinite(tolerance) || tolerance < 0) throw new Error("Constraint residual tolerance must be finite and non-negative");
+  const points = new Map(document.elements.filter((element): element is Extract<Element, { type: "sketch" }> => element.type === "sketch").flatMap((sketch) => sketch.nodes.map((node) => [constraintNodeKey({ elementId: sketch.id, nodeId: node.id }), node.point] as const)));
+  return normalizedConstraintsForDocument(document).map((constraint) => {
+    const values = constraint.references.map((reference) => points.get(constraintNodeKey(reference)));
+    const isPoint = (point: PointMm | undefined): point is PointMm => point !== undefined && typeof point === "object" && Number.isFinite(point.x) && Number.isFinite(point.y);
+    const valid = values.every(isPoint) && (constraint.ownerId === undefined || constraint.references.every((reference) => reference.elementId === constraint.ownerId));
+    const expected = constraint.kind === "fixed" ? 1 : ["parallel", "perpendicular", "equal"].includes(constraint.kind) ? 4 : 2;
+    const usesValue = ["distance-horizontal", "distance-vertical", "distance", "angle"].includes(constraint.kind);
+    const knownKind = ["horizontal", "vertical", "coincident", "parallel", "perpendicular", "equal", "distance-horizontal", "distance-vertical", "distance", "angle", "fixed"].includes(constraint.kind);
+    if (!valid || !knownKind || values.length !== expected || values.some((value) => !isPoint(value)) || usesValue && (!Number.isFinite(constraint.value) || constraint.value === undefined || constraint.value <= 0) || !usesValue && constraint.value !== undefined) return { constraintId: constraint.id, residual: Number.POSITIVE_INFINITY, satisfied: false, supported: false };
+    const first = values[0]!; const second = values[1];
+    if (constraint.kind === "fixed") return { constraintId: constraint.id, residual: Math.hypot(first.x, first.y), satisfied: Math.hypot(first.x, first.y) <= tolerance, supported: true };
+    const dx = second!.x - first.x; const dy = second!.y - first.y; const directionLength = Math.hypot(dx, dy); const requiresDirection = constraint.kind !== "coincident";
+    if (requiresDirection && directionLength <= tolerance) return { constraintId: constraint.id, residual: Number.POSITIVE_INFINITY, satisfied: false, supported: false };
+    let residual: number;
+    if (constraint.kind === "coincident") residual = Math.hypot(dx, dy);
+    else if (constraint.kind === "horizontal") residual = Math.abs(dy);
+    else if (constraint.kind === "vertical") residual = Math.abs(dx);
+    else if (constraint.kind === "distance-horizontal") residual = Math.abs(Math.abs(dx) - constraint.value!);
+    else if (constraint.kind === "distance-vertical") residual = Math.abs(Math.abs(dy) - constraint.value!);
+    else if (constraint.kind === "distance") residual = Math.abs(Math.hypot(dx, dy) - constraint.value!);
+    else if (constraint.kind === "angle") { const difference = Math.atan2(dy, dx) * 180 / Math.PI - constraint.value!; residual = Math.abs(((difference + 180) % 360 + 360) % 360 - 180); }
+    else { const third = values[2]!; const fourth = values[3]!; const ax = dx; const ay = dy; const bx = fourth.x - third.x; const by = fourth.y - third.y; const firstLength = Math.hypot(ax, ay); const secondLength = Math.hypot(bx, by); if (firstLength <= tolerance || secondLength <= tolerance) return { constraintId: constraint.id, residual: Number.POSITIVE_INFINITY, satisfied: false, supported: false }; const cross = (ax / firstLength) * (by / secondLength) - (ay / firstLength) * (bx / secondLength); const dot = (ax / firstLength) * (bx / secondLength) + (ay / firstLength) * (by / secondLength); residual = constraint.kind === "parallel" ? Math.abs(cross) : constraint.kind === "perpendicular" ? Math.abs(dot) : Math.abs(firstLength - secondLength); }
+    return { constraintId: constraint.id, residual, satisfied: residual <= tolerance, supported: true };
   });
 }
 
