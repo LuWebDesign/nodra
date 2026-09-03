@@ -58,6 +58,31 @@ describe("parametric constraint boundary", () => {
     expect(constraintComponentStatesForDocument(document)).toEqual([{ nodeKeys: [JSON.stringify(["sketch", "a"]), JSON.stringify(["sketch", "b"])], state: "fully-defined", diagnostics: [] }]);
   });
 
+  it("derives a fully-defined local subcomponent without including unrelated sketch nodes", () => {
+    const scoped: SketchElement = {
+      ...sketch(),
+      nodes: [...sketch().nodes, { id: "unrelated", point: { x: 100, y: 100 } }],
+      constraints: [
+        { id: "fixed-a", kind: "fixed", references: [{ elementId: elementId("sketch"), nodeId: "a" }] },
+        { id: "horizontal", kind: "horizontal", references: [{ elementId: elementId("sketch"), nodeId: "a" }, { elementId: elementId("sketch"), nodeId: "b" }] },
+        { id: "length", kind: "distance-horizontal", references: [{ elementId: elementId("sketch"), nodeId: "a" }, { elementId: elementId("sketch"), nodeId: "b" }], value: 20 },
+      ],
+    };
+
+    const states = constraintComponentStatesForDocument(documentWith([scoped]));
+
+    expect(states.find((state) => state.nodeKeys.length === 2)).toEqual({ nodeKeys: [JSON.stringify(["sketch", "a"]), JSON.stringify(["sketch", "b"])], state: "fully-defined", diagnostics: [] });
+    expect(states.find((state) => state.nodeKeys.length === 1)).toMatchObject({ state: "underdefined", diagnostics: [] });
+  });
+
+  it("classifies an unsupported local constraint as invalid", () => {
+    const invalid = sketch([{ id: "invalid-horizontal", kind: "horizontal", references: [{ elementId: elementId("sketch"), nodeId: "a" }, { elementId: elementId("sketch"), nodeId: "b" }], value: 10 }]);
+
+    const state = constraintComponentStatesForDocument(documentWith([invalid]))[0];
+
+    expect(state).toMatchObject({ state: "invalid", diagnostics: [expect.stringContaining("local-constraint-unsupported:")] });
+  });
+
   it("groups local and page-level constraints into connected components", () => {
     const first = sketch([{ id: "local", kind: "horizontal", references: [{ elementId: elementId("sketch"), nodeId: "a" }, { elementId: elementId("sketch"), nodeId: "b" }] }]);
     const second: SketchElement = { ...sketch(), id: elementId("second"), nodes: [{ id: "c", point: { x: 100, y: 10 } }, { id: "d", point: { x: 120, y: 10 } }], edges: [{ id: "cd", startNodeId: "c", endNodeId: "d" }] };
@@ -128,6 +153,7 @@ describe("parametric constraint boundary", () => {
     expect(preview.document).toBe(document);
     expect(preview).toMatchObject({ converged: false, iterations: 1 });
     expect(preview.residuals[0]).toMatchObject({ supported: false, satisfied: false });
+    expect(preview.states[0]).toMatchObject({ state: "invalid", diagnostics: [expect.stringContaining("global-constraint-unsupported:")] });
   });
 
   it("normalizes angular residuals across the signed-angle boundary", () => {

@@ -12,6 +12,19 @@ describe("canonical millimetre geometry", () => {
     expect(result.status).toBe("underdefined");
     expect(result.sketch.nodes[1]?.point).toEqual({ x: 20, y: 0 });
   });
+  it("normalizes solved sketch angles across the signed-angle boundary", () => {
+    const sketch = { type: "sketch" as const, id: elementId("solver-angle"), layerId: layerId("l"), nodes: [{ id: "a", point: { x: 0, y: 0 } }, { id: "b", point: { x: 10, y: 0 } }], edges: [{ id: "ab", startNodeId: "a", endNodeId: "b" }], constraints: [{ id: "angle", kind: "angle" as const, references: [{ elementId: elementId("solver-angle"), nodeId: "a" }, { elementId: elementId("solver-angle"), nodeId: "b" }] as const, value: 350 }], style };
+    const result = solveSketchConstraints(sketch);
+    expect(result.status).toBe("underdefined");
+    expect(result.conflicts).toEqual([]);
+    expect(result.sketch.nodes[1]!.point.y).toBeLessThan(0);
+  });
+  it("counts local angle and distance as independent degrees of freedom", () => {
+    const sketch = { type: "sketch" as const, id: elementId("defined-angle"), layerId: layerId("l"), nodes: [{ id: "a", point: { x: 0, y: 0 } }, { id: "b", point: { x: 1e9, y: 0 } }], edges: [{ id: "ab", startNodeId: "a", endNodeId: "b" }], constraints: [{ id: "a-fixed", kind: "fixed" as const, references: [{ elementId: elementId("defined-angle"), nodeId: "a" }] as const }, { id: "b-angle", kind: "angle" as const, references: [{ elementId: elementId("defined-angle"), nodeId: "a" }, { elementId: elementId("defined-angle"), nodeId: "b" }] as const, value: 350 }, { id: "c-distance", kind: "distance" as const, references: [{ elementId: elementId("defined-angle"), nodeId: "a" }, { elementId: elementId("defined-angle"), nodeId: "b" }] as const, value: 1e9 }], style };
+    const result = solveSketchConstraints(sketch);
+    expect(result.status).toBe("defined");
+    expect(result.conflicts).toEqual([]);
+  });
   it("solves two-segment relations without mixing relation responsibilities", () => {
     const sketch = { type: "sketch" as const, id: elementId("solver-relations"), layerId: layerId("l"), nodes: [{ id: "a", point: { x: 0, y: 0 } }, { id: "b", point: { x: 10, y: 0 } }, { id: "c", point: { x: 0, y: 10 } }, { id: "d", point: { x: 3, y: 14 } }], edges: [{ id: "ab", startNodeId: "a", endNodeId: "b" }, { id: "cd", startNodeId: "c", endNodeId: "d" }], constraints: [{ id: "equal", kind: "equal" as const, references: [{ elementId: elementId("solver-relations"), nodeId: "a" }, { elementId: elementId("solver-relations"), nodeId: "b" }, { elementId: elementId("solver-relations"), nodeId: "c" }, { elementId: elementId("solver-relations"), nodeId: "d" }] as const }], style };
     const result = solveSketchConstraints(sketch);

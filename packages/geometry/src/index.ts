@@ -213,29 +213,40 @@ export function solveSketchConstraints(sketch: SketchElement): SketchConstraintS
     if (constraint.kind === "distance-horizontal") return Math.abs(Math.abs(second!.x - first.x) - constraint.value!) > 1e-6;
     if (constraint.kind === "distance-vertical") return Math.abs(Math.abs(second!.y - first.y) - constraint.value!) > 1e-6;
     if (constraint.kind === "distance") return Math.abs(Math.hypot(second!.x - first.x, second!.y - first.y) - constraint.value!) > 1e-6;
-    if (constraint.kind === "angle") return Math.abs(Math.atan2(second!.y - first.y, second!.x - first.x) - constraint.value! * Math.PI / 180) > 1e-6;
+    if (constraint.kind === "angle") { const difference = Math.atan2(second!.y - first.y, second!.x - first.x) - constraint.value! * Math.PI / 180; return Math.abs(Math.atan2(Math.sin(difference), Math.cos(difference))) > 1e-6; }
     return false;
   }).map((constraint) => constraint.id);
   conflicts.push(...failed.filter((id) => !conflicts.includes(id)));
   const duplicate = constraints.filter((constraint, index) => constraints.some((other, otherIndex) => otherIndex < index && samePair(constraint, other))).map((constraint) => constraint.id);
   conflicts.push(...duplicate.filter((id) => !conflicts.includes(id)));
   const rows: number[][] = [];
-  const addDifference = (firstId: string, secondId: string | undefined, axis: "x" | "y"): void => {
+  const nodeIndexes = new Map(sketch.nodes.map((node, index) => [node.id, index]));
+  const addRow = (entries: readonly { readonly nodeId: string; readonly x: number; readonly y: number }[]): void => {
     const row = Array.from({ length: sketch.nodes.length * 2 }, () => 0);
-    const firstIndex = sketch.nodes.findIndex((node) => node.id === firstId);
-    const secondIndex = secondId === undefined ? -1 : sketch.nodes.findIndex((node) => node.id === secondId);
-    if (firstIndex < 0 || (secondId !== undefined && secondIndex < 0)) return;
-    row[firstIndex * 2 + (axis === "x" ? 0 : 1)] = 1;
-    if (secondIndex >= 0) row[secondIndex * 2 + (axis === "x" ? 0 : 1)] = -1;
-    rows.push(row);
+    for (const entry of entries) { const index = nodeIndexes.get(entry.nodeId); if (index === undefined) return; row[index * 2] = (row[index * 2] ?? 0) + entry.x; row[index * 2 + 1] = (row[index * 2 + 1] ?? 0) + entry.y; }
+    const scale = Math.max(0, ...row.map(Math.abs));
+    if (scale > Number.EPSILON) rows.push(row.map((value) => value / scale));
   };
   for (const constraint of constraints) {
     if (invalid(constraint)) continue;
-    const first = constraint.references[0]!; const second = constraint.references[1];
-    if (constraint.kind === "fixed") { addDifference(first.nodeId, undefined, "x"); addDifference(first.nodeId, undefined, "y"); }
-    else if (constraint.kind === "coincident") { addDifference(first.nodeId, second!.nodeId, "x"); addDifference(first.nodeId, second!.nodeId, "y"); }
-    else if (constraint.kind === "horizontal" || constraint.kind === "distance-vertical") addDifference(first.nodeId, second!.nodeId, "y");
-    else addDifference(first.nodeId, second!.nodeId, "x");
+    const [first, second, third, fourth] = constraint.references;
+    if (constraint.kind === "fixed") { addRow([{ nodeId: first!.nodeId, x: 1, y: 0 }]); addRow([{ nodeId: first!.nodeId, x: 0, y: 1 }]); continue; }
+    if (constraint.kind === "coincident") { addRow([{ nodeId: first!.nodeId, x: -1, y: 0 }, { nodeId: second!.nodeId, x: 1, y: 0 }]); addRow([{ nodeId: first!.nodeId, x: 0, y: -1 }, { nodeId: second!.nodeId, x: 0, y: 1 }]); continue; }
+    if (constraint.kind === "horizontal" || constraint.kind === "distance-vertical") { addRow([{ nodeId: first!.nodeId, x: 0, y: -1 }, { nodeId: second!.nodeId, x: 0, y: 1 }]); continue; }
+    if (constraint.kind === "vertical" || constraint.kind === "distance-horizontal") { addRow([{ nodeId: first!.nodeId, x: -1, y: 0 }, { nodeId: second!.nodeId, x: 1, y: 0 }]); continue; }
+    const a = nodes.get(first!.nodeId)!; const b = nodes.get(second!.nodeId)!; const ux = b.x - a.x; const uy = b.y - a.y; const firstLength = Math.hypot(ux, uy);
+    if (constraint.kind === "distance" || constraint.kind === "angle") {
+      if (firstLength <= 1e-6) continue;
+      const x = constraint.kind === "distance" ? ux / firstLength : -uy / (firstLength * firstLength);
+      const y = constraint.kind === "distance" ? uy / firstLength : ux / (firstLength * firstLength);
+      addRow([{ nodeId: first!.nodeId, x: -x, y: -y }, { nodeId: second!.nodeId, x, y }]);
+      continue;
+    }
+    const c = nodes.get(third!.nodeId)!; const d = nodes.get(fourth!.nodeId)!; const vx = d.x - c.x; const vy = d.y - c.y; const secondLength = Math.hypot(vx, vy);
+    if (firstLength <= 1e-6 || secondLength <= 1e-6) continue;
+    if (constraint.kind === "parallel") addRow([{ nodeId: first!.nodeId, x: -vy, y: vx }, { nodeId: second!.nodeId, x: vy, y: -vx }, { nodeId: third!.nodeId, x: uy, y: -ux }, { nodeId: fourth!.nodeId, x: -uy, y: ux }]);
+    else if (constraint.kind === "perpendicular") addRow([{ nodeId: first!.nodeId, x: -vx, y: -vy }, { nodeId: second!.nodeId, x: vx, y: vy }, { nodeId: third!.nodeId, x: -ux, y: -uy }, { nodeId: fourth!.nodeId, x: ux, y: uy }]);
+    else addRow([{ nodeId: first!.nodeId, x: -ux / firstLength, y: -uy / firstLength }, { nodeId: second!.nodeId, x: ux / firstLength, y: uy / firstLength }, { nodeId: third!.nodeId, x: vx / secondLength, y: vy / secondLength }, { nodeId: fourth!.nodeId, x: -vx / secondLength, y: -vy / secondLength }]);
   }
   const rank = (matrix: readonly number[][]): number => {
     const values = matrix.map((row) => [...row]); let pivot = 0;

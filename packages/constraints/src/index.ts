@@ -329,7 +329,7 @@ export function solveConstraintComponents(document: DocumentSnapshot): Constrain
     if (nodeKeys.length && !nonConvergedComponents.some((current) => current.length === nodeKeys.length && current.every((key, index) => key === nodeKeys[index]))) nonConvergedComponents.push(nodeKeys);
   }
   const converged = reachedFixedPoint && failedResiduals.length === 0;
-  return { document: preview, changed, converged, iterations, nonConvergedComponents, states: constraintComponentStatesForDocument(preview), residuals };
+  return { document: preview, changed, converged, iterations, nonConvergedComponents, states: deriveConstraintComponentStates(preview, normalized, residuals), residuals };
 }
 
 /** Calculates normalized geometric residuals for every structural constraint record. */
@@ -361,25 +361,43 @@ export function constraintResidualsForDocument(document: DocumentSnapshot, toler
   });
 }
 
-/** Derives component diagnostics from native sketch solvers without persisting solver output. */
-export function constraintComponentStatesForDocument(document: DocumentSnapshot): readonly ConstraintComponentState[] {
+const deriveConstraintComponentStates = (document: DocumentSnapshot, normalized: readonly NormalizedConstraint[], residuals: readonly ConstraintResidual[]): readonly ConstraintComponentState[] => {
   const sketches = document.elements.filter((element): element is Extract<Element, { type: "sketch" }> => element.type === "sketch");
-  const normalized = normalizedConstraintsForDocument(document);
-  const residuals = constraintResidualsForDocument(document);
   return constraintComponentsForDocument(document).map((component) => {
     const nodeKeys = new Set(component.nodeKeys);
-    const involved = sketches.filter((sketch) => sketch.nodes.some((node) => nodeKeys.has(constraintNodeKey({ elementId: sketch.id, nodeId: node.id }))));
-    const globalIds = normalized.filter((constraint) => constraint.scope === "document" && constraint.references.some((reference) => nodeKeys.has(constraintNodeKey(reference)))).map((constraint) => constraint.id);
-    const hasAngle = normalized.some((constraint) => constraint.scope === "local" && constraint.ownerId === involved[0]?.id && constraint.kind === "angle" && constraint.references.some((reference) => nodeKeys.has(constraintNodeKey(reference))));
-    const canUseNativeSolver = globalIds.length === 0 && !hasAngle && involved.length === 1 && involved[0]!.nodes.length === component.nodeKeys.length;
-    const localStates = canUseNativeSolver ? [sketchAdapter.state(involved[0]!)] : [];
-    const globalResiduals = residuals.filter((residual) => globalIds.includes(residual.constraintId));
-    const unsatisfiedGlobal = globalResiduals.filter((residual) => residual.supported && !residual.satisfied);
-    const pendingGlobal = globalResiduals.some((residual) => !residual.supported);
-    const diagnostics = [...localStates.flatMap((state) => state.conflicts.map((conflict) => `${involved[0]!.id}:${conflict}`)), ...unsatisfiedGlobal.map((residual) => `global-constraint-conflict:${residual.constraintId}`), ...(pendingGlobal ? globalIds.filter((id) => globalResiduals.some((residual) => residual.constraintId === id && !residual.supported)).map((id) => `global-constraint-solver-pending:${id}`) : []), ...(!canUseNativeSolver && component.constraintIds.length ? ["component-solver-pending"] : [])].sort();
-    const state = unsatisfiedGlobal.length || localStates.some((value) => value.state === "conflict") ? "conflict" : localStates.some((value) => value.state === "overdefined") ? "overdefined" : localStates.some((value) => value.state === "invalid") ? "invalid" : localStates.every((value) => value.state === "fully-defined") && canUseNativeSolver ? "fully-defined" : "underdefined";
+    const componentConstraints = normalized.filter((constraint) => component.constraintIds.includes(constraint.id));
+    const componentResiduals = residuals.filter((residual) => component.constraintIds.includes(residual.constraintId));
+    const localStates = sketches.flatMap((sketch) => {
+      const constraints = (sketch.constraints ?? []).filter((constraint) => component.constraintIds.includes(constraintIdentity("local", sketch.id, constraint.id)));
+      if (!constraints.length) return [];
+      const nodes = sketch.nodes.filter((node) => nodeKeys.has(constraintNodeKey({ elementId: sketch.id, nodeId: node.id })));
+      const nodeIds = new Set(nodes.map((node) => node.id));
+      const edges = sketch.edges.filter((edge) => nodeIds.has(edge.startNodeId) && nodeIds.has(edge.endNodeId));
+      const solved = solveSketchConstraints({ ...sketch, nodes, edges, constraints });
+      return [{ ownerId: sketch.id, state: solved.status === "defined" ? "fully-defined" as const : solved.status, conflicts: solved.conflicts }];
+    });
+    const globalIds = new Set(componentConstraints.filter((constraint) => constraint.scope === "document").map((constraint) => constraint.id));
+    const unsupported = componentResiduals.filter((residual) => !residual.supported);
+    const unsatisfiedGlobal = componentResiduals.filter((residual) => globalIds.has(residual.constraintId) && residual.supported && !residual.satisfied);
+    const diagnostics = [
+      ...localStates.flatMap((value) => value.conflicts.map((conflict) => `${value.ownerId}:${conflict}`)),
+      ...unsupported.map((residual) => `${globalIds.has(residual.constraintId) ? "global" : "local"}-constraint-unsupported:${residual.constraintId}`),
+      ...unsatisfiedGlobal.map((residual) => `global-constraint-conflict:${residual.constraintId}`),
+      ...localStates.filter((value) => value.state === "overdefined").map((value) => `${value.ownerId}:overdefined`),
+    ].sort();
+    const hasGlobal = globalIds.size > 0;
+    const state: ConstraintState = unsupported.length ? "invalid"
+      : unsatisfiedGlobal.length || localStates.some((value) => value.state === "conflict") ? "conflict"
+        : localStates.some((value) => value.state === "overdefined") ? "overdefined"
+          : !hasGlobal && localStates.length > 0 && localStates.every((value) => value.state === "fully-defined") ? "fully-defined"
+            : "underdefined";
     return { nodeKeys: component.nodeKeys, state, diagnostics };
   });
+};
+
+/** Derives component-scoped diagnostics without persisting solver output. */
+export function constraintComponentStatesForDocument(document: DocumentSnapshot): readonly ConstraintComponentState[] {
+  return deriveConstraintComponentStates(document, normalizedConstraintsForDocument(document), constraintResidualsForDocument(document));
 }
 
 /** Returns the parametric operations currently supported by an element. */
