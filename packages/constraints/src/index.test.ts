@@ -164,6 +164,53 @@ describe("parametric constraint boundary", () => {
     expect(result.residuals[0]).toMatchObject({ satisfied: true, supported: true });
   });
 
+  it("marks an overdefined local-only component as non-converged", () => {
+    const references = [{ elementId: elementId("sketch"), nodeId: "a" }, { elementId: elementId("sketch"), nodeId: "b" }] as const;
+    const overdefined = sketch([{ id: "horizontal-1", kind: "horizontal", references }, { id: "horizontal-2", kind: "horizontal", references }]);
+    const document = documentWith([overdefined]);
+
+    const preview = solveConstraintComponents(document);
+
+    expect(preview.converged).toBe(false);
+    expect(preview.nonConvergedComponents).toHaveLength(1);
+    expect(preview.document).toBe(document);
+  });
+
+  it("solves independent local and global components within the same sketch", () => {
+    const host: SketchElement = { ...sketch(), id: elementId("host"), nodes: [{ id: "a", point: { x: 0, y: 0 } }, { id: "b", point: { x: 10, y: 0 } }, { id: "c", point: { x: 0, y: 20 } }, { id: "d", point: { x: 10, y: 30 } }], edges: [{ id: "ab", startNodeId: "a", endNodeId: "b" }, { id: "cd", startNodeId: "c", endNodeId: "d" }], constraints: [{ id: "local-horizontal", kind: "horizontal", references: [{ elementId: elementId("host"), nodeId: "c" }, { elementId: elementId("host"), nodeId: "d" }] }] };
+    const other: SketchElement = { ...sketch(), id: elementId("other"), nodes: [{ id: "e", point: { x: 100, y: 50 } }, { id: "f", point: { x: 120, y: 50 } }], edges: [{ id: "ef", startNodeId: "e", endNodeId: "f" }] };
+    const coincident = { id: "global-coincident", kind: "coincident" as const, references: [{ elementId: host.id, nodeId: "a" }, { elementId: other.id, nodeId: "e" }] as const };
+
+    const preview = solveConstraintComponents({ ...documentWith([host, other]), constraints: [coincident] });
+
+    expect(preview.converged).toBe(true);
+    expect((preview.document.elements[0] as SketchElement).nodes[3]!.point.y).toBe(20);
+    expect((preview.document.elements[1] as SketchElement).nodes[0]!.point).toEqual({ x: 0, y: 0 });
+  });
+
+  it("alternates compatible local and global constraints to a shared fixed point", () => {
+    const first = sketch();
+    const second: SketchElement = { ...sketch(), id: elementId("second"), nodes: [{ id: "c", point: { x: 100, y: 50 } }, { id: "d", point: { x: 120, y: 50 } }], edges: [{ id: "cd", startNodeId: "c", endNodeId: "d" }], constraints: [{ id: "local-horizontal", kind: "horizontal", references: [{ elementId: elementId("second"), nodeId: "c" }, { elementId: elementId("second"), nodeId: "d" }] }] };
+    const coincident = { id: "global-coincident", kind: "coincident" as const, references: [{ elementId: first.id, nodeId: "a" }, { elementId: second.id, nodeId: "c" }] as const };
+
+    const preview = solveConstraintComponents({ ...documentWith([first, second]), constraints: [coincident] });
+
+    expect(preview).toMatchObject({ converged: true, iterations: 3 });
+    expect((preview.document.elements[1] as SketchElement).nodes.map((node) => node.point.y)).toEqual([10, 10]);
+    expect(preview.residuals.every((residual) => residual.satisfied)).toBe(true);
+  });
+
+  it("reports a cycle when a local constraint conflicts with a global relation", () => {
+    const first = sketch();
+    const second: SketchElement = { ...sketch(), id: elementId("second"), nodes: [{ id: "c", point: { x: 100, y: 50 } }, { id: "d", point: { x: 120, y: 50 } }], edges: [{ id: "cd", startNodeId: "c", endNodeId: "d" }], constraints: [{ id: "local-fixed", kind: "fixed", references: [{ elementId: elementId("second"), nodeId: "c" }] }] };
+    const coincident = { id: "global-coincident", kind: "coincident" as const, references: [{ elementId: first.id, nodeId: "a" }, { elementId: second.id, nodeId: "c" }] as const };
+
+    const preview = solveConstraintComponents({ ...documentWith([first, second]), constraints: [coincident] });
+
+    expect(preview).toMatchObject({ converged: false, iterations: 2 });
+    expect(preview.residuals).toEqual(expect.arrayContaining([expect.objectContaining({ constraintId: JSON.stringify(["local", "second", "local-fixed"]), satisfied: false })]));
+  });
+
   it("iterates connected global constraints to a deterministic fixed point", () => {
     const first = sketch();
     const second: SketchElement = { ...sketch(), id: elementId("second"), nodes: [{ id: "c", point: { x: 100, y: 10 } }, { id: "d", point: { x: 120, y: 10 } }], edges: [{ id: "cd", startNodeId: "c", endNodeId: "d" }] };

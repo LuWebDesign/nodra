@@ -62,6 +62,7 @@ export interface ConstraintSolveResult {
   readonly changed: boolean;
   readonly converged: boolean;
   readonly iterations: number;
+  readonly nonConvergedComponents: readonly (readonly string[])[];
   readonly states: readonly ConstraintComponentState[];
   readonly residuals: readonly ConstraintResidual[];
 }
@@ -152,7 +153,33 @@ const projectGlobalConstraint = (points: Map<string, MutablePoint>, constraint: 
   return Math.max(0, ...values.map((point, index) => Math.hypot(point!.x - previous[index]!.x, point!.y - previous[index]!.y)));
 };
 
-const pointMapSignature = (points: ReadonlyMap<string, MutablePoint>): string => JSON.stringify([...points].map(([key, point]) => [key, Math.round(point.x / CONSTRAINT_TOLERANCE), Math.round(point.y / CONSTRAINT_TOLERANCE)]));
+interface LocalProjectionResult { readonly delta: number; readonly valid: boolean }
+
+const projectLocalSketchConstraints = (points: Map<string, MutablePoint>, sketch: Extract<Element, { type: "sketch" }>, constraintIds: ReadonlySet<string>, nodeKeys: ReadonlySet<string>): LocalProjectionResult => {
+  const constraints = (sketch.constraints ?? []).filter((constraint) => constraintIds.has(constraintIdentity("local", sketch.id, constraint.id)));
+  if (!constraints.length) return { delta: 0, valid: true };
+  const candidate = { ...sketch, constraints, nodes: sketch.nodes.map((node) => ({ ...node, point: { ...(points.get(constraintNodeKey({ elementId: sketch.id, nodeId: node.id })) ?? node.point) } })) };
+  const solved = solveSketchConstraints(candidate);
+  if (solved.status === "conflict" || solved.status === "overdefined") return { delta: 0, valid: false };
+  let maxDelta = 0;
+  for (const node of solved.sketch.nodes) {
+    const key = constraintNodeKey({ elementId: sketch.id, nodeId: node.id });
+    if (!nodeKeys.has(key)) continue;
+    const point = points.get(key);
+    if (!point || !Number.isFinite(node.point.x) || !Number.isFinite(node.point.y)) return { delta: 0, valid: false };
+    maxDelta = Math.max(maxDelta, Math.hypot(node.point.x - point.x, node.point.y - point.y));
+  }
+  for (const node of solved.sketch.nodes) {
+    const key = constraintNodeKey({ elementId: sketch.id, nodeId: node.id });
+    if (!nodeKeys.has(key)) continue;
+    const point = points.get(key)!;
+    point.x = node.point.x;
+    point.y = node.point.y;
+  }
+  return { delta: maxDelta, valid: true };
+};
+
+const pointMapSignature = (points: ReadonlyMap<string, MutablePoint>, nodeKeys?: ReadonlySet<string>): string => JSON.stringify([...points].filter(([key]) => !nodeKeys || nodeKeys.has(key)).map(([key, point]) => [key, Math.round(point.x / CONSTRAINT_TOLERANCE), Math.round(point.y / CONSTRAINT_TOLERANCE)]));
 
 const sketchAdapter: ParametricAdapter = {
   capabilities: { entityKind: "sketch", constraintKinds: sketchConstraintKinds },
@@ -256,43 +283,53 @@ export function solveConstraintComponents(document: DocumentSnapshot): Constrain
   const components = constraintComponentsForDocument(document);
   const normalized = normalizedConstraintsForDocument(document);
   const globalConstraints = normalized.filter((constraint) => constraint.scope === "document");
-  const globalPoints = new Map<string, MutablePoint>(document.elements.filter((element): element is Extract<Element, { type: "sketch" }> => element.type === "sketch").flatMap((sketch) => sketch.nodes.map((node) => [constraintNodeKey({ elementId: sketch.id, nodeId: node.id }), { ...node.point }] as const)));
+  const constrainedComponents = components.filter((component) => component.constraintIds.length > 0);
+  const iteratedConstraintIds = new Set(normalized.map((constraint) => constraint.id));
+  const sketches = document.elements.filter((element): element is Extract<Element, { type: "sketch" }> => element.type === "sketch").sort((first, second) => first.id < second.id ? -1 : first.id > second.id ? 1 : 0);
+  const globalPoints = new Map<string, MutablePoint>(sketches.flatMap((sketch) => sketch.nodes.map((node) => [constraintNodeKey({ elementId: sketch.id, nodeId: node.id }), { ...node.point }] as const)));
   let iterations = 0;
-  let reachedFixedPoint = globalConstraints.length === 0;
-  const seen = new Set<string>([pointMapSignature(globalPoints)]);
-  for (let iteration = 0; iteration < MAX_CONSTRAINT_ITERATIONS && globalConstraints.length; iteration += 1) {
-    iterations = iteration + 1;
-    const maxProjectionDelta = Math.max(0, ...globalConstraints.map((constraint) => projectGlobalConstraint(globalPoints, constraint)));
-    if (maxProjectionDelta <= CONSTRAINT_TOLERANCE) { reachedFixedPoint = true; break; }
-    const signature = pointMapSignature(globalPoints);
-    if (seen.has(signature)) break;
-    seen.add(signature);
+  let reachedFixedPoint = true;
+  const nonConvergedComponents: (readonly string[])[] = [];
+  for (const component of constrainedComponents) {
+    const nodeKeys = new Set(component.nodeKeys);
+    const constraintIds = new Set(component.constraintIds);
+    const componentGlobals = globalConstraints.filter((constraint) => constraintIds.has(constraint.id));
+    const componentSketches = sketches.filter((sketch) => sketch.nodes.some((node) => nodeKeys.has(constraintNodeKey({ elementId: sketch.id, nodeId: node.id }))));
+    const initialPoints = new Map(component.nodeKeys.map((key) => [key, { ...globalPoints.get(key)! }] as const));
+    const seen = new Set<string>([pointMapSignature(globalPoints, nodeKeys)]);
+    let componentReachedFixedPoint = false;
+    let componentIterations = 0;
+    for (let iteration = 0; iteration < MAX_CONSTRAINT_ITERATIONS; iteration += 1) {
+      componentIterations = iteration + 1;
+      const localResults = componentSketches.map((sketch) => projectLocalSketchConstraints(globalPoints, sketch, constraintIds, nodeKeys));
+      if (localResults.some((result) => !result.valid)) break;
+      const maxProjectionDelta = Math.max(0, ...localResults.map((result) => result.delta), ...componentGlobals.map((constraint) => projectGlobalConstraint(globalPoints, constraint)));
+      if (maxProjectionDelta <= CONSTRAINT_TOLERANCE) { componentReachedFixedPoint = true; break; }
+      const signature = pointMapSignature(globalPoints, nodeKeys);
+      if (seen.has(signature)) break;
+      seen.add(signature);
+    }
+    iterations = Math.max(iterations, componentIterations);
+    reachedFixedPoint = reachedFixedPoint && componentReachedFixedPoint;
+    if (!componentReachedFixedPoint) nonConvergedComponents.push(component.nodeKeys);
+    if (!componentReachedFixedPoint) for (const [key, point] of initialPoints) { const target = globalPoints.get(key)!; target.x = point.x; target.y = point.y; }
   }
-  const globallySolvedElements = document.elements.map((element) => {
+  const solvedElements = document.elements.map((element) => {
     if (element.type !== "sketch") return element;
     const nodes = element.nodes.map((node) => ({ ...node, point: globalPoints.get(constraintNodeKey({ elementId: element.id, nodeId: node.id })) ?? node.point }));
     return nodes.some((node, index) => node.point.x !== element.nodes[index]?.point.x || node.point.y !== element.nodes[index]?.point.y) ? { ...element, nodes } : element;
   });
-  const solvedElements = globallySolvedElements.map((element) => {
-    if (element.type !== "sketch") return element;
-    const nodeKeys = new Set(element.nodes.map((node) => constraintNodeKey({ elementId: element.id, nodeId: node.id })));
-    const component = components.find((candidate) => candidate.nodeKeys.length === nodeKeys.size && candidate.nodeKeys.every((key) => nodeKeys.has(key)));
-    const hasGlobal = normalized.some((constraint) => constraint.scope === "document" && constraint.references.some((reference) => nodeKeys.has(constraintNodeKey(reference))));
-    const localConstraints = element.constraints ?? [];
-    const componentConstraints = localConstraints.filter((constraint) => constraint.references.every((reference) => nodeKeys.has(constraintNodeKey(reference))));
-    const hasExcludedLocal = componentConstraints.length !== localConstraints.length;
-    const hasUnsupportedAngle = componentConstraints.some((constraint) => constraint.kind === "angle");
-    if (!component || hasGlobal || hasExcludedLocal || hasUnsupportedAngle || !componentConstraints.length || component.nodeKeys.length !== nodeKeys.size) return element;
-    const solved = solveSketchConstraints({ ...element, constraints: componentConstraints });
-    const geometryChanged = solved.sketch.nodes.some((node, index) => node.point.x !== element.nodes[index]?.point.x || node.point.y !== element.nodes[index]?.point.y);
-    return solved.status === "conflict" || solved.status === "overdefined" || !geometryChanged ? element : solved.sketch;
-  });
   const changed = solvedElements.some((element, index) => JSON.stringify(element) !== JSON.stringify(document.elements[index]));
   const preview = changed ? { ...document, elements: solvedElements } : document;
   const residuals = constraintResidualsForDocument(preview);
-  const globalIds = new Set(globalConstraints.map((constraint) => constraint.id));
-  const converged = reachedFixedPoint && !residuals.some((residual) => globalIds.has(residual.constraintId) && (!residual.supported || !residual.satisfied));
-  return { document: preview, changed, converged, iterations, states: constraintComponentStatesForDocument(preview), residuals };
+  const failedResiduals = residuals.filter((residual) => iteratedConstraintIds.has(residual.constraintId) && (!residual.supported || !residual.satisfied));
+  for (const residual of failedResiduals) {
+    const constraint = normalized.find((candidate) => candidate.id === residual.constraintId);
+    const nodeKeys = constraint?.references.map(constraintNodeKey).sort() ?? [];
+    if (nodeKeys.length && !nonConvergedComponents.some((current) => current.length === nodeKeys.length && current.every((key, index) => key === nodeKeys[index]))) nonConvergedComponents.push(nodeKeys);
+  }
+  const converged = reachedFixedPoint && failedResiduals.length === 0;
+  return { document: preview, changed, converged, iterations, nonConvergedComponents, states: constraintComponentStatesForDocument(preview), residuals };
 }
 
 /** Calculates normalized geometric residuals for every structural constraint record. */
@@ -328,6 +365,7 @@ export function constraintResidualsForDocument(document: DocumentSnapshot, toler
 export function constraintComponentStatesForDocument(document: DocumentSnapshot): readonly ConstraintComponentState[] {
   const sketches = document.elements.filter((element): element is Extract<Element, { type: "sketch" }> => element.type === "sketch");
   const normalized = normalizedConstraintsForDocument(document);
+  const residuals = constraintResidualsForDocument(document);
   return constraintComponentsForDocument(document).map((component) => {
     const nodeKeys = new Set(component.nodeKeys);
     const involved = sketches.filter((sketch) => sketch.nodes.some((node) => nodeKeys.has(constraintNodeKey({ elementId: sketch.id, nodeId: node.id }))));
@@ -335,7 +373,6 @@ export function constraintComponentStatesForDocument(document: DocumentSnapshot)
     const hasAngle = normalized.some((constraint) => constraint.scope === "local" && constraint.ownerId === involved[0]?.id && constraint.kind === "angle" && constraint.references.some((reference) => nodeKeys.has(constraintNodeKey(reference))));
     const canUseNativeSolver = globalIds.length === 0 && !hasAngle && involved.length === 1 && involved[0]!.nodes.length === component.nodeKeys.length;
     const localStates = canUseNativeSolver ? [sketchAdapter.state(involved[0]!)] : [];
-    const residuals = constraintResidualsForDocument(document);
     const globalResiduals = residuals.filter((residual) => globalIds.includes(residual.constraintId));
     const unsatisfiedGlobal = globalResiduals.filter((residual) => residual.supported && !residual.satisfied);
     const pendingGlobal = globalResiduals.some((residual) => !residual.supported);

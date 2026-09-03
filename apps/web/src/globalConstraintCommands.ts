@@ -36,7 +36,9 @@ const solveConstraintComponent = (document: DocumentSnapshot, constraint: Docume
   if (!component) return undefined;
 
   const affectedNodeKeys = new Set(component.nodeKeys);
-  const globallySolved = solveConstraintComponents(document).document;
+  const solveResult = solveConstraintComponents(document);
+  if (solveResult.nonConvergedComponents.some((nodeKeys) => nodeKeys.some((key) => affectedNodeKeys.has(key)))) return undefined;
+  const globallySolved = solveResult.document;
   const solvedById = new Map(globallySolved.elements.map((element) => [element.id, element]));
   const elements = document.elements.map((element) => {
     if (element.type !== "sketch") return element;

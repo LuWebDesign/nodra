@@ -91,7 +91,7 @@ describe("global constraint commands", () => {
     expect(dispatch(added, updateSolvedDocumentConstraint(constraint))).toBe(added);
   });
 
-  it("rejects a global solve that would break a local constraint", () => {
+  it("solves a global relation while preserving a compatible local constraint", () => {
     const first = sketch("first", 0);
     const secondBase = sketch("second", 0, 30);
     const second: SketchElement = {
@@ -108,10 +108,40 @@ describe("global constraint commands", () => {
     };
     const initial = createEditor({ ...createDocument("global", [layer]), elements: [first, second] });
 
+    const committed = dispatch(initial, addSolvedDocumentConstraint(distanceConstraint(first, second, 40)));
+
+    expect(committed.document.constraints?.[0]?.id).toBe("global-distance");
+    expect((committed.document.elements[1] as SketchElement).nodes.map((node) => node.point.x)).toEqual([50, 50]);
+    expect(undo(committed).document).toEqual(initial.document);
+  });
+
+  it("rejects an incompatible local/global cycle without history", () => {
+    const first = sketch("first", 0);
+    const secondBase = sketch("second", 0, 30);
+    const second: SketchElement = { ...secondBase, constraints: [{ id: "second-fixed", kind: "fixed", references: [{ elementId: secondBase.id, nodeId: secondBase.nodes[0]!.id }] }] };
+    const initial = createEditor({ ...createDocument("global", [layer]), elements: [first, second] });
+
     const rejected = dispatch(initial, addSolvedDocumentConstraint(distanceConstraint(first, second, 40)));
 
     expect(rejected).toBe(initial);
     expect(rejected.document.constraints).toBeUndefined();
+    expect(rejected.undo).toHaveLength(0);
+  });
+
+  it("rejects a locally overdefined mixed component even when residuals are satisfied", () => {
+    const first = sketch("first", 0);
+    const secondBase = sketch("second", 0, 30);
+    const references = [
+      { elementId: secondBase.id, nodeId: secondBase.nodes[0]!.id },
+      { elementId: secondBase.id, nodeId: secondBase.nodes[1]!.id },
+    ] as const;
+    const second: SketchElement = { ...secondBase, constraints: [{ id: "horizontal-1", kind: "horizontal", references }, { id: "horizontal-2", kind: "horizontal", references }] };
+    const initial = createEditor({ ...createDocument("global", [layer]), elements: [first, second] });
+
+    const rejected = dispatch(initial, addSolvedDocumentConstraint(distanceConstraint(first, second, 20)));
+
+    expect(rejected).toBe(initial);
+    expect(rejected.undo).toHaveLength(0);
   });
 
   it("does not solve an unrelated global component", () => {
