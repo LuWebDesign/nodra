@@ -48,6 +48,33 @@ describe("editor core", () => {
     expect(redo(restored).document.constraints).toEqual([]);
   });
 
+  it("removes page constraints that reference a deleted element and restores them with undo", () => {
+    const first = createSketchLine(elementId("delete-global-first"), layerId("default"), rectangle.style, { x: 0, y: 0 }, { x: 10, y: 0 });
+    const second = createSketchLine(elementId("delete-global-second"), layerId("default"), rectangle.style, { x: 20, y: 0 }, { x: 30, y: 0 });
+    const constraint = { id: "delete-global", kind: "coincident" as const, references: [{ elementId: first.id, nodeId: first.nodes[1]!.id }, { elementId: second.id, nodeId: second.nodes[0]!.id }] as const };
+    const initial = createEditor({ ...document, elements: [first, second], constraints: [constraint] });
+
+    const removed = dispatch(initial, deleteElement(first.id));
+
+    expect(removed.document.elements).toEqual([second]);
+    expect(removed.document.constraints).toEqual([]);
+    expect(removed.undo).toHaveLength(1);
+    expect(undo(removed).document).toEqual(initial.document);
+  });
+
+  it("preserves valid page constraints during unrelated geometry edits", () => {
+    const first = createSketchLine(elementId("keep-global-first"), layerId("default"), rectangle.style, { x: 0, y: 0 }, { x: 10, y: 0 });
+    const second = createSketchLine(elementId("keep-global-second"), layerId("default"), rectangle.style, { x: 20, y: 0 }, { x: 30, y: 0 });
+    const constraint = { id: "keep-global", kind: "horizontal" as const, references: [{ elementId: first.id, nodeId: first.nodes[0]!.id }, { elementId: second.id, nodeId: second.nodes[0]!.id }] as const };
+    const initial = createEditor({ ...document, elements: [first, second], constraints: [constraint] });
+
+    const moved = dispatch(initial, moveElement(second.id, { x: 5, y: 0 }));
+
+    expect(moved.document.constraints).toEqual([constraint]);
+    expect(moved.undo).toHaveLength(1);
+    expect(undo(moved).document).toEqual(initial.document);
+  });
+
   it("previews, commits, cancels, and undoes a sketch constraint as one transaction", () => {
         const sketch = createSketchLine(elementId("transaction-sketch"), layerId("default"), rectangle.style, { x: 0, y: 0 }, { x: 7, y: 4 });
         const [first, second] = sketch.nodes;
@@ -150,6 +177,19 @@ describe("editor core", () => {
      expect(result.nodes.find((node) => node.point.x === 8)?.point).toEqual({ x: 8, y: 0 });
    });
 
+  it("preserves node-addressed page constraints when splitting a sketch edge", () => {
+    const sketch = createSketchLine(elementId("split-global-sketch"), layerId("default"), rectangle.style, { x: 0, y: 0 }, { x: 20, y: 0 });
+    const other = createSketchLine(elementId("split-global-other"), layerId("default"), rectangle.style, { x: 30, y: 0 }, { x: 40, y: 0 });
+    const constraint = { id: "split-global", kind: "horizontal" as const, references: [{ elementId: sketch.id, nodeId: sketch.nodes[0]!.id }, { elementId: other.id, nodeId: other.nodes[0]!.id }] as const };
+    const initial = createEditor({ ...document, elements: [sketch, other], constraints: [constraint] });
+
+    const state = dispatch(initial, cutSketchEdge(sketch.id, 0, { x: 8, y: 0 }));
+
+    expect(state.document.constraints).toEqual([constraint]);
+    expect((state.document.elements[0] as SketchElement).edges).toHaveLength(2);
+    expect(undo(state).document).toEqual(initial.document);
+  });
+
   it("remaps stable sketch-edge dimension references when splitting an edge", () => {
      const sketch = createSketchLine(elementId("split-reference-sketch"), layerId("default"), rectangle.style, { x: 0, y: 0 }, { x: 20, y: 0 });
      const originalEdge = sketch.edges[0]!;
@@ -179,6 +219,20 @@ describe("editor core", () => {
      expect(state.document.elements).toHaveLength(1);
      expect(state.document.elements[0]).toMatchObject({ type: "sketch", nodes: [{ id: "a" }, { id: "b" }] });
    });
+
+  it("removes page constraints whose node disappears with a deleted sketch edge", () => {
+    const base = createSketchLine(elementId("delete-global-edge"), layerId("default"), rectangle.style, { x: 0, y: 0 }, { x: 10, y: 0 });
+    const sketch: SketchElement = { ...base, nodes: [...base.nodes, { id: "c", point: { x: 20, y: 0 } }], edges: [...base.edges, { id: "bc", startNodeId: base.nodes[1]!.id, endNodeId: "c" }] };
+    const other = createSketchLine(elementId("delete-global-edge-other"), layerId("default"), rectangle.style, { x: 20, y: 10 }, { x: 30, y: 10 });
+    const constraint = { id: "deleted-node-global", kind: "coincident" as const, references: [{ elementId: sketch.id, nodeId: "c" }, { elementId: other.id, nodeId: other.nodes[0]!.id }] as const };
+    const initial = createEditor({ ...document, elements: [sketch, other], constraints: [constraint] });
+
+    const state = dispatch(initial, cutSketchEdge(sketch.id, 1));
+
+    expect((state.document.elements[0] as SketchElement).nodes.some((node) => node.id === "c")).toBe(false);
+    expect(state.document.constraints).toEqual([]);
+    expect(undo(state).document).toEqual(initial.document);
+  });
 
   it("removes a dimension whose stable sketch edge is deleted", () => {
      const base = createSketchLine(elementId("delete-edge-reference"), layerId("default"), rectangle.style, { x: 0, y: 0 }, { x: 10, y: 0 });

@@ -55,9 +55,15 @@ const result = (document: DocumentSnapshot): CommandResult => {
   const checked = validateDocument(document);
   return checked.success ? { success: true, document: checked.data } : { success: false, error: checked.error };
 };
-const replaceElements = (document: DocumentSnapshot, elements: readonly Element[]): CommandResult => result(withElements(document, elements));
+const withoutDanglingDocumentConstraints = (document: DocumentSnapshot, elements: readonly Element[]): DocumentSnapshot => {
+  if (!document.constraints?.length) return document;
+  const sketchNodes = new Map(elements.filter((element): element is SketchElement => element.type === "sketch").map((sketch) => [sketch.id, new Set(sketch.nodes.map((node) => node.id))]));
+  const constraints = document.constraints.filter((constraint) => constraint.references.every((reference) => sketchNodes.get(reference.elementId)?.has(reference.nodeId) === true));
+  return constraints.length === document.constraints.length ? document : { ...document, constraints };
+};
+const replaceElements = (document: DocumentSnapshot, elements: readonly Element[]): CommandResult => result(withElements(withoutDanglingDocumentConstraints(document, elements), elements));
 const replaceTopology = (document: DocumentSnapshot, edit: TopologyEditResult): CommandResult => {
-  const checked = result(withElements(document, edit.elements));
+  const checked = result(withElements(withoutDanglingDocumentConstraints(document, edit.elements), edit.elements));
   return checked.success ? { ...checked, topology: { ...edit, elements: checked.document.elements } } : checked;
 };
 const removeConnectionsFor = (document: DocumentSnapshot, ids: ReadonlySet<ElementId>): DocumentSnapshot => ({ ...document, connections: (document.connections ?? []).filter((connection) => !ids.has(connection.first.elementId) && !ids.has(connection.second.elementId)) });
