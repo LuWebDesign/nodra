@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { FontOutlineError, extractTextGlyphOutlines, fontFamilyFromFileName, simplifyGlyphContour, simplifyGlyphContourForMode } from "./fontOutline.js";
+import { FontOutlineError, analyzeGlyphContour, extractTextGlyphOutlines, fontFamilyFromFileName, simplifyGlyphContour, simplifyGlyphContourForMode } from "./fontOutline.js";
 import { createDocument, elementId, layerId, type TextElement } from "@nodra/domain";
 import { validateDocument } from "@nodra/validation";
 
@@ -13,6 +13,26 @@ describe("font outline adapter", () => {
   it("derives a stable family fallback for supported browser font files", () => {
     expect(fontFamilyFromFileName("My Font.WOFF2")).toBe("My Font");
     expect(fontFamilyFromFileName("font-without-extension")).toBe("font-without-extension");
+  });
+  it("classifies tangent-continuous cubic joins as symmetric", () => {
+    const k = 5.522847498;
+    const contour = {
+      nodes: [
+        { id: "a", anchor: { x: 10, y: 0 }, join: "corner" as const },
+        { id: "b", anchor: { x: 0, y: 10 }, join: "corner" as const },
+        { id: "c", anchor: { x: -10, y: 0 }, join: "corner" as const },
+        { id: "d", anchor: { x: 0, y: -10 }, join: "corner" as const },
+      ],
+      segments: [
+        { type: "cubicBezier" as const, startNodeId: "a", endNodeId: "b", control1: { x: 10, y: k }, control2: { x: k, y: 10 } },
+        { type: "cubicBezier" as const, startNodeId: "b", endNodeId: "c", control1: { x: -k, y: 10 }, control2: { x: -10, y: k } },
+        { type: "cubicBezier" as const, startNodeId: "c", endNodeId: "d", control1: { x: -10, y: -k }, control2: { x: -k, y: -10 } },
+        { type: "cubicBezier" as const, startNodeId: "d", endNodeId: "a", control1: { x: k, y: -10 }, control2: { x: 10, y: -k } },
+      ],
+    };
+    const analysis = analyzeGlyphContour(contour);
+    expect(analysis.every((node) => node.join === "symmetric")).toBe(true);
+    expect(analysis.every((node) => node.tangentIn && node.tangentOut)).toBe(true);
   });
   it("removes redundant linear glyph nodes without changing the closed contour", () => {
     const contour = simplifyGlyphContour({
