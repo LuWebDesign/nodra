@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 
 async function drawRectangle(page: Page) {
   await page.getByRole("button", { name: "Rectángulo" }).click();
@@ -35,6 +35,13 @@ async function drawLine(page: Page, start: { x: number; y: number }, end: { x: n
   await page.getByRole("button", { name: "Línea" }).click();
   await page.mouse.click(start.x, start.y);
   await page.mouse.click(end.x, end.y);
+}
+
+async function visibleBoundingBox(locator: Locator) {
+  await expect(locator).toBeVisible();
+  const box = await locator.boundingBox();
+  expect(box).not.toBeNull();
+  return box!;
 }
 
 test("loads the editor workspace", async ({ page }) => {
@@ -491,6 +498,58 @@ test("edits an explicit sketch distance relationship", async ({ page }) => {
   await expect(value).toHaveValue("140");
 });
 
+test("manages a cross-sketch distance relationship from the inspector", async ({ page }) => {
+  await page.goto("/");
+  const bounds = await visibleBoundingBox(page.locator(".page"));
+  const firstStart = { x: bounds!.x + 110, y: bounds!.y + 120 };
+  const firstEnd = { x: firstStart.x + 90, y: firstStart.y + 40 };
+  const secondStart = { x: bounds!.x + 300, y: bounds!.y + 260 };
+  const secondEnd = { x: secondStart.x + 90, y: secondStart.y + 40 };
+
+  await drawLine(page, firstStart, firstEnd);
+  await page.getByRole("button", { name: "Seleccion" }).click();
+  await drawLine(page, secondStart, secondEnd);
+  await page.getByRole("button", { name: "Forma" }).click();
+
+  const sketches = page.locator(".page-svg svg g[data-element-id]");
+  const lines = sketches.locator("line");
+  await expect(lines).toHaveCount(2);
+  const firstSketchId = await sketches.nth(0).getAttribute("data-element-id");
+  const secondSketchId = await sketches.nth(1).getAttribute("data-element-id");
+  expect(firstSketchId).not.toBeNull();
+  expect(secondSketchId).not.toBeNull();
+  await lines.nth(0).click();
+  await lines.nth(1).click({ modifiers: ["Shift"] });
+  const firstNodes = page.locator(`[data-contour-node^="${firstSketchId}:p:"]`);
+  const secondNodes = page.locator(`[data-contour-node^="${secondSketchId}:p:"]`);
+  await expect(firstNodes).toHaveCount(2);
+  await expect(secondNodes).toHaveCount(2);
+  await firstNodes.nth(1).click();
+  await secondNodes.nth(0).click({ modifiers: ["Shift"] });
+
+  await page.locator(".constraint-buttons").getByRole("button", { name: "Distancia H", exact: true }).click();
+  await page.locator(".constraint-value-editor").getByRole("spinbutton").fill("140");
+  await page.getByRole("button", { name: "Confirmar", exact: true }).click();
+  await page.getByRole("button", { name: "Confirmar relación" }).click();
+
+  const globalRelations = page.getByRole("list", { name: "Relaciones globales" });
+  await expect(globalRelations).toBeVisible();
+  const value = globalRelations.getByRole("spinbutton");
+  await expect(value).toHaveValue("140");
+  await value.fill("160");
+  await globalRelations.getByRole("button", { name: "Guardar", exact: true }).click();
+  await expect(value).toHaveValue("160");
+
+  await page.getByRole("button", { name: "Deshacer" }).click();
+  await expect(globalRelations.getByRole("spinbutton")).toHaveValue("140");
+  await page.getByRole("button", { name: "Rehacer" }).click();
+  await expect(globalRelations.getByRole("spinbutton")).toHaveValue("160");
+  await globalRelations.getByRole("button", { name: "Eliminar", exact: true }).click();
+  await expect(globalRelations).toHaveCount(0);
+  await page.getByRole("button", { name: "Deshacer" }).click();
+  await expect(page.getByRole("list", { name: "Relaciones globales" })).toBeVisible();
+});
+
 test("creates and confirms an explicit sketch relationship", async ({ page }) => {
   await page.goto("/");
   const bounds = await page.locator(".page").boundingBox();
@@ -842,8 +901,7 @@ test("creates a radius Cota from the integrated Cota modes", async ({ page }) =>
   await page.mouse.click(end.x, end.y);
   const ellipse = page.locator(".page-svg svg ellipse[data-element-id]");
   await expect(ellipse).toHaveCount(1);
-  const ellipseBox = await ellipse.boundingBox();
-  expect(ellipseBox).not.toBeNull();
+  const ellipseBox = await visibleBoundingBox(ellipse);
   await page.getByRole("button", { name: "Cota" }).click();
   await page.getByRole("group", { name: "Modo de cota" }).getByRole("button", { name: "Radio" }).click();
   const center = { x: ellipseBox!.x + ellipseBox!.width / 2, y: ellipseBox!.y + ellipseBox!.height / 2 };
@@ -871,8 +929,7 @@ test("creates a radius Cota from the integrated Cota modes", async ({ page }) =>
   await page.mouse.click(end.x, end.y);
   const ellipse = page.locator(".page-svg svg ellipse[data-element-id]");
   await expect(ellipse).toHaveCount(1);
-  const ellipseBox = await ellipse.boundingBox();
-  expect(ellipseBox).not.toBeNull();
+  const ellipseBox = await visibleBoundingBox(ellipse);
   await page.getByRole("button", { name: "Cota" }).click();
   await page.getByRole("group", { name: "Modo de cota" }).getByRole("button", { name: "Diámetro" }).click();
   const center = { x: ellipseBox!.x + ellipseBox!.width / 2, y: ellipseBox!.y + ellipseBox!.height / 2 };
@@ -903,8 +960,7 @@ test("creates a circular Cota from a direct contour click", async ({ page }) => 
   await page.mouse.click(center.x + 90, center.y);
   const ellipse = page.locator(".page-svg svg ellipse[data-element-id]");
   await expect(ellipse).toHaveCount(1);
-  const box = await ellipse.boundingBox();
-  expect(box).not.toBeNull();
+  const box = await visibleBoundingBox(ellipse);
   await page.getByRole("button", { name: "Cota" }).click();
   await page.getByRole("group", { name: "Modo de cota" }).getByRole("button", { name: "Radio" }).click();
   await page.mouse.click(box!.x + box!.width / 2, box!.y);
