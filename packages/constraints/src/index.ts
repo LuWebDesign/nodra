@@ -57,6 +57,13 @@ export interface ConstraintResidual {
   readonly supported: boolean;
 }
 
+export interface ConstraintSolveResult {
+  readonly document: DocumentSnapshot;
+  readonly changed: boolean;
+  readonly states: readonly ConstraintComponentState[];
+  readonly residuals: readonly ConstraintResidual[];
+}
+
 export interface ConstraintComponentState {
   readonly nodeKeys: readonly string[];
   readonly state: ConstraintState;
@@ -198,6 +205,29 @@ export function constraintInputsForDocument(document: DocumentSnapshot): readonl
   });
 }
 
+/** Solves only complete single-sketch components and returns a non-persisted preview snapshot. */
+export function solveConstraintComponents(document: DocumentSnapshot): ConstraintSolveResult {
+  const components = constraintComponentsForDocument(document);
+  const normalized = normalizedConstraintsForDocument(document);
+  const solvedElements = document.elements.map((element) => {
+    if (element.type !== "sketch") return element;
+    const nodeKeys = new Set(element.nodes.map((node) => constraintNodeKey({ elementId: element.id, nodeId: node.id })));
+    const component = components.find((candidate) => candidate.nodeKeys.length === nodeKeys.size && candidate.nodeKeys.every((key) => nodeKeys.has(key)));
+    const hasGlobal = normalized.some((constraint) => constraint.scope === "document" && constraint.references.some((reference) => nodeKeys.has(constraintNodeKey(reference))));
+    const localConstraints = element.constraints ?? [];
+    const componentConstraints = localConstraints.filter((constraint) => constraint.references.every((reference) => nodeKeys.has(constraintNodeKey(reference))));
+    const hasExcludedLocal = componentConstraints.length !== localConstraints.length;
+    const hasUnsupportedAngle = componentConstraints.some((constraint) => constraint.kind === "angle");
+    if (!component || hasGlobal || hasExcludedLocal || hasUnsupportedAngle || !componentConstraints.length || component.nodeKeys.length !== nodeKeys.size) return element;
+    const solved = solveSketchConstraints({ ...element, constraints: componentConstraints });
+    const geometryChanged = solved.sketch.nodes.some((node, index) => node.point.x !== element.nodes[index]?.point.x || node.point.y !== element.nodes[index]?.point.y);
+    return solved.status === "conflict" || solved.status === "overdefined" || !geometryChanged ? element : solved.sketch;
+  });
+  const changed = solvedElements.some((element, index) => element !== document.elements[index]);
+  const preview = changed ? { ...document, elements: solvedElements } : document;
+  return { document: preview, changed, states: constraintComponentStatesForDocument(preview), residuals: constraintResidualsForDocument(preview) };
+}
+
 /** Calculates normalized geometric residuals for every structural constraint record. */
 export function constraintResidualsForDocument(document: DocumentSnapshot, tolerance = 1e-6): readonly ConstraintResidual[] {
   if (!Number.isFinite(tolerance) || tolerance < 0) throw new Error("Constraint residual tolerance must be finite and non-negative");
@@ -235,7 +265,8 @@ export function constraintComponentStatesForDocument(document: DocumentSnapshot)
     const nodeKeys = new Set(component.nodeKeys);
     const involved = sketches.filter((sketch) => sketch.nodes.some((node) => nodeKeys.has(constraintNodeKey({ elementId: sketch.id, nodeId: node.id }))));
     const globalIds = normalized.filter((constraint) => constraint.scope === "document" && constraint.references.some((reference) => nodeKeys.has(constraintNodeKey(reference)))).map((constraint) => constraint.id);
-    const canUseNativeSolver = globalIds.length === 0 && involved.length === 1 && involved[0]!.nodes.length === component.nodeKeys.length;
+    const hasAngle = normalized.some((constraint) => constraint.scope === "local" && constraint.ownerId === involved[0]?.id && constraint.kind === "angle" && constraint.references.some((reference) => nodeKeys.has(constraintNodeKey(reference))));
+    const canUseNativeSolver = globalIds.length === 0 && !hasAngle && involved.length === 1 && involved[0]!.nodes.length === component.nodeKeys.length;
     const localStates = canUseNativeSolver ? [sketchAdapter.state(involved[0]!)] : [];
     const diagnostics = [...localStates.flatMap((state) => state.conflicts.map((conflict) => `${involved[0]!.id}:${conflict}`)), ...(globalIds.length ? globalIds.map((id) => `global-constraint-requires-component-solver:${id}`) : []), ...(!canUseNativeSolver && component.constraintIds.length ? ["component-solver-pending"] : [])].sort();
     const state = localStates.some((value) => value.state === "conflict") ? "conflict" : localStates.some((value) => value.state === "overdefined") ? "overdefined" : localStates.some((value) => value.state === "invalid") ? "invalid" : localStates.every((value) => value.state === "fully-defined") && canUseNativeSolver ? "fully-defined" : "underdefined";

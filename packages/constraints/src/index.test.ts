@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createDocument, elementId, layerId, withElements, type Element, type SketchElement } from "@nodra/domain";
-import { constraintComponentStatesForDocument, constraintComponentsForDocument, constraintDofMetadataForDocument, constraintInputsForDocument, constraintResidualsForDocument, constraintStateForElement, normalizedConstraintsForDocument, parametricCapabilitiesForElement } from "./index.js";
+import { constraintComponentStatesForDocument, constraintComponentsForDocument, constraintDofMetadataForDocument, constraintInputsForDocument, constraintResidualsForDocument, constraintStateForElement, normalizedConstraintsForDocument, parametricCapabilitiesForElement, solveConstraintComponents } from "./index.js";
 
 const layer = { id: layerId("constraints"), name: "Croquis", visible: true, order: 0 } as const;
 const style = { stroke: "#111827", strokeWidth: 1 } as const;
@@ -86,6 +86,17 @@ describe("parametric constraint boundary", () => {
     const angular = { id: "angle", kind: "angle" as const, value: 350, references: [{ elementId: angularSketch.id, nodeId: "a" }, { elementId: angularSketch.id, nodeId: "b" }] as const };
     const result = constraintResidualsForDocument({ ...documentWith([angularSketch]), constraints: [angular] });
     expect(result).toEqual([expect.objectContaining({ satisfied: true, supported: true })]);
+  });
+
+  it("solves a complete local component without mutating the input", () => {
+    const movable: SketchElement = { ...sketch(), id: elementId("movable"), nodes: [{ id: "a", point: { x: 10, y: 10 } }, { id: "b", point: { x: 30, y: 20 } }], constraints: [{ id: "horizontal", kind: "horizontal", references: [{ elementId: elementId("movable"), nodeId: "a" }, { elementId: elementId("movable"), nodeId: "b" }] }] };
+    const document = documentWith([movable]);
+    const result = solveConstraintComponents(document);
+    expect(result.changed).toBe(true);
+    expect(result.document).not.toBe(document);
+    expect((result.document.elements[0] as SketchElement).nodes[1]?.point).toEqual({ x: 30, y: 10 });
+    expect((document.elements[0] as SketchElement).nodes[1]?.point).toEqual({ x: 30, y: 20 });
+    expect(result.residuals[0]).toMatchObject({ satisfied: true, supported: true });
   });
 
   it("keeps unsupported and missing entities distinguishable", () => {
