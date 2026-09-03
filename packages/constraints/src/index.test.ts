@@ -60,7 +60,7 @@ describe("parametric constraint boundary", () => {
 
   it("groups local and page-level constraints into connected components", () => {
     const first = sketch([{ id: "local", kind: "horizontal", references: [{ elementId: elementId("sketch"), nodeId: "a" }, { elementId: elementId("sketch"), nodeId: "b" }] }]);
-    const second: SketchElement = { ...sketch(), id: elementId("second"), nodes: [{ id: "c", point: { x: 10, y: 10 } }, { id: "d", point: { x: 30, y: 10 } }], edges: [{ id: "cd", startNodeId: "c", endNodeId: "d" }] };
+    const second: SketchElement = { ...sketch(), id: elementId("second"), nodes: [{ id: "c", point: { x: 100, y: 10 } }, { id: "d", point: { x: 120, y: 10 } }], edges: [{ id: "cd", startNodeId: "c", endNodeId: "d" }] };
     const global = { id: "connect", kind: "coincident" as const, references: [{ elementId: first.id, nodeId: "b" }, { elementId: second.id, nodeId: "c" }] as const };
     const components = constraintComponentsForDocument({ ...documentWith([first, second]), constraints: [global] });
     expect(components).toHaveLength(2);
@@ -70,7 +70,7 @@ describe("parametric constraint boundary", () => {
     expect(components.find((component) => component.nodeKeys.length === 1)?.constraintIds).toEqual([]);
     expect(normalizedConstraintsForDocument({ ...documentWith([first, second]), constraints: [global] }).map((constraint) => constraint.scope)).toEqual(["document", "local"]);
     const input = constraintInputsForDocument({ ...documentWith([first, second]), constraints: [global] }).find((component) => component.nodes.length === 3);
-    expect(input).toMatchObject({ coordinateCount: 6, constraints: expect.arrayContaining([expect.objectContaining({ scope: "document", kind: "coincident" })]) });
+    expect(input).toMatchObject({ coordinateCount: 6, coordinates: [{ x: 100, y: 10 }, { x: 10, y: 10 }, { x: 30, y: 10 }], constraints: expect.arrayContaining([expect.objectContaining({ scope: "document", kind: "coincident" })]) });
     expect(constraintDofMetadataForDocument({ ...documentWith([first, second]), constraints: [global] })).toEqual(expect.arrayContaining([{ nodeKeys: expect.any(Array), coordinateCount: 6, constraintCount: 2, status: "pending-solver" }]));
     const invalid = { ...global, id: "invalid", references: [global.references[0]!, { elementId: first.id, nodeId: "missing" }] as const };
     const crossSketchLocal = { ...global, id: "cross-local", references: [global.references[0]!, { elementId: second.id, nodeId: "d" }] as const };

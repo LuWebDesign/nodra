@@ -3,6 +3,7 @@ import type {
   DocumentSnapshot,
   Element,
   ElementId,
+  PointMm,
   SketchConstraintKind,
 } from "@nodra/domain";
 import { solveCircleConstraints, solveSketchConstraints } from "@nodra/geometry";
@@ -58,6 +59,7 @@ export interface ConstraintComponentState {
 export interface ConstraintComponentInput {
   readonly nodeKeys: readonly string[];
   readonly nodes: readonly ConstraintNodeReference[];
+  readonly coordinates: readonly PointMm[];
   readonly constraints: readonly NormalizedConstraint[];
   readonly coordinateCount: number;
 }
@@ -180,7 +182,12 @@ export function constraintInputsForDocument(document: DocumentSnapshot): readonl
     const keys = new Set(component.nodeKeys);
     const componentNodes = nodes.filter((node) => keys.has(constraintNodeKey(node))).sort((first, second) => constraintNodeKey(first) < constraintNodeKey(second) ? -1 : constraintNodeKey(first) > constraintNodeKey(second) ? 1 : 0);
     const constraints = normalized.filter((constraint) => (constraint.ownerId === undefined || constraint.references.every((reference) => reference.elementId === constraint.ownerId)) && constraint.references.every((reference) => keys.has(constraintNodeKey(reference))));
-    return { nodeKeys: component.nodeKeys, nodes: componentNodes, constraints, coordinateCount: componentNodes.length * 2 };
+    const coordinates = componentNodes.map((node) => {
+      const point = sketches.find((sketch) => sketch.id === node.elementId)?.nodes.find((candidate) => candidate.id === node.nodeId)?.point;
+      if (!point) throw new Error(`Missing coordinate for constraint node ${node.elementId}/${node.nodeId}`);
+      return point;
+    });
+    return { nodeKeys: component.nodeKeys, nodes: componentNodes, coordinates, constraints, coordinateCount: coordinates.length * 2 };
   });
 }
 
