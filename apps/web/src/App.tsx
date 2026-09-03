@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent, type PointerEvent, type ReactNode, type WheelEvent } from "react";
 import { createProject, elementId, layerId, pageId, projectFromDocument, revision, type DocumentSnapshot, hasRotation, type DimensionElement, type Element, type SketchConstraint, type ElementId, type PointMm, type ProjectSnapshot, type SplineElement, type TextElement, type ExplicitConnection } from "@nodra/domain";
-import { addSketchConstraint, addSketchSegmentRelation, addToSelection, appendSketchEdge, appendSplineNode, beginGesture, cancelGesture, clearSelection, closePath, cutLineAtPoint, cutPathSegment, cutSketchEdge, closeSplineElement, commitGesture, convertTextToGlyphs, createElement, createPathCubicNode, createPathNode, createSketchLine, deleteContourNodes, deleteElement, deleteElementNodes, deletePathNodes, deleteSketchConstraint, dispatch, duplicateElements, flipElements, insertFormaNode, invalidDimensionIdsForShapeOperation, moveElements, movePathHandle, movePathNode, openPath, updateSplineNode, previewGesture, previewGestureFromBase, redo, resizeElement, resizeElementToDimensions, resizeElements, resizeElementsToDimensions, rotateElement, updateDimensionValue, setDimensionDriving, rotateElementsAroundCenter, select, selectForPointerDown, setPathJoin, shapeOperation, splitPathSegment, undo, updateContourNode, updateElement, updateElementNode, updateElementStyles, updatePage, updateSketchConstraint, updateSplineHandle, type FlipAxis, type ShapeOperation } from "@nodra/editor-core";
+import { addDocumentConstraint, addSketchConstraint, addToSelection, appendSketchEdge, appendSplineNode, beginGesture, cancelGesture, clearSelection, closePath, cutLineAtPoint, cutPathSegment, cutSketchEdge, closeSplineElement, commitGesture, convertTextToGlyphs, createElement, createPathCubicNode, createPathNode, createSketchLine, deleteContourNodes, deleteElement, deleteElementNodes, deletePathNodes, deleteSketchConstraint, dispatch, duplicateElements, flipElements, insertFormaNode, invalidDimensionIdsForShapeOperation, moveElements, movePathHandle, movePathNode, openPath, updateSplineNode, previewGesture, previewGestureFromBase, redo, resizeElement, resizeElementToDimensions, resizeElements, resizeElementsToDimensions, rotateElement, updateDimensionValue, setDimensionDriving, rotateElementsAroundCenter, select, selectForPointerDown, setPathJoin, shapeOperation, splitPathSegment, undo, updateContourNode, updateElement, updateElementNode, updateElementStyles, updatePage, updateSketchConstraint, updateSplineHandle, type EditorCommand, type FlipAxis, type ShapeOperation } from "@nodra/editor-core";
+import { solveConstraintComponents } from "@nodra/constraints";
 import { boundsOfElements, connectableNodeAddress, contourVertexNodes, dimensionKindForPlacement, dimensionOffsetForAlignedPlacement, dimensionOffsetForPlacement, elementCenter, editableGeometryNodes, glyphGeometryNodes, groupCenter, groupHandlePoints, pathGeometryNodes, pointMidpoint, dimensionGeometry, realGeometryNodes, solveSketchConstraints, resizeHandle, rotatedResizeHandles, rotationFromDrag, rotationHandlePoints, visibleBezierHandleGuides, type Direction, type GroupHandle, type ResizeHandle } from "@nodra/geometry";
 import { DebouncedAutosave, DexieProjectRepository, requestStoragePersistence, type FontRecord } from "@nodra/persistence";
 import { validateDesign, validateProject } from "@nodra/validation";
@@ -329,6 +330,11 @@ export function App() {
     if (tool !== "spline" && tool !== "forma" && editorRef.current.selection.some((id) => editorRef.current.document.elements.some((element) => element.id === id && element.type === "spline"))) setEditorState(clearSelection(editorRef.current));
   }, [tool]);
   useEffect(() => { setSelectedPathSegment(undefined); setSelectedFormaNodeKeys([]); if (tool !== "forma") setEditModeElementIds([]); }, [tool, project.activePageId]);
+  useEffect(() => {
+    if (!constraintDraft || tool === "forma") return;
+    setEditorState(cancelGesture(editorRef.current));
+    setConstraintDraft(undefined);
+  }, [constraintDraft, tool]);
 
   useEffect(() => {
     setCenterHover(undefined);
@@ -1360,7 +1366,9 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
           const required = kind === "fixed" ? 1 : kind === "parallel" || kind === "perpendicular" || kind === "equal" ? 4 : 2;
           if (references.length !== required) return;
           const constraint: SketchConstraint = { id: `constraint-${crypto.randomUUID()}`, kind, references: references as unknown as SketchConstraint["references"], ...(value !== undefined ? { value } : {}) };
-          const command = (kind === "parallel" || kind === "perpendicular" || kind === "equal" || kind === "coincident") && new Set(references.map((reference) => reference.elementId)).size > 1 ? addSketchSegmentRelation(constraint) : addSketchConstraint(targetSketch.id, constraint);
+          const global = new Set(references.map((reference) => reference.elementId)).size > 1;
+          if (global && !["coincident", "horizontal", "vertical", "distance-horizontal", "distance-vertical", "distance"].includes(kind)) return;
+          const command: EditorCommand = global ? { name: `document-constraint-preview:${constraint.id}`, apply: (current: DocumentSnapshot) => { const added = addDocumentConstraint(constraint).apply(current); if (!added.success) return added; const solved = solveConstraintComponents(added.document); const involvedIds = new Set(constraint.references.map((reference) => reference.elementId)); const localConflict = solved.document.elements.some((element) => element.type === "sketch" && involvedIds.has(element.id) && element.constraints && solveSketchConstraints(element).status === "conflict"); return solved.states.some((state) => state.state === "conflict") || localConflict ? { success: false, error: "La relación global entra en conflicto" } : { ...added, document: solved.document }; } } : addSketchConstraint(targetSketch.id, constraint);
           const preview = previewGesture(beginGesture(editorRef.current), command);
            if (!preview.gesture || preview.document === editorRef.current.document) return;
            setConstraintDraft({ sketchId: targetSketch.id, constraint });
