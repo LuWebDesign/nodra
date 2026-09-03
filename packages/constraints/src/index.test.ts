@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createDocument, elementId, layerId, withElements, type Element, type SketchElement } from "@nodra/domain";
+import { createDocument, elementId, layerId, withElements, type DocumentConstraint, type Element, type SketchElement } from "@nodra/domain";
 import { constraintComponentStatesForDocument, constraintComponentsForDocument, constraintDofMetadataForDocument, constraintInputsForDocument, constraintResidualsForDocument, constraintStateForElement, normalizedConstraintsForDocument, parametricCapabilitiesForElement, solveConstraintComponents } from "./index.js";
 
 const layer = { id: layerId("constraints"), name: "Croquis", visible: true, order: 0 } as const;
@@ -126,6 +126,7 @@ describe("parametric constraint boundary", () => {
 
     expect(preview.changed).toBe(false);
     expect(preview.document).toBe(document);
+    expect(preview).toMatchObject({ converged: false, iterations: 1 });
     expect(preview.residuals[0]).toMatchObject({ supported: false, satisfied: false });
   });
 
@@ -163,6 +164,45 @@ describe("parametric constraint boundary", () => {
     expect(result.residuals[0]).toMatchObject({ satisfied: true, supported: true });
   });
 
+  it("iterates connected global constraints to a deterministic fixed point", () => {
+    const first = sketch();
+    const second: SketchElement = { ...sketch(), id: elementId("second"), nodes: [{ id: "c", point: { x: 100, y: 10 } }, { id: "d", point: { x: 120, y: 10 } }], edges: [{ id: "cd", startNodeId: "c", endNodeId: "d" }] };
+    const third: SketchElement = { ...sketch(), id: elementId("third"), nodes: [{ id: "e", point: { x: 200, y: 10 } }, { id: "f", point: { x: 220, y: 10 } }], edges: [{ id: "ef", startNodeId: "e", endNodeId: "f" }] };
+    const copySecondToThird = { id: "a-copy-second-to-third", kind: "coincident" as const, references: [{ elementId: second.id, nodeId: "c" }, { elementId: third.id, nodeId: "e" }] as const };
+    const copyFirstToSecond = { id: "z-copy-first-to-second", kind: "coincident" as const, references: [{ elementId: first.id, nodeId: "a" }, { elementId: second.id, nodeId: "c" }] as const };
+    const base = documentWith([first, second, third]);
+
+    const forward = solveConstraintComponents({ ...base, constraints: [copySecondToThird, copyFirstToSecond] });
+    const reversed = solveConstraintComponents({ ...base, constraints: [copyFirstToSecond, copySecondToThird] });
+
+    expect((forward.document.elements[1] as SketchElement).nodes[0]!.point).toEqual({ x: 10, y: 10 });
+    expect((forward.document.elements[2] as SketchElement).nodes[0]!.point).toEqual({ x: 10, y: 10 });
+    expect(forward.residuals.every((residual) => residual.satisfied)).toBe(true);
+    expect(forward).toMatchObject({ converged: true, iterations: 3 });
+    expect(reversed.document.elements).toEqual(forward.document.elements);
+    expect(base.elements[1]).toBe(second);
+    expect(base.elements[2]).toBe(third);
+  });
+
+  it("reports exhaustion when a connected chain exceeds the iteration budget", () => {
+    const sketches = Array.from({ length: 34 }, (_, index): SketchElement => ({
+      ...sketch(),
+      id: elementId(`chain-${index}`),
+      nodes: [{ id: "value", point: { x: index * 10, y: 0 } }, { id: "spare", point: { x: index * 10, y: 10 } }],
+      edges: [{ id: "edge", startNodeId: "value", endNodeId: "spare" }],
+    }));
+    const constraints = Array.from({ length: sketches.length - 1 }, (_, index): DocumentConstraint => ({
+      id: `copy-${String(index).padStart(2, "0")}`,
+      kind: "coincident",
+      references: [{ elementId: sketches[index + 1]!.id, nodeId: "value" }, { elementId: sketches[index]!.id, nodeId: "value" }],
+    }));
+
+    const preview = solveConstraintComponents({ ...documentWith(sketches), constraints });
+
+    expect(preview).toMatchObject({ converged: false, iterations: 32 });
+    expect(preview.residuals.some((residual) => residual.supported && !residual.satisfied)).toBe(true);
+  });
+
   it("reports competing global constraints as conflicts", () => {
     const first = sketch();
     const competing = [
@@ -170,6 +210,7 @@ describe("parametric constraint boundary", () => {
       { id: "distance-30", kind: "distance-horizontal" as const, value: 30, references: [{ elementId: first.id, nodeId: "a" }, { elementId: first.id, nodeId: "b" }] as const },
     ];
     const preview = solveConstraintComponents({ ...documentWith([first]), constraints: competing });
+    expect(preview).toMatchObject({ converged: false, iterations: 2 });
     expect(preview.states[0]).toMatchObject({ state: "conflict" });
     expect(preview.states[0]?.diagnostics.some((diagnostic) => diagnostic.startsWith("global-constraint-conflict:"))).toBe(true);
   });
