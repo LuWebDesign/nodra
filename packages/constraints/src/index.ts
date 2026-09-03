@@ -107,6 +107,27 @@ const sketchConstraintKinds = [
 ] as const satisfies readonly SketchConstraintKind[];
 
 const circleConstraintKinds = ["center-horizontal", "center-vertical", "radius", "diameter"] as const satisfies readonly CircleConstraintKind[];
+const CONSTRAINT_TOLERANCE = 1e-6;
+type MutablePoint = { x: number; y: number };
+
+const solveGlobalSegmentRelation = (kind: SketchConstraintKind, first: MutablePoint, second: MutablePoint, third: MutablePoint, fourth: MutablePoint): boolean => {
+  if (kind !== "parallel" && kind !== "perpendicular" && kind !== "equal") return false;
+  const firstLength = Math.hypot(second.x - first.x, second.y - first.y);
+  const secondLength = Math.hypot(fourth.x - third.x, fourth.y - third.y);
+  if (firstLength <= CONSTRAINT_TOLERANCE || secondLength <= CONSTRAINT_TOLERANCE) return false;
+  const firstDirection = { x: (second.x - first.x) / firstLength, y: (second.y - first.y) / firstLength };
+  const secondDirection = { x: (fourth.x - third.x) / secondLength, y: (fourth.y - third.y) / secondLength };
+  if (kind === "equal") {
+    fourth.x = third.x + secondDirection.x * firstLength;
+    fourth.y = third.y + secondDirection.y * firstLength;
+  } else {
+    const candidate = kind === "parallel" ? firstDirection : { x: -firstDirection.y, y: firstDirection.x };
+    const orientation = candidate.x * secondDirection.x + candidate.y * secondDirection.y < 0 ? -1 : 1;
+    fourth.x = third.x + candidate.x * secondLength * orientation;
+    fourth.y = third.y + candidate.y * secondLength * orientation;
+  }
+  return true;
+};
 
 const sketchAdapter: ParametricAdapter = {
   capabilities: { entityKind: "sketch", constraintKinds: sketchConstraintKinds },
@@ -211,17 +232,20 @@ export function solveConstraintComponents(document: DocumentSnapshot): Constrain
   const normalized = normalizedConstraintsForDocument(document);
   const globalPoints = new Map<string, { x: number; y: number }>(document.elements.filter((element): element is Extract<Element, { type: "sketch" }> => element.type === "sketch").flatMap((sketch) => sketch.nodes.map((node) => [constraintNodeKey({ elementId: sketch.id, nodeId: node.id }), { ...node.point }] as const)));
   for (const constraint of normalized.filter((candidate) => candidate.scope === "document").sort((first, second) => first.id < second.id ? -1 : first.id > second.id ? 1 : 0)) {
-    const supportedGlobalKind = constraint.kind === "coincident" || constraint.kind === "horizontal" || constraint.kind === "vertical" || constraint.kind === "distance-horizontal" || constraint.kind === "distance-vertical" || constraint.kind === "distance";
+    const segmentRelation = constraint.kind === "parallel" || constraint.kind === "perpendicular" || constraint.kind === "equal";
+    const supportedGlobalKind = constraint.kind === "coincident" || constraint.kind === "horizontal" || constraint.kind === "vertical" || constraint.kind === "distance-horizontal" || constraint.kind === "distance-vertical" || constraint.kind === "distance" || segmentRelation;
     const requiresValue = constraint.kind === "distance-horizontal" || constraint.kind === "distance-vertical" || constraint.kind === "distance";
-    if (constraint.references.length !== 2 || !supportedGlobalKind || requiresValue && (!Number.isFinite(constraint.value) || constraint.value === undefined || constraint.value <= 0) || !requiresValue && constraint.value !== undefined) continue;
-    const first = globalPoints.get(constraintNodeKey(constraint.references[0]!)); const second = globalPoints.get(constraintNodeKey(constraint.references[1]!));
-    if (!first || !second || !Number.isFinite(first.x) || !Number.isFinite(first.y) || !Number.isFinite(second.x) || !Number.isFinite(second.y)) continue;
+    if (constraint.references.length !== (segmentRelation ? 4 : 2) || !supportedGlobalKind || requiresValue && (!Number.isFinite(constraint.value) || constraint.value === undefined || constraint.value <= 0) || !requiresValue && constraint.value !== undefined) continue;
+    const values = constraint.references.map((reference) => globalPoints.get(constraintNodeKey(reference)));
+    if (values.some((point) => !point || !Number.isFinite(point.x) || !Number.isFinite(point.y))) continue;
+    const first = values[0]!; const second = values[1]!;
     if (constraint.kind === "coincident") { second.x = first.x; second.y = first.y; }
     else if (constraint.kind === "horizontal") second.y = first.y;
     else if (constraint.kind === "vertical") second.x = first.x;
-    else if (constraint.kind === "distance-horizontal") { if (Math.abs(second.x - first.x) <= 1e-9) continue; second.x = first.x + (second.x < first.x ? -constraint.value! : constraint.value!); }
-    else if (constraint.kind === "distance-vertical") { if (Math.abs(second.y - first.y) <= 1e-9) continue; second.y = first.y + (second.y < first.y ? -constraint.value! : constraint.value!); }
-    else { const length = Math.hypot(second.x - first.x, second.y - first.y); if (length <= 1e-9) continue; second.x = first.x + (second.x - first.x) * constraint.value! / length; second.y = first.y + (second.y - first.y) * constraint.value! / length; }
+    else if (constraint.kind === "distance-horizontal") { if (Math.abs(second.x - first.x) <= CONSTRAINT_TOLERANCE) continue; second.x = first.x + (second.x < first.x ? -constraint.value! : constraint.value!); }
+    else if (constraint.kind === "distance-vertical") { if (Math.abs(second.y - first.y) <= CONSTRAINT_TOLERANCE) continue; second.y = first.y + (second.y < first.y ? -constraint.value! : constraint.value!); }
+    else if (constraint.kind === "distance") { const length = Math.hypot(second.x - first.x, second.y - first.y); if (length <= CONSTRAINT_TOLERANCE) continue; second.x = first.x + (second.x - first.x) * constraint.value! / length; second.y = first.y + (second.y - first.y) * constraint.value! / length; }
+    else if (!solveGlobalSegmentRelation(constraint.kind, first, second, values[2]!, values[3]!)) continue;
   }
   const globallySolvedElements = document.elements.map((element) => {
     if (element.type !== "sketch") return element;
@@ -248,7 +272,7 @@ export function solveConstraintComponents(document: DocumentSnapshot): Constrain
 }
 
 /** Calculates normalized geometric residuals for every structural constraint record. */
-export function constraintResidualsForDocument(document: DocumentSnapshot, tolerance = 1e-6): readonly ConstraintResidual[] {
+export function constraintResidualsForDocument(document: DocumentSnapshot, tolerance = CONSTRAINT_TOLERANCE): readonly ConstraintResidual[] {
   if (!Number.isFinite(tolerance) || tolerance < 0) throw new Error("Constraint residual tolerance must be finite and non-negative");
   const points = new Map(document.elements.filter((element): element is Extract<Element, { type: "sketch" }> => element.type === "sketch").flatMap((sketch) => sketch.nodes.map((node) => [constraintNodeKey({ elementId: sketch.id, nodeId: node.id }), node.point] as const)));
   return normalizedConstraintsForDocument(document).map((constraint) => {

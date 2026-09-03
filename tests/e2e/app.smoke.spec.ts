@@ -555,6 +555,60 @@ test("manages a cross-sketch distance relationship from the inspector", async ({
   await expect(page.getByRole("list", { name: "Relaciones globales" })).toBeVisible();
 });
 
+for (const relation of [
+  { button: "Paralela", label: "Paralela" },
+  { button: "Perpendicular", label: "Perpendicular" },
+  { button: "Igual longitud", label: "Igual" },
+] as const) {
+test(`creates a ${relation.label.toLowerCase()} relationship between sketches`, async ({ page }) => {
+  await page.goto("/");
+  const bounds = await visibleBoundingBox(page.locator(".page"));
+  const firstStart = { x: bounds.x + 110, y: bounds.y + 120 };
+  const firstEnd = { x: firstStart.x + 90, y: firstStart.y + 30 };
+  const secondStart = { x: bounds.x + 300, y: bounds.y + 260 };
+  const secondEnd = { x: secondStart.x + 90, y: secondStart.y - 50 };
+
+  await drawLine(page, firstStart, firstEnd);
+  await page.getByRole("button", { name: "Seleccion" }).click();
+  await drawLine(page, secondStart, secondEnd);
+  await page.getByRole("button", { name: "Forma" }).click();
+
+  const sketches = page.locator(".page-svg svg g[data-element-id]");
+  const lines = sketches.locator("line");
+  await expect(lines).toHaveCount(2);
+  const firstSketchId = await sketches.nth(0).getAttribute("data-element-id");
+  const secondSketchId = await sketches.nth(1).getAttribute("data-element-id");
+  expect(firstSketchId).not.toBeNull();
+  expect(secondSketchId).not.toBeNull();
+  await page.mouse.click((firstStart.x + firstEnd.x) / 2, (firstStart.y + firstEnd.y) / 2);
+  await page.keyboard.down("Shift");
+  try {
+    await page.mouse.click((secondStart.x + secondEnd.x) / 2, (secondStart.y + secondEnd.y) / 2);
+  } finally {
+    await page.keyboard.up("Shift");
+  }
+
+  const firstNodes = page.locator(`[data-contour-node^="${firstSketchId}:p:"]`);
+  const secondNodes = page.locator(`[data-contour-node^="${secondSketchId}:p:"]`);
+  await expect(firstNodes).toHaveCount(2);
+  await expect(secondNodes).toHaveCount(2);
+  await firstNodes.nth(0).click();
+  await firstNodes.nth(1).click({ modifiers: ["Shift"] });
+  await secondNodes.nth(0).click({ modifiers: ["Shift"] });
+  await secondNodes.nth(1).click({ modifiers: ["Shift"] });
+
+  await page.locator(".constraint-buttons").getByRole("button", { name: relation.button, exact: true }).click();
+  await page.getByRole("button", { name: "Confirmar relación" }).click();
+  const globalRelations = page.getByRole("list", { name: "Relaciones globales" });
+  await expect(globalRelations).toContainText(relation.label);
+  await page.getByRole("button", { name: "Deshacer" }).click();
+  await expect(globalRelations).toHaveCount(0);
+  await page.getByRole("button", { name: "Rehacer" }).click();
+  await expect(page.getByRole("list", { name: "Relaciones globales" })).toContainText(relation.label);
+});
+
+}
+
 test("creates and confirms an explicit sketch relationship", async ({ page }) => {
   await page.goto("/");
   const bounds = await page.locator(".page").boundingBox();

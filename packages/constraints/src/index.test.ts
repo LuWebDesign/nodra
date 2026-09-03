@@ -85,6 +85,50 @@ describe("parametric constraint boundary", () => {
     expect(bridgedInput?.constraints.some((constraint) => constraint.id.includes("cross-local"))).toBe(false);
   });
 
+  it.each([
+    ["parallel", { x: 100 + Math.sqrt(200), y: 50 }],
+    ["perpendicular", { x: 100, y: 50 + Math.sqrt(200) }],
+    ["equal", { x: 100 + Math.sqrt(200), y: 50 + Math.sqrt(200) }],
+  ] as const)("solves a global %s relation between sketches without mutating the input", (kind, expected) => {
+    const first: SketchElement = { ...sketch(), id: elementId("first"), nodes: [{ id: "a", point: { x: 0, y: 0 } }, { id: "b", point: { x: 20, y: 0 } }] };
+    const second: SketchElement = { ...sketch(), id: elementId("second"), nodes: [{ id: "c", point: { x: 100, y: 50 } }, { id: "d", point: { x: 110, y: 60 } }], edges: [{ id: "cd", startNodeId: "c", endNodeId: "d" }] };
+    const constraint = { id: `global-${kind}`, kind, references: [{ elementId: first.id, nodeId: "a" }, { elementId: first.id, nodeId: "b" }, { elementId: second.id, nodeId: "c" }, { elementId: second.id, nodeId: "d" }] as const };
+    const document = { ...documentWith([first, second]), constraints: [constraint] };
+
+    const preview = solveConstraintComponents(document);
+
+    const point = (preview.document.elements[1] as SketchElement).nodes[1]!.point;
+    expect(point.x).toBeCloseTo(expected.x, 8);
+    expect(point.y).toBeCloseTo(expected.y, 8);
+    expect(preview.residuals.find((residual) => residual.constraintId === JSON.stringify(["document", null, constraint.id]))).toMatchObject({ supported: true, satisfied: true });
+    expect(document.elements).toEqual([first, second]);
+  });
+
+  it("preserves the nearest antiparallel orientation", () => {
+    const first: SketchElement = { ...sketch(), id: elementId("first"), nodes: [{ id: "a", point: { x: 0, y: 0 } }, { id: "b", point: { x: 20, y: 0 } }] };
+    const second: SketchElement = { ...sketch(), id: elementId("second"), nodes: [{ id: "c", point: { x: 100, y: 50 } }, { id: "d", point: { x: 90, y: 60 } }], edges: [{ id: "cd", startNodeId: "c", endNodeId: "d" }] };
+    const constraint = { id: "global-parallel", kind: "parallel" as const, references: [{ elementId: first.id, nodeId: "a" }, { elementId: first.id, nodeId: "b" }, { elementId: second.id, nodeId: "c" }, { elementId: second.id, nodeId: "d" }] as const };
+
+    const preview = solveConstraintComponents({ ...documentWith([first, second]), constraints: [constraint] });
+
+    const point = (preview.document.elements[1] as SketchElement).nodes[1]!.point;
+    expect(point.x).toBeCloseTo(100 - Math.sqrt(200), 8);
+    expect(point.y).toBeCloseTo(50, 8);
+  });
+
+  it("keeps a degenerate global segment relation unsupported and immutable", () => {
+    const first: SketchElement = { ...sketch(), id: elementId("first"), nodes: [{ id: "a", point: { x: 0, y: 0 } }, { id: "b", point: { x: 20, y: 0 } }] };
+    const second: SketchElement = { ...sketch(), id: elementId("second"), nodes: [{ id: "c", point: { x: 100, y: 50 } }, { id: "d", point: { x: 100 + 5e-7, y: 50 } }], edges: [{ id: "cd", startNodeId: "c", endNodeId: "d" }] };
+    const constraint = { id: "global-parallel", kind: "parallel" as const, references: [{ elementId: first.id, nodeId: "a" }, { elementId: first.id, nodeId: "b" }, { elementId: second.id, nodeId: "c" }, { elementId: second.id, nodeId: "d" }] as const };
+    const document = { ...documentWith([first, second]), constraints: [constraint] };
+
+    const preview = solveConstraintComponents(document);
+
+    expect(preview.changed).toBe(false);
+    expect(preview.document).toBe(document);
+    expect(preview.residuals[0]).toMatchObject({ supported: false, satisfied: false });
+  });
+
   it("normalizes angular residuals across the signed-angle boundary", () => {
     const angularSketch: SketchElement = { ...sketch(), id: elementId("angular"), nodes: [{ id: "a", point: { x: 0, y: 0 } }, { id: "b", point: { x: 10, y: -10 * Math.tan(Math.PI / 18) } }] };
     const angular = { id: "angle", kind: "angle" as const, value: 350, references: [{ elementId: angularSketch.id, nodeId: "a" }, { elementId: angularSketch.id, nodeId: "b" }] as const };

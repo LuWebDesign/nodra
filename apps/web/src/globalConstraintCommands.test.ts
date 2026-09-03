@@ -131,9 +131,41 @@ describe("global constraint commands", () => {
     expect((committed.document.elements[3] as SketchElement).nodes[0]!.point.x).toBe(130);
   });
 
+  it.each([
+    ["parallel", { x: Math.sqrt(200), y: 20 }],
+    ["perpendicular", { x: 0, y: 20 + Math.sqrt(200) }],
+    ["equal", { x: Math.sqrt(50), y: 20 + Math.sqrt(50) }],
+  ] as const)("adds and solves a supported global %s relation", (kind, expected) => {
+    const first = sketch("first", 0);
+    const secondBase = sketch("second", 20);
+    const second: SketchElement = { ...secondBase, nodes: [secondBase.nodes[0]!, { ...secondBase.nodes[1]!, point: { x: 10, y: 30 } }] };
+    const constraint: DocumentConstraint = {
+      id: `global-${kind}`,
+      kind,
+      references: [
+        { elementId: first.id, nodeId: first.nodes[0]!.id },
+        { elementId: first.id, nodeId: first.nodes[1]!.id },
+        { elementId: second.id, nodeId: second.nodes[0]!.id },
+        { elementId: second.id, nodeId: second.nodes[1]!.id },
+      ],
+    };
+    const initial = createEditor({ ...createDocument("global", [layer]), elements: [first, second] });
+
+    const committed = dispatch(initial, addSolvedDocumentConstraint(constraint));
+
+    expect(committed.document.constraints).toEqual([constraint]);
+    const point = (committed.document.elements[1] as SketchElement).nodes[1]!.point;
+    expect(point.x).toBeCloseTo(expected.x, 8);
+    expect(point.y).toBeCloseTo(expected.y, 8);
+    expect(committed.undo).toHaveLength(1);
+  });
+
   it("exposes supported kinds and normalized diagnostic identities", () => {
     expect(supportsGlobalConstraintKind("distance")).toBe(true);
-    expect(supportsGlobalConstraintKind("parallel")).toBe(false);
+    expect(supportsGlobalConstraintKind("parallel")).toBe(true);
+    expect(supportsGlobalConstraintKind("perpendicular")).toBe(true);
+    expect(supportsGlobalConstraintKind("equal")).toBe(true);
+    expect(supportsGlobalConstraintKind("angle")).toBe(false);
     expect(documentConstraintDiagnosticId("constraint-1")).toBe('["document",null,"constraint-1"]');
   });
 });
