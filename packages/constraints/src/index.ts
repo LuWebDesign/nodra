@@ -55,6 +55,13 @@ export interface ConstraintComponentState {
   readonly diagnostics: readonly string[];
 }
 
+export interface ConstraintComponentInput {
+  readonly nodeKeys: readonly string[];
+  readonly nodes: readonly ConstraintNodeReference[];
+  readonly constraints: readonly NormalizedConstraint[];
+  readonly coordinateCount: number;
+}
+
 const constraintNodeKey = (reference: ConstraintNodeReference): string => JSON.stringify([reference.elementId, reference.nodeId]);
 const constraintIdentity = (scope: "local" | "document", elementId: ElementId | undefined, id: string): string => JSON.stringify([scope, elementId ?? null, id]);
 
@@ -162,6 +169,19 @@ export function constraintComponentsForDocument(document: DocumentSnapshot): rea
 /** Reports input coordinates and constraint-record counts without pretending to solve degrees of freedom. */
 export function constraintDofMetadataForDocument(document: DocumentSnapshot): readonly ConstraintDofMetadata[] {
   return constraintComponentsForDocument(document).map((component) => ({ nodeKeys: component.nodeKeys, coordinateCount: component.nodeKeys.length * 2, constraintCount: component.constraintIds.length, status: "pending-solver" }));
+}
+
+/** Builds the validated component-scoped input boundary consumed by a future solver. */
+export function constraintInputsForDocument(document: DocumentSnapshot): readonly ConstraintComponentInput[] {
+  const sketches = document.elements.filter((element): element is Extract<Element, { type: "sketch" }> => element.type === "sketch");
+  const nodes = sketches.flatMap((sketch) => sketch.nodes.map((node) => ({ elementId: sketch.id, nodeId: node.id })));
+  const normalized = normalizedConstraintsForDocument(document);
+  return constraintComponentsForDocument(document).map((component) => {
+    const keys = new Set(component.nodeKeys);
+    const componentNodes = nodes.filter((node) => keys.has(constraintNodeKey(node))).sort((first, second) => constraintNodeKey(first) < constraintNodeKey(second) ? -1 : constraintNodeKey(first) > constraintNodeKey(second) ? 1 : 0);
+    const constraints = normalized.filter((constraint) => (constraint.ownerId === undefined || constraint.references.every((reference) => reference.elementId === constraint.ownerId)) && constraint.references.every((reference) => keys.has(constraintNodeKey(reference))));
+    return { nodeKeys: component.nodeKeys, nodes: componentNodes, constraints, coordinateCount: componentNodes.length * 2 };
+  });
 }
 
 /** Derives component diagnostics from native sketch solvers without persisting solver output. */
