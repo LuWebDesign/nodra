@@ -209,7 +209,21 @@ export function constraintInputsForDocument(document: DocumentSnapshot): readonl
 export function solveConstraintComponents(document: DocumentSnapshot): ConstraintSolveResult {
   const components = constraintComponentsForDocument(document);
   const normalized = normalizedConstraintsForDocument(document);
-  const solvedElements = document.elements.map((element) => {
+  const globalPoints = new Map<string, { x: number; y: number }>(document.elements.filter((element): element is Extract<Element, { type: "sketch" }> => element.type === "sketch").flatMap((sketch) => sketch.nodes.map((node) => [constraintNodeKey({ elementId: sketch.id, nodeId: node.id }), { ...node.point }] as const)));
+  for (const constraint of normalized.filter((candidate) => candidate.scope === "document").sort((first, second) => first.id < second.id ? -1 : first.id > second.id ? 1 : 0)) {
+    if (constraint.references.length !== 2 || constraint.kind !== "coincident" && constraint.kind !== "horizontal" && constraint.kind !== "vertical") continue;
+    const first = globalPoints.get(constraintNodeKey(constraint.references[0]!)); const second = globalPoints.get(constraintNodeKey(constraint.references[1]!));
+    if (!first || !second || !Number.isFinite(first.x) || !Number.isFinite(first.y) || !Number.isFinite(second.x) || !Number.isFinite(second.y)) continue;
+    if (constraint.kind === "coincident") { second.x = first.x; second.y = first.y; }
+    else if (constraint.kind === "horizontal") second.y = first.y;
+    else second.x = first.x;
+  }
+  const globallySolvedElements = document.elements.map((element) => {
+    if (element.type !== "sketch") return element;
+    const nodes = element.nodes.map((node) => ({ ...node, point: globalPoints.get(constraintNodeKey({ elementId: element.id, nodeId: node.id })) ?? node.point }));
+    return nodes.some((node, index) => node.point.x !== element.nodes[index]?.point.x || node.point.y !== element.nodes[index]?.point.y) ? { ...element, nodes } : element;
+  });
+  const solvedElements = globallySolvedElements.map((element) => {
     if (element.type !== "sketch") return element;
     const nodeKeys = new Set(element.nodes.map((node) => constraintNodeKey({ elementId: element.id, nodeId: node.id })));
     const component = components.find((candidate) => candidate.nodeKeys.length === nodeKeys.size && candidate.nodeKeys.every((key) => nodeKeys.has(key)));
@@ -223,7 +237,7 @@ export function solveConstraintComponents(document: DocumentSnapshot): Constrain
     const geometryChanged = solved.sketch.nodes.some((node, index) => node.point.x !== element.nodes[index]?.point.x || node.point.y !== element.nodes[index]?.point.y);
     return solved.status === "conflict" || solved.status === "overdefined" || !geometryChanged ? element : solved.sketch;
   });
-  const changed = solvedElements.some((element, index) => element !== document.elements[index]);
+  const changed = solvedElements.some((element, index) => JSON.stringify(element) !== JSON.stringify(document.elements[index]));
   const preview = changed ? { ...document, elements: solvedElements } : document;
   return { document: preview, changed, states: constraintComponentStatesForDocument(preview), residuals: constraintResidualsForDocument(preview) };
 }
@@ -268,7 +282,7 @@ export function constraintComponentStatesForDocument(document: DocumentSnapshot)
     const hasAngle = normalized.some((constraint) => constraint.scope === "local" && constraint.ownerId === involved[0]?.id && constraint.kind === "angle" && constraint.references.some((reference) => nodeKeys.has(constraintNodeKey(reference))));
     const canUseNativeSolver = globalIds.length === 0 && !hasAngle && involved.length === 1 && involved[0]!.nodes.length === component.nodeKeys.length;
     const localStates = canUseNativeSolver ? [sketchAdapter.state(involved[0]!)] : [];
-    const diagnostics = [...localStates.flatMap((state) => state.conflicts.map((conflict) => `${involved[0]!.id}:${conflict}`)), ...(globalIds.length ? globalIds.map((id) => `global-constraint-requires-component-solver:${id}`) : []), ...(!canUseNativeSolver && component.constraintIds.length ? ["component-solver-pending"] : [])].sort();
+    const diagnostics = [...localStates.flatMap((state) => state.conflicts.map((conflict) => `${involved[0]!.id}:${conflict}`)), ...(globalIds.length ? globalIds.map((id) => `global-constraint-solver-first-slice:${id}`) : []), ...(!canUseNativeSolver && component.constraintIds.length ? ["component-solver-pending"] : [])].sort();
     const state = localStates.some((value) => value.state === "conflict") ? "conflict" : localStates.some((value) => value.state === "overdefined") ? "overdefined" : localStates.some((value) => value.state === "invalid") ? "invalid" : localStates.every((value) => value.state === "fully-defined") && canUseNativeSolver ? "fully-defined" : "underdefined";
     return { nodeKeys: component.nodeKeys, state, diagnostics };
   });
