@@ -518,8 +518,13 @@ test("manages a cross-sketch distance relationship from the inspector", async ({
   const secondSketchId = await sketches.nth(1).getAttribute("data-element-id");
   expect(firstSketchId).not.toBeNull();
   expect(secondSketchId).not.toBeNull();
-  await lines.nth(0).click();
-  await lines.nth(1).click({ modifiers: ["Shift"] });
+  await page.mouse.click((firstStart.x + firstEnd.x) / 2, (firstStart.y + firstEnd.y) / 2);
+  await page.keyboard.down("Shift");
+  try {
+    await page.mouse.click((secondStart.x + secondEnd.x) / 2, (secondStart.y + secondEnd.y) / 2);
+  } finally {
+    await page.keyboard.up("Shift");
+  }
   const firstNodes = page.locator(`[data-contour-node^="${firstSketchId}:p:"]`);
   const secondNodes = page.locator(`[data-contour-node^="${secondSketchId}:p:"]`);
   await expect(firstNodes).toHaveCount(2);

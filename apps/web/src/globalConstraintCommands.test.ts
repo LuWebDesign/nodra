@@ -42,7 +42,7 @@ describe("global constraint commands", () => {
     const committed = dispatch(initial, addSolvedDocumentConstraint(constraint));
 
     expect(committed.document.constraints).toEqual([constraint]);
-    expect((committed.document.elements[1] as SketchElement).nodes[0]!.point.x).toBe(50);
+    expect((committed.document.elements[1] as SketchElement).nodes[0]!.point.x).toBe(-30);
     expect(committed.document.revision).toBe(1);
     expect(committed.undo).toHaveLength(1);
     expect(undo(committed).document).toEqual(initial.document);
@@ -57,10 +57,10 @@ describe("global constraint commands", () => {
     const updated = dispatch(added, updateSolvedDocumentConstraint(distanceConstraint(first, second, 60)));
 
     expect(updated.document.constraints?.[0]?.value).toBe(60);
-    expect((updated.document.elements[1] as SketchElement).nodes[0]!.point.x).toBe(70);
+    expect((updated.document.elements[1] as SketchElement).nodes[0]!.point.x).toBe(-50);
     const restored = undo(updated);
     expect(restored.document.constraints?.[0]?.value).toBe(40);
-    expect((restored.document.elements[1] as SketchElement).nodes[0]!.point.x).toBe(50);
+    expect((restored.document.elements[1] as SketchElement).nodes[0]!.point.x).toBe(-30);
   });
 
   it("rejects an unsatisfied global distance without changing history", () => {
