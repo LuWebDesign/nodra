@@ -103,6 +103,17 @@ describe("parametric constraint boundary", () => {
     expect(result.residuals[0]).toMatchObject({ satisfied: true, supported: true });
   });
 
+  it("reports competing global constraints as conflicts", () => {
+    const first = sketch();
+    const competing = [
+      { id: "distance-20", kind: "distance-horizontal" as const, value: 20, references: [{ elementId: first.id, nodeId: "a" }, { elementId: first.id, nodeId: "b" }] as const },
+      { id: "distance-30", kind: "distance-horizontal" as const, value: 30, references: [{ elementId: first.id, nodeId: "a" }, { elementId: first.id, nodeId: "b" }] as const },
+    ];
+    const preview = solveConstraintComponents({ ...documentWith([first]), constraints: competing });
+    expect(preview.states[0]).toMatchObject({ state: "conflict" });
+    expect(preview.states[0]?.diagnostics.some((diagnostic) => diagnostic.startsWith("global-constraint-conflict:"))).toBe(true);
+  });
+
   it("keeps unsupported and missing entities distinguishable", () => {
     const line = { type: "line" as const, id: elementId("line"), layerId: layer.id, start: { x: 0, y: 0 }, end: { x: 10, y: 0 }, rotation: 0, style };
     const document = documentWith([line]);
