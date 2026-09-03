@@ -160,12 +160,35 @@ describe("global constraint commands", () => {
     expect(committed.undo).toHaveLength(1);
   });
 
+  it("adds and solves a global angle relation", () => {
+    const first = sketch("first", 0);
+    const second = sketch("second", 20, 30);
+    const angle: DocumentConstraint = {
+      id: "global-angle",
+      kind: "angle",
+      value: 90,
+      references: [
+        { elementId: first.id, nodeId: first.nodes[1]!.id },
+        { elementId: second.id, nodeId: second.nodes[0]!.id },
+      ],
+    };
+    const initial = createEditor({ ...createDocument("global", [layer]), elements: [first, second] });
+
+    const committed = dispatch(initial, addSolvedDocumentConstraint(angle));
+
+    const firstPoint = (committed.document.elements[0] as SketchElement).nodes[1]!.point;
+    const secondPoint = (committed.document.elements[1] as SketchElement).nodes[0]!.point;
+    expect(secondPoint.x).toBeCloseTo(firstPoint.x, 8);
+    expect(secondPoint.y).toBeGreaterThan(firstPoint.y);
+    expect(committed.document.constraints).toEqual([angle]);
+  });
+
   it("exposes supported kinds and normalized diagnostic identities", () => {
     expect(supportsGlobalConstraintKind("distance")).toBe(true);
     expect(supportsGlobalConstraintKind("parallel")).toBe(true);
     expect(supportsGlobalConstraintKind("perpendicular")).toBe(true);
     expect(supportsGlobalConstraintKind("equal")).toBe(true);
-    expect(supportsGlobalConstraintKind("angle")).toBe(false);
+    expect(supportsGlobalConstraintKind("angle")).toBe(true);
     expect(documentConstraintDiagnosticId("constraint-1")).toBe('["document",null,"constraint-1"]');
   });
 });

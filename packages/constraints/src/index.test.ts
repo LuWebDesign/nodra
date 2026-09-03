@@ -136,6 +136,22 @@ describe("parametric constraint boundary", () => {
     expect(result).toEqual([expect.objectContaining({ satisfied: true, supported: true })]);
   });
 
+  it("solves a global angle while preserving vector length", () => {
+    const first: SketchElement = { ...sketch(), id: elementId("first"), nodes: [{ id: "a", point: { x: 0, y: 0 } }, { id: "b", point: { x: 10, y: 0 } }] };
+    const second: SketchElement = { ...sketch(), id: elementId("second"), nodes: [{ id: "c", point: { x: 30, y: 20 } }, { id: "d", point: { x: 40, y: 20 } }], edges: [{ id: "cd", startNodeId: "c", endNodeId: "d" }] };
+    const constraint = { id: "global-angle", kind: "angle" as const, value: 90, references: [{ elementId: first.id, nodeId: "b" }, { elementId: second.id, nodeId: "c" }] as const };
+    const document = { ...documentWith([first, second]), constraints: [constraint] };
+    const originalLength = Math.hypot(20, 20);
+
+    const preview = solveConstraintComponents(document);
+
+    const point = (preview.document.elements[1] as SketchElement).nodes[0]!.point;
+    expect(point.x).toBeCloseTo(10, 8);
+    expect(point.y).toBeCloseTo(originalLength, 8);
+    expect(preview.residuals[0]).toMatchObject({ supported: true, satisfied: true });
+    expect(document.elements).toEqual([first, second]);
+  });
+
   it("solves a complete local component without mutating the input", () => {
     const movable: SketchElement = { ...sketch(), id: elementId("movable"), nodes: [{ id: "a", point: { x: 10, y: 10 } }, { id: "b", point: { x: 30, y: 20 } }], constraints: [{ id: "horizontal", kind: "horizontal", references: [{ elementId: elementId("movable"), nodeId: "a" }, { elementId: elementId("movable"), nodeId: "b" }] }] };
     const document = documentWith([movable]);

@@ -233,8 +233,8 @@ export function solveConstraintComponents(document: DocumentSnapshot): Constrain
   const globalPoints = new Map<string, { x: number; y: number }>(document.elements.filter((element): element is Extract<Element, { type: "sketch" }> => element.type === "sketch").flatMap((sketch) => sketch.nodes.map((node) => [constraintNodeKey({ elementId: sketch.id, nodeId: node.id }), { ...node.point }] as const)));
   for (const constraint of normalized.filter((candidate) => candidate.scope === "document").sort((first, second) => first.id < second.id ? -1 : first.id > second.id ? 1 : 0)) {
     const segmentRelation = constraint.kind === "parallel" || constraint.kind === "perpendicular" || constraint.kind === "equal";
-    const supportedGlobalKind = constraint.kind === "coincident" || constraint.kind === "horizontal" || constraint.kind === "vertical" || constraint.kind === "distance-horizontal" || constraint.kind === "distance-vertical" || constraint.kind === "distance" || segmentRelation;
-    const requiresValue = constraint.kind === "distance-horizontal" || constraint.kind === "distance-vertical" || constraint.kind === "distance";
+    const supportedGlobalKind = constraint.kind === "coincident" || constraint.kind === "horizontal" || constraint.kind === "vertical" || constraint.kind === "distance-horizontal" || constraint.kind === "distance-vertical" || constraint.kind === "distance" || constraint.kind === "angle" || segmentRelation;
+    const requiresValue = constraint.kind === "distance-horizontal" || constraint.kind === "distance-vertical" || constraint.kind === "distance" || constraint.kind === "angle";
     if (constraint.references.length !== (segmentRelation ? 4 : 2) || !supportedGlobalKind || requiresValue && (!Number.isFinite(constraint.value) || constraint.value === undefined || constraint.value <= 0) || !requiresValue && constraint.value !== undefined) continue;
     const values = constraint.references.map((reference) => globalPoints.get(constraintNodeKey(reference)));
     if (values.some((point) => !point || !Number.isFinite(point.x) || !Number.isFinite(point.y))) continue;
@@ -245,6 +245,7 @@ export function solveConstraintComponents(document: DocumentSnapshot): Constrain
     else if (constraint.kind === "distance-horizontal") { if (Math.abs(second.x - first.x) <= CONSTRAINT_TOLERANCE) continue; second.x = first.x + (second.x < first.x ? -constraint.value! : constraint.value!); }
     else if (constraint.kind === "distance-vertical") { if (Math.abs(second.y - first.y) <= CONSTRAINT_TOLERANCE) continue; second.y = first.y + (second.y < first.y ? -constraint.value! : constraint.value!); }
     else if (constraint.kind === "distance") { const length = Math.hypot(second.x - first.x, second.y - first.y); if (length <= CONSTRAINT_TOLERANCE) continue; second.x = first.x + (second.x - first.x) * constraint.value! / length; second.y = first.y + (second.y - first.y) * constraint.value! / length; }
+    else if (constraint.kind === "angle") { const length = Math.hypot(second.x - first.x, second.y - first.y); if (length <= CONSTRAINT_TOLERANCE) continue; const angle = constraint.value! * Math.PI / 180; second.x = first.x + length * Math.cos(angle); second.y = first.y + length * Math.sin(angle); }
     else if (!solveGlobalSegmentRelation(constraint.kind, first, second, values[2]!, values[3]!)) continue;
   }
   const globallySolvedElements = document.elements.map((element) => {

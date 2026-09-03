@@ -21,6 +21,7 @@ const supportedGlobalKinds = new Set<SketchConstraintKind>([
   "parallel",
   "perpendicular",
   "equal",
+  "angle",
 ]);
 
 export const supportsGlobalConstraintKind = (kind: SketchConstraintKind): boolean => supportedGlobalKinds.has(kind);
