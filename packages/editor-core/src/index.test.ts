@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createDocument, elementId, layerId, type DimensionElement, type Element, type EllipseElement, type LineElement, type GlyphElement, type PathElement, type PointMm, type RectangleElement, type SketchElement, type SplineElement, type TextElement } from "@nodra/domain";
-import { addSketchConstraint, addSketchSegmentRelation, addToSelection, appendSketchEdge, appendSplineNode, beginGesture, cancelGesture, clearSelection, closePath, closeSplineElement, commitGesture, createEditor, createElement, createPathCubicNode, createSketchLine, cutLineAtPoint, cutPathSegment, cutSketchEdge, splitPathLineAt, deleteContourNodes, deleteElement, deleteElementNodes, deletePathNodes, deleteSketchConstraint, dispatch, duplicateElements, flipElements, insertContourNode, invalidDimensionIdsForShapeOperation, moveElement, moveElements, movePathNode, movePathHandle, openPath, previewGesture, previewGestureFromBase, redo, reversePath, removeFromSelection, reorderLayer, resizeElement, resizeElementToDimensions, resizeElements, resizeElementsToDimensions, rotateElementsAroundCenter, select, selectForPointerDown, setDimensionDriving, updateCircleConstraint, deleteCircleConstraint, solveCircle, setLayerVisibility, setPathJoin, shapeOperation, splitPathSegment, toggleSelection, topologyEditForPathSegmentReplacement, topologyReferenceKey, undo, updateContourNode, updateDimensionValue, updateElement, updateElementNode, updateElementStyles, updateSketchConstraint, updateSplineHandle, updateSplineNode } from "./index.js";
+import { addDocumentConstraint, deleteDocumentConstraint, addSketchConstraint, addSketchSegmentRelation, addToSelection, appendSketchEdge, appendSplineNode, beginGesture, cancelGesture, clearSelection, closePath, closeSplineElement, commitGesture, createEditor, createElement, createPathCubicNode, createSketchLine, cutLineAtPoint, cutPathSegment, cutSketchEdge, splitPathLineAt, deleteContourNodes, deleteElement, deleteElementNodes, deletePathNodes, deleteSketchConstraint, dispatch, duplicateElements, flipElements, insertContourNode, invalidDimensionIdsForShapeOperation, moveElement, moveElements, movePathNode, movePathHandle, openPath, previewGesture, previewGestureFromBase, redo, reversePath, removeFromSelection, reorderLayer, resizeElement, resizeElementToDimensions, resizeElements, resizeElementsToDimensions, rotateElementsAroundCenter, select, selectForPointerDown, setDimensionDriving, updateCircleConstraint, deleteCircleConstraint, solveCircle, setLayerVisibility, setPathJoin, shapeOperation, splitPathSegment, toggleSelection, topologyEditForPathSegmentReplacement, topologyReferenceKey, undo, updateContourNode, updateDimensionValue, updateElement, updateElementNode, updateElementStyles, updateSketchConstraint, updateDocumentConstraint, updateSplineHandle, updateSplineNode } from "./index.js";
 import { boundsOfElements, realGeometryNodes } from "@nodra/geometry";
 import type { Direction } from "@nodra/geometry";
 import { appendLinePoint } from "./index.js";
@@ -27,6 +27,27 @@ describe("editor core", () => {
     expect(deduplicated.referenceMap.get(`${path.id}:segment:${path.segments[0]!.id}`)).toMatchObject({ references: [{ segmentId: "first" }] });
     expect(edit.elements).toEqual([path]);
   });
+  it("manages page-level constraints atomically with undo and redo", () => {
+    const first = createSketchLine(elementId("global-first"), layerId("default"), rectangle.style, { x: 0, y: 0 }, { x: 10, y: 0 });
+    const second = createSketchLine(elementId("global-second"), layerId("default"), rectangle.style, { x: 0, y: 10 }, { x: 10, y: 10 });
+    const constraint = { id: "global-coincident", kind: "coincident" as const, references: [{ elementId: first.id, nodeId: first.nodes[1]!.id }, { elementId: second.id, nodeId: second.nodes[0]!.id }] as const };
+    let state = createEditor({ ...document, elements: [first, second] });
+    state = dispatch(state, addDocumentConstraint(constraint));
+    expect(state.document.constraints).toEqual([constraint]);
+    expect(state.document.revision).toBe(1);
+    state = dispatch(state, updateDocumentConstraint({ ...constraint, kind: "horizontal" }));
+    expect(state.document.constraints?.[0]?.kind).toBe("horizontal");
+    expect(state.document.revision).toBe(2);
+    const noOp = dispatch(state, updateDocumentConstraint({ ...constraint, kind: "horizontal" }));
+    expect(noOp).toBe(state);
+    state = dispatch(state, deleteDocumentConstraint(constraint.id));
+    expect(state.document.constraints).toEqual([]);
+    expect(state.document.revision).toBe(3);
+    const restored = undo(state);
+    expect(restored.document.constraints?.[0]?.kind).toBe("horizontal");
+    expect(redo(restored).document.constraints).toEqual([]);
+  });
+
   it("previews, commits, cancels, and undoes a sketch constraint as one transaction", () => {
         const sketch = createSketchLine(elementId("transaction-sketch"), layerId("default"), rectangle.style, { x: 0, y: 0 }, { x: 7, y: 4 });
         const [first, second] = sketch.nodes;

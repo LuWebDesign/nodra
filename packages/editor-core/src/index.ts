@@ -4,6 +4,7 @@ import {
   type ElementId,
   type DimensionElement,
   type CircleConstraint,
+  type DocumentConstraint,
       type SketchConstraint,
   type Layer,
   type LayerId,
@@ -97,6 +98,35 @@ export const createSketchLine = (sketchId: ElementId, layer: LayerId, style: Vis
   const relation: SketchConstraint | undefined = relationKind ? { id: `auto:${edgeId}:${relationKind}`, kind: relationKind, references: [{ elementId: sketchId, nodeId: startNodeId }, { elementId: sketchId, nodeId: endNodeId }] } : undefined;
   return { type: "sketch", id: sketchId, layerId: layer, nodes: [{ id: startNodeId, point: start }, { id: endNodeId, point: end }], edges: [{ id: edgeId, startNodeId, endNodeId }], ...(relation ? { constraints: [relation] } : {}), style };
 };
+const documentConstraintsEqual = (first: DocumentConstraint, second: DocumentConstraint): boolean => first.id === second.id && first.kind === second.kind && first.value === second.value && first.references.length === second.references.length && first.references.every((reference, index) => reference.elementId === second.references[index]?.elementId && reference.nodeId === second.references[index]?.nodeId);
+const replaceDocumentConstraints = (document: DocumentSnapshot, constraints: readonly DocumentConstraint[]): CommandResult => result({ ...document, revision: nextRevision(document.revision), ...(constraints.length || document.constraints ? { constraints: [...constraints] } : {}) });
+
+export const addDocumentConstraint = (constraint: DocumentConstraint): EditorCommand => ({
+  name: `document-constraint-add:${constraint.id}`,
+  apply: (document) => (document.constraints ?? []).some((current) => current.id === constraint.id)
+    ? { success: false, error: `Document constraint already exists: ${constraint.id}` }
+    : replaceDocumentConstraints(document, [...(document.constraints ?? []), constraint]),
+});
+
+export const updateDocumentConstraint = (constraint: DocumentConstraint): EditorCommand => ({
+  name: `document-constraint-update:${constraint.id}`,
+  apply: (document) => {
+    const constraints = document.constraints ?? [];
+    if (!constraints.some((current) => current.id === constraint.id)) return { success: false, error: `Document constraint not found: ${constraint.id}` };
+    if (constraints.some((current) => current.id === constraint.id && documentConstraintsEqual(current, constraint))) return { success: true, document };
+    return replaceDocumentConstraints(document, constraints.map((current) => current.id === constraint.id ? constraint : current));
+  },
+});
+
+export const deleteDocumentConstraint = (constraintId: string): EditorCommand => ({
+  name: `document-constraint-delete:${constraintId}`,
+  apply: (document) => {
+    const constraints = document.constraints ?? [];
+    if (!constraints.some((constraint) => constraint.id === constraintId)) return { success: false, error: `Document constraint not found: ${constraintId}` };
+    return replaceDocumentConstraints(document, constraints.filter((constraint) => constraint.id !== constraintId));
+  },
+});
+
 export const appendSketchEdge = (sketchId: ElementId, fromNodeId: string, point: PointMm, toNodeId?: string): EditorCommand => ({
   name: `sketch-create-edge:${sketchId}`,
   apply: (document) => {
