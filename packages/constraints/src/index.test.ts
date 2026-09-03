@@ -117,7 +117,7 @@ describe("parametric constraint boundary", () => {
   ] as const)("solves a global %s relation between sketches without mutating the input", (kind, expected) => {
     const first: SketchElement = { ...sketch(), id: elementId("first"), nodes: [{ id: "a", point: { x: 0, y: 0 } }, { id: "b", point: { x: 20, y: 0 } }] };
     const second: SketchElement = { ...sketch(), id: elementId("second"), nodes: [{ id: "c", point: { x: 100, y: 50 } }, { id: "d", point: { x: 110, y: 60 } }], edges: [{ id: "cd", startNodeId: "c", endNodeId: "d" }] };
-    const constraint = { id: `global-${kind}`, kind, references: [{ elementId: first.id, nodeId: "a" }, { elementId: first.id, nodeId: "b" }, { elementId: second.id, nodeId: "c" }, { elementId: second.id, nodeId: "d" }] as const };
+    const constraint = { id: `global-${kind}`, kind, references: [{ elementId: first.id, edgeId: first.edges[0]!.id }, { elementId: second.id, edgeId: second.edges[0]!.id }] as const };
     const document = { ...documentWith([first, second]), constraints: [constraint] };
 
     const preview = solveConstraintComponents(document);

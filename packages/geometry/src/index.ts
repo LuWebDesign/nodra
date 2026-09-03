@@ -1,6 +1,6 @@
 import polygonClipping, { type MultiPolygon } from "polygon-clipping";
 import { hasBounds } from "@nodra/domain";
-    import type { ConnectableNodeAddress, ContourElement, DimensionElement, Element, ElementId, EllipseElement, GlyphElement, HandleOffset, LineElement, PathCubicSegment, PathElement, PointMm, RectangleElement, SizeMm, SketchConstraint, SketchElement, SplineElement, SplineNode } from "@nodra/domain";
+    import type { ConnectableNodeAddress, ContourElement, DimensionElement, Element, ElementId, EllipseElement, GlyphElement, HandleOffset, LineElement, PathCubicSegment, PathElement, PointMm, RectangleElement, SizeMm, SketchConstraint, SketchElement, SketchPointReference, SplineElement, SplineNode } from "@nodra/domain";
 
 export interface Bounds { readonly x: number; readonly y: number; readonly width: number; readonly height: number }
 export interface Viewport { readonly zoom: number; readonly panMm: PointMm }
@@ -158,18 +158,29 @@ export interface SketchConstraintSolveResult { readonly sketch: SketchElement; r
 
 /** Applies the bounded, deterministic first-slice sketch constraints without guessing unsupported geometry. */
 export function solveSketchConstraints(sketch: SketchElement): SketchConstraintSolveResult {
-  const constraints = sketch.constraints ?? [];
+  type PointConstraint = Omit<SketchConstraint, "references"> & { readonly references: readonly SketchPointReference[] };
+  const constraints: readonly PointConstraint[] = (sketch.constraints ?? []).map((constraint) => {
+    if (constraint.references.every((reference) => "nodeId" in reference)) return { ...constraint, references: constraint.references };
+    const segmentRelation = constraint.kind === "parallel" || constraint.kind === "perpendicular" || constraint.kind === "equal";
+    if (!segmentRelation || constraint.references.length !== 2 || !constraint.references.every((reference) => "edgeId" in reference && reference.elementId === sketch.id)) return { ...constraint, references: [] };
+    const references = constraint.references.flatMap((reference) => {
+      if (!("edgeId" in reference)) return [];
+      const edge = sketch.edges.find((candidate) => candidate.id === reference.edgeId);
+      return edge ? [{ elementId: sketch.id, nodeId: edge.startNodeId }, { elementId: sketch.id, nodeId: edge.endNodeId }] : [];
+    });
+    return { ...constraint, references: references.length === 4 ? references : [] };
+  });
   const nodes = new Map(sketch.nodes.map((node) => [node.id, { ...node.point }]));
   const conflicts: string[] = [];
   const resolve = (reference: { readonly elementId: string; readonly nodeId: string }) => reference.elementId === sketch.id ? nodes.get(reference.nodeId) : undefined;
-  const refs = (constraint: SketchConstraint) => constraint.references.map(resolve);
+  const refs = (constraint: PointConstraint) => constraint.references.map(resolve);
   const referenceKey = (reference: { readonly elementId: string; readonly nodeId: string }) => `${reference.elementId}:${reference.nodeId}`;
-  const samePair = (a: SketchConstraint, b: SketchConstraint) => {
+  const samePair = (a: PointConstraint, b: PointConstraint) => {
     if (a.kind !== b.kind || a.references.length !== b.references.length) return false;
     const left = a.references.map(referenceKey).sort(); const right = b.references.map(referenceKey).sort();
     return left.every((key, index) => key === right[index]);
   };
-  const invalid = (constraint: SketchConstraint): boolean => {
+  const invalid = (constraint: PointConstraint): boolean => {
     if (constraint.references.some((reference) => reference.elementId !== sketch.id || !nodes.has(reference.nodeId))) return true;
     if ((constraint.kind === "fixed" && constraint.references.length !== 1) || ((constraint.kind === "parallel" || constraint.kind === "perpendicular" || constraint.kind === "equal") && constraint.references.length !== 4) || (constraint.kind !== "fixed" && constraint.kind !== "parallel" && constraint.kind !== "perpendicular" && constraint.kind !== "equal" && constraint.references.length !== 2)) return true;
     if (constraint.references.length === 2 && referenceKey(constraint.references[0]!) === referenceKey(constraint.references[1]!)) return true;

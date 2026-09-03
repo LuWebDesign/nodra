@@ -183,7 +183,7 @@ describe("global constraint commands", () => {
 
     const committed = dispatch(initial, addSolvedDocumentConstraint(constraint));
 
-    expect(committed.document.constraints).toEqual([constraint]);
+    expect(committed.document.constraints).toEqual([{ id: `global-${kind}`, kind, references: [{ elementId: first.id, edgeId: first.edges[0]!.id }, { elementId: second.id, edgeId: second.edges[0]!.id }] }]);
     const point = (committed.document.elements[1] as SketchElement).nodes[1]!.point;
     expect(point.x).toBeCloseTo(expected.x, 8);
     expect(point.y).toBeCloseTo(expected.y, 8);

@@ -32,6 +32,13 @@ describe("canonical millimetre geometry", () => {
     expect(Math.hypot(d.x - c.x, d.y - c.y)).toBeCloseTo(10);
     expect(Math.atan2(d.y - c.y, d.x - c.x)).toBeCloseTo(Math.atan2(4, 3));
   });
+  it("solves canonical stable-edge segment relations", () => {
+    const sketch = { type: "sketch" as const, id: elementId("stable-relations"), layerId: layerId("l"), nodes: [{ id: "a", point: { x: 0, y: 0 } }, { id: "b", point: { x: 10, y: 0 } }, { id: "c", point: { x: 0, y: 10 } }, { id: "d", point: { x: 3, y: 14 } }], edges: [{ id: "ab", startNodeId: "a", endNodeId: "b" }, { id: "cd", startNodeId: "c", endNodeId: "d" }], constraints: [{ id: "parallel", kind: "parallel" as const, references: [{ elementId: elementId("stable-relations"), edgeId: "ab" }, { elementId: elementId("stable-relations"), edgeId: "cd" }] as const }], style };
+    const result = solveSketchConstraints(sketch);
+    expect(result.status).toBe("underdefined");
+    expect(result.conflicts).toEqual([]);
+    expect(result.sketch.nodes[3]!.point.y).toBeCloseTo(10);
+  });
   it("rejects ambiguous zero-axis distances and detects reversed duplicates", () => {
         const sketch = { type: "sketch" as const, id: elementId("solver-safety"), layerId: layerId("l"), nodes: [{ id: "a", point: { x: 0, y: 0 } }, { id: "b", point: { x: 0, y: 5 } }], edges: [{ id: "ab", startNodeId: "a", endNodeId: "b" }], constraints: [{ id: "distance", kind: "distance-horizontal" as const, references: [{ elementId: elementId("solver-safety"), nodeId: "a" }, { elementId: elementId("solver-safety"), nodeId: "b" }] as const, value: 10 }, { id: "h1", kind: "horizontal" as const, references: [{ elementId: elementId("solver-safety"), nodeId: "a" }, { elementId: elementId("solver-safety"), nodeId: "b" }] as const }, { id: "h2", kind: "horizontal" as const, references: [{ elementId: elementId("solver-safety"), nodeId: "b" }, { elementId: elementId("solver-safety"), nodeId: "a" }] as const }], style };
         const result = solveSketchConstraints(sketch);

@@ -5,6 +5,7 @@ import type {
   ElementId,
   PointMm,
   SketchConstraintKind,
+  SketchConstraint,
 } from "@nodra/domain";
 import { solveCircleConstraints, solveSketchConstraints } from "@nodra/geometry";
 
@@ -204,12 +205,25 @@ const circleAdapter: ParametricAdapter = {
 const adapters: readonly ParametricAdapter[] = [sketchAdapter, circleAdapter];
 const adapterFor = (element: Element): ParametricAdapter | undefined => adapters.find((adapter) => adapter.supports(element));
 
+const pointReferencesForConstraint = (sketches: readonly Extract<Element, { type: "sketch" }>[], constraint: SketchConstraint): readonly ConstraintNodeReference[] => {
+  if (constraint.references.every((reference) => "nodeId" in reference)) return constraint.references;
+  const segmentRelation = constraint.kind === "parallel" || constraint.kind === "perpendicular" || constraint.kind === "equal";
+  if (!segmentRelation || constraint.references.length !== 2 || !constraint.references.every((reference) => "edgeId" in reference)) return [];
+  const references = constraint.references.flatMap((reference) => {
+    if (!("edgeId" in reference)) return [];
+    const sketch = sketches.find((candidate) => candidate.id === reference.elementId);
+    const edge = sketch?.edges.find((candidate) => candidate.id === reference.edgeId);
+    return sketch && edge ? [{ elementId: sketch.id, nodeId: edge.startNodeId }, { elementId: sketch.id, nodeId: edge.endNodeId }] : [];
+  });
+  return references.length === 4 ? references : [];
+};
+
 /** Returns a stable, namespaced structural view; callers must validate references before solving. */
 export function normalizedConstraintsForDocument(document: DocumentSnapshot): readonly NormalizedConstraint[] {
   const sketches = document.elements.filter((element): element is Extract<Element, { type: "sketch" }> => element.type === "sketch");
   return [
-    ...sketches.flatMap((sketch) => (sketch.constraints ?? []).map((constraint) => ({ id: constraintIdentity("local", sketch.id, constraint.id), scope: "local" as const, ownerId: sketch.id, references: constraint.references, kind: constraint.kind, ...(constraint.value !== undefined ? { value: constraint.value } : {}) }))),
-    ...(document.constraints ?? []).map((constraint) => ({ id: constraintIdentity("document", undefined, constraint.id), scope: "document" as const, references: constraint.references, kind: constraint.kind, ...(constraint.value !== undefined ? { value: constraint.value } : {}) })),
+    ...sketches.flatMap((sketch) => (sketch.constraints ?? []).map((constraint) => ({ id: constraintIdentity("local", sketch.id, constraint.id), scope: "local" as const, ownerId: sketch.id, references: pointReferencesForConstraint(sketches, constraint), kind: constraint.kind, ...(constraint.value !== undefined ? { value: constraint.value } : {}) }))),
+    ...(document.constraints ?? []).map((constraint) => ({ id: constraintIdentity("document", undefined, constraint.id), scope: "document" as const, references: pointReferencesForConstraint(sketches, constraint), kind: constraint.kind, ...(constraint.value !== undefined ? { value: constraint.value } : {}) })),
   ].sort((first, second) => first.id < second.id ? -1 : first.id > second.id ? 1 : 0);
 
 }

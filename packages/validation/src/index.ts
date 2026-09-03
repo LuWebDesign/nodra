@@ -58,19 +58,27 @@ const contour = z.object({ ...common, type: z.literal("contour"), position: poin
 const sketchNode = z.object({ id: nonEmptyId, point }).strict();
 const sketchEdge = z.object({ id: nonEmptyId, startNodeId: nonEmptyId, endNodeId: nonEmptyId }).strict();
 const sketchPointReference = z.object({ elementId: nonEmptyId, nodeId: nonEmptyId }).strict();
-const sketchConstraint = z.object({ id: nonEmptyId, kind: z.enum(["horizontal", "vertical", "coincident", "parallel", "perpendicular", "equal", "distance-horizontal", "distance-vertical", "distance", "angle", "fixed"]), references: z.array(sketchPointReference).min(1).max(4), value: finite.positive().optional() }).strict();
+const sketchEdgeReference = z.object({ elementId: nonEmptyId, edgeId: nonEmptyId }).strict();
+const sketchConstraintReference = z.union([sketchPointReference, sketchEdgeReference]);
+const sketchConstraint = z.object({ id: nonEmptyId, kind: z.enum(["horizontal", "vertical", "coincident", "parallel", "perpendicular", "equal", "distance-horizontal", "distance-vertical", "distance", "angle", "fixed"]), references: z.array(sketchConstraintReference).min(1).max(4), value: finite.positive().optional() }).strict();
 const sketch = z.object({ id: nonEmptyId, layerId: nonEmptyId, type: z.literal("sketch"), nodes: z.array(sketchNode).min(2), edges: z.array(sketchEdge).min(1), constraints: z.array(sketchConstraint).optional(), style, operation: operation.optional() }).strict().superRefine((value, ctx) => {
   const nodeIds = value.nodes.map((node) => node.id); const edgeIds = value.edges.map((edge) => edge.id);
   if (new Set(nodeIds).size !== nodeIds.length) ctx.addIssue({ code: "custom", message: "Sketch node IDs must be unique", path: ["nodes"] });
   if (new Set(edgeIds).size !== edgeIds.length) ctx.addIssue({ code: "custom", message: "Sketch edge IDs must be unique", path: ["edges"] });
-  const known = new Set(nodeIds);
+  const known = new Set(nodeIds); const knownEdges = new Set(edgeIds);
   const constraints = value.constraints ?? [];
   const constraintIds = constraints.map((constraint) => constraint.id);
   if (new Set(constraintIds).size !== constraintIds.length) ctx.addIssue({ code: "custom", message: "Sketch constraint IDs must be unique", path: ["constraints"] });
   constraints.forEach((constraint, index) => {
-    if (constraint.references.some((reference) => reference.elementId !== value.id || !known.has(reference.nodeId))) ctx.addIssue({ code: "custom", message: "Sketch constraint references an unknown node", path: ["constraints", index, "references"] });
-    const expectedReferences = constraint.kind === "fixed" ? 1 : constraint.kind === "parallel" || constraint.kind === "perpendicular" || constraint.kind === "equal" ? 4 : 2;
-    if (constraint.references.length !== expectedReferences) ctx.addIssue({ code: "custom", message: constraint.kind + " constraints require " + expectedReferences + " reference" + (expectedReferences === 1 ? "" : "s"), path: ["constraints", index, "references"] });
+    if (constraint.references.some((reference) => reference.elementId !== value.id || ("nodeId" in reference ? !known.has(reference.nodeId) : !knownEdges.has(reference.edgeId)))) ctx.addIssue({ code: "custom", message: "Sketch constraint references unknown geometry", path: ["constraints", index, "references"] });
+    const segmentRelation = constraint.kind === "parallel" || constraint.kind === "perpendicular" || constraint.kind === "equal";
+    const canonicalSegments = segmentRelation && constraint.references.length === 2 && constraint.references.every((reference) => "edgeId" in reference);
+    const distinctCanonicalSegments = canonicalSegments && "edgeId" in constraint.references[0]! && "edgeId" in constraint.references[1]! && constraint.references[0].edgeId !== constraint.references[1].edgeId;
+    const legacySegments = segmentRelation && constraint.references.length === 4 && constraint.references.every((reference) => "nodeId" in reference);
+    const legacyEdges = legacySegments ? [[constraint.references[0], constraint.references[1]], [constraint.references[2], constraint.references[3]]].map(([first, second]) => value.edges.filter((edge) => "nodeId" in first! && "nodeId" in second! && (edge.startNodeId === first.nodeId && edge.endNodeId === second.nodeId || edge.startNodeId === second.nodeId && edge.endNodeId === first.nodeId))) : [];
+    const distinctLegacySegments = legacyEdges.length === 2 && legacyEdges.every((matches) => matches.length === 1) && legacyEdges[0]![0]!.id !== legacyEdges[1]![0]!.id;
+    const expectedReferences = constraint.kind === "fixed" ? 1 : 2;
+    if (segmentRelation ? !distinctCanonicalSegments && !distinctLegacySegments : constraint.references.length !== expectedReferences || !constraint.references.every((reference) => "nodeId" in reference)) ctx.addIssue({ code: "custom", message: segmentRelation ? "Segment constraints require two edge references" : constraint.kind + " constraints require " + expectedReferences + " reference" + (expectedReferences === 1 ? "" : "s"), path: ["constraints", index, "references"] });
     if ((constraint.kind === "distance-horizontal" || constraint.kind === "distance-vertical" || constraint.kind === "distance" || constraint.kind === "angle") && (constraint.value === undefined || constraint.value <= 0)) ctx.addIssue({ code: "custom", message: "Distance constraints require a positive value", path: ["constraints", index, "value"] });
   });
   value.edges.forEach((edge, index) => {
@@ -159,15 +167,20 @@ export const validateDocumentConstraints = (elements: readonly z.infer<typeof el
   constraints.forEach((constraint, index) => {
     if (ids.has(constraint.id)) ctx.addIssue({ code: "custom", message: "Document constraint IDs must be unique", path: [...path, index, "id"] });
     ids.add(constraint.id);
-    const expectedReferences = constraint.kind === "fixed" ? 1 : constraint.kind === "parallel" || constraint.kind === "perpendicular" || constraint.kind === "equal" ? 4 : 2;
-    if (constraint.references.length !== expectedReferences) ctx.addIssue({ code: "custom", message: constraint.kind + " constraints require " + expectedReferences + " reference" + (expectedReferences === 1 ? "" : "s"), path: [...path, index, "references"] });
+    const segmentRelation = constraint.kind === "parallel" || constraint.kind === "perpendicular" || constraint.kind === "equal";
+    const canonicalSegments = segmentRelation && constraint.references.length === 2 && constraint.references.every((reference) => "edgeId" in reference);
+    const legacySegments = segmentRelation && constraint.references.length === 4 && constraint.references.every((reference) => "nodeId" in reference);
+    const legacyEdges = legacySegments ? [[constraint.references[0], constraint.references[1]], [constraint.references[2], constraint.references[3]]].map(([first, second]) => { const sketch = sketches.get(first!.elementId); return sketch?.edges.filter((edge) => "nodeId" in first! && "nodeId" in second! && first.elementId === second.elementId && (edge.startNodeId === first.nodeId && edge.endNodeId === second.nodeId || edge.startNodeId === second.nodeId && edge.endNodeId === first.nodeId)) ?? []; }) : [];
+    const distinctLegacySegments = legacyEdges.length === 2 && legacyEdges.every((matches) => matches.length === 1) && (legacyEdges[0]![0]!.id !== legacyEdges[1]![0]!.id || constraint.references[0]!.elementId !== constraint.references[2]!.elementId);
+    const expectedReferences = constraint.kind === "fixed" ? 1 : 2;
+    if (segmentRelation ? !canonicalSegments && !distinctLegacySegments : constraint.references.length !== expectedReferences || !constraint.references.every((reference) => "nodeId" in reference)) ctx.addIssue({ code: "custom", message: segmentRelation ? "Segment constraints require two edge references" : constraint.kind + " constraints require " + expectedReferences + " reference" + (expectedReferences === 1 ? "" : "s"), path: [...path, index, "references"] });
     const usesValue = constraint.kind === "distance-horizontal" || constraint.kind === "distance-vertical" || constraint.kind === "distance" || constraint.kind === "angle";
     if (usesValue && (constraint.value === undefined || constraint.value <= 0)) ctx.addIssue({ code: "custom", message: "Distance constraints require a positive value", path: [...path, index, "value"] });
     if (!usesValue && constraint.value !== undefined) ctx.addIssue({ code: "custom", message: "This constraint kind must not define a value", path: [...path, index, "value"] });
-    if (constraint.references.some((reference, referenceIndex) => constraint.references.slice(0, referenceIndex).some((previous) => previous.elementId === reference.elementId && previous.nodeId === reference.nodeId))) ctx.addIssue({ code: "custom", message: "Document constraint references must identify different nodes", path: [...path, index, "references"] });
+    if (constraint.references.some((reference, referenceIndex) => constraint.references.slice(0, referenceIndex).some((previous) => previous.elementId === reference.elementId && ("nodeId" in previous && "nodeId" in reference ? previous.nodeId === reference.nodeId : "edgeId" in previous && "edgeId" in reference && previous.edgeId === reference.edgeId)))) ctx.addIssue({ code: "custom", message: "Document constraint references must identify different geometry", path: [...path, index, "references"] });
     constraint.references.forEach((reference, referenceIndex) => {
       const target = sketches.get(reference.elementId);
-      if (!target || !target.nodes.some((node) => node.id === reference.nodeId)) ctx.addIssue({ code: "custom", message: "Document constraint references an unknown sketch node", path: [...path, index, "references", referenceIndex] });
+      if (!target || ("nodeId" in reference ? !target.nodes.some((node) => node.id === reference.nodeId) : !target.edges.some((edge) => edge.id === reference.edgeId))) ctx.addIssue({ code: "custom", message: "Document constraint references unknown sketch geometry", path: [...path, index, "references", referenceIndex] });
     });
   });
 };
@@ -393,6 +406,40 @@ const normalizeStableDimensionReferences = (input: unknown): unknown => {
   }) };
   return input;
 };
+const normalizeStableConstraintReferences = (input: unknown): unknown => {
+  if (typeof input !== "object" || input === null || Array.isArray(input)) return input;
+  const normalizePage = (page: Record<string, unknown>): Record<string, unknown> => {
+    if (!Array.isArray(page.elements)) return page;
+    const byId = new Map(page.elements.flatMap((element) => typeof element === "object" && element !== null && !Array.isArray(element) && typeof (element as Record<string, unknown>).id === "string" ? [[(element as Record<string, unknown>).id as string, element as Record<string, unknown>] as const] : []));
+    const normalizeConstraints = (constraints: unknown): unknown => !Array.isArray(constraints) ? constraints : constraints.map((constraint) => {
+      if (typeof constraint !== "object" || constraint === null || Array.isArray(constraint)) return constraint;
+      const current = constraint as Record<string, unknown>;
+      if (!["parallel", "perpendicular", "equal"].includes(current.kind as string) || !Array.isArray(current.references) || current.references.length !== 4) return constraint;
+      const references = current.references as unknown[];
+      const edges = [[references[0], references[1]], [references[2], references[3]]].map((pair) => {
+        if (pair.some((reference) => typeof reference !== "object" || reference === null || Array.isArray(reference))) return undefined;
+        const [first, second] = pair as [Record<string, unknown>, Record<string, unknown>];
+        if (typeof first.elementId !== "string" || first.elementId !== second.elementId || typeof first.nodeId !== "string" || typeof second.nodeId !== "string") return undefined;
+        const sketch = byId.get(first.elementId);
+        if (sketch?.type !== "sketch" || !Array.isArray(sketch.edges)) return undefined;
+        const matches = sketch.edges.filter((edge) => { if (typeof edge !== "object" || edge === null || Array.isArray(edge)) return false; const candidate = edge as Record<string, unknown>; return candidate.startNodeId === first.nodeId && candidate.endNodeId === second.nodeId || candidate.startNodeId === second.nodeId && candidate.endNodeId === first.nodeId; });
+        const edge = matches.length === 1 ? matches[0] as Record<string, unknown> : undefined;
+        return edge && typeof edge.id === "string" ? { elementId: first.elementId, edgeId: edge.id } : undefined;
+      });
+      return edges.every((edge) => edge !== undefined) ? { ...current, references: edges } : constraint;
+    });
+    const elements = page.elements.map((element) => {
+      if (typeof element !== "object" || element === null || Array.isArray(element)) return element;
+      const current = element as Record<string, unknown>;
+      return current.type === "sketch" && current.constraints !== undefined ? { ...current, constraints: normalizeConstraints(current.constraints) } : element;
+    });
+    return { ...page, elements, ...(page.constraints !== undefined ? { constraints: normalizeConstraints(page.constraints) } : {}) };
+  };
+  const candidate = input as Record<string, unknown>;
+  if (Array.isArray(candidate.pages)) return { ...candidate, pages: candidate.pages.map((page) => typeof page === "object" && page !== null && !Array.isArray(page) ? normalizePage(page as Record<string, unknown>) : page) };
+  return normalizePage(candidate);
+};
+
 const migrateLegacyPages = (pages: unknown): unknown => Array.isArray(pages) ? pages.map((page) => {
   if (typeof page !== "object" || page === null || Array.isArray(page)) return page;
   const candidate = page as Record<string, unknown>;
@@ -411,7 +458,7 @@ export function migrateDocument(input: JsonValue): JsonValue {
 export type DocumentLoadResult = { readonly mode: "editable"; readonly document: DocumentSnapshot; readonly issues: readonly [] } | { readonly mode: "diagnostic" | "recovery"; readonly raw: unknown; readonly issues: readonly ValidationIssue[]; readonly error: string };
 export function loadDocument(input: unknown): DocumentLoadResult { const checked = validateDocument(input); if (checked.success) return { mode: "editable", document: checked.data, issues: [] }; const candidate = typeof input === "object" && input !== null && !Array.isArray(input) ? input as Record<string, unknown> : undefined; const capabilities = candidate?.capabilities; const unknown = typeof capabilities === "object" && capabilities !== null && !Array.isArray(capabilities) && Object.keys(capabilities).some((key) => key !== "spline"); return { mode: unknown ? "diagnostic" : "recovery", raw: input, issues: checked.issues, error: checked.error }; }
 export function validateDocument(input: unknown): ValidationResult {
-  const migrated = normalizeStableDimensionReferences(migrateDocument(input as JsonValue));
+  const migrated = normalizeStableConstraintReferences(normalizeStableDimensionReferences(migrateDocument(input as JsonValue)));
   const result = documentSchema.safeParse(migrated);
   if (result.success) { // SAFETY: documentSchema validated the complete shape; branded IDs are runtime strings.
     return { success: true, data: result.data as unknown as DocumentSnapshot };
@@ -421,7 +468,7 @@ export function validateDocument(input: unknown): ValidationResult {
 }
 
 export function validateProject(input: unknown): { readonly success: true; readonly data: ProjectSnapshot } | { readonly success: false; readonly issues: readonly ValidationIssue[]; readonly error: string } {
-  const migrated = normalizeStableDimensionReferences(migrateProject(input));
+  const migrated = normalizeStableConstraintReferences(normalizeStableDimensionReferences(migrateProject(input)));
   const result = projectSchema.safeParse(migrated);
   if (result.success) { // SAFETY: projectSchema validated the complete shape; branded IDs are runtime strings.
     return { success: true, data: result.data as unknown as ProjectSnapshot };

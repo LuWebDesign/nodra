@@ -57,8 +57,8 @@ const result = (document: DocumentSnapshot): CommandResult => {
 };
 const withoutDanglingDocumentConstraints = (document: DocumentSnapshot, elements: readonly Element[]): DocumentSnapshot => {
   if (!document.constraints?.length) return document;
-  const sketchNodes = new Map(elements.filter((element): element is SketchElement => element.type === "sketch").map((sketch) => [sketch.id, new Set(sketch.nodes.map((node) => node.id))]));
-  const constraints = document.constraints.filter((constraint) => constraint.references.every((reference) => sketchNodes.get(reference.elementId)?.has(reference.nodeId) === true));
+  const sketches = new Map(elements.filter((element): element is SketchElement => element.type === "sketch").map((sketch) => [sketch.id, sketch]));
+  const constraints = document.constraints.filter((constraint) => constraint.references.every((reference) => { const sketch = sketches.get(reference.elementId); return sketch !== undefined && ("nodeId" in reference ? sketch.nodes.some((node) => node.id === reference.nodeId) : sketch.edges.some((edge) => edge.id === reference.edgeId)); }));
   return constraints.length === document.constraints.length ? document : { ...document, constraints };
 };
 const replaceElements = (document: DocumentSnapshot, elements: readonly Element[]): CommandResult => result(withElements(withoutDanglingDocumentConstraints(document, elements), elements));
@@ -104,7 +104,8 @@ export const createSketchLine = (sketchId: ElementId, layer: LayerId, style: Vis
   const relation: SketchConstraint | undefined = relationKind ? { id: `auto:${edgeId}:${relationKind}`, kind: relationKind, references: [{ elementId: sketchId, nodeId: startNodeId }, { elementId: sketchId, nodeId: endNodeId }] } : undefined;
   return { type: "sketch", id: sketchId, layerId: layer, nodes: [{ id: startNodeId, point: start }, { id: endNodeId, point: end }], edges: [{ id: edgeId, startNodeId, endNodeId }], ...(relation ? { constraints: [relation] } : {}), style };
 };
-const documentConstraintsEqual = (first: DocumentConstraint, second: DocumentConstraint): boolean => first.id === second.id && first.kind === second.kind && first.value === second.value && first.references.length === second.references.length && first.references.every((reference, index) => reference.elementId === second.references[index]?.elementId && reference.nodeId === second.references[index]?.nodeId);
+const constraintReferenceKey = (reference: SketchConstraint["references"][number]): string => JSON.stringify([reference.elementId, "nodeId" in reference ? "node" : "edge", "nodeId" in reference ? reference.nodeId : reference.edgeId]);
+const documentConstraintsEqual = (first: DocumentConstraint, second: DocumentConstraint): boolean => first.id === second.id && first.kind === second.kind && first.value === second.value && first.references.length === second.references.length && first.references.every((reference, index) => constraintReferenceKey(reference) === (second.references[index] ? constraintReferenceKey(second.references[index]) : undefined));
 const replaceDocumentConstraints = (document: DocumentSnapshot, constraints: readonly DocumentConstraint[]): CommandResult => result({ ...document, revision: nextRevision(document.revision), ...(constraints.length || document.constraints ? { constraints: [...constraints] } : {}) });
 
 export const addDocumentConstraint = (constraint: DocumentConstraint): EditorCommand => ({
@@ -178,6 +179,12 @@ const remapSketchEdgeDimensionReferences = (edit: TopologyEditResult, sketchId: 
   return first && second ? [{ ...element, references: [first, second] }] : [];
 });
 
+const constraintReferencesSketchEdge = (constraint: SketchConstraint, sketchId: ElementId, edge: SketchElement["edges"][number]): boolean => {
+  if (constraint.references.some((reference) => "edgeId" in reference && reference.elementId === sketchId && reference.edgeId === edge.id)) return true;
+  if (!(constraint.kind === "parallel" || constraint.kind === "perpendicular" || constraint.kind === "equal") || constraint.references.length !== 4 || !constraint.references.every((reference) => "nodeId" in reference)) return false;
+  return [[constraint.references[0], constraint.references[1]], [constraint.references[2], constraint.references[3]]].some(([first, second]) => first !== undefined && second !== undefined && "nodeId" in first && "nodeId" in second && first.elementId === sketchId && second.elementId === sketchId && (first.nodeId === edge.startNodeId && second.nodeId === edge.endNodeId || first.nodeId === edge.endNodeId && second.nodeId === edge.startNodeId));
+};
+
 export const cutSketchEdge = (sketchId: ElementId, segmentIndex: number, cutPoint?: PointMm): EditorCommand => ({
   name: `sketch-cut-edge:${sketchId}:${segmentIndex}`,
   apply: (document) => {
@@ -185,6 +192,8 @@ export const cutSketchEdge = (sketchId: ElementId, segmentIndex: number, cutPoin
     if (!sketch) return { success: false, error: "Sketch not found" };
     if (!Number.isInteger(segmentIndex) || segmentIndex < 0 || segmentIndex >= sketch.edges.length) return { success: false, error: "Sketch edge not found" };
     const edge = sketch.edges[segmentIndex]!;
+    const documentConstraints = document.constraints?.filter((constraint) => !constraintReferencesSketchEdge(constraint, sketch.id, edge));
+    const baseDocument = documentConstraints && documentConstraints.length !== document.constraints?.length ? { ...document, constraints: documentConstraints } : document;
     const startNode = sketch.nodes.find((node) => node.id === edge.startNodeId)!;
     const endNode = sketch.nodes.find((node) => node.id === edge.endNodeId)!;
     if (cutPoint) {
@@ -203,22 +212,23 @@ export const cutSketchEdge = (sketchId: ElementId, segmentIndex: number, cutPoin
       const splitPoint = { x: startNode.point.x + vx * parameter, y: startNode.point.y + vy * parameter };
       const edges = sketch.edges.flatMap((candidate, index) => index === segmentIndex ? [splitEdgeA, splitEdgeB] : [candidate]);
       const nodes = [...sketch.nodes, { id: splitNodeId, point: splitPoint }];
-      const nextSketch = { ...sketch, nodes, edges };
+      const constraints = sketch.constraints?.filter((constraint) => !constraintReferencesSketchEdge(constraint, sketch.id, edge));
+      const nextSketch = { ...sketch, nodes, edges, ...(constraints ? { constraints } : {}) };
       const originalReference = sketchEdgeReference(sketchId, edge.id);
       const referenceMap = new Map<string, ReferenceResolution>([[topologyReferenceKey(originalReference), { kind: "replaced", references: [sketchEdgeReference(sketchId, splitEdgeA.id), sketchEdgeReference(sketchId, splitEdgeB.id)] }]]);
       const edit: TopologyEditResult = { elements: document.elements.map((element) => element.id === sketchId ? nextSketch : element), referenceMap, diagnostics: [] };
       const elements = remapSketchEdgeDimensionReferences(edit, sketchId, sketch.edges, edges);
-      return replaceTopology(document, { ...edit, elements });
+      return replaceTopology(baseDocument, { ...edit, elements });
     }
     const edges = sketch.edges.filter((_, index) => index !== segmentIndex);
     if (edges.length === 0) {
       const originalReference = sketchEdgeReference(sketchId, edge.id); const referenceKey = topologyReferenceKey(originalReference);
       const edit: TopologyEditResult = { elements: document.elements.filter((element) => element.id !== sketchId && !(element.type === "dimension" && element.references.some((reference) => reference.elementId === sketchId))), referenceMap: new Map([[referenceKey, { kind: "removed", reason: "Sketch edge was deleted" }]]), diagnostics: [{ code: "reference-removed", referenceKey, message: "Sketch edge was deleted" }] };
-      return replaceTopology(document, edit);
+      return replaceTopology(baseDocument, edit);
     }
     const usedNodeIds = new Set(edges.flatMap((edge) => [edge.startNodeId, edge.endNodeId]));
     const nodes = sketch.nodes.filter((node) => usedNodeIds.has(node.id));
-    const constraints = sketch.constraints?.filter((constraint) => constraint.references.every((reference) => usedNodeIds.has(reference.nodeId)));
+    const constraints = sketch.constraints?.filter((constraint) => constraint.references.every((reference) => "nodeId" in reference ? usedNodeIds.has(reference.nodeId) : edges.some((edge) => edge.id === reference.edgeId)));
     const nextSketch = { ...sketch, nodes, edges, ...(constraints ? { constraints } : {}) };
     const withoutRemovedNodeDimensions = document.elements.flatMap<Element>((element) => {
       if (element.type !== "dimension") return [element];
@@ -236,7 +246,7 @@ export const cutSketchEdge = (sketchId: ElementId, segmentIndex: number, cutPoin
     const referenceMap = new Map<string, ReferenceResolution>([[referenceKey, { kind: "removed", reason: "Sketch edge was deleted" }]]);
     const edit: TopologyEditResult = { elements: withoutRemovedNodeDimensions.map((element) => element.id === sketchId ? nextSketch : element), referenceMap, diagnostics: [{ code: "reference-removed", referenceKey, message: "Sketch edge was deleted" }] };
     const elements = remapSketchEdgeDimensionReferences(edit, sketchId, sketch.edges, edges);
-    return replaceTopology(document, { ...edit, elements });
+    return replaceTopology(baseDocument, { ...edit, elements });
   },
 });
 
@@ -1411,7 +1421,12 @@ export const updateDimensionValue = (dimensionId: ElementId, value: number): Edi
           const secondNodeIds = new Set([secondLine.startNodeId, secondLine.endNodeId]);
           const constraints = element.constraints?.filter((constraint) => {
             if (!constraint.id.startsWith("auto:") || !["horizontal", "vertical", "perpendicular"].includes(constraint.kind)) return true;
-            const references = constraint.references.map((reference) => reference.nodeId);
+            const references = constraint.references.flatMap((reference) => {
+              if ("nodeId" in reference) return [reference.nodeId];
+              if (reference.elementId !== element.id) return [];
+              const edge = element.edges.find((candidate) => candidate.id === reference.edgeId);
+              return edge ? [edge.startNodeId, edge.endNodeId] : [];
+            });
             const constrainsSecond = references.length === 2 && references.every((nodeId) => secondNodeIds.has(nodeId));
             const constrainsPair = references.length === 4 && references.every((nodeId) => relationNodeIds.has(nodeId));
             return !constrainsSecond && !constrainsPair;
@@ -1430,8 +1445,8 @@ export const updateDimensionValue = (dimensionId: ElementId, value: number): Edi
         const nextConstraint = sketchConstraintForDimension(dimension, target, document.elements, value);
         const constraint = target.constraints?.find((candidate) => candidate.id === dimension.constraintId);
         if (!constraint || !nextConstraint || constraint.kind !== nextConstraint.kind) return { success: false, error: "Driving dimension constraint does not match its references" };
-        const constraintReferenceIds = constraint.references.map((reference) => `${reference.elementId}:${reference.nodeId}`).sort();
-        const dimensionReferenceIds = nextConstraint.references.map((reference) => `${reference.elementId}:${reference.nodeId}`).sort();
+        const constraintReferenceIds = constraint.references.map(constraintReferenceKey).sort();
+        const dimensionReferenceIds = nextConstraint.references.map(constraintReferenceKey).sort();
         const matches = constraintReferenceIds.length === dimensionReferenceIds.length && constraintReferenceIds.every((reference, index) => reference === dimensionReferenceIds[index]);
         if (!matches) return { success: false, error: "Driving dimension constraint does not match its references" };
         const solved = solveSketchConstraints({ ...target, constraints: target.constraints!.map((candidate) => candidate.id === constraint.id ? nextConstraint : candidate) });
@@ -1458,9 +1473,20 @@ export const updateDimensionValue = (dimensionId: ElementId, value: number): Edi
   },
 });
 
+const segmentEdgeKeysForConstraint = (sketch: SketchElement, constraint: SketchConstraint): readonly string[] | undefined => {
+  if (!(constraint.kind === "parallel" || constraint.kind === "perpendicular" || constraint.kind === "equal")) return undefined;
+  if (constraint.references.length === 2 && constraint.references.every((reference) => "edgeId" in reference)) return constraint.references.map(constraintReferenceKey).sort();
+  if (constraint.references.length !== 4 || !constraint.references.every((reference) => "nodeId" in reference)) return undefined;
+  const edges = [[constraint.references[0], constraint.references[1]], [constraint.references[2], constraint.references[3]]].map(([first, second]) => sketch.edges.find((edge) => first !== undefined && second !== undefined && "nodeId" in first && "nodeId" in second && (edge.startNodeId === first.nodeId && edge.endNodeId === second.nodeId || edge.startNodeId === second.nodeId && edge.endNodeId === first.nodeId)));
+  return edges.every((edge) => edge !== undefined) ? edges.map((edge) => JSON.stringify([sketch.id, "edge", edge!.id])).sort() : undefined;
+};
+
 const validateSketchConstraint = (sketch: SketchElement, constraint: SketchConstraint): string | undefined => {
-  if (!constraint.references.every((reference) => reference.elementId === sketch.id && sketch.nodes.some((node) => node.id === reference.nodeId))) return "Sketch constraint references are invalid";
-  if ((constraint.kind === "parallel" || constraint.kind === "perpendicular" || constraint.kind === "equal") && constraint.references.length !== 4) return "This sketch relation requires two line references";
+  const segmentRelation = constraint.kind === "parallel" || constraint.kind === "perpendicular" || constraint.kind === "equal";
+  const segmentEdges = segmentEdgeKeysForConstraint(sketch, constraint);
+  if (!constraint.references.every((reference) => reference.elementId === sketch.id && ("nodeId" in reference ? sketch.nodes.some((node) => node.id === reference.nodeId) : sketch.edges.some((edge) => edge.id === reference.edgeId)))) return "Sketch constraint references are invalid";
+  if (segmentRelation && (segmentEdges?.length !== 2 || new Set(segmentEdges).size !== 2)) return "This sketch relation requires two different line references";
+  if (!segmentRelation && !constraint.references.every((reference) => "nodeId" in reference)) return "This sketch constraint requires point references";
   if ((constraint.kind === "horizontal" || constraint.kind === "vertical" || constraint.kind === "coincident" || constraint.kind === "distance-horizontal" || constraint.kind === "distance-vertical" || constraint.kind === "distance" || constraint.kind === "angle") && constraint.references.length !== 2) return "This sketch constraint requires two references";
   if (constraint.kind === "fixed" && constraint.references.length !== 1) return "A fixed constraint requires one reference";
   if ((constraint.kind === "distance-horizontal" || constraint.kind === "distance-vertical" || constraint.kind === "distance" || constraint.kind === "angle") && (!Number.isFinite(constraint.value) || constraint.value === undefined || constraint.value <= 0)) return "Distance constraints require a positive value";
@@ -1478,37 +1504,67 @@ const solveSketchCandidate = (document: DocumentSnapshot, sketch: SketchElement,
 export const addSketchSegmentRelation = (constraint: SketchConstraint): EditorCommand => ({
   name: `sketch-segment-relation:${constraint.id}`,
   apply: (document) => {
-    if (!(constraint.kind === "parallel" || constraint.kind === "perpendicular" || constraint.kind === "equal" || constraint.kind === "coincident") || constraint.references.length !== (constraint.kind === "coincident" ? 2 : 4)) return { success: false, error: "Relation requires valid sketch references" };
+    const segmentRelation = constraint.kind === "parallel" || constraint.kind === "perpendicular" || constraint.kind === "equal";
+    const validArity = constraint.kind === "coincident"
+      ? constraint.references.length === 2 && constraint.references.every((reference) => "nodeId" in reference)
+      : segmentRelation && ((constraint.references.length === 2 && constraint.references.every((reference) => "edgeId" in reference)) || (constraint.references.length === 4 && constraint.references.every((reference) => "nodeId" in reference)));
+    if (!validArity) return { success: false, error: "Relation requires valid sketch references" };
     const sourceIds = [...new Set(constraint.references.map((reference) => reference.elementId))];
     const sketches = sourceIds.map((sourceId) => document.elements.find((element): element is SketchElement => element.id === sourceId && element.type === "sketch"));
     if (sketches.some((sketch) => sketch === undefined)) return { success: false, error: "Segment relation sketches were not found" };
+    if (segmentRelation) {
+      const edgeKeys = constraint.references.length === 2 && constraint.references.every((reference) => "edgeId" in reference)
+        ? constraint.references.flatMap((reference) => { if (!("edgeId" in reference)) return []; const sketch = sketches.find((candidate) => candidate?.id === reference.elementId); return sketch?.edges.some((edge) => edge.id === reference.edgeId) ? [constraintReferenceKey(reference)] : []; })
+        : [[constraint.references[0], constraint.references[1]], [constraint.references[2], constraint.references[3]]].flatMap(([first, second]) => { if (!first || !second || !("nodeId" in first) || !("nodeId" in second) || first.elementId !== second.elementId) return []; const sketch = sketches.find((candidate) => candidate?.id === first.elementId); const matches = sketch?.edges.filter((edge) => edge.startNodeId === first.nodeId && edge.endNodeId === second.nodeId || edge.startNodeId === second.nodeId && edge.endNodeId === first.nodeId) ?? []; return matches.length === 1 ? [JSON.stringify([first.elementId, "edge", matches[0]!.id])] : []; });
+      if (edgeKeys.length !== 2 || new Set(edgeKeys).size !== 2) return { success: false, error: "Relation requires two different sketch edges" };
+    }
     const target = sketches[0]!;
-    if (sourceIds.length === 1) return addSketchConstraint(target.id, { ...constraint, references: constraint.references.map((reference) => ({ elementId: target.id, nodeId: reference.nodeId })) as unknown as SketchConstraint["references"] }).apply(document);
-    const remapNode = new Map<string, string>();
+    if (sourceIds.length === 1) return addSketchConstraint(target.id, { ...constraint, references: constraint.references.map((reference) => "nodeId" in reference ? { elementId: target.id, nodeId: reference.nodeId } : { elementId: target.id, edgeId: reference.edgeId }) as unknown as SketchConstraint["references"] }).apply(document);
+    const remapNode = new Map<string, string>(); const remapEdge = new Map<string, string>();
     const nodes = sketches.flatMap((sketch, sketchIndex) => sketch!.nodes.map((node) => {
       const nodeId = sketchIndex === 0 ? node.id : `${sketch!.id}:${node.id}`;
       remapNode.set(`${sketch!.id}:${node.id}`, nodeId);
       return { ...node, id: nodeId };
     }));
-    const edges = sketches.flatMap((sketch, sketchIndex) => sketch!.edges.map((edge) => ({ id: sketchIndex === 0 ? edge.id : `${sketch!.id}:${edge.id}`, startNodeId: remapNode.get(`${sketch!.id}:${edge.startNodeId}`) ?? edge.startNodeId, endNodeId: remapNode.get(`${sketch!.id}:${edge.endNodeId}`) ?? edge.endNodeId })));
-    const existingConstraints = sketches.flatMap((sketch, sketchIndex) => (sketch!.constraints ?? []).map((current) => ({ ...current, id: sketchIndex === 0 ? current.id : `${sketch!.id}:${current.id}`, references: current.references.map((reference) => ({ elementId: target.id, nodeId: remapNode.get(`${sketch!.id}:${reference.nodeId}`) ?? reference.nodeId })) as unknown as SketchConstraint["references"] })));
-    const relation = { ...constraint, references: constraint.references.map((reference) => ({ elementId: target.id, nodeId: remapNode.get(`${reference.elementId}:${reference.nodeId}`) ?? reference.nodeId })) as unknown as SketchConstraint["references"] };
+    const edges = sketches.flatMap((sketch, sketchIndex) => sketch!.edges.map((edge) => { const edgeId = sketchIndex === 0 ? edge.id : `${sketch!.id}:${edge.id}`; remapEdge.set(`${sketch!.id}:${edge.id}`, edgeId); return { id: edgeId, startNodeId: remapNode.get(`${sketch!.id}:${edge.startNodeId}`) ?? edge.startNodeId, endNodeId: remapNode.get(`${sketch!.id}:${edge.endNodeId}`) ?? edge.endNodeId }; }));
+    const remapReference = (reference: SketchConstraint["references"][number]) => {
+      if (!sourceIds.includes(reference.elementId)) return reference;
+      return "nodeId" in reference ? { elementId: target.id, nodeId: remapNode.get(`${reference.elementId}:${reference.nodeId}`) ?? reference.nodeId } : { elementId: target.id, edgeId: remapEdge.get(`${reference.elementId}:${reference.edgeId}`) ?? reference.edgeId };
+    };
+    const existingConstraints = sketches.flatMap((sketch, sketchIndex) => (sketch!.constraints ?? []).map((current) => ({ ...current, id: sketchIndex === 0 ? current.id : `${sketch!.id}:${current.id}`, references: current.references.map(remapReference) as unknown as SketchConstraint["references"] })));
+    const relation = { ...constraint, references: constraint.references.map(remapReference) as unknown as SketchConstraint["references"] };
     const merged: SketchElement = { ...target, nodes, edges, constraints: [...existingConstraints, relation] };
     const solved = solveSketchConstraints(merged);
     if (solved.status === "conflict" || solved.status === "overdefined") return { success: false, error: `Sketch constraints are ${solved.status}` };
     const removed = new Set(sourceIds.slice(1));
     const remapElement = (element: Element): Element | undefined => {
       if (removed.has(element.id)) return undefined;
-      if (element.type !== "dimension") return element;
-      if (!element.references.some((reference) => removed.has(reference.elementId))) return element;
-      return undefined;
+      if (element.type !== "dimension" || !element.references.some((reference) => removed.has(reference.elementId))) return element;
+      const references = element.references.map((reference) => {
+        if (!sourceIds.includes(reference.elementId)) return reference;
+        const source = sketches.find((sketch) => sketch?.id === reference.elementId);
+        if (!source) return undefined;
+        if ("kind" in reference && reference.kind === "line") {
+          const oldEdge = reference.edgeId !== undefined ? source.edges.find((edge) => edge.id === reference.edgeId) : source.edges[reference.edgeIndex ?? 0];
+          const edgeId = oldEdge ? remapEdge.get(`${source.id}:${oldEdge.id}`) : undefined;
+          const edgeIndex = edgeId === undefined ? -1 : edges.findIndex((edge) => edge.id === edgeId);
+          return edgeId !== undefined && edgeIndex >= 0 ? { ...reference, elementId: target.id, edgeId, edgeIndex } : undefined;
+        }
+        const oldNode = reference.nodeId !== undefined ? source.nodes.find((node) => node.id === reference.nodeId) : source.nodes[reference.nodeIndex];
+        const nodeId = oldNode ? remapNode.get(`${source.id}:${oldNode.id}`) : undefined;
+        const nodeIndex = nodeId === undefined ? -1 : nodes.findIndex((node) => node.id === nodeId);
+        return nodeId !== undefined && nodeIndex >= 0 ? { ...reference, elementId: target.id, nodeId, nodeIndex } : undefined;
+      });
+      return references[0] && references[1] ? { ...element, references: [references[0], references[1]] } : undefined;
     };
     const elements = document.elements.flatMap((element) => {
       if (element.id === target.id) return [solved.sketch];
       const mapped = remapElement(element);
       return mapped ? [mapped] : [];
     });
-    return replaceElements(removeConnectionsFor(document, removed), elements);
+    const documentConstraints = document.constraints?.map((current) => ({ ...current, references: current.references.map(remapReference) as unknown as SketchConstraint["references"] }));
+    const baseDocument = removeConnectionsFor(documentConstraints ? { ...document, constraints: documentConstraints } : document, removed);
+    return replaceElements(baseDocument, elements);
   },
 });
 
@@ -1517,8 +1573,14 @@ export const addSketchConstraint = (sketchId: ElementId, constraint: SketchConst
   apply: (document) => {
     const sketch = document.elements.find((element): element is SketchElement => element.id === sketchId && element.type === "sketch");
     if (!sketch || sketch.constraints?.some((current) => current.id === constraint.id)) return { success: false, error: "Sketch constraint cannot be added" };
-    const sameReferences = (first: SketchConstraint, second: SketchConstraint) => first.kind === second.kind && first.references.length === second.references.length && first.references.every((reference, index) => reference.elementId === second.references[index]?.elementId && reference.nodeId === second.references[index]?.nodeId);
-    const constraints = (sketch.constraints ?? []).filter((current) => !(current.id.startsWith("auto:") && (sameReferences(current, constraint) || constraint.references.every((reference) => current.references.some((candidate) => `${candidate.elementId}:${candidate.nodeId}` === `${reference.elementId}:${reference.nodeId}`)))));
+    const sameReferences = (first: SketchConstraint, second: SketchConstraint) => first.kind === second.kind && first.references.length === second.references.length && first.references.every((reference, index) => constraintReferenceKey(reference) === (second.references[index] ? constraintReferenceKey(second.references[index]) : undefined));
+    const explicitEdges = segmentEdgeKeysForConstraint(sketch, constraint) ?? (constraint.references.length === 2 && constraint.references.every((reference) => "nodeId" in reference) ? sketch.edges.flatMap((edge) => { const [first, second] = constraint.references; return first && second && "nodeId" in first && "nodeId" in second && (edge.startNodeId === first.nodeId && edge.endNodeId === second.nodeId || edge.startNodeId === second.nodeId && edge.endNodeId === first.nodeId) ? [JSON.stringify([sketch.id, "edge", edge.id])] : []; }) : undefined);
+    const constraints = (sketch.constraints ?? []).filter((current) => {
+      if (!current.id.startsWith("auto:")) return true;
+      const currentEdges = segmentEdgeKeysForConstraint(sketch, current);
+      const sameEdges = explicitEdges !== undefined && explicitEdges.length > 0 && currentEdges !== undefined && explicitEdges.every((key) => currentEdges.includes(key));
+      return !(sameReferences(current, constraint) || sameEdges || constraint.references.every((reference) => current.references.some((candidate) => constraintReferenceKey(candidate) === constraintReferenceKey(reference))));
+    });
     return solveSketchCandidate(document, sketch, [...constraints, constraint]);
   },
 });
@@ -1725,7 +1787,8 @@ export const deleteElementNodes = (id: ElementId, nodeIndexes: readonly number[]
       const keptNodes = current.nodes.filter((node) => !nodeIds.has(node.id));
       const keptEdges = current.edges.filter((edge) => !nodeIds.has(edge.startNodeId) && !nodeIds.has(edge.endNodeId));
       if (keptNodes.length < 2 || keptEdges.length < 1) return { success: false, error: "A sketch must retain at least two nodes and one edge" };
-      const constraints = current.constraints?.filter((constraint) => !constraint.references.some((reference) => nodeIds.has(reference.nodeId)));
+      const keptEdgeIds = new Set(keptEdges.map((edge) => edge.id));
+      const constraints = current.constraints?.filter((constraint) => constraint.references.every((reference) => "nodeId" in reference ? !nodeIds.has(reference.nodeId) : keptEdgeIds.has(reference.edgeId)));
       const next = { ...current, nodes: keptNodes, edges: keptEdges, ...(constraints ? { constraints } : {}) };
       return replaceElements(document, document.elements.map((element) => element.id === id ? next : element));
     }

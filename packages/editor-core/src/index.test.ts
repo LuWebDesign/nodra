@@ -121,6 +121,27 @@ describe("editor core", () => {
         expect((perpendicular.document.elements[0] as SketchElement).nodes[3]?.point.x).toBeCloseTo(0);
       });
 
+      it("replaces an automatic segment relation with an explicit stable-edge relation", () => {
+        const sketch: SketchElement = { type: "sketch", id: elementId("replace-auto-segment"), layerId: layerId("default"), nodes: [{ id: "a", point: { x: 0, y: 0 } }, { id: "b", point: { x: 10, y: 0 } }, { id: "c", point: { x: 10, y: 10 } }], edges: [{ id: "ab", startNodeId: "a", endNodeId: "b" }, { id: "bc", startNodeId: "b", endNodeId: "c" }], constraints: [{ id: "auto:bc:perpendicular", kind: "perpendicular", references: [{ elementId: elementId("replace-auto-segment"), edgeId: "ab" }, { elementId: elementId("replace-auto-segment"), edgeId: "bc" }] }], style: rectangle.style };
+        const explicit = { id: "parallel", kind: "parallel" as const, references: [{ elementId: sketch.id, edgeId: "ab" }, { elementId: sketch.id, edgeId: "bc" }] as const };
+
+        const state = dispatch(createEditor({ ...document, elements: [sketch] }), addSketchConstraint(sketch.id, explicit));
+
+        expect((state.document.elements[0] as SketchElement).constraints).toEqual([explicit]);
+        expect((state.document.elements[0] as SketchElement).nodes[2]!.point.y).toBeCloseTo(0);
+      });
+
+      it("rejects duplicate canonical edges and non-edge legacy segment pairs atomically", () => {
+        const sketch: SketchElement = { type: "sketch", id: elementId("invalid-segment-command"), layerId: layerId("default"), nodes: [{ id: "a", point: { x: 0, y: 0 } }, { id: "b", point: { x: 10, y: 0 } }, { id: "c", point: { x: 20, y: 0 } }], edges: [{ id: "ab", startNodeId: "a", endNodeId: "b" }, { id: "bc", startNodeId: "b", endNodeId: "c" }], style: rectangle.style };
+        const initial = createEditor({ ...document, elements: [sketch] });
+        const duplicate = { id: "duplicate", kind: "parallel" as const, references: [{ elementId: sketch.id, edgeId: "ab" }, { elementId: sketch.id, edgeId: "ab" }] as const };
+        const nonEdges = { id: "non-edges", kind: "parallel" as const, references: [{ elementId: sketch.id, nodeId: "a" }, { elementId: sketch.id, nodeId: "c" }, { elementId: sketch.id, nodeId: "b" }, { elementId: sketch.id, nodeId: "c" }] as const };
+
+        expect(dispatch(initial, addSketchConstraint(sketch.id, duplicate))).toBe(initial);
+        expect(dispatch(initial, addSketchSegmentRelation(nonEdges))).toBe(initial);
+        expect(initial.undo).toHaveLength(0);
+      });
+
       it("merges two sketches when adding an explicit relation between their segments", () => {
         const first = createSketchLine(elementId("first-relation-sketch"), layerId("default"), rectangle.style, { x: 0, y: 0 }, { x: 10, y: 0 });
         const second = createSketchLine(elementId("second-relation-sketch"), layerId("default"), rectangle.style, { x: 0, y: 10 }, { x: 3, y: 14 });
@@ -131,6 +152,25 @@ describe("editor core", () => {
         expect(merged.edges).toHaveLength(2);
         expect(merged.constraints?.some((constraint) => constraint.kind === "parallel")).toBe(true);
         expect(merged.nodes[3]?.point.y).toBeCloseTo(10);
+      });
+
+      it("remaps page constraints and dimensions when the legacy merge command absorbs a sketch", () => {
+        const first = createSketchLine(elementId("merge-remap-first"), layerId("default"), rectangle.style, { x: 0, y: 0 }, { x: 10, y: 0 });
+        const second = createSketchLine(elementId("merge-remap-second"), layerId("default"), rectangle.style, { x: 0, y: 10 }, { x: 7, y: 14 });
+        const third = createSketchLine(elementId("merge-remap-third"), layerId("default"), rectangle.style, { x: 20, y: 10 }, { x: 30, y: 10 });
+        const relation = { id: "parallel", kind: "parallel" as const, references: [{ elementId: first.id, edgeId: first.edges[0]!.id }, { elementId: second.id, edgeId: second.edges[0]!.id }] as const };
+        const global = { id: "external-horizontal", kind: "horizontal" as const, references: [{ elementId: second.id, nodeId: second.nodes[0]!.id }, { elementId: third.id, nodeId: third.nodes[0]!.id }] as const };
+        const linked: DimensionElement = { ...dimension, id: elementId("merge-remap-dimension"), kind: "angular", references: [{ kind: "line", elementId: second.id, edgeId: second.edges[0]!.id, edgeIndex: 0 }, { kind: "line", elementId: second.id, edgeId: second.edges[0]!.id, edgeIndex: 0 }] };
+        const initial = createEditor({ ...document, elements: [first, second, third, linked], constraints: [global] });
+
+        const command = addSketchSegmentRelation(relation);
+        const applied = command.apply(initial.document);
+        if (!applied.success) throw new Error(applied.error);
+        const state = dispatch(initial, command);
+
+        expect(state.document.constraints?.[0]?.references).toEqual([{ elementId: first.id, nodeId: `${second.id}:${second.nodes[0]!.id}` }, global.references[1]]);
+        expect((state.document.elements.find((element) => element.id === linked.id) as DimensionElement).references).toEqual([{ kind: "line", elementId: first.id, edgeId: `${second.id}:${second.edges[0]!.id}`, edgeIndex: 1 }, { kind: "line", elementId: first.id, edgeId: `${second.id}:${second.edges[0]!.id}`, edgeIndex: 1 }]);
+        expect(undo(state).document).toEqual(initial.document);
       });
 
       it("merges two sketches for an explicit coincident node relation", () => {
@@ -187,6 +227,32 @@ describe("editor core", () => {
 
     expect(state.document.constraints).toEqual([constraint]);
     expect((state.document.elements[0] as SketchElement).edges).toHaveLength(2);
+    expect(undo(state).document).toEqual(initial.document);
+  });
+
+  it("removes stable-edge constraints when their referenced edge is split", () => {
+    const firstBase = createSketchLine(elementId("split-constrained-edge"), layerId("default"), rectangle.style, { x: 0, y: 0 }, { x: 20, y: 0 });
+    const first: SketchElement = { ...firstBase, nodes: [...firstBase.nodes, { id: "c", point: { x: 0, y: 10 } }, { id: "d", point: { x: 20, y: 10 } }], edges: [...firstBase.edges, { id: "cd", startNodeId: "c", endNodeId: "d" }], constraints: [{ id: "local-parallel", kind: "parallel", references: [{ elementId: firstBase.id, edgeId: firstBase.edges[0]!.id }, { elementId: firstBase.id, edgeId: "cd" }] }] };
+    const second = createSketchLine(elementId("split-constrained-other"), layerId("default"), rectangle.style, { x: 30, y: 0 }, { x: 50, y: 0 });
+    const global = { id: "global-parallel", kind: "parallel" as const, references: [{ elementId: first.id, edgeId: first.edges[0]!.id }, { elementId: second.id, edgeId: second.edges[0]!.id }] as const };
+    const initial = createEditor({ ...document, elements: [first, second], constraints: [global] });
+
+    const state = dispatch(initial, cutSketchEdge(first.id, 0, { x: 8, y: 0 }));
+
+    expect((state.document.elements[0] as SketchElement).constraints).toEqual([]);
+    expect(state.document.constraints).toEqual([]);
+    expect(undo(state).document).toEqual(initial.document);
+  });
+
+  it("removes a legacy global segment relation when its source edge is split", () => {
+    const first = createSketchLine(elementId("split-legacy-global"), layerId("default"), rectangle.style, { x: 0, y: 0 }, { x: 20, y: 0 });
+    const second = createSketchLine(elementId("split-legacy-other"), layerId("default"), rectangle.style, { x: 30, y: 0 }, { x: 50, y: 0 });
+    const legacy = { id: "legacy-parallel", kind: "parallel" as const, references: [{ elementId: first.id, nodeId: first.nodes[0]!.id }, { elementId: first.id, nodeId: first.nodes[1]!.id }, { elementId: second.id, nodeId: second.nodes[0]!.id }, { elementId: second.id, nodeId: second.nodes[1]!.id }] as const };
+    const initial = createEditor({ ...document, elements: [first, second], constraints: [legacy] });
+
+    const state = dispatch(initial, cutSketchEdge(first.id, 0, { x: 8, y: 0 }));
+
+    expect(state.document.constraints).toEqual([]);
     expect(undo(state).document).toEqual(initial.document);
   });
 
@@ -670,6 +736,17 @@ it("preserves a horizontal sketch relation while changing an angular dimension",
      const updated = state.document.elements[0] as SketchElement;
      expect(updated.nodes[0]?.point.y).toBe(0);
      expect(updated.nodes[1]?.point.y).toBe(0);
+   });
+
+it("removes a canonical automatic segment relation when driving an angular dimension", () => {
+     const sketch: SketchElement = { type: "sketch", id: elementId("canonical-auto-angle"), layerId: layerId("default"), nodes: [{ id: "a", point: { x: 0, y: 0 } }, { id: "b", point: { x: 10, y: 0 } }, { id: "c", point: { x: 10, y: 10 } }], edges: [{ id: "ab", startNodeId: "a", endNodeId: "b" }, { id: "bc", startNodeId: "b", endNodeId: "c" }], constraints: [{ id: "auto:bc:perpendicular", kind: "perpendicular", references: [{ elementId: elementId("canonical-auto-angle"), edgeId: "ab" }, { elementId: elementId("canonical-auto-angle"), edgeId: "bc" }] }], style: rectangle.style };
+     const angle: DimensionElement = { type: "dimension", id: elementId("canonical-auto-angle-dimension"), layerId: sketch.layerId, kind: "angular", references: [{ kind: "line", elementId: sketch.id, edgeId: "ab", edgeIndex: 0 }, { kind: "line", elementId: sketch.id, edgeId: "bc", edgeIndex: 1 }], offset: { x: 5, y: -5 }, precision: 2, units: "mm", rotation: 0, style: rectangle.style };
+
+     const state = dispatch(createEditor({ ...document, elements: [sketch, angle] }), updateDimensionValue(angle.id, 30));
+
+     const updated = state.document.elements[0] as SketchElement;
+     expect(updated.constraints).toEqual([]);
+     expect(Math.atan2(updated.nodes[2]!.point.y - updated.nodes[1]!.point.y, updated.nodes[2]!.point.x - updated.nodes[1]!.point.x) * 180 / Math.PI).toBeCloseTo(150);
    });
 
 it("drives the angle between two connected lines while preserving the second length", () => {

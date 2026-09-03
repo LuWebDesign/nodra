@@ -157,6 +157,36 @@ describe("native document validation", () => {
         expect(validateDocument({ ...base, elements: [sketch] }).success).toBe(false);
         expect(validateDocument({ ...base, elements: [{ ...sketch, constraints: [{ ...sketch.constraints[0], references: [{ elementId: "sketch", nodeId: "missing" }, { elementId: "sketch", nodeId: "b" }] }] }] }).success).toBe(false);
       });
+  it("normalizes legacy segment relations to stable sketch edge references", () => {
+    const base = createDocument("stable-segment-constraints", [{ id: layerId("layer-1"), name: "Design", visible: true, order: 0 }]);
+    const sketch = { type: "sketch" as const, id: "sketch", layerId: "layer-1", nodes: [{ id: "a", point: { x: 0, y: 0 } }, { id: "b", point: { x: 10, y: 0 } }, { id: "c", point: { x: 0, y: 10 } }, { id: "d", point: { x: 10, y: 10 } }], edges: [{ id: "ab", startNodeId: "a", endNodeId: "b" }, { id: "cd", startNodeId: "c", endNodeId: "d" }], constraints: [{ id: "parallel", kind: "parallel" as const, references: [{ elementId: "sketch", nodeId: "a" }, { elementId: "sketch", nodeId: "b" }, { elementId: "sketch", nodeId: "c" }, { elementId: "sketch", nodeId: "d" }] as const }], style: { stroke: "#000", strokeWidth: 1 } };
+
+    const result = validateDocument({ ...base, elements: [sketch] });
+
+    expect(result.success).toBe(true);
+    if (result.success) expect((result.data.elements[0] as typeof result.data.elements[0] & { constraints: readonly unknown[] }).constraints[0]).toMatchObject({ references: [{ elementId: "sketch", edgeId: "ab" }, { elementId: "sketch", edgeId: "cd" }] });
+  });
+
+  it("rejects duplicate or ambiguous local segment edge identities", () => {
+    const base = createDocument("invalid-stable-segments", [{ id: layerId("layer-1"), name: "Design", visible: true, order: 0 }]);
+    const sketch = { type: "sketch" as const, id: "sketch", layerId: "layer-1", nodes: [{ id: "a", point: { x: 0, y: 0 } }, { id: "b", point: { x: 10, y: 0 } }], edges: [{ id: "ab-1", startNodeId: "a", endNodeId: "b" }, { id: "ab-2", startNodeId: "a", endNodeId: "b" }], style: { stroke: "#000", strokeWidth: 1 } };
+    const duplicate = { id: "duplicate", kind: "parallel" as const, references: [{ elementId: "sketch", edgeId: "ab-1" }, { elementId: "sketch", edgeId: "ab-1" }] as const };
+    const ambiguousLegacy = { id: "ambiguous", kind: "parallel" as const, references: [{ elementId: "sketch", nodeId: "a" }, { elementId: "sketch", nodeId: "b" }, { elementId: "sketch", nodeId: "b" }, { elementId: "sketch", nodeId: "a" }] as const };
+
+    expect(validateDocument({ ...base, elements: [{ ...sketch, constraints: [duplicate] }] }).success).toBe(false);
+    expect(validateDocument({ ...base, elements: [{ ...sketch, constraints: [ambiguousLegacy] }] }).success).toBe(false);
+  });
+
+  it("accepts canonical global segment references and rejects missing edges", () => {
+    const base = createDocument("canonical-global-segments", [{ id: layerId("layer-1"), name: "Design", visible: true, order: 0 }]);
+    const first = { type: "sketch" as const, id: "first", layerId: "layer-1", nodes: [{ id: "a", point: { x: 0, y: 0 } }, { id: "b", point: { x: 10, y: 0 } }], edges: [{ id: "ab", startNodeId: "a", endNodeId: "b" }], style: { stroke: "#000", strokeWidth: 1 } };
+    const second = { ...first, id: "second", nodes: [{ id: "c", point: { x: 0, y: 10 } }, { id: "d", point: { x: 10, y: 10 } }], edges: [{ id: "cd", startNodeId: "c", endNodeId: "d" }] };
+    const relation = { id: "parallel", kind: "parallel" as const, references: [{ elementId: "first", edgeId: "ab" }, { elementId: "second", edgeId: "cd" }] as const };
+
+    expect(validateDocument({ ...base, elements: [first, second], constraints: [relation] }).success).toBe(true);
+    expect(validateDocument({ ...base, elements: [first, second], constraints: [{ ...relation, references: [{ elementId: "first", edgeId: "missing" }, relation.references[1]] }] }).success).toBe(false);
+  });
+
       it("validates page-level constraints across sketch elements", () => {
     const base = createDocument("global-constraints", [{ id: layerId("layer-1"), name: "Design", visible: true, order: 0 }]);
     const first = { type: "sketch" as const, id: "first", layerId: "layer-1", nodes: [{ id: "a", point: { x: 0, y: 0 } }, { id: "b", point: { x: 10, y: 0 } }], edges: [{ id: "ab", startNodeId: "a", endNodeId: "b" }], style: { stroke: "#000", strokeWidth: 1 } };

@@ -4,7 +4,7 @@
 
 Implementación incremental en curso.
 
-Entregas aplicadas: límite compartido `@nodra/constraints`, referencias estables `edgeId` para cotas de aristas de sketch y, desde schema 7, IDs obligatorios para segmentos de path/glifo con migración determinista y contrato explícito `TopologyEditResult` en editor-core.
+Entregas aplicadas: límite compartido `@nodra/constraints`, solver iterativo por componentes locales/globales, referencias estables `edgeId` para cotas y relaciones segmentarias de sketch y, desde schema 7, IDs obligatorios para segmentos de path/glifo con migración determinista y contrato explícito `TopologyEditResult` en editor-core.
 
 Este documento define la base técnica para ampliar el sistema de croquis de Nodra sin introducir lógica específica por herramienta. No autoriza implementar de una sola vez todas las entidades y relaciones de un CAD profesional.
 
@@ -567,7 +567,9 @@ Estado implementado de este contrato:
 - partir segmentos declara reemplazos, borrar nodos conserva segmentos intactos y agrupa los segmentos reconstruidos como reemplazos;
 - abrir un path y cortar geometría declaran referencias eliminadas;
 - la reconstrucción planar deriva destinos desde la identidad del segmento fuente y sus piezas, no mediante una reparación posterior global por coordenadas;
-- cotas de nodo y conexiones explícitas se remapean por identidad cuando su destino sobrevive; si el nodo o handle desaparece, el dependiente se elimina dentro de la misma transacción.
+- cotas de nodo y conexiones explícitas se remapean por identidad cuando su destino sobrevive; si el nodo o handle desaparece, el dependiente se elimina dentro de la misma transacción;
+- las nuevas relaciones `parallel`, `perpendicular` y `equal` persisten dos referencias `edgeId`; las relaciones legacy de cuatro nodos se normalizan solamente cuando cada pareja identifica una arista única y ambas aristas son distintas;
+- dividir o eliminar una arista elimina atómicamente las relaciones segmentarias que dependían de su identidad, sin redirigirlas silenciosamente a una de las piezas; las cotas conservan su política independiente de seguir la primera pieza.
 
 ## 13. Herramientas
 

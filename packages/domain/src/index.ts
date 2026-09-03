@@ -83,7 +83,9 @@ export interface SketchNode { readonly id: string; readonly point: PointMm }
 export interface SketchEdge { readonly id: string; readonly startNodeId: string; readonly endNodeId: string }
 export type SketchConstraintKind = "horizontal" | "vertical" | "coincident" | "parallel" | "perpendicular" | "equal" | "distance-horizontal" | "distance-vertical" | "distance" | "angle" | "fixed";
 export interface SketchPointReference { readonly elementId: ElementId; readonly nodeId: string }
-export interface SketchConstraint { readonly id: string; readonly kind: SketchConstraintKind; readonly references: readonly [SketchPointReference, ...SketchPointReference[]]; readonly value?: number }
+export interface SketchEdgeReference { readonly elementId: ElementId; readonly edgeId: string }
+export type SketchConstraintReference = SketchPointReference | SketchEdgeReference;
+export interface SketchConstraint { readonly id: string; readonly kind: SketchConstraintKind; readonly references: readonly [SketchConstraintReference, ...SketchConstraintReference[]]; readonly value?: number }
 export interface SketchElement { readonly type: "sketch"; readonly id: ElementId; readonly layerId: LayerId; readonly nodes: readonly SketchNode[]; readonly edges: readonly SketchEdge[]; readonly constraints?: readonly SketchConstraint[]; readonly style: VisualStyle; readonly operation?: OperationMetadata }
 /** Page-level parametric constraint; references may span multiple sketch elements. */
 export type DocumentConstraint = SketchConstraint;

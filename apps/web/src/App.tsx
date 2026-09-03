@@ -1364,9 +1364,9 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
           const targetSketch = selectedSketchElements[0];
           if (!targetSketch || constraintDraft) return;
           const references = kind === "parallel" || kind === "perpendicular" || kind === "equal"
-            ? selectedSketchRelationEdges.length === 2 ? selectedSketchRelationEdges.flatMap(({ elementId, edge }) => [{ elementId, nodeId: edge.startNodeId }, { elementId, nodeId: edge.endNodeId }]) : []
+            ? selectedSketchRelationEdges.length === 2 ? selectedSketchRelationEdges.map(({ elementId, edge }) => ({ elementId, edgeId: edge.id })) : []
             : selectedSketchConstraintNodes;
-          const required = kind === "fixed" ? 1 : kind === "parallel" || kind === "perpendicular" || kind === "equal" ? 4 : 2;
+          const required = kind === "fixed" ? 1 : 2;
           if (references.length !== required) return;
           const constraint: SketchConstraint = { id: `constraint-${crypto.randomUUID()}`, kind, references: references as unknown as SketchConstraint["references"], ...(value !== undefined ? { value } : {}) };
           const global = new Set(references.map((reference) => reference.elementId)).size > 1;
