@@ -247,6 +247,98 @@ describe("editor core", () => {
     expect(result?.type === "path" ? result.nodes.some((node) => node.anchor.x === 10 && node.anchor.y === 0) : false).toBe(true);
   });
 
+  it("cuts one segment of two crossing native lines and restores them atomically", () => {
+    const horizontal: LineElement = { type: "line", id: elementId("crossing-native-horizontal"), layerId: layerId("default"), start: { x: 0, y: 0 }, end: { x: 20, y: 0 }, rotation: 0, style: rectangle.style };
+    const vertical: LineElement = { type: "line", id: elementId("crossing-native-vertical"), layerId: layerId("default"), start: { x: 10, y: -10 }, end: { x: 10, y: 10 }, rotation: 0, style: rectangle.style };
+    const initial = createEditor({ ...document, elements: [horizontal, vertical] });
+
+    const cut = dispatch(initial, cutSegment(horizontal.id, 0, { x: 5, y: 0 }));
+    const paths = cut.document.elements.filter((element): element is PathElement => element.type === "path");
+    const segmentKeys = paths.flatMap((candidate) => {
+      const nodes = new Map(candidate.nodes.map((node) => [node.id, node.anchor]));
+      return candidate.segments.flatMap((segment) => {
+        const start = nodes.get(segment.startNodeId); const end = nodes.get(segment.endNodeId);
+        return start && end ? [[`${start.x},${start.y}`, `${end.x},${end.y}`].sort().join("|")] : [];
+      });
+    });
+
+    expect(cut.document.elements.every((element) => element.type === "path")).toBe(true);
+    expect(paths.every((candidate) => !candidate.closed && candidate.segments.every((segment) => segment.type === "line"))).toBe(true);
+    expect(segmentKeys.sort()).toEqual(["10,-10|10,0", "10,0|10,10", "10,0|20,0"].sort());
+    expect(cut.undo).toHaveLength(1);
+    expect(undo(cut).document).toEqual(initial.document);
+    expect(redo(undo(cut)).document).toEqual(cut.document);
+  });
+
+  it("cuts the crossbar of an open H made from native lines", () => {
+    const left: LineElement = { type: "line", id: elementId("open-h-left"), layerId: layerId("default"), start: { x: 0, y: 0 }, end: { x: 0, y: 20 }, rotation: 0, style: rectangle.style };
+    const crossbar: LineElement = { type: "line", id: elementId("open-h-crossbar"), layerId: layerId("default"), start: { x: 0, y: 10 }, end: { x: 20, y: 10 }, rotation: 0, style: rectangle.style };
+    const right: LineElement = { type: "line", id: elementId("open-h-right"), layerId: layerId("default"), start: { x: 20, y: 0 }, end: { x: 20, y: 20 }, rotation: 0, style: rectangle.style };
+    const initial = createEditor({ ...document, elements: [left, crossbar, right] });
+
+    const cut = dispatch(initial, cutSegment(crossbar.id, 0, { x: 10, y: 10 }));
+    const paths = cut.document.elements.filter((element): element is PathElement => element.type === "path");
+    const segmentKeys = paths.flatMap((candidate) => {
+      const nodes = new Map(candidate.nodes.map((node) => [node.id, node.anchor]));
+      return candidate.segments.flatMap((segment) => {
+        const start = nodes.get(segment.startNodeId); const end = nodes.get(segment.endNodeId);
+        return start && end ? [[`${start.x},${start.y}`, `${end.x},${end.y}`].sort().join("|")] : [];
+      });
+    });
+
+    expect(paths).toHaveLength(2);
+    expect(paths.every((candidate) => !candidate.closed && candidate.segments.every((segment) => segment.type === "line"))).toBe(true);
+    expect(segmentKeys.sort()).toEqual(["0,0|0,10", "0,10|0,20", "20,0|20,10", "20,10|20,20"].sort());
+    expect(cut.undo).toHaveLength(1);
+    expect(undo(cut).document).toEqual(initial.document);
+    expect(redo(undo(cut)).document).toEqual(cut.document);
+  });
+
+  it("cuts a straight path at a shared segment endpoint without removing its neighbor", () => {
+    const endpointPath: PathElement = {
+      type: "path", id: elementId("endpoint-cut-path"), layerId: layerId("default"), closed: false, style: rectangle.style,
+      nodes: [{ id: "a", anchor: { x: 0, y: 0 }, join: "corner" }, { id: "b", anchor: { x: 10, y: 0 }, join: "corner" }, { id: "c", anchor: { x: 20, y: 0 }, join: "corner" }],
+      segments: [{ id: "ab", type: "line", startNodeId: "a", endNodeId: "b" }, { id: "bc", type: "line", startNodeId: "b", endNodeId: "c" }],
+    };
+    const initial = createEditor({ ...document, elements: [endpointPath] });
+
+    const cut = dispatch(initial, cutSegment(endpointPath.id, 0, { x: 10, y: 0 }));
+    const result = cut.document.elements.find((element) => element.id === endpointPath.id);
+    const survivorKey = result?.type === "path" ? (() => {
+      const nodes = new Map(result.nodes.map((node) => [node.id, node.anchor]));
+      const segment = result.segments[0]; const start = segment ? nodes.get(segment.startNodeId) : undefined; const end = segment ? nodes.get(segment.endNodeId) : undefined;
+      return start && end ? [`${start.x},${start.y}`, `${end.x},${end.y}`].sort().join("|") : undefined;
+    })() : undefined;
+
+    expect(cut.document.elements).toHaveLength(1);
+    expect(result).toMatchObject({ type: "path", closed: false, segments: [{ type: "line" }] });
+    expect(result?.type === "path" ? result.nodes.map((node) => `${node.anchor.x},${node.anchor.y}`).sort() : []).toEqual(["10,0", "20,0"]);
+    expect(survivorKey).toBe("10,0|20,0");
+    expect(cut.undo).toHaveLength(1);
+    expect(undo(cut).document).toEqual(initial.document);
+    expect(redo(undo(cut)).document).toEqual(cut.document);
+  });
+
+  it("opens a closed triangular sketch and reports the cut edge as removed", () => {
+    const triangle: SketchElement = {
+      type: "sketch", id: elementId("closed-triangle"), layerId: layerId("default"), style: rectangle.style,
+      nodes: [{ id: "a", point: { x: 0, y: 0 } }, { id: "b", point: { x: 10, y: 0 } }, { id: "c", point: { x: 5, y: 10 } }],
+      edges: [{ id: "ab", startNodeId: "a", endNodeId: "b" }, { id: "bc", startNodeId: "b", endNodeId: "c" }, { id: "ca", startNodeId: "c", endNodeId: "a" }],
+    };
+    const source = { ...document, elements: [triangle] };
+    const command = cutSegment(triangle.id, 0, { x: 5, y: 0 });
+    const applied = command.apply(source);
+
+    expect(applied.success).toBe(true);
+    expect(applied.success && applied.topology?.referenceMap.get(`${triangle.id}:edge:ab`)).toEqual({ kind: "removed", reason: "Sketch edge was deleted" });
+    expect(applied.success && applied.topology?.diagnostics).toEqual([{ code: "reference-removed", referenceKey: `${triangle.id}:edge:ab`, message: "Sketch edge was deleted" }]);
+    const cut = dispatch(createEditor(source), command);
+    expect(cut.document.elements).toMatchObject([{ type: "sketch", id: triangle.id, nodes: [{ id: "a" }, { id: "b" }, { id: "c" }], edges: [{ id: "bc" }, { id: "ca" }] }]);
+    expect(cut.undo).toHaveLength(1);
+    expect(undo(cut).document).toEqual(source);
+    expect(redo(undo(cut)).document).toEqual(cut.document);
+  });
+
   it("splits a sketch segment at the cut point without deleting the whole line", () => {
      const sketch = createSketchLine(elementId("split-sketch"), layerId("default"), rectangle.style, { x: 0, y: 0 }, { x: 20, y: 0 });
      const state = dispatch(createEditor({ ...document, elements: [sketch] }), cutSketchEdge(sketch.id, 0, { x: 8, y: 0 }));
