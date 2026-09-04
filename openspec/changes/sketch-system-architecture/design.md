@@ -464,21 +464,41 @@ type ConstraintState =
   | "conflict"
   | "invalid";
 
+interface ConstraintDofMetadata {
+  readonly nodeKeys: readonly string[];
+  readonly coordinateCount: number;
+  readonly constraintCount: number;
+  readonly rank: number;
+  readonly degreesOfFreedom: number;
+  readonly status: ConstraintState;
+}
+
 interface ConstraintDiagnostic {
-  readonly code: string;
+  readonly code:
+    | "unsupported-constraint"
+    | "constraint-conflict"
+    | "redundant-component"
+    | "non-converged-component";
   readonly constraintIds: readonly string[];
   readonly referenceKeys: readonly string[];
   readonly message: string;
 }
 
 interface ConstraintSolveResult {
-  readonly state: ConstraintState;
+  readonly document: DocumentSnapshot;
+  readonly changed: boolean;
+  readonly converged: boolean;
+  readonly iterations: number;
+  readonly nonConvergedComponents: readonly (readonly string[])[];
   readonly degreesOfFreedom: number;
   readonly affectedElementIds: readonly ElementId[];
-  readonly values: ReadonlyMap<VariableId, number>;
+  readonly states: readonly ConstraintComponentState[];
+  readonly residuals: readonly ConstraintResidual[];
   readonly diagnostics: readonly ConstraintDiagnostic[];
 }
 ```
+
+`constraintDofMetadataForDocument` informa rango y DOF por componente. `solveConstraintComponents` devuelve un preview inmutable del documento y agrega `degreesOfFreedom` como la suma de todos los componentes; `affectedElementIds` contiene únicamente elementos participantes en restricciones soportadas.
 
 Semántica:
 

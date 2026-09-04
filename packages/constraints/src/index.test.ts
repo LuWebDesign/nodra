@@ -96,10 +96,10 @@ describe("parametric constraint boundary", () => {
     expect(normalizedConstraintsForDocument({ ...documentWith([first, second]), constraints: [global] }).map((constraint) => constraint.scope)).toEqual(["document", "local"]);
     const input = constraintInputsForDocument({ ...documentWith([first, second]), constraints: [global] }).find((component) => component.nodes.length === 3);
     expect(input).toMatchObject({ coordinateCount: 6, coordinates: [{ x: 100, y: 10 }, { x: 10, y: 10 }, { x: 30, y: 10 }], constraints: expect.arrayContaining([expect.objectContaining({ scope: "document", kind: "coincident" })]) });
-    expect(constraintDofMetadataForDocument({ ...documentWith([first, second]), constraints: [global] })).toEqual(expect.arrayContaining([{ nodeKeys: expect.any(Array), coordinateCount: 6, constraintCount: 2, status: "pending-solver" }]));
+    expect(constraintDofMetadataForDocument({ ...documentWith([first, second]), constraints: [global] })).toEqual(expect.arrayContaining([{ nodeKeys: expect.any(Array), coordinateCount: 6, constraintCount: 2, rank: 3, degreesOfFreedom: 3, status: "conflict" }]));
     expect(constraintResidualsForDocument({ ...documentWith([first, second]), constraints: [global] })).toEqual(expect.arrayContaining([expect.objectContaining({ constraintId: JSON.stringify(["document", null, "connect"]), residual: 70, satisfied: false, supported: true })]));
     const preview = solveConstraintComponents({ ...documentWith([first, second]), constraints: [global] });
-    expect(preview.changed).toBe(true);
+    expect(preview).toMatchObject({ changed: true, degreesOfFreedom: 5, affectedElementIds: ["second", "sketch"], diagnostics: [] });
     expect((preview.document.elements[1] as SketchElement).nodes[0]?.point).toEqual({ x: 30, y: 10 });
     expect((second.nodes[0] as SketchElement["nodes"][number]).point).toEqual({ x: 100, y: 10 });
     const invalid = { ...global, id: "invalid", references: [global.references[0]!, { elementId: first.id, nodeId: "missing" }] as const };
@@ -288,6 +288,57 @@ describe("parametric constraint boundary", () => {
     expect(preview.states[0]?.diagnostics.some((diagnostic) => diagnostic.startsWith("global-constraint-conflict:"))).toBe(true);
   });
 
+  it("derives zero degrees of freedom from a full-rank local component", () => {
+    const source = sketch([{ id: "fixed-a", kind: "fixed", references: [{ elementId: elementId("sketch"), nodeId: "a" }] }, { id: "join", kind: "coincident", references: [{ elementId: elementId("sketch"), nodeId: "a" }, { elementId: elementId("sketch"), nodeId: "b" }] }]);
+
+    expect(constraintDofMetadataForDocument(documentWith([source]))).toEqual([{ nodeKeys: expect.any(Array), coordinateCount: 4, constraintCount: 2, rank: 4, degreesOfFreedom: 0, status: "fully-defined" }]);
+  });
+
+  it("rolls back valid local projections when the component also contains unsupported degeneracy", () => {
+    const horizontal = { id: "degenerate-horizontal", kind: "horizontal" as const, references: [{ elementId: elementId("sketch"), nodeId: "a" }, { elementId: elementId("sketch"), nodeId: "b" }] as const };
+    const source = sketch([horizontal, { id: "fixed-a", kind: "fixed", references: [horizontal.references[0]] }]);
+    const degenerate = { ...source, nodes: source.nodes.map((node) => ({ ...node, point: { x: 5, y: 5 } })) };
+    const document = documentWith([degenerate]);
+
+    const preview = solveConstraintComponents(document);
+
+    expect(preview).toMatchObject({ document, changed: false, converged: false, nonConvergedComponents: [] });
+    expect(constraintDofMetadataForDocument(documentWith([{ ...degenerate, constraints: [horizontal] }])).find((component) => component.constraintCount === 1)).toMatchObject({ rank: 0, degreesOfFreedom: 4, status: "invalid" });
+    expect(preview.diagnostics.map((diagnostic) => diagnostic.code)).toEqual(["constraint-conflict", "unsupported-constraint"]);
+  });
+
+  it("keeps malformed shared-node constraints out of non-converged component diagnostics", () => {
+    const references = [{ elementId: elementId("sketch"), nodeId: "a" }, { elementId: elementId("sketch"), nodeId: "b" }] as const;
+    const source = sketch([{ id: "horizontal-1", kind: "horizontal", references }, { id: "horizontal-2", kind: "horizontal", references }, { id: "malformed", kind: "horizontal", references: [references[0], { elementId: elementId("sketch"), nodeId: "missing" }] }]);
+
+    const preview = solveConstraintComponents(documentWith([source]));
+    const diagnostic = preview.diagnostics.find((candidate) => candidate.code === "non-converged-component");
+
+    expect(diagnostic?.constraintIds).toEqual([JSON.stringify(["local", "sketch", "horizontal-1"]), JSON.stringify(["local", "sketch", "horizontal-2"])]);
+    expect(preview.diagnostics).toEqual(expect.arrayContaining([expect.objectContaining({ code: "unsupported-constraint", constraintIds: [JSON.stringify(["local", "sketch", "malformed"])] })]));
+  });
+
+  it("omits non-finite constraints from Jacobian rank", () => {
+    const source = sketch([{ id: "fixed-a", kind: "fixed", references: [{ elementId: elementId("sketch"), nodeId: "a" }] }]);
+    const invalid = { ...source, nodes: [{ ...source.nodes[0]!, point: { x: Number.NaN, y: 0 } }, source.nodes[1]!] };
+
+    expect(constraintDofMetadataForDocument(documentWith([invalid])).find((component) => component.constraintCount === 1)).toMatchObject({ rank: 0, degreesOfFreedom: 2, status: "invalid" });
+  });
+
+  it("classifies redundant global equations from component rank", () => {
+    const first = sketch();
+    const second: SketchElement = { ...sketch(), id: elementId("second"), nodes: [{ id: "c", point: { x: 100, y: 10 } }, { id: "d", point: { x: 120, y: 10 } }], edges: [{ id: "cd", startNodeId: "c", endNodeId: "d" }] };
+    const references = [{ elementId: first.id, nodeId: "a" }, { elementId: second.id, nodeId: "c" }] as const;
+    const document = { ...documentWith([first, second]), constraints: [{ id: "first-horizontal", kind: "horizontal" as const, references }, { id: "duplicate-horizontal", kind: "horizontal" as const, references }] };
+
+    const preview = solveConstraintComponents(document);
+    const metadata = constraintDofMetadataForDocument(document).find((component) => component.constraintCount === 2);
+
+    expect(metadata).toMatchObject({ coordinateCount: 4, rank: 1, degreesOfFreedom: 3, status: "overdefined" });
+    expect(preview.states.find((state) => state.nodeKeys.length === 2)).toMatchObject({ state: "overdefined", diagnostics: expect.arrayContaining(["component:overdefined"]) });
+    expect(preview.diagnostics).toEqual([expect.objectContaining({ code: "redundant-component", constraintIds: [JSON.stringify(["document", null, "duplicate-horizontal"]), JSON.stringify(["document", null, "first-horizontal"])] })]);
+  });
+
   it("rejects fixed constraints at document scope instead of silently ignoring them", () => {
     const source = sketch();
     const fixed = { id: "global-fixed", kind: "fixed" as const, references: [{ elementId: source.id, nodeId: "a" }] as const };
@@ -295,8 +346,11 @@ describe("parametric constraint boundary", () => {
     const preview = solveConstraintComponents({ ...documentWith([source]), constraints: [fixed] });
 
     expect(preview.converged).toBe(false);
+    expect(preview.nonConvergedComponents).toEqual([]);
+    expect(constraintDofMetadataForDocument({ ...documentWith([source]), constraints: [fixed] }).find((component) => component.constraintCount === 1)).toMatchObject({ rank: 0, degreesOfFreedom: 2, status: "invalid" });
     expect(preview.residuals).toEqual([expect.objectContaining({ supported: false, satisfied: false })]);
     expect(preview.states[0]).toMatchObject({ state: "invalid", diagnostics: [expect.stringContaining("global-constraint-unsupported:")] });
+    expect(preview.diagnostics).toEqual(expect.arrayContaining([expect.objectContaining({ code: "unsupported-constraint", constraintIds: [JSON.stringify(["document", null, "global-fixed"])], referenceKeys: [JSON.stringify(["sketch", "a"])] })]));
   });
 
   it("keeps unsupported and missing entities distinguishable", () => {

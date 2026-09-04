@@ -48,7 +48,9 @@ export interface ConstraintDofMetadata {
   readonly nodeKeys: readonly string[];
   readonly coordinateCount: number;
   readonly constraintCount: number;
-  readonly status: "pending-solver";
+  readonly rank: number;
+  readonly degreesOfFreedom: number;
+  readonly status: ConstraintState;
 }
 
 export interface ConstraintResidual {
@@ -58,14 +60,24 @@ export interface ConstraintResidual {
   readonly supported: boolean;
 }
 
+export interface ConstraintDiagnostic {
+  readonly code: "unsupported-constraint" | "constraint-conflict" | "redundant-component" | "non-converged-component";
+  readonly constraintIds: readonly string[];
+  readonly referenceKeys: readonly string[];
+  readonly message: string;
+}
+
 export interface ConstraintSolveResult {
   readonly document: DocumentSnapshot;
   readonly changed: boolean;
   readonly converged: boolean;
   readonly iterations: number;
   readonly nonConvergedComponents: readonly (readonly string[])[];
+  readonly degreesOfFreedom: number;
+  readonly affectedElementIds: readonly ElementId[];
   readonly states: readonly ConstraintComponentState[];
   readonly residuals: readonly ConstraintResidual[];
+  readonly diagnostics: readonly ConstraintDiagnostic[];
 }
 
 export interface ConstraintComponentState {
@@ -164,6 +176,15 @@ const projectLocalSketchConstraints = (points: Map<string, MutablePoint>, sketch
   const constraints = (sketch.constraints ?? []).filter((constraint) => constraintIds.has(constraintIdentity("local", sketch.id, constraint.id)));
   if (!constraints.length) return { delta: 0, valid: true };
   const candidate = { ...sketch, constraints, nodes: sketch.nodes.map((node) => ({ ...node, point: { ...(points.get(constraintNodeKey({ elementId: sketch.id, nodeId: node.id })) ?? node.point) } })) };
+  const candidatePoints = new Map(candidate.nodes.map((node) => [node.id, node.point]));
+  const degenerateAxis = constraints.some((constraint) => {
+    if (constraint.kind !== "horizontal" && constraint.kind !== "vertical" || constraint.references.length !== 2 || !constraint.references.every((reference) => "nodeId" in reference)) return false;
+    const [firstReference, secondReference] = constraint.references;
+    const first = firstReference && "nodeId" in firstReference ? candidatePoints.get(firstReference.nodeId) : undefined;
+    const second = secondReference && "nodeId" in secondReference ? candidatePoints.get(secondReference.nodeId) : undefined;
+    return first !== undefined && second !== undefined && Math.hypot(second.x - first.x, second.y - first.y) <= CONSTRAINT_TOLERANCE;
+  });
+  if (degenerateAxis) return { delta: 0, valid: false };
   const solved = solveSketchConstraints(candidate);
   if (solved.status === "conflict" || solved.status === "overdefined") return { delta: 0, valid: false };
   let maxDelta = 0;
@@ -273,12 +294,76 @@ export function constraintComponentsForDocument(document: DocumentSnapshot): rea
     .sort((first, second) => first.nodeKeys[0]! < second.nodeKeys[0]! ? -1 : first.nodeKeys[0]! > second.nodeKeys[0]! ? 1 : 0);
 }
 
-/** Reports input coordinates and constraint-record counts without pretending to solve degrees of freedom. */
-export function constraintDofMetadataForDocument(document: DocumentSnapshot): readonly ConstraintDofMetadata[] {
-  return constraintComponentsForDocument(document).map((component) => ({ nodeKeys: component.nodeKeys, coordinateCount: component.nodeKeys.length * 2, constraintCount: component.constraintIds.length, status: "pending-solver" }));
-}
+const matrixRank = (matrix: readonly number[][]): number => {
+  const values = matrix.map((row) => [...row]);
+  let pivot = 0;
+  for (let column = 0; column < (values[0]?.length ?? 0) && pivot < values.length; column++) {
+    const candidate = values.slice(pivot).findIndex((row) => Math.abs(row[column] ?? 0) > CONSTRAINT_TOLERANCE);
+    if (candidate < 0) continue;
+    [values[pivot], values[pivot + candidate]] = [values[pivot + candidate]!, values[pivot]!];
+    const divisor = values[pivot]![column]!;
+    values[pivot] = values[pivot]!.map((value) => value / divisor);
+    for (let row = 0; row < values.length; row++) {
+      if (row === pivot) continue;
+      const factor = values[row]![column] ?? 0;
+      if (Math.abs(factor) > CONSTRAINT_TOLERANCE) values[row] = values[row]!.map((value, index) => value - factor * values[pivot]![index]!);
+    }
+    pivot += 1;
+  }
+  return pivot;
+};
 
-/** Builds the validated component-scoped input boundary consumed by a future solver. */
+const constraintRankForInput = (input: ConstraintComponentInput): { readonly rank: number; readonly rowCount: number } => {
+  const indexes = new Map(input.nodes.map((node, index) => [constraintNodeKey(node), index]));
+  const points = new Map(input.nodes.map((node, index) => [constraintNodeKey(node), input.coordinates[index]!]));
+  const rows: number[][] = [];
+  const addRow = (entries: readonly { readonly reference: ConstraintNodeReference; readonly x: number; readonly y: number }[]): void => {
+    const row = Array.from({ length: input.coordinateCount }, () => 0);
+    for (const entry of entries) {
+      const index = indexes.get(constraintNodeKey(entry.reference));
+      if (index === undefined) return;
+      row[index * 2] = (row[index * 2] ?? 0) + entry.x;
+      row[index * 2 + 1] = (row[index * 2 + 1] ?? 0) + entry.y;
+    }
+    const scale = Math.max(0, ...row.map(Math.abs));
+    if (scale > Number.EPSILON) rows.push(row.map((value) => value / scale));
+  };
+  for (const constraint of input.constraints) {
+    const [first, second, third, fourth] = constraint.references;
+    const expected = constraint.kind === "fixed" ? 1 : constraint.kind === "parallel" || constraint.kind === "perpendicular" || constraint.kind === "equal" ? 4 : 2;
+    const usesValue = constraint.kind === "distance-horizontal" || constraint.kind === "distance-vertical" || constraint.kind === "distance" || constraint.kind === "angle";
+    if (!first || constraint.references.length !== expected || constraint.scope === "document" && !supportsDocumentConstraintKind(constraint.kind) || usesValue && (constraint.value === undefined || !Number.isFinite(constraint.value) || constraint.value <= 0) || !usesValue && constraint.value !== undefined) continue;
+    const finiteReferences = constraint.references.every((reference) => { const point = points.get(constraintNodeKey(reference)); return point !== undefined && Number.isFinite(point.x) && Number.isFinite(point.y); });
+    if (!finiteReferences) continue;
+    if (constraint.kind === "fixed") { addRow([{ reference: first, x: 1, y: 0 }]); addRow([{ reference: first, x: 0, y: 1 }]); continue; }
+    if (!second) continue;
+    if (constraint.kind === "coincident") { addRow([{ reference: first, x: -1, y: 0 }, { reference: second, x: 1, y: 0 }]); addRow([{ reference: first, x: 0, y: -1 }, { reference: second, x: 0, y: 1 }]); continue; }
+    const firstPoint = points.get(constraintNodeKey(first)); const secondPoint = points.get(constraintNodeKey(second));
+    if (!firstPoint || !secondPoint) continue;
+    const ux = secondPoint.x - firstPoint.x; const uy = secondPoint.y - firstPoint.y; const firstLength = Math.hypot(ux, uy);
+    if (firstLength <= CONSTRAINT_TOLERANCE) continue;
+    if (constraint.kind === "distance-horizontal" && Math.abs(ux) <= CONSTRAINT_TOLERANCE || constraint.kind === "distance-vertical" && Math.abs(uy) <= CONSTRAINT_TOLERANCE) continue;
+    if (constraint.kind === "horizontal" || constraint.kind === "distance-vertical") { addRow([{ reference: first, x: 0, y: -1 }, { reference: second, x: 0, y: 1 }]); continue; }
+    if (constraint.kind === "vertical" || constraint.kind === "distance-horizontal") { addRow([{ reference: first, x: -1, y: 0 }, { reference: second, x: 1, y: 0 }]); continue; }
+    if (constraint.kind === "distance" || constraint.kind === "angle") {
+      const x = constraint.kind === "distance" ? ux / firstLength : -uy / (firstLength * firstLength);
+      const y = constraint.kind === "distance" ? uy / firstLength : ux / (firstLength * firstLength);
+      addRow([{ reference: first, x: -x, y: -y }, { reference: second, x, y }]);
+      continue;
+    }
+    if (!third || !fourth) continue;
+    const thirdPoint = points.get(constraintNodeKey(third)); const fourthPoint = points.get(constraintNodeKey(fourth));
+    if (!thirdPoint || !fourthPoint) continue;
+    const vx = fourthPoint.x - thirdPoint.x; const vy = fourthPoint.y - thirdPoint.y; const secondLength = Math.hypot(vx, vy);
+    if (firstLength <= CONSTRAINT_TOLERANCE || secondLength <= CONSTRAINT_TOLERANCE) continue;
+    if (constraint.kind === "parallel") addRow([{ reference: first, x: -vy, y: vx }, { reference: second, x: vy, y: -vx }, { reference: third, x: uy, y: -ux }, { reference: fourth, x: -uy, y: ux }]);
+    else if (constraint.kind === "perpendicular") addRow([{ reference: first, x: -vx, y: -vy }, { reference: second, x: vx, y: vy }, { reference: third, x: -ux, y: -uy }, { reference: fourth, x: ux, y: uy }]);
+    else if (constraint.kind === "equal") addRow([{ reference: first, x: -ux / firstLength, y: -uy / firstLength }, { reference: second, x: ux / firstLength, y: uy / firstLength }, { reference: third, x: vx / secondLength, y: vy / secondLength }, { reference: fourth, x: -vx / secondLength, y: -vy / secondLength }]);
+  }
+  return { rank: matrixRank(rows), rowCount: rows.length };
+};
+
+/** Builds the validated component-scoped input boundary consumed by the solver. */
 export function constraintInputsForDocument(document: DocumentSnapshot): readonly ConstraintComponentInput[] {
   const sketches = document.elements.filter((element): element is Extract<Element, { type: "sketch" }> => element.type === "sketch");
   const nodes = sketches.flatMap((sketch) => sketch.nodes.map((node) => ({ elementId: sketch.id, nodeId: node.id })));
@@ -296,6 +381,48 @@ export function constraintInputsForDocument(document: DocumentSnapshot): readonl
   });
 }
 
+/** Reports solved Jacobian rank and remaining degrees of freedom for each component. */
+export function constraintDofMetadataForDocument(document: DocumentSnapshot): readonly ConstraintDofMetadata[] {
+  const inputs = constraintInputsForDocument(document);
+  const normalized = normalizedConstraintsForDocument(document);
+  const states = deriveConstraintComponentStates(document, normalized, constraintResidualsForDocument(document), inputs);
+  return inputs.map((input) => {
+    const { rank } = constraintRankForInput(input);
+    const status = states.find((state) => state.nodeKeys[0] === input.nodeKeys[0])?.state ?? "invalid";
+    return { nodeKeys: input.nodeKeys, coordinateCount: input.coordinateCount, constraintCount: input.constraints.length, rank, degreesOfFreedom: input.coordinateCount - rank, status };
+  });
+}
+
+const structuredConstraintDiagnostics = (
+  normalized: readonly NormalizedConstraint[],
+  states: readonly ConstraintComponentState[],
+  residuals: readonly ConstraintResidual[],
+  nonConvergedComponents: readonly (readonly string[])[],
+): readonly ConstraintDiagnostic[] => {
+  const byId = new Map(normalized.map((constraint) => [constraint.id, constraint]));
+  const details = (constraintIds: readonly string[]): Pick<ConstraintDiagnostic, "constraintIds" | "referenceKeys"> => ({
+    constraintIds: [...constraintIds].sort(),
+    referenceKeys: [...new Set(constraintIds.flatMap((id) => byId.get(id)?.references.map(constraintNodeKey) ?? []))].sort(),
+  });
+  const diagnostics: ConstraintDiagnostic[] = [];
+  const supportedIds = new Set(residuals.filter((residual) => residual.supported).map((residual) => residual.constraintId));
+  for (const residual of residuals) {
+    if (!residual.supported) diagnostics.push({ code: "unsupported-constraint", ...details([residual.constraintId]), message: "Constraint kind, references, value, or geometry is unsupported" });
+    else if (!residual.satisfied) diagnostics.push({ code: "constraint-conflict", ...details([residual.constraintId]), message: "Constraint is not satisfied" });
+  }
+  for (const state of states.filter((candidate) => candidate.state === "overdefined")) {
+    const keys = new Set(state.nodeKeys);
+    const ids = normalized.filter((constraint) => supportedIds.has(constraint.id) && constraint.references.length > 0 && constraint.references.every((reference) => keys.has(constraintNodeKey(reference)))).map((constraint) => constraint.id);
+    diagnostics.push({ code: "redundant-component", ...details(ids), message: "Constraint component contains redundant equations" });
+  }
+  for (const nodeKeys of nonConvergedComponents) {
+    const keys = new Set(nodeKeys);
+    const ids = normalized.filter((constraint) => supportedIds.has(constraint.id) && constraint.references.length > 0 && constraint.references.every((reference) => keys.has(constraintNodeKey(reference)))).map((constraint) => constraint.id);
+    diagnostics.push({ code: "non-converged-component", ...details(ids), referenceKeys: [...nodeKeys].sort(), message: "Constraint component did not converge" });
+  }
+  return diagnostics.sort((first, second) => `${first.code}:${first.constraintIds.join(",")}`.localeCompare(`${second.code}:${second.constraintIds.join(",")}`));
+};
+
 /** Iteratively projects page constraints, then solves eligible local-only components without persisting the preview. */
 export function solveConstraintComponents(document: DocumentSnapshot): ConstraintSolveResult {
   const components = constraintComponentsForDocument(document);
@@ -308,6 +435,7 @@ export function solveConstraintComponents(document: DocumentSnapshot): Constrain
   let iterations = 0;
   let reachedFixedPoint = true;
   const nonConvergedComponents: (readonly string[])[] = [];
+  const invalidLocalComponents: ConstraintComponent[] = [];
   for (const component of constrainedComponents) {
     const nodeKeys = new Set(component.nodeKeys);
     const constraintIds = new Set(component.constraintIds);
@@ -316,11 +444,12 @@ export function solveConstraintComponents(document: DocumentSnapshot): Constrain
     const initialPoints = new Map(component.nodeKeys.map((key) => [key, { ...globalPoints.get(key)! }] as const));
     const seen = new Set<string>([pointMapSignature(globalPoints, nodeKeys)]);
     let componentReachedFixedPoint = false;
+    let invalidLocalProjection = false;
     let componentIterations = 0;
     for (let iteration = 0; iteration < MAX_CONSTRAINT_ITERATIONS; iteration += 1) {
       componentIterations = iteration + 1;
       const localResults = componentSketches.map((sketch) => projectLocalSketchConstraints(globalPoints, sketch, constraintIds, nodeKeys));
-      if (localResults.some((result) => !result.valid)) break;
+      if (localResults.some((result) => !result.valid)) { invalidLocalProjection = true; invalidLocalComponents.push(component); break; }
       const maxProjectionDelta = Math.max(0, ...localResults.map((result) => result.delta), ...componentGlobals.map((constraint) => projectGlobalConstraint(globalPoints, constraint)));
       if (maxProjectionDelta <= CONSTRAINT_TOLERANCE) { componentReachedFixedPoint = true; break; }
       const signature = pointMapSignature(globalPoints, nodeKeys);
@@ -329,7 +458,7 @@ export function solveConstraintComponents(document: DocumentSnapshot): Constrain
     }
     iterations = Math.max(iterations, componentIterations);
     reachedFixedPoint = reachedFixedPoint && componentReachedFixedPoint;
-    if (!componentReachedFixedPoint) nonConvergedComponents.push(component.nodeKeys);
+    if (!componentReachedFixedPoint && !invalidLocalProjection) nonConvergedComponents.push(component.nodeKeys);
     if (!componentReachedFixedPoint) for (const [key, point] of initialPoints) { const target = globalPoints.get(key)!; target.x = point.x; target.y = point.y; }
   }
   const solvedElements = document.elements.map((element) => {
@@ -341,13 +470,24 @@ export function solveConstraintComponents(document: DocumentSnapshot): Constrain
   const preview = changed ? { ...document, elements: solvedElements } : document;
   const residuals = constraintResidualsForDocument(preview);
   const failedResiduals = residuals.filter((residual) => iteratedConstraintIds.has(residual.constraintId) && (!residual.supported || !residual.satisfied));
-  for (const residual of failedResiduals) {
-    const constraint = normalized.find((candidate) => candidate.id === residual.constraintId);
-    const nodeKeys = constraint?.references.map(constraintNodeKey).sort() ?? [];
+  for (const component of invalidLocalComponents) {
+    const componentResiduals = residuals.filter((residual) => component.constraintIds.includes(residual.constraintId));
+    if (componentResiduals.length > 0 && componentResiduals.every((residual) => residual.supported)) nonConvergedComponents.push(component.nodeKeys);
+  }
+  for (const residual of failedResiduals.filter((candidate) => candidate.supported)) {
+    const component = components.find((candidate) => candidate.constraintIds.includes(residual.constraintId));
+    const componentResiduals = component ? residuals.filter((candidate) => component.constraintIds.includes(candidate.constraintId)) : [];
+    const nodeKeys = componentResiduals.some((candidate) => !candidate.supported) ? [] : component?.nodeKeys ?? [];
     if (nodeKeys.length && !nonConvergedComponents.some((current) => current.length === nodeKeys.length && current.every((key, index) => key === nodeKeys[index]))) nonConvergedComponents.push(nodeKeys);
   }
   const converged = reachedFixedPoint && failedResiduals.length === 0;
-  return { document: preview, changed, converged, iterations, nonConvergedComponents, states: deriveConstraintComponentStates(preview, normalized, residuals), residuals };
+  const previewInputs = constraintInputsForDocument(preview);
+  const states = deriveConstraintComponentStates(preview, normalized, residuals, previewInputs);
+  const degreesOfFreedom = previewInputs.reduce((total, input) => total + input.coordinateCount - constraintRankForInput(input).rank, 0);
+  const supportedIds = new Set(residuals.filter((residual) => residual.supported).map((residual) => residual.constraintId));
+  const affectedElementIds = [...new Set(normalized.filter((constraint) => supportedIds.has(constraint.id)).flatMap((constraint) => constraint.references.map((reference) => reference.elementId)))].sort();
+  const diagnostics = structuredConstraintDiagnostics(normalized, states, residuals, nonConvergedComponents);
+  return { document: preview, changed, converged, iterations, nonConvergedComponents, degreesOfFreedom, affectedElementIds, states, residuals, diagnostics };
 }
 
 /** Calculates normalized geometric residuals for every structural constraint record. */
@@ -365,7 +505,8 @@ export function constraintResidualsForDocument(document: DocumentSnapshot, toler
     const first = values[0]!; const second = values[1];
     if (constraint.kind === "fixed") return { constraintId: constraint.id, residual: Math.hypot(first.x, first.y), satisfied: Math.hypot(first.x, first.y) <= tolerance, supported: true };
     const dx = second!.x - first.x; const dy = second!.y - first.y; const directionLength = Math.hypot(dx, dy); const requiresDirection = constraint.kind !== "coincident";
-    if (requiresDirection && directionLength <= tolerance) return { constraintId: constraint.id, residual: Number.POSITIVE_INFINITY, satisfied: false, supported: false };
+    const ambiguousAxisDistance = constraint.kind === "distance-horizontal" && Math.abs(dx) <= tolerance || constraint.kind === "distance-vertical" && Math.abs(dy) <= tolerance;
+    if (requiresDirection && directionLength <= tolerance || ambiguousAxisDistance) return { constraintId: constraint.id, residual: Number.POSITIVE_INFINITY, satisfied: false, supported: false };
     let residual: number;
     if (constraint.kind === "coincident") residual = Math.hypot(dx, dy);
     else if (constraint.kind === "horizontal") residual = Math.abs(dy);
@@ -379,8 +520,9 @@ export function constraintResidualsForDocument(document: DocumentSnapshot, toler
   });
 }
 
-const deriveConstraintComponentStates = (document: DocumentSnapshot, normalized: readonly NormalizedConstraint[], residuals: readonly ConstraintResidual[]): readonly ConstraintComponentState[] => {
+const deriveConstraintComponentStates = (document: DocumentSnapshot, normalized: readonly NormalizedConstraint[], residuals: readonly ConstraintResidual[], componentInputs: readonly ConstraintComponentInput[]): readonly ConstraintComponentState[] => {
   const sketches = document.elements.filter((element): element is Extract<Element, { type: "sketch" }> => element.type === "sketch");
+  const inputs = new Map(componentInputs.map((input) => [input.nodeKeys[0], input]));
   return constraintComponentsForDocument(document).map((component) => {
     const nodeKeys = new Set(component.nodeKeys);
     const componentConstraints = normalized.filter((constraint) => component.constraintIds.includes(constraint.id));
@@ -397,17 +539,21 @@ const deriveConstraintComponentStates = (document: DocumentSnapshot, normalized:
     const globalIds = new Set(componentConstraints.filter((constraint) => constraint.scope === "document").map((constraint) => constraint.id));
     const unsupported = componentResiduals.filter((residual) => !residual.supported);
     const unsatisfiedGlobal = componentResiduals.filter((residual) => globalIds.has(residual.constraintId) && residual.supported && !residual.satisfied);
+    const input = inputs.get(component.nodeKeys[0]);
+    const analysis = input ? constraintRankForInput(input) : { rank: 0, rowCount: 0 };
+    const degreesOfFreedom = (input?.coordinateCount ?? component.nodeKeys.length * 2) - analysis.rank;
+    const redundant = analysis.rowCount > analysis.rank;
     const diagnostics = [
       ...localStates.flatMap((value) => value.conflicts.map((conflict) => `${value.ownerId}:${conflict}`)),
       ...unsupported.map((residual) => `${globalIds.has(residual.constraintId) ? "global" : "local"}-constraint-unsupported:${residual.constraintId}`),
       ...unsatisfiedGlobal.map((residual) => `global-constraint-conflict:${residual.constraintId}`),
       ...localStates.filter((value) => value.state === "overdefined").map((value) => `${value.ownerId}:overdefined`),
+      ...(redundant ? ["component:overdefined"] : []),
     ].sort();
-    const hasGlobal = globalIds.size > 0;
     const state: ConstraintState = unsupported.length ? "invalid"
       : unsatisfiedGlobal.length || localStates.some((value) => value.state === "conflict") ? "conflict"
-        : localStates.some((value) => value.state === "overdefined") ? "overdefined"
-          : !hasGlobal && localStates.length > 0 && localStates.every((value) => value.state === "fully-defined") ? "fully-defined"
+        : redundant || localStates.some((value) => value.state === "overdefined") ? "overdefined"
+          : degreesOfFreedom === 0 ? "fully-defined"
             : "underdefined";
     return { nodeKeys: component.nodeKeys, state, diagnostics };
   });
@@ -415,7 +561,7 @@ const deriveConstraintComponentStates = (document: DocumentSnapshot, normalized:
 
 /** Derives component-scoped diagnostics without persisting solver output. */
 export function constraintComponentStatesForDocument(document: DocumentSnapshot): readonly ConstraintComponentState[] {
-  return deriveConstraintComponentStates(document, normalizedConstraintsForDocument(document), constraintResidualsForDocument(document));
+  return deriveConstraintComponentStates(document, normalizedConstraintsForDocument(document), constraintResidualsForDocument(document), constraintInputsForDocument(document));
 }
 
 /** Returns the parametric operations currently supported by an element. */
