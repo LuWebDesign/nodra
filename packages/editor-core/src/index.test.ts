@@ -275,6 +275,23 @@ describe("editor core", () => {
      expect(result.nodes.some((node) => node.point.x === 19)).toBe(false);
    });
 
+  it("splits every sketch edge crossing the clicked edge at the same intersection", () => {
+    const horizontal = createSketchLine(elementId("multi-cut-horizontal"), layerId("default"), rectangle.style, { x: 0, y: 0 }, { x: 20, y: 0 });
+    const vertical = createSketchLine(elementId("multi-cut-vertical"), layerId("default"), rectangle.style, { x: 10, y: -10 }, { x: 10, y: 10 });
+    const untouched = createSketchLine(elementId("multi-cut-untouched"), layerId("default"), rectangle.style, { x: 30, y: 0 }, { x: 40, y: 0 });
+    const initial = createEditor({ ...document, elements: [horizontal, vertical, untouched] });
+    const state = dispatch(initial, cutSketchEdge(horizontal.id, 0, { x: 10, y: 0 }));
+    const nextHorizontal = state.document.elements.find((element): element is SketchElement => element.id === horizontal.id)!;
+    const nextVertical = state.document.elements.find((element): element is SketchElement => element.id === vertical.id)!;
+    expect(nextHorizontal.edges).toHaveLength(2);
+    expect(nextVertical.edges).toHaveLength(2);
+    expect(nextHorizontal.nodes.some((node) => node.point.x === 10 && node.point.y === 0)).toBe(true);
+    expect(nextVertical.nodes.some((node) => node.point.x === 10 && node.point.y === 0)).toBe(true);
+    expect(state.document.elements.find((element) => element.id === untouched.id)).toEqual(untouched);
+    expect(state.undo).toHaveLength(1);
+    expect(undo(state).document).toEqual(initial.document);
+  });
+
   it("removes dimensions whose sketch node is removed by a cut", () => {
      const sketch = { ...createSketchLine(elementId("cut-dimension-sketch"), layerId("default"), rectangle.style, { x: 0, y: 0 }, { x: 10, y: 0 }), nodes: [{ id: "a", point: { x: 0, y: 0 } }, { id: "b", point: { x: 10, y: 0 } }, { id: "c", point: { x: 20, y: 0 } }], edges: [{ id: "ab", startNodeId: "a", endNodeId: "b" }, { id: "bc", startNodeId: "b", endNodeId: "c" }] };
      const linked: DimensionElement = { ...dimension, id: elementId("cut-dimension"), references: [{ kind: "node", elementId: sketch.id, nodeIndex: 0, nodeId: "a" }, { kind: "node", elementId: sketch.id, nodeIndex: 2, nodeId: "c" }] };

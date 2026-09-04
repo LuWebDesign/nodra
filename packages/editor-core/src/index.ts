@@ -192,33 +192,63 @@ export const cutSketchEdge = (sketchId: ElementId, segmentIndex: number, cutPoin
     if (!sketch) return { success: false, error: "Sketch not found" };
     if (!Number.isInteger(segmentIndex) || segmentIndex < 0 || segmentIndex >= sketch.edges.length) return { success: false, error: "Sketch edge not found" };
     const edge = sketch.edges[segmentIndex]!;
-    const documentConstraints = document.constraints?.filter((constraint) => !constraintReferencesSketchEdge(constraint, sketch.id, edge));
-    const baseDocument = documentConstraints && documentConstraints.length !== document.constraints?.length ? { ...document, constraints: documentConstraints } : document;
     const startNode = sketch.nodes.find((node) => node.id === edge.startNodeId)!;
     const endNode = sketch.nodes.find((node) => node.id === edge.endNodeId)!;
+    const documentConstraints = document.constraints?.filter((constraint) => !constraintReferencesSketchEdge(constraint, sketch.id, edge));
+    const baseDocument = documentConstraints && documentConstraints.length !== document.constraints?.length ? { ...document, constraints: documentConstraints } : document;
     if (cutPoint) {
-      const crossingSegments = document.elements.filter((element) => element.id !== sketch.id && element.type !== "dimension").flatMap((element) => cuttableSegments(element));
+      // Pick the actual crossing once, then split every sketch edge which passes
+      // through that same point. Other geometry remains only a snap target.
+      const crossingSegments = document.elements.flatMap((element) => element.type === "dimension" ? [] : cuttableSegments(element).filter((segment) => segment.elementId !== sketch.id || segment.segmentIndex !== segmentIndex));
       const intersections = crossingSegments.flatMap((segment) => {
         const hit = lineSegmentIntersection(startNode.point, endNode.point, segment.start, segment.end, 1e-7);
         return hit ? [hit.point] : [];
       });
-      const intersection = intersections.sort((first, second) => Math.hypot(first.x - cutPoint.x, first.y - cutPoint.y) - Math.hypot(second.x - cutPoint.x, second.y - cutPoint.y))[0];
-      const requestedPoint = intersection ?? cutPoint;
-      const vx = endNode.point.x - startNode.point.x; const vy = endNode.point.y - startNode.point.y; const lengthSquared = vx * vx + vy * vy;
-      if (lengthSquared <= 1e-12) return { success: false, error: "Cannot split a zero-length sketch edge" };
-      const parameter = ((requestedPoint.x - startNode.point.x) * vx + (requestedPoint.y - startNode.point.y) * vy) / lengthSquared;
-      if (parameter <= 1e-6 || parameter >= 1 - 1e-6) return { success: false, error: "Cut point must be inside the sketch segment" };
-      const splitNodeId = sketchNodeId(); const splitEdgeA = { id: sketchEdgeId(), startNodeId: edge.startNodeId, endNodeId: splitNodeId }; const splitEdgeB = { id: sketchEdgeId(), startNodeId: splitNodeId, endNodeId: edge.endNodeId };
-      const splitPoint = { x: startNode.point.x + vx * parameter, y: startNode.point.y + vy * parameter };
-      const edges = sketch.edges.flatMap((candidate, index) => index === segmentIndex ? [splitEdgeA, splitEdgeB] : [candidate]);
-      const nodes = [...sketch.nodes, { id: splitNodeId, point: splitPoint }];
-      const constraints = sketch.constraints?.filter((constraint) => !constraintReferencesSketchEdge(constraint, sketch.id, edge));
-      const nextSketch = { ...sketch, nodes, edges, ...(constraints ? { constraints } : {}) };
-      const originalReference = sketchEdgeReference(sketchId, edge.id);
-      const referenceMap = new Map<string, ReferenceResolution>([[topologyReferenceKey(originalReference), { kind: "replaced", references: [sketchEdgeReference(sketchId, splitEdgeA.id), sketchEdgeReference(sketchId, splitEdgeB.id)] }]]);
-      const edit: TopologyEditResult = { elements: document.elements.map((element) => element.id === sketchId ? nextSketch : element), referenceMap, diagnostics: [] };
-      const elements = remapSketchEdgeDimensionReferences(edit, sketchId, sketch.edges, edges);
-      return replaceTopology(baseDocument, { ...edit, elements });
+      const requestedPoint = intersections.sort((first, second) => Math.hypot(first.x - cutPoint.x, first.y - cutPoint.y) - Math.hypot(second.x - cutPoint.x, second.y - cutPoint.y))[0] ?? cutPoint;
+      const parameterAt = (first: PointMm, last: PointMm): number => {
+        const vx = last.x - first.x; const vy = last.y - first.y; const lengthSquared = vx * vx + vy * vy;
+        return lengthSquared <= 1e-12 ? Number.NaN : ((requestedPoint.x - first.x) * vx + (requestedPoint.y - first.y) * vy) / lengthSquared;
+      };
+      const clickedParameter = parameterAt(startNode.point, endNode.point);
+      if (!Number.isFinite(clickedParameter)) return { success: false, error: "Cannot split a zero-length sketch edge" };
+      if (clickedParameter <= 1e-6 || clickedParameter >= 1 - 1e-6) return { success: false, error: "Cut point must be inside the sketch segment" };
+      const affected = document.elements.flatMap((element) => element.type === "sketch" ? element.edges.flatMap((candidate, index) => {
+        const first = element.nodes.find((node) => node.id === candidate.startNodeId)?.point;
+        const last = element.nodes.find((node) => node.id === candidate.endNodeId)?.point;
+        if (!first || !last || element.id === sketch.id && index === segmentIndex) return [];
+        const hit = lineSegmentIntersection(startNode.point, endNode.point, first, last, 1e-7);
+        const parameter = parameterAt(first, last);
+        return hit && Math.hypot(hit.point.x - requestedPoint.x, hit.point.y - requestedPoint.y) <= 1e-6 && parameter > 1e-6 && parameter < 1 - 1e-6 ? [{ sketch: element, edge: candidate, index, first, last }] : [];
+      }) : []).concat([{ sketch, edge, index: segmentIndex, first: startNode.point, last: endNode.point }]);
+      const documentConstraints = document.constraints?.filter((constraint) => !affected.some((target) => constraintReferencesSketchEdge(constraint, target.sketch.id, target.edge)));
+      const cutDocument = documentConstraints && documentConstraints.length !== document.constraints?.length ? { ...document, constraints: documentConstraints } : document;
+      const referenceMap = new Map<string, ReferenceResolution>();
+      const replacements = new Map<ElementId, SketchElement>();
+      const targetsBySketch = new Map<ElementId, typeof affected>();
+      for (const target of affected) targetsBySketch.set(target.sketch.id, [...(targetsBySketch.get(target.sketch.id) ?? []), target]);
+      for (const targets of targetsBySketch.values()) {
+        const sourceSketch = targets[0]!.sketch;
+        const splitEdges = new Map<number, readonly [{ readonly id: string; readonly startNodeId: string; readonly endNodeId: string }, { readonly id: string; readonly startNodeId: string; readonly endNodeId: string }]>();
+        const splitNodes = targets.map((target) => {
+          const splitNodeId = sketchNodeId();
+          const splitEdgeA = { id: sketchEdgeId(), startNodeId: target.edge.startNodeId, endNodeId: splitNodeId };
+          const splitEdgeB = { id: sketchEdgeId(), startNodeId: splitNodeId, endNodeId: target.edge.endNodeId };
+          splitEdges.set(target.index, [splitEdgeA, splitEdgeB]);
+          const parameter = parameterAt(target.first, target.last);
+          return { id: splitNodeId, point: { x: target.first.x + (target.last.x - target.first.x) * parameter, y: target.first.y + (target.last.y - target.first.y) * parameter } };
+        });
+        const edges = sourceSketch.edges.flatMap((candidate, index) => splitEdges.get(index) ?? [candidate]);
+        const constraints = sourceSketch.constraints?.filter((constraint) => !targets.some((target) => constraintReferencesSketchEdge(constraint, sourceSketch.id, target.edge)));
+        replacements.set(sourceSketch.id, { ...sourceSketch, nodes: [...sourceSketch.nodes, ...splitNodes], edges, ...(constraints ? { constraints } : {}) });
+        for (const target of targets) {
+          const split = splitEdges.get(target.index)!;
+          const originalReference = sketchEdgeReference(sourceSketch.id, target.edge.id);
+          referenceMap.set(topologyReferenceKey(originalReference), { kind: "replaced", references: [sketchEdgeReference(sourceSketch.id, split[0].id), sketchEdgeReference(sourceSketch.id, split[1].id)] });
+        }
+      }
+      const edit: TopologyEditResult = { elements: document.elements.map((element) => replacements.get(element.id) ?? element), referenceMap, diagnostics: [] };
+      const elements = [...replacements.entries()].reduce((current, [id, replacement]) => remapSketchEdgeDimensionReferences({ ...edit, elements: current }, id, document.elements.find((element): element is SketchElement => element.id === id)!.edges, replacement.edges), edit.elements);
+      return replaceTopology(cutDocument, { ...edit, elements });
     }
     const edges = sketch.edges.filter((_, index) => index !== segmentIndex);
     if (edges.length === 0) {
