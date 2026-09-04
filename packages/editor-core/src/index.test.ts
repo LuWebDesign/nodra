@@ -365,6 +365,36 @@ describe("editor core", () => {
     expect(redo(undo(cut)).document).toEqual(cut.document);
   });
 
+  it("accepts a new constraint and dimension on surviving sketch nodes after a cut", () => {
+    const sketch: SketchElement = {
+      type: "sketch", id: elementId("post-cut-parametric"), layerId: layerId("default"), style: rectangle.style,
+      nodes: [{ id: "a", point: { x: 0, y: 0 } }, { id: "b", point: { x: 10, y: 0 } }, { id: "c", point: { x: 10, y: 10 } }, { id: "d", point: { x: 0, y: 12 } }],
+      edges: [{ id: "ab", startNodeId: "a", endNodeId: "b" }, { id: "bc", startNodeId: "b", endNodeId: "c" }, { id: "cd", startNodeId: "c", endNodeId: "d" }, { id: "da", startNodeId: "d", endNodeId: "a" }],
+    };
+    const initial = createEditor({ ...document, elements: [sketch] });
+    const cut = dispatch(initial, cutSegment(sketch.id, 0, { x: 5, y: 0 }));
+    const cutSketch = cut.document.elements.find((element): element is SketchElement => element.id === sketch.id && element.type === "sketch");
+    const cIndex = cutSketch?.nodes.findIndex((node) => node.id === "c") ?? -1;
+    const dIndex = cutSketch?.nodes.findIndex((node) => node.id === "d") ?? -1;
+    const relation = { id: "post-cut-horizontal", kind: "horizontal" as const, references: [{ elementId: sketch.id, nodeId: "c" }, { elementId: sketch.id, nodeId: "d" }] as const };
+    const constrained = dispatch(cut, addSketchConstraint(sketch.id, relation));
+    const linked: DimensionElement = { ...dimension, id: elementId("post-cut-dimension"), references: [{ kind: "node", elementId: sketch.id, nodeIndex: cIndex, nodeId: "c" }, { kind: "node", elementId: sketch.id, nodeIndex: dIndex, nodeId: "d" }] };
+    const annotated = dispatch(constrained, createElement(linked));
+    const result = annotated.document.elements.find((element): element is SketchElement => element.id === sketch.id && element.type === "sketch");
+    const reverted = undo(undo(annotated));
+
+    expect(cutSketch?.edges.map((edge) => edge.id)).toEqual(["bc", "cd", "da"]);
+    expect(cutSketch?.nodes.map((node) => node.id)).toEqual(["a", "b", "c", "d"]);
+    expect(result?.constraints).toEqual([relation]);
+    expect(result?.nodes.find((node) => node.id === "d")?.point.y).toBeCloseTo(10);
+    expect(annotated.document.elements.find((element) => element.id === linked.id)).toEqual(linked);
+    expect(linked.references).toEqual([{ kind: "node", elementId: sketch.id, nodeIndex: cIndex, nodeId: "c" }, { kind: "node", elementId: sketch.id, nodeIndex: dIndex, nodeId: "d" }]);
+    expect(annotated.undo).toHaveLength(3);
+    expect(reverted.document).toEqual(cut.document);
+    expect(redo(redo(reverted)).document).toEqual(annotated.document);
+    expect(undo(cut).document).toEqual(initial.document);
+  });
+
   it("splits a sketch segment at the cut point without deleting the whole line", () => {
      const sketch = createSketchLine(elementId("split-sketch"), layerId("default"), rectangle.style, { x: 0, y: 0 }, { x: 20, y: 0 });
      const state = dispatch(createEditor({ ...document, elements: [sketch] }), cutSketchEdge(sketch.id, 0, { x: 8, y: 0 }));
