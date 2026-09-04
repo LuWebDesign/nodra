@@ -530,6 +530,25 @@ export function splitCubicBezier(curve: CubicBezier, t = 0.5): readonly [CubicBe
   const a = lerp(curve.p0, curve.p1); const b = lerp(curve.p1, curve.p2); const c = lerp(curve.p2, curve.p3); const d = lerp(a, b); const e = lerp(b, c); const m = lerp(d, e);
   return [{ p0: curve.p0, p1: a, p2: d, p3: m }, { p0: m, p1: e, p2: c, p3: curve.p3 }];
 }
+/** Splits a cubic at sorted, unique normalized parameters using De Casteljau. */
+export function splitCubicBezierAtParameters(curve: CubicBezier, parameters: readonly number[], parameterTolerance = 1e-12): readonly CubicBezier[] {
+  const values = [curve.p0.x, curve.p0.y, curve.p1.x, curve.p1.y, curve.p2.x, curve.p2.y, curve.p3.x, curve.p3.y, parameterTolerance, ...parameters];
+  if (!values.every(Number.isFinite) || parameterTolerance < 0 || parameterTolerance >= 0.5) throw new Error("curve and parameters must be finite and tolerance must be within [0, 0.5)");
+  const sortedCuts = parameters.map((parameter) => Math.max(0, Math.min(1, parameter))).filter((parameter) => parameter > parameterTolerance && parameter < 1 - parameterTolerance).sort((first, second) => first - second);
+  const cuts = sortedCuts.reduce<number[]>((accepted, parameter) => { const previous = accepted.at(-1); if (previous === undefined || parameter - previous > parameterTolerance) accepted.push(parameter); return accepted; }, []);
+  const pieces: CubicBezier[] = [];
+  const finiteCurve = (candidate: CubicBezier) => [candidate.p0.x, candidate.p0.y, candidate.p1.x, candidate.p1.y, candidate.p2.x, candidate.p2.y, candidate.p3.x, candidate.p3.y].every(Number.isFinite);
+  let remaining = curve; let previous = 0;
+  for (const parameter of cuts) {
+    const localParameter = (parameter - previous) / (1 - previous);
+    const [left, right] = splitCubicBezier(remaining, localParameter);
+    if (!finiteCurve(left) || !finiteCurve(right)) throw new Error("Bézier split exceeds the numeric range");
+    pieces.push(left); remaining = right; previous = parameter;
+  }
+  pieces.push(remaining);
+  return pieces;
+}
+
 export function flattenCubicBezier(curve: CubicBezier, tolerance = 0.1): PointMm[] {
   if (!Number.isFinite(tolerance) || tolerance <= 0) throw new Error("tolerance must be positive");
   const result: PointMm[] = [curve.p0];
