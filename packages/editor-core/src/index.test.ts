@@ -247,6 +247,29 @@ describe("editor core", () => {
     expect(result?.type === "path" ? result.nodes.some((node) => node.anchor.x === 10 && node.anchor.y === 0) : false).toBe(true);
   });
 
+  it("cuts one segment of two crossing native lines and restores them atomically", () => {
+    const horizontal: LineElement = { type: "line", id: elementId("crossing-native-horizontal"), layerId: layerId("default"), start: { x: 0, y: 0 }, end: { x: 20, y: 0 }, rotation: 0, style: rectangle.style };
+    const vertical: LineElement = { type: "line", id: elementId("crossing-native-vertical"), layerId: layerId("default"), start: { x: 10, y: -10 }, end: { x: 10, y: 10 }, rotation: 0, style: rectangle.style };
+    const initial = createEditor({ ...document, elements: [horizontal, vertical] });
+
+    const cut = dispatch(initial, cutSegment(horizontal.id, 0, { x: 5, y: 0 }));
+    const paths = cut.document.elements.filter((element): element is PathElement => element.type === "path");
+    const segmentKeys = paths.flatMap((candidate) => {
+      const nodes = new Map(candidate.nodes.map((node) => [node.id, node.anchor]));
+      return candidate.segments.flatMap((segment) => {
+        const start = nodes.get(segment.startNodeId); const end = nodes.get(segment.endNodeId);
+        return start && end ? [[`${start.x},${start.y}`, `${end.x},${end.y}`].sort().join("|")] : [];
+      });
+    });
+
+    expect(cut.document.elements.every((element) => element.type === "path")).toBe(true);
+    expect(paths.every((candidate) => !candidate.closed && candidate.segments.every((segment) => segment.type === "line"))).toBe(true);
+    expect(segmentKeys.sort()).toEqual(["10,-10|10,0", "10,0|10,10", "10,0|20,0"].sort());
+    expect(cut.undo).toHaveLength(1);
+    expect(undo(cut).document).toEqual(initial.document);
+    expect(redo(undo(cut)).document).toEqual(cut.document);
+  });
+
   it("splits a sketch segment at the cut point without deleting the whole line", () => {
      const sketch = createSketchLine(elementId("split-sketch"), layerId("default"), rectangle.style, { x: 0, y: 0 }, { x: 20, y: 0 });
      const state = dispatch(createEditor({ ...document, elements: [sketch] }), cutSketchEdge(sketch.id, 0, { x: 8, y: 0 }));
