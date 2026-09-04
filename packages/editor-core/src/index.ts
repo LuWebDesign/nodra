@@ -345,6 +345,7 @@ const cutSketchEdgeDestructive = (sketchId: ElementId, segmentIndex: number, cut
         const clickedReference = sketchEdgeReference(sketch.id, edge.id);
         referenceMap.set(topologyReferenceKey(clickedReference), { kind: "removed", reason: "Sketch edge was deleted" });
         for (const target of targets) {
+          if (target.sketch.id === sketch.id && target.index === segmentIndex) continue;
           const split = splitEdges.get(target.index)!;
           const originalReference = sketchEdgeReference(sourceSketch.id, target.edge.id);
           referenceMap.set(topologyReferenceKey(originalReference), { kind: "replaced", references: [sketchEdgeReference(sourceSketch.id, split[0].id), sketchEdgeReference(sourceSketch.id, split[1].id)] });
@@ -354,7 +355,8 @@ const cutSketchEdgeDestructive = (sketchId: ElementId, segmentIndex: number, cut
         const replacement = replacements.get(element.id);
         return replacement && replacement.edges.length === 0 ? [] : [replacement ?? element];
       });
-      const edit: TopologyEditResult = { elements: editedElements, referenceMap, diagnostics: [] };
+      const clickedReferenceKey = topologyReferenceKey(sketchEdgeReference(sketch.id, edge.id));
+      const edit: TopologyEditResult = { elements: editedElements, referenceMap, diagnostics: [{ code: "reference-removed", referenceKey: clickedReferenceKey, message: "Sketch edge was deleted" }] };
       const elements = [...replacements.entries()].reduce((current, [id, replacement]) => remapSketchEdgeDimensionReferences({ ...edit, elements: current }, id, document.elements.find((element): element is SketchElement => element.id === id)!.edges, replacement.edges), edit.elements);
       return replaceTopology(cutDocument, { ...edit, elements });
     }

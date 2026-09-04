@@ -319,6 +319,26 @@ describe("editor core", () => {
     expect(redo(undo(cut)).document).toEqual(cut.document);
   });
 
+  it("opens a closed triangular sketch and reports the cut edge as removed", () => {
+    const triangle: SketchElement = {
+      type: "sketch", id: elementId("closed-triangle"), layerId: layerId("default"), style: rectangle.style,
+      nodes: [{ id: "a", point: { x: 0, y: 0 } }, { id: "b", point: { x: 10, y: 0 } }, { id: "c", point: { x: 5, y: 10 } }],
+      edges: [{ id: "ab", startNodeId: "a", endNodeId: "b" }, { id: "bc", startNodeId: "b", endNodeId: "c" }, { id: "ca", startNodeId: "c", endNodeId: "a" }],
+    };
+    const source = { ...document, elements: [triangle] };
+    const command = cutSegment(triangle.id, 0, { x: 5, y: 0 });
+    const applied = command.apply(source);
+
+    expect(applied.success).toBe(true);
+    expect(applied.success && applied.topology?.referenceMap.get(`${triangle.id}:edge:ab`)).toEqual({ kind: "removed", reason: "Sketch edge was deleted" });
+    expect(applied.success && applied.topology?.diagnostics).toEqual([{ code: "reference-removed", referenceKey: `${triangle.id}:edge:ab`, message: "Sketch edge was deleted" }]);
+    const cut = dispatch(createEditor(source), command);
+    expect(cut.document.elements).toMatchObject([{ type: "sketch", id: triangle.id, nodes: [{ id: "a" }, { id: "b" }, { id: "c" }], edges: [{ id: "bc" }, { id: "ca" }] }]);
+    expect(cut.undo).toHaveLength(1);
+    expect(undo(cut).document).toEqual(source);
+    expect(redo(undo(cut)).document).toEqual(cut.document);
+  });
+
   it("splits a sketch segment at the cut point without deleting the whole line", () => {
      const sketch = createSketchLine(elementId("split-sketch"), layerId("default"), rectangle.style, { x: 0, y: 0 }, { x: 20, y: 0 });
      const state = dispatch(createEditor({ ...document, elements: [sketch] }), cutSketchEdge(sketch.id, 0, { x: 8, y: 0 }));
