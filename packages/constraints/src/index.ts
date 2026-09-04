@@ -113,6 +113,10 @@ const sketchConstraintKinds = [
 const circleConstraintKinds = ["center-horizontal", "center-vertical", "radius", "diameter"] as const satisfies readonly CircleConstraintKind[];
 const CONSTRAINT_TOLERANCE = 1e-6;
 const MAX_CONSTRAINT_ITERATIONS = 32;
+const documentConstraintKinds = new Set<SketchConstraintKind>(["coincident", "horizontal", "vertical", "distance-horizontal", "distance-vertical", "distance", "parallel", "perpendicular", "equal", "angle"]);
+
+/** Reports whether the page-level solver supports a constraint kind. */
+export const supportsDocumentConstraintKind = (kind: SketchConstraintKind): boolean => documentConstraintKinds.has(kind);
 type MutablePoint = { x: number; y: number };
 
 const solveGlobalSegmentRelation = (kind: SketchConstraintKind, first: MutablePoint, second: MutablePoint, third: MutablePoint, fourth: MutablePoint): boolean => {
@@ -136,7 +140,7 @@ const solveGlobalSegmentRelation = (kind: SketchConstraintKind, first: MutablePo
 
 const projectGlobalConstraint = (points: Map<string, MutablePoint>, constraint: NormalizedConstraint): number => {
   const segmentRelation = constraint.kind === "parallel" || constraint.kind === "perpendicular" || constraint.kind === "equal";
-  const supported = constraint.kind === "coincident" || constraint.kind === "horizontal" || constraint.kind === "vertical" || constraint.kind === "distance-horizontal" || constraint.kind === "distance-vertical" || constraint.kind === "distance" || constraint.kind === "angle" || segmentRelation;
+  const supported = supportsDocumentConstraintKind(constraint.kind);
   const requiresValue = constraint.kind === "distance-horizontal" || constraint.kind === "distance-vertical" || constraint.kind === "distance" || constraint.kind === "angle";
   if (constraint.references.length !== (segmentRelation ? 4 : 2) || !supported || requiresValue && (!Number.isFinite(constraint.value) || constraint.value === undefined || constraint.value <= 0) || !requiresValue && constraint.value !== undefined) return 0;
   const values = constraint.references.map((reference) => points.get(constraintNodeKey(reference)));
@@ -356,7 +360,7 @@ export function constraintResidualsForDocument(document: DocumentSnapshot, toler
     const valid = values.every(isPoint) && (constraint.ownerId === undefined || constraint.references.every((reference) => reference.elementId === constraint.ownerId));
     const expected = constraint.kind === "fixed" ? 1 : ["parallel", "perpendicular", "equal"].includes(constraint.kind) ? 4 : 2;
     const usesValue = ["distance-horizontal", "distance-vertical", "distance", "angle"].includes(constraint.kind);
-    const knownKind = ["horizontal", "vertical", "coincident", "parallel", "perpendicular", "equal", "distance-horizontal", "distance-vertical", "distance", "angle", "fixed"].includes(constraint.kind);
+    const knownKind = ["horizontal", "vertical", "coincident", "parallel", "perpendicular", "equal", "distance-horizontal", "distance-vertical", "distance", "angle", "fixed"].includes(constraint.kind) && !(constraint.scope === "document" && !supportsDocumentConstraintKind(constraint.kind));
     if (!valid || !knownKind || values.length !== expected || values.some((value) => !isPoint(value)) || usesValue && (!Number.isFinite(constraint.value) || constraint.value === undefined || constraint.value <= 0) || !usesValue && constraint.value !== undefined) return { constraintId: constraint.id, residual: Number.POSITIVE_INFINITY, satisfied: false, supported: false };
     const first = values[0]!; const second = values[1];
     if (constraint.kind === "fixed") return { constraintId: constraint.id, residual: Math.hypot(first.x, first.y), satisfied: Math.hypot(first.x, first.y) <= tolerance, supported: true };

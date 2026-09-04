@@ -165,6 +165,7 @@ export const validateDocumentConstraints = (elements: readonly z.infer<typeof el
   const sketches = new Map(elements.filter((element): element is Extract<typeof element, { type: "sketch" }> => element.type === "sketch").map((element) => [element.id, element]));
   const ids = new Set<string>();
   constraints.forEach((constraint, index) => {
+    if (constraint.kind === "fixed") ctx.addIssue({ code: "custom", message: "Fixed constraints are local-only", path: [...path, index, "kind"] });
     if (ids.has(constraint.id)) ctx.addIssue({ code: "custom", message: "Document constraint IDs must be unique", path: [...path, index, "id"] });
     ids.add(constraint.id);
     const segmentRelation = constraint.kind === "parallel" || constraint.kind === "perpendicular" || constraint.kind === "equal";

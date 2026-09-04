@@ -1520,51 +1520,7 @@ export const addSketchSegmentRelation = (constraint: SketchConstraint): EditorCo
     }
     const target = sketches[0]!;
     if (sourceIds.length === 1) return addSketchConstraint(target.id, { ...constraint, references: constraint.references.map((reference) => "nodeId" in reference ? { elementId: target.id, nodeId: reference.nodeId } : { elementId: target.id, edgeId: reference.edgeId }) as unknown as SketchConstraint["references"] }).apply(document);
-    const remapNode = new Map<string, string>(); const remapEdge = new Map<string, string>();
-    const nodes = sketches.flatMap((sketch, sketchIndex) => sketch!.nodes.map((node) => {
-      const nodeId = sketchIndex === 0 ? node.id : `${sketch!.id}:${node.id}`;
-      remapNode.set(`${sketch!.id}:${node.id}`, nodeId);
-      return { ...node, id: nodeId };
-    }));
-    const edges = sketches.flatMap((sketch, sketchIndex) => sketch!.edges.map((edge) => { const edgeId = sketchIndex === 0 ? edge.id : `${sketch!.id}:${edge.id}`; remapEdge.set(`${sketch!.id}:${edge.id}`, edgeId); return { id: edgeId, startNodeId: remapNode.get(`${sketch!.id}:${edge.startNodeId}`) ?? edge.startNodeId, endNodeId: remapNode.get(`${sketch!.id}:${edge.endNodeId}`) ?? edge.endNodeId }; }));
-    const remapReference = (reference: SketchConstraint["references"][number]) => {
-      if (!sourceIds.includes(reference.elementId)) return reference;
-      return "nodeId" in reference ? { elementId: target.id, nodeId: remapNode.get(`${reference.elementId}:${reference.nodeId}`) ?? reference.nodeId } : { elementId: target.id, edgeId: remapEdge.get(`${reference.elementId}:${reference.edgeId}`) ?? reference.edgeId };
-    };
-    const existingConstraints = sketches.flatMap((sketch, sketchIndex) => (sketch!.constraints ?? []).map((current) => ({ ...current, id: sketchIndex === 0 ? current.id : `${sketch!.id}:${current.id}`, references: current.references.map(remapReference) as unknown as SketchConstraint["references"] })));
-    const relation = { ...constraint, references: constraint.references.map(remapReference) as unknown as SketchConstraint["references"] };
-    const merged: SketchElement = { ...target, nodes, edges, constraints: [...existingConstraints, relation] };
-    const solved = solveSketchConstraints(merged);
-    if (solved.status === "conflict" || solved.status === "overdefined") return { success: false, error: `Sketch constraints are ${solved.status}` };
-    const removed = new Set(sourceIds.slice(1));
-    const remapElement = (element: Element): Element | undefined => {
-      if (removed.has(element.id)) return undefined;
-      if (element.type !== "dimension" || !element.references.some((reference) => removed.has(reference.elementId))) return element;
-      const references = element.references.map((reference) => {
-        if (!sourceIds.includes(reference.elementId)) return reference;
-        const source = sketches.find((sketch) => sketch?.id === reference.elementId);
-        if (!source) return undefined;
-        if ("kind" in reference && reference.kind === "line") {
-          const oldEdge = reference.edgeId !== undefined ? source.edges.find((edge) => edge.id === reference.edgeId) : source.edges[reference.edgeIndex ?? 0];
-          const edgeId = oldEdge ? remapEdge.get(`${source.id}:${oldEdge.id}`) : undefined;
-          const edgeIndex = edgeId === undefined ? -1 : edges.findIndex((edge) => edge.id === edgeId);
-          return edgeId !== undefined && edgeIndex >= 0 ? { ...reference, elementId: target.id, edgeId, edgeIndex } : undefined;
-        }
-        const oldNode = reference.nodeId !== undefined ? source.nodes.find((node) => node.id === reference.nodeId) : source.nodes[reference.nodeIndex];
-        const nodeId = oldNode ? remapNode.get(`${source.id}:${oldNode.id}`) : undefined;
-        const nodeIndex = nodeId === undefined ? -1 : nodes.findIndex((node) => node.id === nodeId);
-        return nodeId !== undefined && nodeIndex >= 0 ? { ...reference, elementId: target.id, nodeId, nodeIndex } : undefined;
-      });
-      return references[0] && references[1] ? { ...element, references: [references[0], references[1]] } : undefined;
-    };
-    const elements = document.elements.flatMap((element) => {
-      if (element.id === target.id) return [solved.sketch];
-      const mapped = remapElement(element);
-      return mapped ? [mapped] : [];
-    });
-    const documentConstraints = document.constraints?.map((current) => ({ ...current, references: current.references.map(remapReference) as unknown as SketchConstraint["references"] }));
-    const baseDocument = removeConnectionsFor(documentConstraints ? { ...document, constraints: documentConstraints } : document, removed);
-    return replaceElements(baseDocument, elements);
+    return addDocumentConstraint(constraint).apply(document);
   },
 });
 

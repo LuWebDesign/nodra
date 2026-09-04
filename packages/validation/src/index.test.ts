@@ -193,6 +193,7 @@ describe("native document validation", () => {
     const second = { type: "sketch" as const, id: "second", layerId: "layer-1", nodes: [{ id: "c", point: { x: 0, y: 10 } }, { id: "d", point: { x: 10, y: 10 } }], edges: [{ id: "cd", startNodeId: "c", endNodeId: "d" }], style: { stroke: "#000", strokeWidth: 1 } };
     const constraint = { id: "global-horizontal", kind: "horizontal" as const, references: [{ elementId: first.id, nodeId: "a" }, { elementId: second.id, nodeId: "c" }] as const };
     expect(validateDocument({ ...base, elements: [first, second], constraints: [constraint] }).success).toBe(true);
+    expect(validateDocument({ ...base, elements: [first, second], constraints: [{ id: "global-fixed", kind: "fixed", references: [constraint.references[0]] }] }).success).toBe(false);
     expect(validateDocument({ ...base, elements: [first, second], constraints: [{ ...constraint, references: [{ elementId: first.id, nodeId: "missing" }, constraint.references[1]] }] }).success).toBe(false);
   });
       it("rejects non-finite and non-positive page dimensions", () => {

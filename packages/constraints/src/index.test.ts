@@ -288,6 +288,17 @@ describe("parametric constraint boundary", () => {
     expect(preview.states[0]?.diagnostics.some((diagnostic) => diagnostic.startsWith("global-constraint-conflict:"))).toBe(true);
   });
 
+  it("rejects fixed constraints at document scope instead of silently ignoring them", () => {
+    const source = sketch();
+    const fixed = { id: "global-fixed", kind: "fixed" as const, references: [{ elementId: source.id, nodeId: "a" }] as const };
+
+    const preview = solveConstraintComponents({ ...documentWith([source]), constraints: [fixed] });
+
+    expect(preview.converged).toBe(false);
+    expect(preview.residuals).toEqual([expect.objectContaining({ supported: false, satisfied: false })]);
+    expect(preview.states[0]).toMatchObject({ state: "invalid", diagnostics: [expect.stringContaining("global-constraint-unsupported:")] });
+  });
+
   it("keeps unsupported and missing entities distinguishable", () => {
     const line = { type: "line" as const, id: elementId("line"), layerId: layer.id, start: { x: 0, y: 0 }, end: { x: 10, y: 0 }, rotation: 0, style };
     const document = documentWith([line]);

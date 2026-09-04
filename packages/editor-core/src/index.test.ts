@@ -142,19 +142,17 @@ describe("editor core", () => {
         expect(initial.undo).toHaveLength(0);
       });
 
-      it("merges two sketches when adding an explicit relation between their segments", () => {
+      it("stores an external segment relation without merging its sketches", () => {
         const first = createSketchLine(elementId("first-relation-sketch"), layerId("default"), rectangle.style, { x: 0, y: 0 }, { x: 10, y: 0 });
         const second = createSketchLine(elementId("second-relation-sketch"), layerId("default"), rectangle.style, { x: 0, y: 10 }, { x: 3, y: 14 });
         const relation = { id: "parallel", kind: "parallel" as const, references: [{ elementId: first.id, nodeId: first.nodes[0]!.id }, { elementId: first.id, nodeId: first.nodes[1]!.id }, { elementId: second.id, nodeId: second.nodes[0]!.id }, { elementId: second.id, nodeId: second.nodes[1]!.id }] as const };
         const state = dispatch(createEditor({ ...document, elements: [first, second] }), addSketchSegmentRelation(relation));
-        expect(state.document.elements).toHaveLength(1);
-        const merged = state.document.elements[0] as SketchElement;
-        expect(merged.edges).toHaveLength(2);
-        expect(merged.constraints?.some((constraint) => constraint.kind === "parallel")).toBe(true);
-        expect(merged.nodes[3]?.point.y).toBeCloseTo(10);
+        expect(state.document.elements.map((element) => element.id)).toEqual([first.id, second.id]);
+        expect(state.document.constraints).toEqual([{ id: "parallel", kind: "parallel", references: [{ elementId: first.id, edgeId: first.edges[0]!.id }, { elementId: second.id, edgeId: second.edges[0]!.id }] }]);
+        expect(state.undo).toHaveLength(1);
       });
 
-      it("remaps page constraints and dimensions when the legacy merge command absorbs a sketch", () => {
+      it("preserves existing page constraints and dimensions when adding another external relation", () => {
         const first = createSketchLine(elementId("merge-remap-first"), layerId("default"), rectangle.style, { x: 0, y: 0 }, { x: 10, y: 0 });
         const second = createSketchLine(elementId("merge-remap-second"), layerId("default"), rectangle.style, { x: 0, y: 10 }, { x: 7, y: 14 });
         const third = createSketchLine(elementId("merge-remap-third"), layerId("default"), rectangle.style, { x: 20, y: 10 }, { x: 30, y: 10 });
@@ -168,20 +166,19 @@ describe("editor core", () => {
         if (!applied.success) throw new Error(applied.error);
         const state = dispatch(initial, command);
 
-        expect(state.document.constraints?.[0]?.references).toEqual([{ elementId: first.id, nodeId: `${second.id}:${second.nodes[0]!.id}` }, global.references[1]]);
-        expect((state.document.elements.find((element) => element.id === linked.id) as DimensionElement).references).toEqual([{ kind: "line", elementId: first.id, edgeId: `${second.id}:${second.edges[0]!.id}`, edgeIndex: 1 }, { kind: "line", elementId: first.id, edgeId: `${second.id}:${second.edges[0]!.id}`, edgeIndex: 1 }]);
+        expect(state.document.constraints).toEqual([global, relation]);
+        expect(state.document.elements.map((element) => element.id)).toEqual([first.id, second.id, third.id, linked.id]);
+        expect((state.document.elements.find((element) => element.id === linked.id) as DimensionElement).references).toEqual(linked.references);
         expect(undo(state).document).toEqual(initial.document);
       });
 
-      it("merges two sketches for an explicit coincident node relation", () => {
+      it("stores an external coincident relation without merging sketches", () => {
         const first = createSketchLine(elementId("first-coincident-sketch"), layerId("default"), rectangle.style, { x: 0, y: 0 }, { x: 10, y: 0 });
         const second = createSketchLine(elementId("second-coincident-sketch"), layerId("default"), rectangle.style, { x: 20, y: 10 }, { x: 20, y: 20 });
         const relation = { id: "coincident-cross", kind: "coincident" as const, references: [{ elementId: first.id, nodeId: first.nodes[1]!.id }, { elementId: second.id, nodeId: second.nodes[0]!.id }] as const };
         const state = dispatch(createEditor({ ...document, elements: [first, second] }), addSketchSegmentRelation(relation));
-        expect(state.document.elements).toHaveLength(1);
-        const merged = state.document.elements[0] as SketchElement;
-        expect(merged.constraints).toContainEqual(expect.objectContaining({ kind: "coincident" }));
-        expect(merged.nodes.find((node) => node.id === `${second.id}:${second.nodes[0]!.id}`)?.point).toEqual(merged.nodes.find((node) => node.id === first.nodes[1]!.id)?.point);
+        expect(state.document.elements.map((element) => element.id)).toEqual([first.id, second.id]);
+        expect(state.document.constraints).toEqual([relation]);
       });
 
       it("deletes sketch nodes with their attached constraints while preserving the sketch model", () => {

@@ -3,6 +3,7 @@ import {
   constraintComponentsForDocument,
   constraintResidualsForDocument,
   solveConstraintComponents,
+  supportsDocumentConstraintKind,
 } from "@nodra/constraints";
 import type { DocumentConstraint, DocumentSnapshot, SketchConstraintKind } from "@nodra/domain";
 import {
@@ -11,20 +12,7 @@ import {
   type EditorCommand,
 } from "@nodra/editor-core";
 
-const supportedGlobalKinds = new Set<SketchConstraintKind>([
-  "coincident",
-  "horizontal",
-  "vertical",
-  "distance-horizontal",
-  "distance-vertical",
-  "distance",
-  "parallel",
-  "perpendicular",
-  "equal",
-  "angle",
-]);
-
-export const supportsGlobalConstraintKind = (kind: SketchConstraintKind): boolean => supportedGlobalKinds.has(kind);
+export const supportsGlobalConstraintKind = (kind: SketchConstraintKind): boolean => supportsDocumentConstraintKind(kind);
 
 export const documentConstraintDiagnosticId = (constraintId: string): string => JSON.stringify(["document", null, constraintId]);
 
