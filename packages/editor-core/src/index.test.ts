@@ -270,6 +270,46 @@ describe("editor core", () => {
     expect(redo(undo(cut)).document).toEqual(cut.document);
   });
 
+  it("cuts the segment between two distinct crossings in one operation", () => {
+    const horizontal: LineElement = { type: "line", id: elementId("multi-cross-horizontal"), layerId: layerId("default"), start: { x: 0, y: 0 }, end: { x: 30, y: 0 }, rotation: 0, style: rectangle.style };
+    const firstCrossing: LineElement = { type: "line", id: elementId("multi-cross-first"), layerId: layerId("default"), start: { x: 10, y: -10 }, end: { x: 10, y: 10 }, rotation: 0, style: rectangle.style };
+    const secondCrossing: LineElement = { type: "line", id: elementId("multi-cross-second"), layerId: layerId("default"), start: { x: 20, y: -10 }, end: { x: 20, y: 10 }, rotation: 0, style: rectangle.style };
+    const initial = createEditor({ ...document, elements: [horizontal, firstCrossing, secondCrossing] });
+
+    const cut = dispatch(initial, cutSegment(horizontal.id, 0, { x: 15, y: 0 }));
+    const paths = cut.document.elements.filter((element): element is PathElement => element.type === "path");
+    const segmentKeys = paths.flatMap((candidate) => {
+      const nodes = new Map(candidate.nodes.map((node) => [node.id, node.anchor]));
+      return candidate.segments.flatMap((segment) => {
+        const start = nodes.get(segment.startNodeId); const end = nodes.get(segment.endNodeId);
+        return start && end ? [[`${start.x},${start.y}`, `${end.x},${end.y}`].sort().join("|")] : [];
+      });
+    });
+
+    expect(cut.document.elements.every((element) => element.type === "path")).toBe(true);
+    expect(paths.every((candidate) => !candidate.closed && candidate.segments.every((segment) => segment.type === "line"))).toBe(true);
+    expect(paths.every((candidate) => candidate.segments.length === candidate.nodes.length - 1 && candidate.segments.every((segment, index) => index === 0 || candidate.segments[index - 1]?.endNodeId === segment.startNodeId))).toBe(true);
+    expect(segmentKeys.sort()).toEqual(["0,0|10,0", "10,-10|10,0", "10,0|10,10", "20,-10|20,0", "20,0|20,10", "20,0|30,0"].sort());
+    expect(cut.undo).toHaveLength(1);
+    expect(undo(cut).document).toEqual(initial.document);
+    expect(redo(undo(cut)).document).toEqual(cut.document);
+  });
+
+  it("removes an isolated native line when no intersections exist", () => {
+    const isolated: LineElement = { type: "line", id: elementId("isolated-native-cut"), layerId: layerId("default"), start: { x: 0, y: 0 }, end: { x: 20, y: 0 }, rotation: 0, style: rectangle.style };
+    const unrelated = { ...rectangle, id: elementId("isolated-cut-unrelated"), position: { x: 100, y: 100 } };
+    const initial = createEditor({ ...document, elements: [isolated, unrelated] });
+
+    const cut = dispatch(initial, cutSegment(isolated.id, 0, { x: 10, y: 0 }));
+
+    expect(cut.document.elements).toHaveLength(1);
+    expect(cut.document.elements[0]).toMatchObject(unrelated);
+    expect(cut.document.elements.some((element) => element.id === isolated.id)).toBe(false);
+    expect(cut.undo).toHaveLength(1);
+    expect(undo(cut).document).toEqual(initial.document);
+    expect(redo(undo(cut)).document).toEqual(cut.document);
+  });
+
   it("cuts the crossbar of an open H made from native lines", () => {
     const left: LineElement = { type: "line", id: elementId("open-h-left"), layerId: layerId("default"), start: { x: 0, y: 0 }, end: { x: 0, y: 20 }, rotation: 0, style: rectangle.style };
     const crossbar: LineElement = { type: "line", id: elementId("open-h-crossbar"), layerId: layerId("default"), start: { x: 0, y: 10 }, end: { x: 20, y: 10 }, rotation: 0, style: rectangle.style };
