@@ -152,6 +152,7 @@ export const ELLIPSE_APPROXIMATION_SEGMENTS = 64;
 export const ROUNDED_RECTANGLE_APPROXIMATION_SEGMENTS = 8;
 
 export interface CubicBezier { readonly p0: PointMm; readonly p1: PointMm; readonly p2: PointMm; readonly p3: PointMm }
+export interface CubicBezierLineIntersection { readonly point: PointMm; readonly curveT: number; readonly lineT: number }
 export type BezierHandleDirection = "in" | "out";
 export interface BezierHandlePoint { readonly direction: BezierHandleDirection; readonly point: PointMm }
 export interface BezierGeometryNode { readonly nodeId: string; readonly anchor: PointMm; readonly handles: readonly BezierHandlePoint[] }
@@ -460,6 +461,62 @@ function derivativeRoots(p0: number, p1: number, p2: number, p3: number): number
   if (discriminant < 0) return [];
   const root = Math.sqrt(discriminant);
   return [-1, 1].map((sign) => (-B + sign * root) / (2 * A)).filter((t) => t > 0 && t < 1);
+}
+
+/** Returns isolated intersections between a cubic Bézier and a finite line segment.
+ * `epsilon` is a geometric distance tolerance in millimetres. Degenerate lines
+ * and curves coincident with the supporting line have no isolated result. */
+export function cubicBezierLineIntersections(curve: CubicBezier, lineStart: PointMm, lineEnd: PointMm, epsilon = 1e-9): readonly CubicBezierLineIntersection[] {
+  const values = [curve.p0.x, curve.p0.y, curve.p1.x, curve.p1.y, curve.p2.x, curve.p2.y, curve.p3.x, curve.p3.y, lineStart.x, lineStart.y, lineEnd.x, lineEnd.y, epsilon];
+  if (!values.every(Number.isFinite) || epsilon < 0) throw new Error("curve, segment, and epsilon must be finite");
+  const dx = lineEnd.x - lineStart.x; const dy = lineEnd.y - lineStart.y;
+  const lineLength = Math.hypot(dx, dy);
+  if (!Number.isFinite(lineLength)) throw new Error("curve and segment exceed the numeric range");
+  if (lineLength === 0) return [];
+  const unitX = dx / lineLength; const unitY = dy / lineLength;
+  const signedDistance = (point: PointMm) => unitX * (point.y - lineStart.y) - unitY * (point.x - lineStart.x);
+  const q0 = signedDistance(curve.p0); const q1 = signedDistance(curve.p1); const q2 = signedDistance(curve.p2); const q3 = signedDistance(curve.p3);
+  if (![q0, q1, q2, q3].every(Number.isFinite)) throw new Error("curve and segment exceed the numeric range");
+  const qScale = Math.max(Math.abs(q0), Math.abs(q1), Math.abs(q2), Math.abs(q3));
+  const numericDistanceTolerance = Number.EPSILON * Math.max(1, qScale) * 32;
+  const distanceTolerance = epsilon + numericDistanceTolerance;
+  if (qScale <= numericDistanceTolerance) return [];
+  const [r0, r1, r2, r3] = [q0 / qScale, q1 / qScale, q2 / qScale, q3 / qScale] as const;
+  const scalarAt = (t: number) => { const u = 1 - t; return u ** 3 * r0 + 3 * u ** 2 * t * r1 + 3 * u * t ** 2 * r2 + t ** 3 * r3; };
+  const rootTolerance = 1e-12;
+  const rootValueTolerance = Number.EPSILON * 32;
+  const boundaries = [0, ...derivativeRoots(r0, r1, r2, r3).sort((first, second) => first - second), 1];
+  const roots: number[] = [];
+  for (const boundary of boundaries) if (Math.abs(scalarAt(boundary)) <= rootValueTolerance) roots.push(boundary);
+  for (let index = 0; index + 1 < boundaries.length; index += 1) {
+    let low = boundaries[index]!; let high = boundaries[index + 1]!;
+    let lowValue = scalarAt(low); const highValue = scalarAt(high);
+    if (Math.abs(lowValue) <= rootValueTolerance || Math.abs(highValue) <= rootValueTolerance || (lowValue < 0) === (highValue < 0)) continue;
+    for (let iteration = 0; iteration < 64 && high - low > Number.EPSILON; iteration += 1) {
+      const middle = (low + high) / 2; const middleValue = scalarAt(middle);
+      if (middleValue === 0) { low = middle; high = middle; break; }
+      if ((lowValue < 0) === (middleValue < 0)) { low = middle; lowValue = middleValue; } else high = middle;
+    }
+    roots.push((low + high) / 2);
+  }
+  const candidates = roots.map((root) => Math.max(0, Math.min(1, root))).sort((first, second) => first - second).flatMap((curveT): CubicBezierLineIntersection[] => {
+    const point = evaluateCubicBezier(curve, curveT);
+    const residual = Math.abs(signedDistance(point));
+    const lineT = ((point.x - lineStart.x) * unitX + (point.y - lineStart.y) * unitY) / lineLength;
+    if (!Number.isFinite(residual) || !Number.isFinite(lineT)) throw new Error("curve and segment exceed the numeric range");
+    const clampedLineT = Math.max(0, Math.min(1, lineT));
+    const closest = { x: lineStart.x + dx * clampedLineT, y: lineStart.y + dy * clampedLineT };
+    const coordinateScale = Math.max(1, Math.abs(point.x), Math.abs(point.y), Math.abs(closest.x), Math.abs(closest.y));
+    const segmentTolerance = epsilon + Number.EPSILON * coordinateScale * 32;
+    if (residual > distanceTolerance || Math.hypot(point.x - closest.x, point.y - closest.y) > segmentTolerance) return [];
+    return [{ point, curveT, lineT: clampedLineT }];
+  });
+  return candidates.filter((candidate, index) => {
+    const previous = candidates[index - 1];
+    if (!previous || Math.abs(candidate.curveT - previous.curveT) > rootTolerance) return true;
+    const coordinateScale = Math.max(1, Math.abs(candidate.point.x), Math.abs(candidate.point.y), Math.abs(previous.point.x), Math.abs(previous.point.y));
+    return Math.hypot(candidate.point.x - previous.point.x, candidate.point.y - previous.point.y) > epsilon + Number.EPSILON * coordinateScale * 32;
+  });
 }
 export function cubicBezierBounds(curve: CubicBezier): Bounds {
   const ts = [0, 1, ...derivativeRoots(curve.p0.x, curve.p1.x, curve.p2.x, curve.p3.x), ...derivativeRoots(curve.p0.y, curve.p1.y, curve.p2.y, curve.p3.y)];
