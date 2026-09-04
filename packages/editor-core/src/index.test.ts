@@ -295,6 +295,21 @@ describe("editor core", () => {
     expect(redo(undo(cut)).document).toEqual(cut.document);
   });
 
+  it("removes an isolated native line when no intersections exist", () => {
+    const isolated: LineElement = { type: "line", id: elementId("isolated-native-cut"), layerId: layerId("default"), start: { x: 0, y: 0 }, end: { x: 20, y: 0 }, rotation: 0, style: rectangle.style };
+    const unrelated = { ...rectangle, id: elementId("isolated-cut-unrelated"), position: { x: 100, y: 100 } };
+    const initial = createEditor({ ...document, elements: [isolated, unrelated] });
+
+    const cut = dispatch(initial, cutSegment(isolated.id, 0, { x: 10, y: 0 }));
+
+    expect(cut.document.elements).toHaveLength(1);
+    expect(cut.document.elements[0]).toMatchObject(unrelated);
+    expect(cut.document.elements.some((element) => element.id === isolated.id)).toBe(false);
+    expect(cut.undo).toHaveLength(1);
+    expect(undo(cut).document).toEqual(initial.document);
+    expect(redo(undo(cut)).document).toEqual(cut.document);
+  });
+
   it("cuts the crossbar of an open H made from native lines", () => {
     const left: LineElement = { type: "line", id: elementId("open-h-left"), layerId: layerId("default"), start: { x: 0, y: 0 }, end: { x: 0, y: 20 }, rotation: 0, style: rectangle.style };
     const crossbar: LineElement = { type: "line", id: elementId("open-h-crossbar"), layerId: layerId("default"), start: { x: 0, y: 10 }, end: { x: 20, y: 10 }, rotation: 0, style: rectangle.style };
