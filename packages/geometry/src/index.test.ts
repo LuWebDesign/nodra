@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { angularDimensionGeometry, bezierHandlePoint, boundsOf, boundsOfElements, boundsOutsidePage, connectableNode, connectableNodeAddress, closedElementToPolygon, cubicBezierBounds, cuttableSegments, cubicBezierDerivative, degreesToRadians, dimensionGeometry, dimensionKindForNodes, dimensionKindForPlacement, dimensionOffsetForAlignedPlacement, dimensionOffsetForPlacement, editableGeometryNodes, elementCenter, elementSegmentAt, elementToContour, evaluateCubicBezier, ELLIPSE_APPROXIMATION_SEGMENTS, groupCenter, groupHandlePoints, hitTest, mirrorHandleOffset, mmToScreen, pointMidpoint, radiansToDegrees, realGeometryNodes, resizeGroup, resizeHandle, rotatedLineEndpoints, rotateElements, rotationFromDrag, solveSketchConstraints, solveCircleConstraints, rotationHandlePoints, screenToMm, shapeResultContours, sketchClosedContours, sketchEdgeAtAddress, sketchEdgeIndexAtAddress, splitCubicBezier, splitCuttableSegments, validateSize, visibleBezierHandleGuides } from "./index.js";
+import { angularDimensionGeometry, bezierHandlePoint, boundsOf, boundsOfElements, boundsOutsidePage, connectableNode, connectableNodeAddress, closedElementToPolygon, cubicBezierBounds, cubicBezierLineIntersections, cuttableSegments, cubicBezierDerivative, degreesToRadians, dimensionGeometry, dimensionKindForNodes, dimensionKindForPlacement, dimensionOffsetForAlignedPlacement, dimensionOffsetForPlacement, editableGeometryNodes, elementCenter, elementSegmentAt, elementToContour, evaluateCubicBezier, ELLIPSE_APPROXIMATION_SEGMENTS, groupCenter, groupHandlePoints, hitTest, mirrorHandleOffset, mmToScreen, pointMidpoint, radiansToDegrees, realGeometryNodes, resizeGroup, resizeHandle, rotatedLineEndpoints, rotateElements, rotationFromDrag, solveSketchConstraints, solveCircleConstraints, rotationHandlePoints, screenToMm, shapeResultContours, sketchClosedContours, sketchEdgeAtAddress, sketchEdgeIndexAtAddress, splitCubicBezier, splitCuttableSegments, validateSize, visibleBezierHandleGuides } from "./index.js";
 import { elementId, layerId } from "@nodra/domain";
 
 const style = { stroke: "#000", strokeWidth: 0.2 };
@@ -185,6 +185,71 @@ describe("canonical millimetre geometry", () => {
     expect(cubicBezierBounds(curve).height).toBeCloseTo(7.5);
     const [left, right] = splitCubicBezier(curve);
     expect(left.p3).toEqual(right.p0);
+  });
+  it("finds a finite line crossing on a cubic Bézier without flattening", () => {
+    const curve = { p0: { x: 0, y: -5 }, p1: { x: 10 / 3, y: -5 }, p2: { x: 20 / 3, y: 5 }, p3: { x: 10, y: 5 } };
+    const intersections = cubicBezierLineIntersections(curve, { x: 0, y: 0 }, { x: 10, y: 0 });
+
+    expect(intersections).toHaveLength(1);
+    expect(intersections[0]?.curveT).toBeCloseTo(0.5, 9);
+    expect(intersections[0]?.lineT).toBeCloseTo(0.5, 9);
+    expect(intersections[0]?.point).toMatchObject({ x: 5, y: expect.closeTo(0, 9) });
+    expect(cubicBezierLineIntersections(curve, { x: 0, y: 0 }, { x: 4.999999, y: 0 })).toEqual([]);
+    expect(cubicBezierLineIntersections(curve, { x: 0, y: 0 }, { x: 5.000001, y: 0 })).toHaveLength(1);
+  });
+  it("returns three ordered intersections for an S-shaped cubic Bézier", () => {
+    const curve = { p0: { x: 0, y: -0.08 }, p1: { x: 10 / 3, y: 0.14 }, p2: { x: 20 / 3, y: -0.14 }, p3: { x: 10, y: 0.08 } };
+    const intersections = cubicBezierLineIntersections(curve, { x: 0, y: 0 }, { x: 10, y: 0 });
+
+    expect(intersections).toHaveLength(3);
+    expect(intersections.map((intersection) => intersection.curveT)).toEqual([expect.closeTo(0.2, 8), expect.closeTo(0.5, 8), expect.closeTo(0.8, 8)]);
+    expect(intersections.map((intersection) => intersection.lineT)).toEqual([expect.closeTo(0.2, 8), expect.closeTo(0.5, 8), expect.closeTo(0.8, 8)]);
+  });
+  it("deduplicates a tangent line contact on a cubic Bézier", () => {
+    const curve = { p0: { x: 0, y: 0.25 }, p1: { x: 10 / 3, y: -1 / 12 }, p2: { x: 20 / 3, y: -1 / 12 }, p3: { x: 10, y: 0.25 } };
+    const intersections = cubicBezierLineIntersections(curve, { x: 0, y: 0 }, { x: 10, y: 0 });
+
+    expect(intersections).toHaveLength(1);
+    expect(intersections[0]).toMatchObject({ curveT: expect.closeTo(0.5, 9), lineT: expect.closeTo(0.5, 9), point: { x: expect.closeTo(5, 9), y: expect.closeTo(0, 9) } });
+  });
+  it("keeps a real crossing even when the curve stays inside the geometric tolerance", () => {
+    const curve = { p0: { x: 0, y: -5e-10 }, p1: { x: 10 / 3, y: 5e-10 }, p2: { x: 20 / 3, y: -5e-10 }, p3: { x: 10, y: 5e-10 } };
+    const intersections = cubicBezierLineIntersections(curve, { x: 0, y: 0 }, { x: 10, y: 0 }, 1e-9);
+
+    expect(intersections).toHaveLength(1);
+    expect(intersections[0]).toMatchObject({ curveT: expect.closeTo(0.5, 9), lineT: expect.closeTo(0.5, 9) });
+  });
+  it("supports diagonal lines and rejects a near-tangent miss", () => {
+    const fromLocal = (u: number, v: number) => ({ x: u - v, y: u + v });
+    const diagonalCurve = { p0: fromLocal(0, -5), p1: fromLocal(10 / 3, -5), p2: fromLocal(20 / 3, 5), p3: fromLocal(10, 5) };
+    const nearTangent = { p0: { x: 0, y: 0.250001 }, p1: { x: 10 / 3, y: -1 / 12 + 0.000001 }, p2: { x: 20 / 3, y: -1 / 12 + 0.000001 }, p3: { x: 10, y: 0.250001 } };
+    const intersections = cubicBezierLineIntersections(diagonalCurve, { x: 0, y: 0 }, { x: 10, y: 10 });
+
+    expect(intersections).toHaveLength(1);
+    expect(intersections[0]).toMatchObject({ curveT: expect.closeTo(0.5, 9), lineT: expect.closeTo(0.5, 9), point: { x: expect.closeTo(5, 9), y: expect.closeTo(5, 9) } });
+    expect(cubicBezierLineIntersections(diagonalCurve, { x: 0, y: 0 }, { x: 5 - 0.5e-9, y: 5 - 0.5e-9 }, 1e-9)).toHaveLength(1);
+    expect(cubicBezierLineIntersections(diagonalCurve, { x: 0, y: 0 }, { x: 5 - 0.8e-9, y: 5 - 0.8e-9 }, 1e-9)).toEqual([]);
+    expect(cubicBezierLineIntersections(nearTangent, { x: 0, y: 0 }, { x: 10, y: 0 })).toEqual([]);
+  });
+  it("keeps line intersections stable across translated and small geometry scales", () => {
+    const translated = { p0: { x: 1e9, y: 1e9 - 5 }, p1: { x: 1e9 + 10 / 3, y: 1e9 - 5 }, p2: { x: 1e9 + 20 / 3, y: 1e9 + 5 }, p3: { x: 1e9 + 10, y: 1e9 + 5 } };
+    const tiny = { p0: { x: 0, y: -5e-6 }, p1: { x: 10e-6 / 3, y: -5e-6 }, p2: { x: 20e-6 / 3, y: 5e-6 }, p3: { x: 10e-6, y: 5e-6 } };
+
+    expect(cubicBezierLineIntersections(translated, { x: 1e9, y: 1e9 }, { x: 1e9 + 10, y: 1e9 }, 1e-6)[0]).toMatchObject({ curveT: expect.closeTo(0.5, 7), lineT: expect.closeTo(0.5, 7) });
+    expect(cubicBezierLineIntersections(tiny, { x: 0, y: 0 }, { x: 10e-6, y: 0 }, 1e-12)[0]).toMatchObject({ curveT: expect.closeTo(0.5, 9), lineT: expect.closeTo(0.5, 9) });
+  });
+  it("includes endpoint contacts and rejects non-isolated or invalid line intersections", () => {
+    const endpointCurve = { p0: { x: 0, y: 0 }, p1: { x: 10 / 3, y: 1 }, p2: { x: 20 / 3, y: 1 }, p3: { x: 10, y: 1 } };
+    const endpoint = cubicBezierLineIntersections(endpointCurve, { x: 0, y: 0 }, { x: 10, y: 0 });
+    const collinear = { p0: { x: 0, y: 0 }, p1: { x: 3, y: 0 }, p2: { x: 7, y: 0 }, p3: { x: 10, y: 0 } };
+
+    expect(endpoint).toEqual([{ point: { x: 0, y: 0 }, curveT: 0, lineT: 0 }]);
+    expect(cubicBezierLineIntersections(endpointCurve, { x: 0, y: 0 }, { x: 5e-10, y: 0 }, 1e-9)).toEqual([{ point: { x: 0, y: 0 }, curveT: 0, lineT: 0 }]);
+    expect(cubicBezierLineIntersections(collinear, { x: 0, y: 0 }, { x: 10, y: 0 })).toEqual([]);
+    expect(cubicBezierLineIntersections(endpointCurve, { x: 0, y: 0 }, { x: 0, y: 0 })).toEqual([]);
+    expect(() => cubicBezierLineIntersections(endpointCurve, { x: Number.NaN, y: 0 }, { x: 10, y: 0 })).toThrow("curve, segment, and epsilon must be finite");
+    expect(() => cubicBezierLineIntersections(endpointCurve, { x: 0, y: 0 }, { x: 10, y: 0 }, -1)).toThrow("curve, segment, and epsilon must be finite");
+    expect(() => cubicBezierLineIntersections(endpointCurve, { x: -Number.MAX_VALUE, y: 0 }, { x: Number.MAX_VALUE, y: 0 })).toThrow("curve and segment exceed the numeric range");
   });
   it("handles linear and constant derivative polynomials", () => {
     const curve = { p0: { x: 2, y: 4 }, p1: { x: 5, y: 4 }, p2: { x: 5, y: 10 }, p3: { x: 2, y: 10 } };
