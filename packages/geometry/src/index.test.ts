@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { angularDimensionGeometry, bezierHandlePoint, boundsOf, boundsOfElements, boundsOutsidePage, connectableNode, connectableNodeAddress, closedElementToPolygon, cubicBezierBounds, cubicBezierLineIntersections, cuttableSegments, cubicBezierDerivative, degreesToRadians, dimensionGeometry, dimensionKindForNodes, dimensionKindForPlacement, dimensionOffsetForAlignedPlacement, dimensionOffsetForPlacement, editableGeometryNodes, elementCenter, elementSegmentAt, elementToContour, evaluateCubicBezier, ELLIPSE_APPROXIMATION_SEGMENTS, groupCenter, groupHandlePoints, hitTest, mirrorHandleOffset, mmToScreen, pointMidpoint, radiansToDegrees, realGeometryNodes, resizeGroup, resizeHandle, rotatedLineEndpoints, rotateElements, rotationFromDrag, solveSketchConstraints, solveCircleConstraints, rotationHandlePoints, screenToMm, shapeResultContours, sketchClosedContours, sketchEdgeAtAddress, sketchEdgeIndexAtAddress, splitCubicBezier, splitCuttableSegments, validateSize, visibleBezierHandleGuides } from "./index.js";
+import { angularDimensionGeometry, bezierHandlePoint, boundsOf, boundsOfElements, boundsOutsidePage, connectableNode, connectableNodeAddress, closedElementToPolygon, cubicBezierBounds, cubicBezierLineIntersections, cuttableSegments, cubicBezierDerivative, degreesToRadians, dimensionGeometry, dimensionKindForNodes, dimensionKindForPlacement, dimensionOffsetForAlignedPlacement, dimensionOffsetForPlacement, editableGeometryNodes, elementCenter, elementSegmentAt, elementToContour, evaluateCubicBezier, ELLIPSE_APPROXIMATION_SEGMENTS, groupCenter, groupHandlePoints, hitTest, mirrorHandleOffset, mmToScreen, pointMidpoint, radiansToDegrees, realGeometryNodes, resizeGroup, resizeHandle, rotatedLineEndpoints, rotateElements, rotationFromDrag, solveSketchConstraints, solveCircleConstraints, rotationHandlePoints, screenToMm, shapeResultContours, sketchClosedContours, sketchEdgeAtAddress, sketchEdgeIndexAtAddress, splitCubicBezier, splitCubicBezierAtParameters, splitCuttableSegments, validateSize, visibleBezierHandleGuides } from "./index.js";
 import { elementId, layerId } from "@nodra/domain";
 
 const style = { stroke: "#000", strokeWidth: 0.2 };
@@ -250,6 +250,42 @@ describe("canonical millimetre geometry", () => {
     expect(() => cubicBezierLineIntersections(endpointCurve, { x: Number.NaN, y: 0 }, { x: 10, y: 0 })).toThrow("curve, segment, and epsilon must be finite");
     expect(() => cubicBezierLineIntersections(endpointCurve, { x: 0, y: 0 }, { x: 10, y: 0 }, -1)).toThrow("curve, segment, and epsilon must be finite");
     expect(() => cubicBezierLineIntersections(endpointCurve, { x: -Number.MAX_VALUE, y: 0 }, { x: Number.MAX_VALUE, y: 0 })).toThrow("curve and segment exceed the numeric range");
+  });
+  it("splits a cubic Bézier at multiple normalized parameters with De Casteljau", () => {
+    const curve = { p0: { x: 0, y: 0 }, p1: { x: 0, y: 12 }, p2: { x: 12, y: 12 }, p3: { x: 12, y: 0 } };
+    const pieces = splitCubicBezierAtParameters(curve, [0.75, 0.25]);
+    const ranges = [[0, 0.25], [0.25, 0.75], [0.75, 1]] as const;
+
+    expect(pieces).toHaveLength(3);
+    expect(pieces[0]?.p0).toEqual(curve.p0);
+    expect(pieces[0]?.p3).toEqual(evaluateCubicBezier(curve, 0.25));
+    expect(pieces[1]?.p0).toEqual(pieces[0]?.p3);
+    expect(pieces[1]?.p3).toEqual(evaluateCubicBezier(curve, 0.75));
+    expect(pieces[2]?.p0).toEqual(pieces[1]?.p3);
+    expect(pieces[2]?.p3).toEqual(curve.p3);
+    const [expectedFirst, expectedRemainder] = splitCubicBezier(curve, 0.25);
+    const [expectedMiddle, expectedLast] = splitCubicBezier(expectedRemainder, 2 / 3);
+    expect(pieces).toEqual([expectedFirst, expectedMiddle, expectedLast]);
+    for (const [index, piece] of pieces.entries()) {
+      const range = ranges[index];
+      expect(range).toBeDefined();
+      if (!range) continue;
+      expect(evaluateCubicBezier(piece, 0.5)).toEqual(evaluateCubicBezier(curve, range[0] + (range[1] - range[0]) * 0.5));
+    }
+  });
+  it("normalizes Bézier split parameters and rejects invalid input", () => {
+    const curve = { p0: { x: 0, y: 0 }, p1: { x: 0, y: 10 }, p2: { x: 10, y: 10 }, p3: { x: 10, y: 0 } };
+    const pieces = splitCubicBezierAtParameters(curve, [1, 0.75, 0.25, 0.25, 0, -1, 2]);
+
+    expect(pieces).toHaveLength(3);
+    expect(splitCubicBezierAtParameters(curve, [])).toEqual([curve]);
+    expect(splitCubicBezierAtParameters(curve, [1e-13, 1 - 1e-13])).toEqual([curve]);
+    expect(splitCubicBezierAtParameters(curve, [0.1, 0.15, 0.2], 0.06)).toHaveLength(3);
+    expect(() => splitCubicBezierAtParameters(curve, [Number.NaN])).toThrow("curve and parameters must be finite and tolerance must be within [0, 0.5)");
+    expect(() => splitCubicBezierAtParameters(curve, [0.5], -1)).toThrow("curve and parameters must be finite and tolerance must be within [0, 0.5)");
+    expect(() => splitCubicBezierAtParameters(curve, [0.5], 0.5)).toThrow("curve and parameters must be finite and tolerance must be within [0, 0.5)");
+    const extreme = { p0: { x: Number.MAX_VALUE, y: 0 }, p1: { x: -Number.MAX_VALUE, y: 1 }, p2: { x: Number.MAX_VALUE, y: 2 }, p3: { x: -Number.MAX_VALUE, y: 3 } };
+    expect(() => splitCubicBezierAtParameters(extreme, [0.5])).toThrow("Bézier split exceeds the numeric range");
   });
   it("handles linear and constant derivative polynomials", () => {
     const curve = { p0: { x: 2, y: 4 }, p1: { x: 5, y: 4 }, p2: { x: 5, y: 10 }, p3: { x: 2, y: 10 } };
