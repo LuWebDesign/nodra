@@ -339,6 +339,32 @@ describe("editor core", () => {
     expect(redo(undo(cut)).document).toEqual(cut.document);
   });
 
+  it("opens a closed square sketch while preserving a surviving node connection", () => {
+    const square: SketchElement = {
+      type: "sketch", id: elementId("closed-square"), layerId: layerId("default"), style: rectangle.style,
+      nodes: [{ id: "a", point: { x: 0, y: 0 } }, { id: "b", point: { x: 10, y: 0 } }, { id: "c", point: { x: 10, y: 10 } }, { id: "d", point: { x: 0, y: 10 } }],
+      edges: [{ id: "ab", startNodeId: "a", endNodeId: "b" }, { id: "bc", startNodeId: "b", endNodeId: "c" }, { id: "cd", startNodeId: "c", endNodeId: "d" }, { id: "da", startNodeId: "d", endNodeId: "a" }],
+    };
+    const anchor = { ...rectangle, id: elementId("closed-square-anchor"), position: { x: 10, y: 7.5 } };
+    const connection = { id: "closed-square-survivor", first: { elementId: square.id, node: { kind: "sketch" as const, nodeId: "c" } }, second: { elementId: anchor.id, node: { kind: "named" as const, name: "w" as const } } };
+    const source = { ...document, elements: [square, anchor], connections: [connection] };
+    const command = cutSegment(square.id, 0, { x: 5, y: 0 });
+    const applied = command.apply(source);
+    const initial = createEditor(source);
+
+    expect(applied.success).toBe(true);
+    expect(applied.success && applied.topology?.referenceMap.get(`${square.id}:edge:ab`)).toMatchObject({ kind: "removed" });
+    const cut = dispatch(initial, command);
+    const result = cut.document.elements.find((element): element is SketchElement => element.id === square.id && element.type === "sketch");
+
+    expect(result?.nodes).toEqual(square.nodes);
+    expect(result?.edges).toEqual(square.edges.slice(1));
+    expect(cut.document.connections).toEqual([connection]);
+    expect(cut.undo).toHaveLength(1);
+    expect(undo(cut).document).toEqual(initial.document);
+    expect(redo(undo(cut)).document).toEqual(cut.document);
+  });
+
   it("splits a sketch segment at the cut point without deleting the whole line", () => {
      const sketch = createSketchLine(elementId("split-sketch"), layerId("default"), rectangle.style, { x: 0, y: 0 }, { x: 20, y: 0 });
      const state = dispatch(createEditor({ ...document, elements: [sketch] }), cutSketchEdge(sketch.id, 0, { x: 8, y: 0 }));
