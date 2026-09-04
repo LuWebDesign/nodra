@@ -24,7 +24,7 @@ export interface DimensionLineHit { readonly elementId: ElementId; readonly line
 export interface CircleDimensionHit { readonly elementId: ElementId; readonly center: NodeHit; readonly rim: NodeHit; readonly distance: number }
 export type DimensionTarget = { readonly kind: "node"; readonly hit: NodeHit } | { readonly kind: "circle"; readonly hit: CircleDimensionHit } | { readonly kind: "line"; readonly hit: DimensionLineHit };
 export interface PathNodeHit { readonly elementId: ElementId; readonly node: PathGeometryNode & { readonly ringIndex?: number } }
-    export interface CuttableSegmentHit { readonly elementId: ElementId; readonly segmentIndex: number; readonly distance: number; readonly start: PointMm; readonly end: PointMm; readonly points?: readonly PointMm[] }
+    export interface CuttableSegmentHit { readonly elementId: ElementId; readonly segmentIndex: number; readonly ringIndex?: number; readonly distance: number; readonly start: PointMm; readonly end: PointMm; readonly points?: readonly PointMm[] }
 export type PathGuideDirection = "incoming" | "outgoing";
 export interface PathGuide {
   readonly elementId: ElementId;
@@ -112,7 +112,7 @@ export function pickPathNode(document: DocumentSnapshot, point: PointMm, zoom: n
           const element = document.elements.find((candidate) => candidate.id === segment.elementId);
           const arcPieces = element?.type === "ellipse" ? splitSegments.filter((candidate) => candidate.elementId === segment.elementId && candidate.segmentIndex === segment.segmentIndex) : undefined;
           const points = arcPieces ? [arcPieces[0]!.start, ...arcPieces.map((piece) => piece.end)] : undefined;
-          best = { elementId: segment.elementId, segmentIndex: segment.segmentIndex, distance, start: points?.[0] ?? segment.start, end: points?.at(-1) ?? segment.end, ...(points ? { points } : {}) };
+          best = { elementId: segment.elementId, segmentIndex: segment.segmentIndex, ...(segment.ringIndex === undefined ? {} : { ringIndex: segment.ringIndex }), distance, start: points?.[0] ?? segment.start, end: points?.at(-1) ?? segment.end, ...(points ? { points } : {}) };
         }
       }
       return best;

@@ -443,6 +443,13 @@ describe("drag geometry", () => {
     expect(hit).toMatchObject({ elementId: line.id, segmentIndex: 0, start: { x: 0, y: 0 }, end: { x: 10, y: 0 } });
   });
 
+  it("picks contour ring and boundary indexes for Cut", () => {
+    const layer = { id: layerId("cut-contour-hover"), name: "Cut contour hover", visible: true, order: 0 };
+    const document = createDocument("cut-contour-hover", [layer]);
+    const contour = { type: "contour" as const, id: elementId("cut-hover-contour"), layerId: layer.id, position: { x: 0, y: 0 }, size: { width: 10, height: 10 }, contours: [{ points: [{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }, { x: 0, y: 10 }, { x: 0, y: 0 }] }], fillRule: "evenodd" as const, rotation: 0, style: { stroke: "#000", strokeWidth: 1, fill: "#fff" } };
+    expect(pickCuttableSegment({ ...document, elements: [contour] }, { x: 5, y: 0.5 }, 1)).toMatchObject({ elementId: contour.id, ringIndex: 0, segmentIndex: 0 });
+  });
+
   it("returns full ellipse quadrant points for cut hover feedback", () => {
     const layer = { id: layerId("cut-ellipse-hover"), name: "Cut ellipse hover", visible: true, order: 0 };
     const document = createDocument("cut-ellipse-hover", [layer]);

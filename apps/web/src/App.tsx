@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent, type PointerEvent, type ReactNode, type WheelEvent } from "react";
 import { createProject, elementId, layerId, pageId, projectFromDocument, revision, type DocumentSnapshot, hasRotation, type DimensionElement, type Element, type SketchConstraint, type ElementId, type PointMm, type ProjectSnapshot, type SplineElement, type TextElement, type ExplicitConnection } from "@nodra/domain";
-import { deleteDocumentConstraint, addSketchConstraint, addToSelection, appendSketchEdge, appendSplineNode, beginGesture, cancelGesture, clearSelection, closePath, cutLineAtPoint, cutPathSegment, cutSketchEdge, closeSplineElement, commitGesture, convertTextToGlyphs, createElement, createPathCubicNode, createPathNode, createSketchLine, deleteContourNodes, deleteElement, deleteElementNodes, deletePathNodes, deleteSketchConstraint, dispatch, duplicateElements, flipElements, insertFormaNode, invalidDimensionIdsForShapeOperation, moveElements, movePathHandle, movePathNode, openPath, updateSplineNode, previewGesture, previewGestureFromBase, redo, resizeElement, resizeElementToDimensions, resizeElements, resizeElementsToDimensions, rotateElement, updateDimensionValue, setDimensionDriving, rotateElementsAroundCenter, select, selectForPointerDown, setPathJoin, shapeOperation, splitPathSegment, undo, updateContourNode, updateElement, updateElementNode, updateElementStyles, updatePage, updateSketchConstraint, updateSplineHandle, type EditorCommand, type FlipAxis, type ShapeOperation } from "@nodra/editor-core";
+import { deleteDocumentConstraint, addSketchConstraint, addToSelection, appendSketchEdge, appendSplineNode, beginGesture, cancelGesture, clearSelection, closePath, cutSegment, closeSplineElement, commitGesture, convertTextToGlyphs, createElement, createPathCubicNode, createPathNode, createSketchLine, deleteContourNodes, deleteElement, deleteElementNodes, deletePathNodes, deleteSketchConstraint, dispatch, duplicateElements, flipElements, insertFormaNode, invalidDimensionIdsForShapeOperation, moveElements, movePathHandle, movePathNode, openPath, updateSplineNode, previewGesture, previewGestureFromBase, redo, resizeElement, resizeElementToDimensions, resizeElements, resizeElementsToDimensions, rotateElement, updateDimensionValue, setDimensionDriving, rotateElementsAroundCenter, select, selectForPointerDown, setPathJoin, shapeOperation, splitPathSegment, undo, updateContourNode, updateElement, updateElementNode, updateElementStyles, updatePage, updateSketchConstraint, updateSplineHandle, type EditorCommand, type FlipAxis, type ShapeOperation } from "@nodra/editor-core";
 import { constraintComponentStatesForDocument, constraintResidualsForDocument, type ConstraintState } from "@nodra/constraints";
 import { boundsOfElements, connectableNodeAddress, contourVertexNodes, dimensionKindForPlacement, dimensionOffsetForAlignedPlacement, dimensionOffsetForPlacement, elementCenter, editableGeometryNodes, glyphGeometryNodes, groupCenter, groupHandlePoints, pathGeometryNodes, pointMidpoint, dimensionGeometry, realGeometryNodes, solveSketchConstraints, resizeHandle, rotatedResizeHandles, rotationFromDrag, rotationHandlePoints, visibleBezierHandleGuides, type Direction, type GroupHandle, type ResizeHandle } from "@nodra/geometry";
 import { DebouncedAutosave, DexieProjectRepository, requestStoragePersistence, type FontRecord } from "@nodra/persistence";
@@ -842,24 +842,15 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
      if (tool === "cut") {
         const hit = pickCuttableSegment(editorRef.current.document, point, zoom);
         const element = hit ? editorRef.current.document.elements.find((candidate) => candidate.id === hit.elementId) : undefined;
-        const segment = element?.type === "path" ? element.segments[hit?.segmentIndex ?? -1] : undefined;
-        if (hit && element?.type === "line") {
-              const next = dispatch(editorRef.current, cutLineAtPoint(hit.elementId, point));
-              if (next !== editorRef.current) {
-                const cutPathIds = next.document.elements.filter((candidate) => candidate.type === "path" && (candidate.id === hit.elementId || candidate.id.startsWith(`${hit.elementId}:piece:`) || candidate.id.startsWith(`${hit.elementId}:cut:`))).map((candidate) => candidate.id);
-                setEditorState(select(next, cutPathIds));
-                setEditModeElementIds(cutPathIds);
-              }
-            } else if (hit && element?.type === "sketch") {
-          const next = dispatch(editorRef.current, cutSketchEdge(hit.elementId, hit.segmentIndex, point));
+        if (hit && element) {
+          const next = dispatch(editorRef.current, cutSegment(hit.elementId, hit.segmentIndex, point, hit.ringIndex ?? 0));
           if (next !== editorRef.current) {
-            const selectedIds = next.document.elements.some((candidate) => candidate.id === hit.elementId) ? [hit.elementId] : [];
+            const selectedIds = element.type === "line"
+              ? next.document.elements.filter((candidate) => candidate.type === "path" && (candidate.id === hit.elementId || candidate.id.startsWith(`${hit.elementId}:piece:`) || candidate.id.startsWith(`${hit.elementId}:cut:`))).map((candidate) => candidate.id)
+              : next.document.elements.some((candidate) => candidate.id === hit.elementId) ? [hit.elementId] : [];
             setEditorState(select(next, selectedIds));
             setEditModeElementIds(selectedIds);
           }
-            } else if (hit && (element?.type === "rectangle" || element?.type === "ellipse" || segment?.type === "line")) {
-          const next = dispatch(editorRef.current, cutPathSegment(hit.elementId, hit.segmentIndex, point));
-          if (next !== editorRef.current) setEditorState(select(next, [hit.elementId]));
         }
         return;
       }

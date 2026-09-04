@@ -28,7 +28,7 @@ import {
   withElements,
 } from "@nodra/domain";
 import { validateDocument } from "@nodra/validation";
-import { boundsOfElements, connectableNodeAddress, contourWithPoints, directionVector, elementCenter, elementToContour, dimensionGeometry, glyphGeometryNodes, groupCenter, mirrorHandleOffset, realGeometryNodes, resizeGroup, rotateElements, shapeResultContours, transformPoint, splitCuttableSegments, classifyCutGraph, cuttableSegments, lineSegmentIntersection, sketchEdgeAtAddress, sketchEdgeIndexAtAddress, solveSketchConstraints, solveCircleConstraints, type Direction } from "@nodra/geometry";
+import { boundsOfElements, connectableNodeAddress, contourWithPoints, directionVector, elementCenter, elementToContour, dimensionGeometry, glyphGeometryNodes, groupCenter, mirrorHandleOffset, realGeometryNodes, resizeGroup, rotateElements, shapeResultContours, transformPoint, splitCuttableSegments, classifyCutGraph, cuttableSegments, lineSegmentIntersection, rotatedLineEndpoints, sketchEdgeAtAddress, sketchEdgeIndexAtAddress, solveSketchConstraints, solveCircleConstraints, type Direction } from "@nodra/geometry";
 import { insertSplineNode, moveSplineHandle as moveSplineHandleData, moveSplineNode as moveSplineNodeData } from "./spline.js";
 import { topologyReferenceKey, type ReferenceResolution, type TopologyEditResult, type TopologyReference } from "./topology.js";
 
@@ -279,6 +279,115 @@ export const cutSketchEdge = (sketchId: ElementId, segmentIndex: number, cutPoin
     return replaceTopology(baseDocument, { ...edit, elements });
   },
 });
+
+const cutSketchEdgeDestructive = (sketchId: ElementId, segmentIndex: number, cutPoint?: PointMm): EditorCommand => ({
+  name: `sketch-cut-edge:${sketchId}:${segmentIndex}`,
+  apply: (document) => {
+    const sketch = document.elements.find((element): element is SketchElement => element.id === sketchId && element.type === "sketch");
+    if (!sketch) return { success: false, error: "Sketch not found" };
+    if (!Number.isInteger(segmentIndex) || segmentIndex < 0 || segmentIndex >= sketch.edges.length) return { success: false, error: "Sketch edge not found" };
+    const edge = sketch.edges[segmentIndex]!;
+    const startNode = sketch.nodes.find((node) => node.id === edge.startNodeId)!;
+    const endNode = sketch.nodes.find((node) => node.id === edge.endNodeId)!;
+    const documentConstraints = document.constraints?.filter((constraint) => !constraintReferencesSketchEdge(constraint, sketch.id, edge));
+    const baseDocument = documentConstraints && documentConstraints.length !== document.constraints?.length ? { ...document, constraints: documentConstraints } : document;
+    if (cutPoint) {
+      // Pick the actual crossing once, then split every sketch edge which passes
+      // through that same point. Other geometry remains only a snap target.
+      const crossingSegments = document.elements.flatMap((element) => element.type === "dimension" ? [] : cuttableSegments(element).filter((segment) => segment.elementId !== sketch.id || segment.segmentIndex !== segmentIndex));
+      const intersections = crossingSegments.flatMap((segment) => {
+        const hit = lineSegmentIntersection(startNode.point, endNode.point, segment.start, segment.end, 1e-7);
+        return hit ? [hit.point] : [];
+      });
+      const requestedPoint = intersections.sort((first, second) => Math.hypot(first.x - cutPoint.x, first.y - cutPoint.y) - Math.hypot(second.x - cutPoint.x, second.y - cutPoint.y))[0] ?? cutPoint;
+      const parameterAt = (first: PointMm, last: PointMm): number => {
+        const vx = last.x - first.x; const vy = last.y - first.y; const lengthSquared = vx * vx + vy * vy;
+        return lengthSquared <= 1e-12 ? Number.NaN : ((requestedPoint.x - first.x) * vx + (requestedPoint.y - first.y) * vy) / lengthSquared;
+      };
+      const clickedParameter = parameterAt(startNode.point, endNode.point);
+      if (!Number.isFinite(clickedParameter)) return { success: false, error: "Cannot split a zero-length sketch edge" };
+      const affected = document.elements.flatMap((element) => element.type === "sketch" ? element.edges.flatMap((candidate, index) => {
+        const first = element.nodes.find((node) => node.id === candidate.startNodeId)?.point;
+        const last = element.nodes.find((node) => node.id === candidate.endNodeId)?.point;
+        if (!first || !last || element.id === sketch.id && index === segmentIndex) return [];
+        const hit = lineSegmentIntersection(startNode.point, endNode.point, first, last, 1e-7);
+        const parameter = parameterAt(first, last);
+        return hit && Math.hypot(hit.point.x - requestedPoint.x, hit.point.y - requestedPoint.y) <= 1e-6 && parameter > 1e-6 && parameter < 1 - 1e-6 ? [{ sketch: element, edge: candidate, index, first, last }] : [];
+      }) : []).concat([{ sketch, edge, index: segmentIndex, first: startNode.point, last: endNode.point }]);
+      const documentConstraints = document.constraints?.filter((constraint) => !affected.some((target) => constraintReferencesSketchEdge(constraint, target.sketch.id, target.edge)));
+      const cutDocument = documentConstraints && documentConstraints.length !== document.constraints?.length ? { ...document, constraints: documentConstraints } : document;
+      const referenceMap = new Map<string, ReferenceResolution>();
+      const replacements = new Map<ElementId, SketchElement>();
+      const targetsBySketch = new Map<ElementId, typeof affected>();
+      for (const target of affected) targetsBySketch.set(target.sketch.id, [...(targetsBySketch.get(target.sketch.id) ?? []), target]);
+      for (const targets of targetsBySketch.values()) {
+        const sourceSketch = targets[0]!.sketch;
+        const splitEdges = new Map<number, readonly [{ readonly id: string; readonly startNodeId: string; readonly endNodeId: string }, { readonly id: string; readonly startNodeId: string; readonly endNodeId: string }]>();
+        const splitNodes = targets.map((target) => {
+          const splitNodeId = sketchNodeId();
+          const splitEdgeA = { id: sketchEdgeId(), startNodeId: target.edge.startNodeId, endNodeId: splitNodeId };
+          const splitEdgeB = { id: sketchEdgeId(), startNodeId: splitNodeId, endNodeId: target.edge.endNodeId };
+          splitEdges.set(target.index, [splitEdgeA, splitEdgeB]);
+          const parameter = parameterAt(target.first, target.last);
+          return { id: splitNodeId, point: { x: target.first.x + (target.last.x - target.first.x) * parameter, y: target.first.y + (target.last.y - target.first.y) * parameter } };
+        });
+        // The clicked edge is removed; only the other sketch edges crossing the
+        // same point are split. This keeps Cut destructive while preserving the
+        // multi-sketch intersection topology established by the split work.
+        const edges = sourceSketch.edges.flatMap((candidate, index) => index === segmentIndex && sourceSketch.id === sketch.id ? [] : splitEdges.get(index) ?? [candidate]);
+        const constraints = sourceSketch.constraints?.filter((constraint) => {
+          const referencesAffected = affected.some((target) => target.sketch.id === sourceSketch.id && constraintReferencesSketchEdge(constraint, sourceSketch.id, target.edge));
+          const referencesClicked = sourceSketch.id === sketch.id && constraintReferencesSketchEdge(constraint, sourceSketch.id, edge);
+          return !referencesAffected && !referencesClicked;
+        });
+        const usedNodeIds = new Set(edges.flatMap((candidate) => [candidate.startNodeId, candidate.endNodeId]));
+        replacements.set(sourceSketch.id, { ...sourceSketch, nodes: [...sourceSketch.nodes, ...splitNodes].filter((node) => usedNodeIds.has(node.id)), edges, ...(constraints ? { constraints } : {}) });
+        const clickedReference = sketchEdgeReference(sketch.id, edge.id);
+        referenceMap.set(topologyReferenceKey(clickedReference), { kind: "removed", reason: "Sketch edge was deleted" });
+        for (const target of targets) {
+          const split = splitEdges.get(target.index)!;
+          const originalReference = sketchEdgeReference(sourceSketch.id, target.edge.id);
+          referenceMap.set(topologyReferenceKey(originalReference), { kind: "replaced", references: [sketchEdgeReference(sourceSketch.id, split[0].id), sketchEdgeReference(sourceSketch.id, split[1].id)] });
+        }
+      }
+      const editedElements = document.elements.flatMap<Element>((element) => {
+        const replacement = replacements.get(element.id);
+        return replacement && replacement.edges.length === 0 ? [] : [replacement ?? element];
+      });
+      const edit: TopologyEditResult = { elements: editedElements, referenceMap, diagnostics: [] };
+      const elements = [...replacements.entries()].reduce((current, [id, replacement]) => remapSketchEdgeDimensionReferences({ ...edit, elements: current }, id, document.elements.find((element): element is SketchElement => element.id === id)!.edges, replacement.edges), edit.elements);
+      return replaceTopology(cutDocument, { ...edit, elements });
+    }
+    const edges = sketch.edges.filter((_, index) => index !== segmentIndex);
+    if (edges.length === 0) {
+      const originalReference = sketchEdgeReference(sketchId, edge.id); const referenceKey = topologyReferenceKey(originalReference);
+      const edit: TopologyEditResult = { elements: document.elements.filter((element) => element.id !== sketchId && !(element.type === "dimension" && element.references.some((reference) => reference.elementId === sketchId))), referenceMap: new Map([[referenceKey, { kind: "removed", reason: "Sketch edge was deleted" }]]), diagnostics: [{ code: "reference-removed", referenceKey, message: "Sketch edge was deleted" }] };
+      return replaceTopology(baseDocument, edit);
+    }
+    const usedNodeIds = new Set(edges.flatMap((edge) => [edge.startNodeId, edge.endNodeId]));
+    const nodes = sketch.nodes.filter((node) => usedNodeIds.has(node.id));
+    const constraints = sketch.constraints?.filter((constraint) => constraint.references.every((reference) => "nodeId" in reference ? usedNodeIds.has(reference.nodeId) : edges.some((edge) => edge.id === reference.edgeId)));
+    const nextSketch = { ...sketch, nodes, edges, ...(constraints ? { constraints } : {}) };
+    const withoutRemovedNodeDimensions = document.elements.flatMap<Element>((element) => {
+      if (element.type !== "dimension") return [element];
+      const remap = (reference: DimensionElement["references"][number]): DimensionElement["references"][number] | undefined => {
+        if (!("nodeIndex" in reference) || reference.elementId !== sketchId) return reference;
+        const oldNode = reference.nodeId !== undefined ? sketch.nodes.find((node) => node.id === reference.nodeId) : sketch.nodes[reference.nodeIndex];
+        const nextIndex = oldNode ? nodes.findIndex((node) => node.id === oldNode.id) : -1;
+        return oldNode && nextIndex >= 0 ? { kind: "node", elementId: sketchId, nodeIndex: nextIndex, nodeId: oldNode.id } : undefined;
+      };
+      const first = remap(element.references[0]); const second = remap(element.references[1]);
+      return first && second ? [{ ...element, references: [first, second] }] : [];
+    });
+    const originalReference = sketchEdgeReference(sketchId, edge.id);
+    const referenceKey = topologyReferenceKey(originalReference);
+    const referenceMap = new Map<string, ReferenceResolution>([[referenceKey, { kind: "removed", reason: "Sketch edge was deleted" }]]);
+    const edit: TopologyEditResult = { elements: withoutRemovedNodeDimensions.map((element) => element.id === sketchId ? nextSketch : element), referenceMap, diagnostics: [{ code: "reference-removed", referenceKey, message: "Sketch edge was deleted" }] };
+    const elements = remapSketchEdgeDimensionReferences(edit, sketchId, sketch.edges, edges);
+    return replaceTopology(baseDocument, { ...edit, elements });
+  },
+});
+
 
 /** Extends a native two-endpoint line into an editable open path. */
 export const appendLinePoint = (lineId: ElementId, point: PointMm): EditorCommand => ({
@@ -1081,6 +1190,85 @@ export const cutPathSegment = (pathId: ElementId, segmentIndex: number, point?: 
   }
   return cutStraightComponent(document, pathId, segmentIndex, point);
 } });
+
+/** Removes a polygon contour boundary and converts that ring to an open PathElement.
+ * A crossing open sketch/native line is split at the same boundary intersection;
+ * other external geometry is intentionally left unchanged. */
+export const cutContourSegment = (contourId: ElementId, ringIndex: number, segmentIndex: number, clickPoint?: PointMm): EditorCommand => ({
+  name: `contour-cut-segment:${contourId}:${ringIndex}:${segmentIndex}`,
+  apply: (document) => {
+    const contour = document.elements.find((element): element is Extract<Element, { type: "contour" }> => element.id === contourId && element.type === "contour");
+    const ring = contour?.contours[ringIndex];
+    if (!contour || !ring) return { success: false, error: "Contour ring not found" };
+    const vertices = ring.points.length > 1 && ring.points.at(-1)?.x === ring.points[0]?.x && ring.points.at(-1)?.y === ring.points[0]?.y ? ring.points.slice(0, -1) : ring.points;
+    if (!Number.isInteger(segmentIndex) || segmentIndex < 0 || segmentIndex >= vertices.length || vertices.length < 3) return { success: false, error: "Contour segment not found" };
+    if (clickPoint && ![clickPoint.x, clickPoint.y].every(Number.isFinite)) return { success: false, error: "Contour cut point is invalid" };
+    const ordered = [...vertices.slice(segmentIndex + 1), ...vertices.slice(0, segmentIndex + 1)];
+    const boundaryStart = vertices[segmentIndex]!;
+    const boundaryEnd = vertices[(segmentIndex + 1) % vertices.length]!;
+    const externalNodeId = (elementId: ElementId) => `${elementId}:contour-cut:${ringIndex}:${segmentIndex}`;
+    const splitExternal = (element: Element): Element => {
+      if (element.type === "line") {
+        const [start, end] = rotatedLineEndpoints(element);
+        const hit = lineSegmentIntersection(boundaryStart, boundaryEnd, start, end, 1e-7);
+        if (!hit || hit.secondT <= 1e-7 || hit.secondT >= 1 - 1e-7) return element;
+        const nodeId = externalNodeId(element.id);
+        return { type: "path", id: element.id, layerId: element.layerId, nodes: [{ id: `${element.id}:start`, anchor: start, join: "corner" }, { id: nodeId, anchor: hit.point, join: "corner" }, { id: `${element.id}:end`, anchor: end, join: "corner" }], segments: [{ id: `${element.id}:start-segment`, type: "line", startNodeId: `${element.id}:start`, endNodeId: nodeId }, { id: `${element.id}:end-segment`, type: "line", startNodeId: nodeId, endNodeId: `${element.id}:end` }], closed: false, style: element.style, ...(element.operation ? { operation: element.operation } : {}) };
+      }
+      if (element.type !== "sketch") return element;
+      const nodes = [...element.nodes];
+      const edges = element.edges.flatMap((edge) => {
+        const start = nodes.find((node) => node.id === edge.startNodeId)?.point; const end = nodes.find((node) => node.id === edge.endNodeId)?.point;
+        if (!start || !end) return [edge];
+        const hit = lineSegmentIntersection(boundaryStart, boundaryEnd, start, end, 1e-7);
+        if (!hit || hit.secondT <= 1e-7 || hit.secondT >= 1 - 1e-7) return [edge];
+        const nodeId = externalNodeId(element.id); nodes.push({ id: nodeId, point: hit.point });
+        return [{ id: `${edge.id}:a`, startNodeId: edge.startNodeId, endNodeId: nodeId }, { id: `${edge.id}:b`, startNodeId: nodeId, endNodeId: edge.endNodeId }];
+      });
+      if (edges.length === element.edges.length) return element;
+      const affected = new Set(element.edges.filter((edge) => !edges.includes(edge)).map((edge) => edge.id));
+      const constraints = element.constraints?.filter((constraint) => ![...affected].some((edgeId) => constraint.references.some((reference) => "edgeId" in reference && reference.edgeId === edgeId)));
+      return { ...element, nodes, edges, ...(constraints ? { constraints } : {}) };
+    };
+    const externalElements = document.elements.map((element) => element.id === contour.id ? element : splitExternal(element));
+    const pathId = contour.id;
+    const nodes: PathNode[] = ordered.map((anchor, index) => ({ id: `${pathId}:cut-node:${ringIndex}:${index}`, anchor, join: "corner" }));
+    const path: PathElement = {
+      type: "path", id: pathId, layerId: contour.layerId, nodes,
+      segments: nodes.slice(0, -1).map((node, index) => ({ id: pathSegmentId(), type: "line" as const, startNodeId: node.id, endNodeId: nodes[index + 1]!.id })),
+      closed: false,
+      style: Object.fromEntries(Object.entries(contour.style).filter(([name]) => name !== "fill")) as typeof contour.style,
+      ...(contour.operation ? { operation: contour.operation } : {}),
+    };
+    const remainingRings = contour.contours.filter((_, index) => index !== ringIndex);
+    const elements = externalElements.flatMap<Element>((element) => {
+      if (element.id !== contour.id) return [element];
+      if (remainingRings.length < 1) return [path];
+      const remaining = contourWithPoints(contour, remainingRings.map((current) => current.points));
+      return [{ ...remaining, id: elementId(`${contour.id}:remaining`) }, path];
+    });
+    const crossedSketchIds = new Set(externalElements.flatMap((element, index) => {
+      const before = document.elements[index];
+      return element.type === "sketch" && before?.type === "sketch" && element.edges !== before.edges ? [element.id] : [];
+    }));
+    const constraints = document.constraints?.filter((constraint) => !constraint.references.some((reference) => crossedSketchIds.has(reference.elementId) && "edgeId" in reference));
+    return replaceElements(constraints ? { ...document, constraints } : document, elements);
+  },
+});
+
+/** Unified Cut dispatch used by interaction clients. */
+export const cutSegment = (elementId: ElementId, segmentIndex: number, point?: PointMm, ringIndex = 0): EditorCommand => ({
+  name: `cut:${elementId}:${ringIndex}:${segmentIndex}`,
+  apply: (document) => {
+    const element = document.elements.find((candidate) => candidate.id === elementId);
+    if (!element) return { success: false, error: "Cut target not found" };
+    if (element.type === "sketch") return cutSketchEdgeDestructive(elementId, segmentIndex, point).apply(document);
+    if (element.type === "contour") return cutContourSegment(elementId, ringIndex, segmentIndex, point).apply(document);
+    if (element.type === "line") return cutLineAtPoint(elementId, point ?? element.start).apply(document);
+    if (element.type === "rectangle" || element.type === "ellipse" || element.type === "path") return cutPathSegment(elementId, segmentIndex, point).apply(document);
+    return { success: false, error: "Element segment is not cuttable" };
+  },
+});
 
 export const splitPathSegment = (pathId: ElementId, segmentIndex: number, newNodeId = `path-node-${crypto.randomUUID()}`): EditorCommand => ({ name: `path-split:${pathId}:${segmentIndex}`, apply: (document) => {
   const path = pathAt(document, pathId); const segment = path?.segments[segmentIndex];

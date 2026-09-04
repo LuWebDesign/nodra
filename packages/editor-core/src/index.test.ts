@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createDocument, elementId, layerId, type DimensionElement, type Element, type EllipseElement, type LineElement, type GlyphElement, type PathElement, type PointMm, type RectangleElement, type SketchElement, type SplineElement, type TextElement } from "@nodra/domain";
-import { addDocumentConstraint, deleteDocumentConstraint, addSketchConstraint, addSketchSegmentRelation, addToSelection, appendSketchEdge, appendSplineNode, beginGesture, cancelGesture, clearSelection, closePath, closeSplineElement, commitGesture, createEditor, createElement, createPathCubicNode, createSketchLine, cutLineAtPoint, cutPathSegment, cutSketchEdge, splitPathLineAt, deleteContourNodes, deleteElement, deleteElementNodes, deletePathNodes, deleteSketchConstraint, dispatch, duplicateElements, flipElements, insertContourNode, invalidDimensionIdsForShapeOperation, moveElement, moveElements, movePathNode, movePathHandle, openPath, previewGesture, previewGestureFromBase, redo, reversePath, removeFromSelection, reorderLayer, resizeElement, resizeElementToDimensions, resizeElements, resizeElementsToDimensions, rotateElementsAroundCenter, select, selectForPointerDown, setDimensionDriving, updateCircleConstraint, deleteCircleConstraint, solveCircle, setLayerVisibility, setPathJoin, shapeOperation, splitPathSegment, toggleSelection, topologyEditForPathSegmentReplacement, topologyReferenceKey, undo, updateContourNode, updateDimensionValue, updateElement, updateElementNode, updateElementStyles, updateSketchConstraint, updateDocumentConstraint, updateSplineHandle, updateSplineNode } from "./index.js";
+import { addDocumentConstraint, deleteDocumentConstraint, addSketchConstraint, addSketchSegmentRelation, addToSelection, appendSketchEdge, appendSplineNode, beginGesture, cancelGesture, clearSelection, closePath, closeSplineElement, commitGesture, createEditor, createElement, createPathCubicNode, createSketchLine, cutContourSegment, cutLineAtPoint, cutPathSegment, cutSegment, cutSketchEdge, splitPathLineAt, deleteContourNodes, deleteElement, deleteElementNodes, deletePathNodes, deleteSketchConstraint, dispatch, duplicateElements, flipElements, insertContourNode, invalidDimensionIdsForShapeOperation, moveElement, moveElements, movePathNode, movePathHandle, openPath, previewGesture, previewGestureFromBase, redo, reversePath, removeFromSelection, reorderLayer, resizeElement, resizeElementToDimensions, resizeElements, resizeElementsToDimensions, rotateElementsAroundCenter, select, selectForPointerDown, setDimensionDriving, updateCircleConstraint, deleteCircleConstraint, solveCircle, setLayerVisibility, setPathJoin, shapeOperation, splitPathSegment, toggleSelection, topologyEditForPathSegmentReplacement, topologyReferenceKey, undo, updateContourNode, updateDimensionValue, updateElement, updateElementNode, updateElementStyles, updateSketchConstraint, updateDocumentConstraint, updateSplineHandle, updateSplineNode } from "./index.js";
 import { boundsOfElements, realGeometryNodes } from "@nodra/geometry";
 import type { Direction } from "@nodra/geometry";
 import { appendLinePoint } from "./index.js";
@@ -205,6 +205,48 @@ describe("editor core", () => {
     const cut = dispatch(closed, cutSketchEdge(sketch.id, 1));
     expect(cut.document.elements[0]).toMatchObject({ type: "sketch", nodes: [{ id: sketch.nodes[0]!.id }, { id: sketch.nodes[1]!.id }, { point: { x: 10, y: 10 } }], edges: [{ startNodeId: sketch.nodes[0]!.id, endNodeId: sketch.nodes[1]!.id }, { startNodeId: branched.nodes[2]!.id, endNodeId: sketch.nodes[0]!.id }] });
   });
+  it("removes the clicked sketch edge while splitting a crossing sketch at the shared point", () => {
+     const clicked = createSketchLine(elementId("cut-clicked-sketch"), layerId("default"), rectangle.style, { x: 0, y: 0 }, { x: 20, y: 0 });
+     const crossing = createSketchLine(elementId("cut-crossing-sketch"), layerId("default"), rectangle.style, { x: 10, y: -10 }, { x: 10, y: 10 });
+     const state = dispatch(createEditor({ ...document, elements: [clicked, crossing] }), cutSegment(clicked.id, 0, { x: 10, y: 0 }));
+     const result = state.document.elements.find((element) => element.id === crossing.id);
+     expect(state.document.elements.find((element) => element.id === clicked.id && element.type === "sketch" && element.edges.length === 0)).toBeUndefined();
+     expect(result?.type === "sketch" ? result.edges : []).toHaveLength(2);
+     expect(result?.type === "sketch" ? result.nodes.some((node) => node.point.x === 10 && node.point.y === 0) : false).toBe(true);
+     expect(state.undo).toHaveLength(1);
+   });
+
+  it("converts a cut contour boundary to an open path", () => {
+    const contour = { type: "contour" as const, id: elementId("cut-contour"), layerId: layerId("default"), position: { x: 0, y: 0 }, size: { width: 10, height: 10 }, contours: [{ points: [{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }, { x: 0, y: 10 }, { x: 0, y: 0 }] }], fillRule: "evenodd" as const, rotation: 0, style: rectangle.style };
+    const state = dispatch(createEditor({ ...document, elements: [contour] }), cutContourSegment(contour.id, 0, 1));
+    expect(state.document.elements).toHaveLength(1);
+    expect(state.document.elements[0]).toMatchObject({ type: "path", id: contour.id, closed: false, nodes: [{ anchor: { x: 10, y: 10 } }, { anchor: { x: 0, y: 10 } }, { anchor: { x: 0, y: 0 } }, { anchor: { x: 10, y: 0 } }], segments: [{ type: "line" }, { type: "line" }, { type: "line" }] });
+    expect(state.undo).toHaveLength(1);
+  });
+
+  it("cuts a contour edge, splits a crossing open sketch, preserves it, and undoes atomically", () => {
+    const contour = { type: "contour" as const, id: elementId("contour-crossed"), layerId: layerId("default"), position: { x: 0, y: 0 }, size: { width: 20, height: 20 }, contours: [{ points: [{ x: 0, y: 0 }, { x: 20, y: 0 }, { x: 20, y: 20 }, { x: 0, y: 20 }, { x: 0, y: 0 }] }], fillRule: "evenodd" as const, rotation: 0, style: rectangle.style };
+    const crossing = createSketchLine(elementId("external-open-line"), layerId("default"), rectangle.style, { x: 10, y: -10 }, { x: 10, y: 10 });
+    const initial = createEditor({ ...document, elements: [contour, crossing] });
+    const cut = dispatch(initial, cutSegment(contour.id, 0, { x: 10, y: 0 }));
+    const result = cut.document.elements.find((element) => element.id === crossing.id);
+    expect(cut.document.elements.find((element) => element.id === contour.id && element.type === "path")).toBeDefined();
+    expect(result?.type === "sketch" ? result.edges : []).toHaveLength(2);
+    expect(result?.type === "sketch" ? result.nodes.some((node) => node.point.x === 10 && node.point.y === 0) : false).toBe(true);
+    expect(cut.undo).toHaveLength(1);
+    expect(undo(cut).document).toEqual(initial.document);
+  });
+
+  it("splits a native line crossing a contour without deleting it", () => {
+    const contour = { type: "contour" as const, id: elementId("contour-native-crossed"), layerId: layerId("default"), position: { x: 0, y: 0 }, size: { width: 20, height: 20 }, contours: [{ points: [{ x: 0, y: 0 }, { x: 20, y: 0 }, { x: 20, y: 20 }, { x: 0, y: 20 }, { x: 0, y: 0 }] }], fillRule: "evenodd" as const, rotation: 0, style: rectangle.style };
+    const line: LineElement = { type: "line", id: elementId("external-native-line"), layerId: layerId("default"), start: { x: 10, y: -10 }, end: { x: 10, y: 10 }, rotation: 0, style: rectangle.style };
+    const cut = dispatch(createEditor({ ...document, elements: [contour, line] }), cutSegment(contour.id, 0, { x: 10, y: 0 }));
+    const result = cut.document.elements.find((element) => element.id === line.id);
+    expect(result?.type).toBe("path");
+    expect(result?.type === "path" ? result.nodes : []).toHaveLength(3);
+    expect(result?.type === "path" ? result.nodes.some((node) => node.anchor.x === 10 && node.anchor.y === 0) : false).toBe(true);
+  });
+
   it("splits a sketch segment at the cut point without deleting the whole line", () => {
      const sketch = createSketchLine(elementId("split-sketch"), layerId("default"), rectangle.style, { x: 0, y: 0 }, { x: 20, y: 0 });
      const state = dispatch(createEditor({ ...document, elements: [sketch] }), cutSketchEdge(sketch.id, 0, { x: 8, y: 0 }));

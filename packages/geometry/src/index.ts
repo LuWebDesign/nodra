@@ -5,7 +5,7 @@ import { hasBounds } from "@nodra/domain";
 export interface Bounds { readonly x: number; readonly y: number; readonly width: number; readonly height: number }
 export interface Viewport { readonly zoom: number; readonly panMm: PointMm }
 export interface PointPx { readonly x: number; readonly y: number }
-export interface CuttableSegment { readonly elementId: ElementId; readonly segmentIndex: number; readonly start: PointMm; readonly end: PointMm }
+export interface CuttableSegment { readonly elementId: ElementId; readonly segmentIndex: number; readonly start: PointMm; readonly end: PointMm; readonly ringIndex?: number }
 
 /** Projects supported Stage 1 objects into straight, cuttable boundary segments. */
 export function cuttableSegments(element: Element): readonly CuttableSegment[] {
@@ -38,7 +38,14 @@ export function cuttableSegments(element: Element): readonly CuttableSegment[] {
     const quadrantSize = ELLIPSE_APPROXIMATION_SEGMENTS / 4;
     return points.map((start, index) => ({ elementId: element.id, segmentIndex: Math.floor(index / quadrantSize), start, end: points[(index + 1) % points.length]! }));
   }
-      if (element.type !== "rectangle" || element.cornerRadius !== 0 || (element.cornerRadii !== undefined && Object.values(element.cornerRadii).some((radius) => radius !== 0))) return [];
+  if (element.type === "contour") {
+    return element.contours.flatMap((contour, ringIndex) => {
+      const vertices = contour.points.length > 1 && contour.points.at(-1)?.x === contour.points[0]?.x && contour.points.at(-1)?.y === contour.points[0]?.y ? contour.points.slice(0, -1) : contour.points;
+      if (vertices.length < 2) return [];
+      return vertices.map((start, segmentIndex) => ({ elementId: element.id, ringIndex, segmentIndex, start, end: vertices[(segmentIndex + 1) % vertices.length]! }));
+    });
+  }
+  if (element.type !== "rectangle" || element.cornerRadius !== 0 || (element.cornerRadii !== undefined && Object.values(element.cornerRadii).some((radius) => radius !== 0))) return [];
   const corners = rotatedCorners(element);
   return corners.map((start, index) => ({ elementId: element.id, segmentIndex: index, start, end: corners[(index + 1) % corners.length]! }));
 }
