@@ -986,13 +986,13 @@ La base se considera preparada para escalar cuando:
 ## 24. Decisiones pendientes antes de implementar
 
 1. Periodo de convivencia de `connections` y restricciones coincidentes.
-2. Primer conjunto exacto de relaciones externas admitidas.
-3. Si el renderer recibe estados precalculados o una consulta pura por documento; no debe recalcular el solver por cada elemento.
-4. Política configurable de inferencias automáticas.
-5. Representación futura de operaciones derivadas para desfases, patrones y simetrías.
+2. Política configurable de inferencias automáticas.
+3. Representación futura de operaciones derivadas para desfases, patrones y simetrías.
 
 Decisiones resueltas durante la implementación:
 
 - el paquete compartido se denomina `@nodra/constraints`;
+- las relaciones externas iniciales admiten coincidencia, ejes, distancias, ángulo y relaciones segmentarias; `fixed` permanece local;
+- el renderer consulta estados puros una vez por documento en modo `editor`, mientras el modo `export` conserva los estilos persistidos sin colores diagnósticos;
 - cada `PathSegment` persistido usa un `id` estable obligatorio; los segmentos legacy reciben IDs deterministas por elemento, contorno e índice durante la migración a schema 7;
 - al dividir una arista de sketch, la cota angular existente sigue la primera pieza colineal y el cambio topológico declara ambas piezas como reemplazos.

@@ -6,8 +6,14 @@ import { validateDocument } from "@nodra/validation";
 const MAX_ISSUES = 8;
 const SUPPORTED_SCHEMA_VERSIONS = new Set(Array.from({ length: CURRENT_SCHEMA_VERSION }, (_, index) => index + 1));
 
+export type RenderMode = "editor" | "export";
+
+export interface RenderOptions {
+  readonly mode?: RenderMode;
+}
+
 export interface SvgRenderer {
-  render(document: unknown, viewport: unknown): RenderResult;
+  render(document: unknown, viewport: unknown, options?: RenderOptions): RenderResult;
 }
 
 export type RenderResult =
@@ -42,7 +48,7 @@ function visualAttributes(element: Element): string {
   return `stroke="${escapeAttribute(element.style.stroke)}" stroke-width="${number(element.style.strokeWidth)}" fill="${fill}"${closed ? ` fill-opacity="${DEFAULT_FILL_OPACITY}"` : ""}`;
 }
 
-function renderElement(element: Element, viewport: Viewport, document: DocumentSnapshot, sketchConstraintStates: ReadonlyMap<string, ConstraintState>): string {
+function renderElement(element: Element, viewport: Viewport, document: DocumentSnapshot, sketchConstraintStates: ReadonlyMap<string, ConstraintState>, mode: RenderMode): string {
   const screen = (point: { x: number; y: number }) => mmToScreen(point, viewport);
   if (element.type === "dimension") {
     const geometry = dimensionGeometry(element, []);
@@ -76,9 +82,9 @@ function renderElement(element: Element, viewport: Viewport, document: DocumentS
   if (element.type === "sketch") {
     const nodes = new Map(element.nodes.map((node) => [node.id, screen(node.point)]));
     const fill = escapeAttribute(element.style.fill ?? element.style.stroke);
-    const constraintStatus = sketchConstraintStates.get(element.id) ?? constraintStateForElement(document, element.id).state;
+    const constraintStatus = mode === "editor" ? sketchConstraintStates.get(element.id) ?? constraintStateForElement(document, element.id).state : undefined;
     const constraintStroke = constraintStatus === "fully-defined" ? "#111827" : constraintStatus === "conflict" || constraintStatus === "invalid" ? "#ef4444" : constraintStatus === "overdefined" ? "#f59e0b" : "#2563eb";
-    const sketchAttributes = visualAttributes(element).replace(`stroke="${escapeAttribute(element.style.stroke)}"`, `stroke="${constraintStroke}"`);
+    const sketchAttributes = mode === "editor" ? visualAttributes(element).replace(`stroke="${escapeAttribute(element.style.stroke)}"`, `stroke="${constraintStroke}"`) : visualAttributes(element);
     const contours = sketchClosedContours(element).map((contour) => contour.map((point, index) => { const current = screen(point); return `${index === 0 ? "M" : "L"}${number(current.x)} ${number(current.y)}`; }).join(" ") + " Z").join(" ");
     const faces = contours ? `<path data-sketch-fill="true" d="${escapeAttribute(contours)}" fill="${fill}" fill-opacity="${DEFAULT_FILL_OPACITY}" stroke="none" fill-rule="evenodd" />` : "";
     const lines = element.edges.map((edge) => { const start = nodes.get(edge.startNodeId); const end = nodes.get(edge.endNodeId); return start && end ? `<line x1="${number(start.x)}" y1="${number(start.y)}" x2="${number(end.x)}" y2="${number(end.y)}" />` : ""; }).join("");
@@ -166,7 +172,17 @@ function renderPath(element: PathElement, viewport: Viewport): string {
   return `<path data-element-id="${escapeAttribute(element.id)}" d="${escapeAttribute(path)}" ${visualAttributes(element)} />`;
 }
 
-export function renderSvg(document: unknown, viewport: unknown): RenderResult {
+export function renderSvg(document: unknown, viewport: unknown, options: unknown = {}): RenderResult {
+  let requestedMode: unknown;
+  try {
+    const plainOptions = typeof options === "object" && options !== null && !Array.isArray(options) && (Object.getPrototypeOf(options) === Object.prototype || Object.getPrototypeOf(options) === null);
+    if (!plainOptions || Reflect.ownKeys(options).some((key) => key !== "mode")) return { success: false, reason: "invalid", error: "render options must contain only a render mode", issues: ["render options must contain only a render mode"] };
+    requestedMode = Reflect.get(options, "mode");
+  } catch {
+    return { success: false, reason: "invalid", error: "render options could not be read", issues: ["render options could not be read"] };
+  }
+  if (requestedMode !== undefined && requestedMode !== "editor" && requestedMode !== "export") return { success: false, reason: "invalid", error: "render options.mode must be editor or export", issues: ["render options.mode must be editor or export"] };
+  const mode: RenderMode = requestedMode ?? "editor";
   const checked = validateDocument(document);
   if (!checked.success) {
     const candidate = typeof document === "object" && document !== null ? document as { schemaVersion?: unknown; elements?: unknown } : undefined;
@@ -180,21 +196,23 @@ export function renderSvg(document: unknown, viewport: unknown): RenderResult {
   const elements = [...checked.data.elements].filter((element) => visibleLayers.has(element.layerId));
   const orderedLayers = new Map([...checked.data.layers].sort((a, b) => a.order - b.order).map((layer, index) => [layer.id, index]));
   elements.sort((a, b) => (orderedLayers.get(a.layerId) ?? 0) - (orderedLayers.get(b.layerId) ?? 0));
-  const componentStates = constraintComponentStatesForDocument(checked.data);
-  const statePriority: Record<ConstraintState, number> = { "fully-defined": 0, underdefined: 1, overdefined: 2, conflict: 3, invalid: 4 };
-  const stateByNodeKey = new Map<string, ConstraintState>();
-  componentStates.forEach((component) => component.nodeKeys.forEach((key) => {
-    const current = stateByNodeKey.get(key);
-    if (current === undefined || statePriority[component.state] > statePriority[current]) stateByNodeKey.set(key, component.state);
-  }));
-  const sketchConstraintStates = new Map(checked.data.elements.filter((element) => element.type === "sketch").map((sketch) => {
-    const state = sketch.nodes.reduce<ConstraintState>((current, node) => {
-      const candidate = stateByNodeKey.get(JSON.stringify([sketch.id, node.id])) ?? "underdefined";
-      return statePriority[candidate] > statePriority[current] ? candidate : current;
-    }, "fully-defined");
-    return [sketch.id, state] as const;
-  }));
-  const contents = elements.map((element) => element.type === "dimension" ? renderDimension(element, checkedViewport.data, checked.data.elements) : renderElement(element, checkedViewport.data, checked.data, sketchConstraintStates)).join("");
+  const sketchConstraintStates = new Map<string, ConstraintState>();
+  if (mode === "editor") {
+    const statePriority: Record<ConstraintState, number> = { "fully-defined": 0, underdefined: 1, overdefined: 2, conflict: 3, invalid: 4 };
+    const stateByNodeKey = new Map<string, ConstraintState>();
+    constraintComponentStatesForDocument(checked.data).forEach((component) => component.nodeKeys.forEach((key) => {
+      const current = stateByNodeKey.get(key);
+      if (current === undefined || statePriority[component.state] > statePriority[current]) stateByNodeKey.set(key, component.state);
+    }));
+    checked.data.elements.filter((element) => element.type === "sketch").forEach((sketch) => {
+      const state = sketch.nodes.reduce<ConstraintState>((current, node) => {
+        const candidate = stateByNodeKey.get(JSON.stringify([sketch.id, node.id])) ?? "underdefined";
+        return statePriority[candidate] > statePriority[current] ? candidate : current;
+      }, "fully-defined");
+      sketchConstraintStates.set(sketch.id, state);
+    });
+  }
+  const contents = elements.map((element) => element.type === "dimension" ? renderDimension(element, checkedViewport.data, checked.data.elements) : renderElement(element, checkedViewport.data, checked.data, sketchConstraintStates, mode)).join("");
   return { success: true, svg: `<svg xmlns="http://www.w3.org/2000/svg" data-units="mm" width="${number(checked.data.page.width)}" height="${number(checked.data.page.height)}" viewBox="0 0 ${number(checked.data.page.width)} ${number(checked.data.page.height)}"><g>${contents}</g></svg>`, renderedElementIds: elements.map((element) => element.id) };
 }
 

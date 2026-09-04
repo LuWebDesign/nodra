@@ -35,6 +35,17 @@ describe("SVG renderer boundary", () => {
       expect(result.svg).toContain('data-element-id="defined" stroke="#111827"');
     }
   });
+  it("keeps editor diagnostic colors out of export rendering", () => {
+    const underdefined = { type: "sketch" as const, id: elementId("export-sketch"), layerId: layer.id, nodes: [{ id: "a", point: { x: 0, y: 0 } }, { id: "b", point: { x: 20, y: 0 } }], edges: [{ id: "ab", startNodeId: "a", endNodeId: "b" }], constraints: [], style };
+    const document = withElements(createDocument("export-constraint-colors", [layer]), [underdefined]);
+
+    const editor = renderSvg(document, { zoom: 1, panMm: { x: 0, y: 0 } });
+    const exported = renderSvg(document, { zoom: 1, panMm: { x: 0, y: 0 } }, { mode: "export" });
+
+    expect(editor.success && editor.svg).toContain('data-element-id="export-sketch" stroke="#2563eb"');
+    expect(exported.success && exported.svg).toContain('data-element-id="export-sketch" stroke="#111"');
+    expect(exported.success && exported.svg).not.toContain('stroke="#2563eb"');
+  });
   it("renders global constraint conflicts for every involved sketch", () => {
     const first = { type: "sketch" as const, id: elementId("global-state-first"), layerId: layer.id, nodes: [{ id: "a", point: { x: 0, y: 0 } }, { id: "b", point: { x: 20, y: 0 } }], edges: [{ id: "ab", startNodeId: "a", endNodeId: "b" }], style };
     const second = { ...first, id: elementId("global-state-second"), nodes: [{ id: "c", point: { x: 0, y: 10 } }, { id: "d", point: { x: 20, y: 10 } }], edges: [{ id: "cd", startNodeId: "c", endNodeId: "d" }] };
@@ -106,6 +117,12 @@ describe("SVG renderer boundary", () => {
     expect(renderSvg({ schemaVersion: 1 }, { zoom: 1, panMm: { x: 0, y: 0 } })).toMatchObject({ success: false, reason: "invalid" });
     expect(renderSvg({ schemaVersion: 99 }, { zoom: 1, panMm: { x: 0, y: 0 } })).toMatchObject({ success: false, reason: "unsupported" });
     expect(renderSvg(document(), { zoom: 0, panMm: { x: 0, y: 0 } })).toMatchObject({ success: false, reason: "invalid" });
+    expect(renderSvg(document(), { zoom: 1, panMm: { x: 0, y: 0 } }, null)).toMatchObject({ success: false, reason: "invalid" });
+    expect(renderSvg(document(), { zoom: 1, panMm: { x: 0, y: 0 } }, [])).toMatchObject({ success: false, reason: "invalid" });
+    expect(renderSvg(document(), { zoom: 1, panMm: { x: 0, y: 0 } }, { mode: "other" })).toMatchObject({ success: false, reason: "invalid" });
+    expect(renderSvg(document(), { zoom: 1, panMm: { x: 0, y: 0 } }, { extra: true })).toMatchObject({ success: false, reason: "invalid" });
+    expect(renderSvg(document(), { zoom: 1, panMm: { x: 0, y: 0 } }, { [Symbol("extra")]: true })).toMatchObject({ success: false, reason: "invalid" });
+    expect(renderSvg(document(), { zoom: 1, panMm: { x: 0, y: 0 } }, Object.defineProperty({}, "mode", { get: () => { throw new Error("unreadable"); } }))).toMatchObject({ success: false, reason: "invalid" });
   });
 
   it("classifies invalid schema-3 documents as invalid rather than unsupported", () => {
