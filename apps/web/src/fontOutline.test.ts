@@ -24,15 +24,15 @@ describe("font outline adapter", () => {
         { id: "e", anchor: { x: 0, y: 10 }, join: "corner" },
       ],
       segments: [
-        { type: "line", startNodeId: "a", endNodeId: "b" },
-        { type: "line", startNodeId: "b", endNodeId: "c" },
-        { type: "line", startNodeId: "c", endNodeId: "d" },
-        { type: "line", startNodeId: "d", endNodeId: "e" },
-        { type: "line", startNodeId: "e", endNodeId: "a" },
+        { id: "fixture-segment-1", type: "line", startNodeId: "a", endNodeId: "b" },
+        { id: "fixture-segment-2", type: "line", startNodeId: "b", endNodeId: "c" },
+        { id: "fixture-segment-3", type: "line", startNodeId: "c", endNodeId: "d" },
+        { id: "fixture-segment-4", type: "line", startNodeId: "d", endNodeId: "e" },
+        { id: "fixture-segment-5", type: "line", startNodeId: "e", endNodeId: "a" },
       ],
     });
     expect(contour.nodes.map((node) => node.id)).toEqual(["a", "c", "d", "e"]);
-    expect(contour.segments).toContainEqual({ type: "line", startNodeId: "a", endNodeId: "c" });
+    expect(contour.segments).toContainEqual({ id: "glyph-segment:a:c", type: "line", startNodeId: "a", endNodeId: "c" });
     expect(contour.segments).toHaveLength(contour.nodes.length);
   });
   it("keeps aligned nodes that do not project between their neighbours", () => {
@@ -45,11 +45,11 @@ describe("font outline adapter", () => {
         { id: "e", anchor: { x: 0, y: 10 }, join: "corner" },
       ],
       segments: [
-        { type: "line", startNodeId: "a", endNodeId: "b" },
-        { type: "line", startNodeId: "b", endNodeId: "c" },
-        { type: "line", startNodeId: "c", endNodeId: "d" },
-        { type: "line", startNodeId: "d", endNodeId: "e" },
-        { type: "line", startNodeId: "e", endNodeId: "a" },
+        { id: "fixture-segment-7", type: "line", startNodeId: "a", endNodeId: "b" },
+        { id: "fixture-segment-8", type: "line", startNodeId: "b", endNodeId: "c" },
+        { id: "fixture-segment-9", type: "line", startNodeId: "c", endNodeId: "d" },
+        { id: "fixture-segment-10", type: "line", startNodeId: "d", endNodeId: "e" },
+        { id: "fixture-segment-11", type: "line", startNodeId: "e", endNodeId: "a" },
       ],
     });
     expect(contour.nodes.map((node) => node.id)).toContain("b");
@@ -60,7 +60,7 @@ describe("font outline adapter", () => {
         const angle = index / 24 * Math.PI * 2;
         return { id: `n-${index}`, anchor: { x: Math.cos(angle) * 10, y: Math.sin(angle) * 10 }, join: "corner" as const };
       }),
-      segments: Array.from({ length: 24 }, (_, index) => ({ type: "line" as const, startNodeId: `n-${index}`, endNodeId: `n-${(index + 1) % 24}` })),
+      segments: Array.from({ length: 24 }, (_, index) => ({ id: "fixture-segment-12", type: "line" as const, startNodeId: `n-${index}`, endNodeId: `n-${(index + 1) % 24}` })),
     }, "editable");
     expect(contour.nodes.length).toBeLessThanOrEqual(20);
     expect(contour.segments.every((segment) => segment.type === "cubicBezier")).toBe(true);
@@ -74,10 +74,10 @@ describe("font outline adapter", () => {
         { id: "d", anchor: { x: 0, y: 10 }, join: "corner" as const },
       ],
       segments: [
-        { type: "line" as const, startNodeId: "a", endNodeId: "b" },
-        { type: "line" as const, startNodeId: "b", endNodeId: "c" },
-        { type: "line" as const, startNodeId: "c", endNodeId: "d" },
-        { type: "line" as const, startNodeId: "d", endNodeId: "a" },
+        { id: "fixture-segment-13", type: "line" as const, startNodeId: "a", endNodeId: "b" },
+        { id: "fixture-segment-14", type: "line" as const, startNodeId: "b", endNodeId: "c" },
+        { id: "fixture-segment-15", type: "line" as const, startNodeId: "c", endNodeId: "d" },
+        { id: "fixture-segment-16", type: "line" as const, startNodeId: "d", endNodeId: "a" },
       ],
     };
     const result = simplifyGlyphContourForMode(source, "editable");
@@ -95,10 +95,10 @@ describe("font outline adapter", () => {
         { id: "d", anchor: { x: 0, y: 10 }, join: "corner" as const },
       ],
       segments: [
-        { type: "cubicBezier" as const, startNodeId: "a", endNodeId: "b", control1: { x: 2, y: -4 }, control2: { x: 8, y: -4 } },
-        { type: "line" as const, startNodeId: "b", endNodeId: "c" },
-        { type: "line" as const, startNodeId: "c", endNodeId: "d" },
-        { type: "line" as const, startNodeId: "d", endNodeId: "a" },
+        { id: "fixture-segment-17", type: "cubicBezier" as const, startNodeId: "a", endNodeId: "b", control1: { x: 2, y: -4 }, control2: { x: 8, y: -4 } },
+        { id: "fixture-segment-18", type: "line" as const, startNodeId: "b", endNodeId: "c" },
+        { id: "fixture-segment-19", type: "line" as const, startNodeId: "c", endNodeId: "d" },
+        { id: "fixture-segment-20", type: "line" as const, startNodeId: "d", endNodeId: "a" },
       ],
     };
     expect(simplifyGlyphContourForMode(source, "editable")).toEqual(source);
@@ -110,7 +110,7 @@ describe("font outline adapter", () => {
         const angle = index / 24 * Math.PI * 2;
         return { id: `n-${index}`, anchor: { x: Math.cos(angle) * 10, y: Math.sin(angle) * 10 }, join: "corner" as const };
       }),
-      segments: Array.from({ length: 24 }, (_, index) => ({ type: "line" as const, startNodeId: `n-${index}`, endNodeId: `n-${(index + 1) % 24}` })),
+      segments: Array.from({ length: 24 }, (_, index) => ({ id: "fixture-segment-21", type: "line" as const, startNodeId: `n-${index}`, endNodeId: `n-${(index + 1) % 24}` })),
     };
     expect(simplifyGlyphContourForMode(source, "precise").nodes.length).toBeGreaterThan(simplifyGlyphContourForMode(source, "editable").nodes.length);
   });
@@ -123,14 +123,14 @@ describe("font outline adapter", () => {
         { id: "d", anchor: { x: 10, y: 10 }, join: "corner" },
       ],
       segments: [
-        { type: "line", startNodeId: "a", endNodeId: "b" },
-        { type: "line", startNodeId: "b", endNodeId: "c" },
-        { type: "cubicBezier", startNodeId: "c", endNodeId: "d", control1: { x: 12, y: 2 }, control2: { x: 12, y: 8 } },
-        { type: "line", startNodeId: "d", endNodeId: "a" },
+        { id: "fixture-segment-22", type: "line", startNodeId: "a", endNodeId: "b" },
+        { id: "fixture-segment-23", type: "line", startNodeId: "b", endNodeId: "c" },
+        { id: "fixture-segment-24", type: "cubicBezier", startNodeId: "c", endNodeId: "d", control1: { x: 12, y: 2 }, control2: { x: 12, y: 8 } },
+        { id: "fixture-segment-25", type: "line", startNodeId: "d", endNodeId: "a" },
       ],
     });
     expect(contour.nodes.map((node) => node.id)).toEqual(["a", "c", "d"]);
-    expect(contour.segments).toContainEqual({ type: "cubicBezier", startNodeId: "c", endNodeId: "d", control1: { x: 12, y: 2 }, control2: { x: 12, y: 8 } });
+    expect(contour.segments).toContainEqual({ id: "fixture-segment-24", type: "cubicBezier", startNodeId: "c", endNodeId: "d", control1: { x: 12, y: 2 }, control2: { x: 12, y: 8 } });
   });
   it("fails clearly when CSS font metadata has no uploaded bytes", () => {
     const text: TextElement = { type: "text", id: elementId("text"), layerId: layerId("layer"), position: { x: 0, y: 0 }, size: { width: 10, height: 10 }, text: "A", fontFamily: "Arial", fontSize: 10, fontWeight: "normal", fontStyle: "normal", textAlign: "left", lineHeight: 1.2, rotation: 0, style: { stroke: "#000", fill: "#000", strokeWidth: 1 } };

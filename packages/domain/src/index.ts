@@ -1,4 +1,4 @@
-export const CURRENT_SCHEMA_VERSION = 5 as const;
+export const CURRENT_SCHEMA_VERSION = 7 as const;
 
 export type SchemaVersion = typeof CURRENT_SCHEMA_VERSION;
 export type DocumentId = string & { readonly __brand: "DocumentId" };
@@ -83,12 +83,16 @@ export interface SketchNode { readonly id: string; readonly point: PointMm }
 export interface SketchEdge { readonly id: string; readonly startNodeId: string; readonly endNodeId: string }
 export type SketchConstraintKind = "horizontal" | "vertical" | "coincident" | "parallel" | "perpendicular" | "equal" | "distance-horizontal" | "distance-vertical" | "distance" | "angle" | "fixed";
 export interface SketchPointReference { readonly elementId: ElementId; readonly nodeId: string }
-export interface SketchConstraint { readonly id: string; readonly kind: SketchConstraintKind; readonly references: readonly [SketchPointReference, ...SketchPointReference[]]; readonly value?: number }
+export interface SketchEdgeReference { readonly elementId: ElementId; readonly edgeId: string }
+export type SketchConstraintReference = SketchPointReference | SketchEdgeReference;
+export interface SketchConstraint { readonly id: string; readonly kind: SketchConstraintKind; readonly references: readonly [SketchConstraintReference, ...SketchConstraintReference[]]; readonly value?: number }
 export interface SketchElement { readonly type: "sketch"; readonly id: ElementId; readonly layerId: LayerId; readonly nodes: readonly SketchNode[]; readonly edges: readonly SketchEdge[]; readonly constraints?: readonly SketchConstraint[]; readonly style: VisualStyle; readonly operation?: OperationMetadata }
+/** Page-level parametric constraint; references may span multiple sketch elements. */
+export type DocumentConstraint = SketchConstraint;
 export type DimensionKind = "aligned" | "horizontal" | "vertical" | "angular" | "radius" | "diameter";
 export type DimensionReference =
   | { readonly kind: "node"; readonly elementId: ElementId; readonly nodeIndex: number; readonly nodeId?: string }
-  | { readonly kind: "line"; readonly elementId: ElementId; readonly edgeIndex?: number }
+  | { readonly kind: "line"; readonly elementId: ElementId; readonly edgeId?: string; readonly edgeIndex?: number }
   /** Legacy node references are accepted at the boundary and normalized by validation. */
   | { readonly elementId: ElementId; readonly nodeIndex: number; readonly nodeId?: string };
 export interface DimensionElement {
@@ -130,11 +134,13 @@ export interface PathNode {
   readonly join: PathJoin;
 }
 export interface PathLineSegment {
+  readonly id: string;
   readonly type: "line";
   readonly startNodeId: string;
   readonly endNodeId: string;
 }
 export interface PathCubicSegment {
+  readonly id: string;
   readonly type: "cubicBezier";
   readonly startNodeId: string;
   readonly endNodeId: string;
@@ -195,6 +201,7 @@ export interface DocumentCapabilities { readonly spline?: 1 }
   readonly page: SizeMm;
   readonly layers: readonly Layer[];
   readonly elements: readonly Element[];
+  readonly constraints?: readonly DocumentConstraint[];
   readonly connections?: readonly ExplicitConnection[];
 }
 
@@ -203,6 +210,7 @@ export interface PageSnapshot {
   readonly page: SizeMm;
   readonly layers: readonly Layer[];
   readonly elements: readonly Element[];
+  readonly constraints?: readonly DocumentConstraint[];
   readonly connections?: readonly ExplicitConnection[];
 }
 
@@ -234,8 +242,8 @@ export function createDocument(id: string, layers: readonly Layer[] = []): Docum
 }
 
 export function createProject(document: DocumentSnapshot): ProjectSnapshot {
-  const page = { id: pageId("page-1"), page: document.page, layers: document.layers, elements: document.elements, connections: document.connections ?? [] };
-  return { schemaVersion: CURRENT_SCHEMA_VERSION, id: document.id, revision: document.revision, origin: document.origin, units: document.units, preferences: { lineGuidesEnabled: true, lineGuideAngle: 45 }, pages: [page], activePageId: page.id };
+  const page = { id: pageId("page-1"), page: document.page, layers: document.layers, elements: document.elements, ...(document.constraints ? { constraints: document.constraints } : {}), connections: document.connections ?? [] };
+  return { schemaVersion: CURRENT_SCHEMA_VERSION, id: document.id, revision: document.revision, origin: document.origin, units: document.units, ...(document.capabilities ? { capabilities: document.capabilities } : {}), preferences: { lineGuidesEnabled: true, lineGuideAngle: 45 }, pages: [page], activePageId: page.id };
 }
 
 export function projectPage(project: ProjectSnapshot, pageIdValue = project.activePageId): PageSnapshot {
@@ -244,11 +252,11 @@ export function projectPage(project: ProjectSnapshot, pageIdValue = project.acti
 
 export function documentFromProject(project: ProjectSnapshot, pageIdValue = project.activePageId): DocumentSnapshot {
   const page = projectPage(project, pageIdValue);
-  return { schemaVersion: project.schemaVersion, id: project.id, revision: project.revision, origin: project.origin, units: project.units, page: page.page, layers: page.layers, elements: page.elements, connections: page.connections ?? [] };
+  return { schemaVersion: project.schemaVersion, id: project.id, revision: project.revision, origin: project.origin, units: project.units, ...(project.capabilities ? { capabilities: project.capabilities } : {}), page: page.page, layers: page.layers, elements: page.elements, ...(page.constraints ? { constraints: page.constraints } : {}), connections: page.connections ?? [] };
 }
 
 export function projectFromDocument(project: ProjectSnapshot, document: DocumentSnapshot): ProjectSnapshot {
-  return { ...project, revision: document.revision, pages: project.pages.map((page) => page.id === project.activePageId ? { ...page, page: document.page, layers: document.layers, elements: document.elements, connections: document.connections ?? [] } : page) };
+  return { ...project, revision: document.revision, ...(document.capabilities ? { capabilities: document.capabilities } : {}), pages: project.pages.map((page) => page.id === project.activePageId ? { ...page, page: document.page, layers: document.layers, elements: document.elements, constraints: document.constraints ?? [], connections: document.connections ?? [] } : page) };
 }
 
 export function nextRevision(value: Revision): Revision {

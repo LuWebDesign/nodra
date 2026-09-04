@@ -17,7 +17,7 @@ Load before changing any Nodra editor tool, pointer routing, hit testing, or ges
 - Route document changes through validated `editor-core` commands. Commit completed gestures once; cancel restores the gesture base.
 - Preserve hit-test precedence, visible-layer filtering, tolerance units, and tool-specific exclusions.
 - Treat explicit connections as persisted data: create them only from confirmed snap clicks, never hover; do not imply that connection removal or management is supported.
-- Preserve schema version 5 migration/defaulting and validation, including stable addresses for rectangle/ellipse/line anchors and path/spline nodes and handles.
+- Preserve schema version 7 migration/defaulting and validation, including stable addresses for rectangle/ellipse/line anchors, sketch edge dimensions, stable path/glyph segment IDs, and path/spline nodes and handles.
 - Inspector dimension edits keep the object/selection center when no relevant connection exists; connected sides anchor their side, corners anchor both axes, and aspect lock preserves proportions without breaking those anchors.
 
 ## Decision Gates

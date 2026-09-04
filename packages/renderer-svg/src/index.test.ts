@@ -24,6 +24,41 @@ describe("SVG renderer boundary", () => {
       expect(result.renderedElementIds).toEqual(["rect", "ellipse", "line"]);
     }
   });
+  it("renders sketch definition state through the shared constraint boundary", () => {
+    const underdefined = { type: "sketch" as const, id: elementId("underdefined"), layerId: layer.id, nodes: [{ id: "a", point: { x: 0, y: 0 } }, { id: "b", point: { x: 20, y: 0 } }], edges: [{ id: "ab", startNodeId: "a", endNodeId: "b" }], constraints: [], style };
+    const defined = { ...underdefined, id: elementId("defined"), nodes: [{ id: "a", point: { x: 0, y: 0 } }, { id: "b", point: { x: 20, y: 0 } }], constraints: [{ id: "fixed-a", kind: "fixed" as const, references: [{ elementId: elementId("defined"), nodeId: "a" }] as const }, { id: "horizontal", kind: "horizontal" as const, references: [{ elementId: elementId("defined"), nodeId: "a" }, { elementId: elementId("defined"), nodeId: "b" }] as const }, { id: "length", kind: "distance-horizontal" as const, references: [{ elementId: elementId("defined"), nodeId: "a" }, { elementId: elementId("defined"), nodeId: "b" }] as const, value: 20 }] };
+    const result = renderSvg(withElements(createDocument("constraint-colors", [layer]), [underdefined, defined]), { zoom: 1, panMm: { x: 0, y: 0 } });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.svg).toContain('data-element-id="underdefined" stroke="#2563eb"');
+      expect(result.svg).toContain('data-element-id="defined" stroke="#111827"');
+    }
+  });
+  it("keeps editor diagnostic colors out of export rendering", () => {
+    const underdefined = { type: "sketch" as const, id: elementId("export-sketch"), layerId: layer.id, nodes: [{ id: "a", point: { x: 0, y: 0 } }, { id: "b", point: { x: 20, y: 0 } }], edges: [{ id: "ab", startNodeId: "a", endNodeId: "b" }], constraints: [], style };
+    const document = withElements(createDocument("export-constraint-colors", [layer]), [underdefined]);
+
+    const editor = renderSvg(document, { zoom: 1, panMm: { x: 0, y: 0 } });
+    const exported = renderSvg(document, { zoom: 1, panMm: { x: 0, y: 0 } }, { mode: "export" });
+
+    expect(editor.success && editor.svg).toContain('data-element-id="export-sketch" stroke="#2563eb"');
+    expect(exported.success && exported.svg).toContain('data-element-id="export-sketch" stroke="#111"');
+    expect(exported.success && exported.svg).not.toContain('stroke="#2563eb"');
+  });
+  it("renders global constraint conflicts for every involved sketch", () => {
+    const first = { type: "sketch" as const, id: elementId("global-state-first"), layerId: layer.id, nodes: [{ id: "a", point: { x: 0, y: 0 } }, { id: "b", point: { x: 20, y: 0 } }], edges: [{ id: "ab", startNodeId: "a", endNodeId: "b" }], style };
+    const second = { ...first, id: elementId("global-state-second"), nodes: [{ id: "c", point: { x: 0, y: 10 } }, { id: "d", point: { x: 20, y: 10 } }], edges: [{ id: "cd", startNodeId: "c", endNodeId: "d" }] };
+    const document = { ...withElements(createDocument("global-constraint-colors", [layer]), [first, second]), constraints: [{ id: "global-horizontal", kind: "horizontal" as const, references: [{ elementId: first.id, nodeId: "a" }, { elementId: second.id, nodeId: "c" }] as const }] };
+
+    const result = renderSvg(document, { zoom: 1, panMm: { x: 0, y: 0 } });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.svg).toContain('data-element-id="global-state-first" stroke="#ef4444"');
+      expect(result.svg).toContain('data-element-id="global-state-second" stroke="#ef4444"');
+    }
+  });
   it("renders radius dimensions with an R prefix", () => {
     const ellipse = { type: "ellipse" as const, id: elementId("circle"), layerId: layer.id, position: { x: 10, y: 10 }, size: { width: 20, height: 20 }, rotation: 0, style };
     const radius = { type: "dimension" as const, id: elementId("radius"), layerId: layer.id, kind: "radius" as const, references: [{ kind: "node" as const, elementId: ellipse.id, nodeIndex: 0, nodeId: "center" }, { kind: "node" as const, elementId: ellipse.id, nodeIndex: 2, nodeId: "e" }] as const, offset: { x: 8, y: 0 }, precision: 2, units: "mm" as const, rotation: 0 as const, style };
@@ -82,6 +117,12 @@ describe("SVG renderer boundary", () => {
     expect(renderSvg({ schemaVersion: 1 }, { zoom: 1, panMm: { x: 0, y: 0 } })).toMatchObject({ success: false, reason: "invalid" });
     expect(renderSvg({ schemaVersion: 99 }, { zoom: 1, panMm: { x: 0, y: 0 } })).toMatchObject({ success: false, reason: "unsupported" });
     expect(renderSvg(document(), { zoom: 0, panMm: { x: 0, y: 0 } })).toMatchObject({ success: false, reason: "invalid" });
+    expect(renderSvg(document(), { zoom: 1, panMm: { x: 0, y: 0 } }, null)).toMatchObject({ success: false, reason: "invalid" });
+    expect(renderSvg(document(), { zoom: 1, panMm: { x: 0, y: 0 } }, [])).toMatchObject({ success: false, reason: "invalid" });
+    expect(renderSvg(document(), { zoom: 1, panMm: { x: 0, y: 0 } }, { mode: "other" })).toMatchObject({ success: false, reason: "invalid" });
+    expect(renderSvg(document(), { zoom: 1, panMm: { x: 0, y: 0 } }, { extra: true })).toMatchObject({ success: false, reason: "invalid" });
+    expect(renderSvg(document(), { zoom: 1, panMm: { x: 0, y: 0 } }, { [Symbol("extra")]: true })).toMatchObject({ success: false, reason: "invalid" });
+    expect(renderSvg(document(), { zoom: 1, panMm: { x: 0, y: 0 } }, Object.defineProperty({}, "mode", { get: () => { throw new Error("unreadable"); } }))).toMatchObject({ success: false, reason: "invalid" });
   });
 
   it("classifies invalid schema-3 documents as invalid rather than unsupported", () => {
@@ -100,7 +141,7 @@ describe("SVG renderer boundary", () => {
     expect(source).toEqual(before);
   });
   it("renders canonical open paths with line and cubic commands", () => {
-    const source = withElements(createDocument("path", [layer]), [{ type: "path", id: elementId("path"), layerId: layer.id, nodes: [{ id: "a", anchor: { x: 0, y: 0 }, join: "corner" }, { id: "b", anchor: { x: 10, y: 0 }, join: "smooth" }, { id: "c", anchor: { x: 20, y: 0 }, join: "corner" }], segments: [{ type: "line", startNodeId: "a", endNodeId: "b" }, { type: "cubicBezier", startNodeId: "b", endNodeId: "c", control1: { x: 12, y: 5 }, control2: { x: 18, y: 5 } }], closed: false, style }]);
+    const source = withElements(createDocument("path", [layer]), [{ type: "path", id: elementId("path"), layerId: layer.id, nodes: [{ id: "a", anchor: { x: 0, y: 0 }, join: "corner" }, { id: "b", anchor: { x: 10, y: 0 }, join: "smooth" }, { id: "c", anchor: { x: 20, y: 0 }, join: "corner" }], segments: [{ id: "fixture-segment-1", type: "line", startNodeId: "a", endNodeId: "b" }, { id: "fixture-segment-2", type: "cubicBezier", startNodeId: "b", endNodeId: "c", control1: { x: 12, y: 5 }, control2: { x: 18, y: 5 } }], closed: false, style }]);
     const result = renderSvg(source, { zoom: 1, panMm: { x: 0, y: 0 } });
     expect(result.success).toBe(true);
     if (result.success) expect(result.svg).toContain("M0 0 L10 0 C12 5 18 5 20 0");

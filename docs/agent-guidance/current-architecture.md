@@ -10,8 +10,9 @@ Nodra is a pnpm workspace over `apps/*` and `packages/*`. `apps/web/src/main.tsx
 
 ```text
 web -> domain, geometry, editor-core, persistence, renderer-svg
-editor-core -> domain, validation
-renderer-svg -> domain, geometry, validation
+editor-core -> domain, geometry, validation
+renderer-svg -> domain, geometry, constraints, validation
+constraints -> domain, geometry
 persistence -> domain, validation, Dexie
 geometry -> domain
 validation -> domain, Zod
@@ -19,7 +20,7 @@ domain -> no dependencies
 ui -> no dependencies; standalone boundary, not declared by apps/web
 ```
 
-Packages are `domain`, `geometry`, `validation`, `editor-core`, `renderer-svg`, `persistence`, and `ui`; each exports from `src/index.ts`. `ui` is stateless contracts, not React components, and no package manifest currently declares it as a dependency.
+Packages are `domain`, `geometry`, `constraints`, `validation`, `editor-core`, `renderer-svg`, `persistence`, and `ui`; each exports from `src/index.ts`. `constraints` centralizes parametric capabilities and derived entity state, initially through adapters for sketches and circles. `ui` is stateless contracts, not React components, and no package manifest currently declares it as a dependency.
 
 ## Technologies actually installed
 
@@ -28,8 +29,8 @@ Node >=24; pnpm 10.15.1; TypeScript 5.9.2; React 19.1.1; Vite 7.1.3; Vitest 3.2.
 ## Strengths
 
 - Explicit package boundaries and source exports.
-- Domain schemaVersion 3, branded IDs, mm/top-left coordinates, pages/layers, revisions, and typed elements.
-- Zod validation/migrations, command-driven editing, gesture transaction semantics, escaped non-mutating SVG, and revision-aware local recovery.
+- Domain schemaVersion 7, branded IDs, mm/top-left coordinates, pages/layers, revisions, typed elements, stable sketch-edge dimension references, and stable path/glyph segment IDs.
+- Zod validation/migrations, command-driven editing, gesture transaction semantics, explicit ephemeral topology maps on topology-changing command results, escaped non-mutating SVG, and revision-aware local recovery.
 
 ## Risks and gaps
 
@@ -39,7 +40,7 @@ Node >=24; pnpm 10.15.1; TypeScript 5.9.2; React 19.1.1; Vite 7.1.3; Vitest 3.2.
 
 ### Important
 - `App.tsx` is a large composition hotspot.
-- Renderer schema classification needs an explicit schema 3 versus invalid-input policy.
+- Schema migrations and renderer support classification must remain aligned as the document model evolves.
 - `packages/ui` contains contracts only.
 - This audit is the current architecture documentation; ADRs and prior developer architecture documentation are still missing.
 

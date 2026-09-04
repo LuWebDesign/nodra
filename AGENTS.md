@@ -9,8 +9,8 @@
 
 ## Boundaries and conventions
 
-- Public workspace packages are `@nodra/domain`, `@nodra/geometry`, `@nodra/validation`, `@nodra/editor-core`, `@nodra/renderer-svg`, `@nodra/persistence`, and `@nodra/ui`; each exports `src/index.ts`.
-- Dependency direction is one-way: `domain` has no dependencies; `geometry` and `validation` depend on `domain`; `editor-core` depends on domain/geometry/validation; `renderer-svg` depends on domain/geometry/validation; `persistence` depends on domain/validation; web composes the runtime packages. `ui` is standalone and is not currently a web dependency.
+- Public workspace packages are `@nodra/domain`, `@nodra/geometry`, `@nodra/constraints`, `@nodra/validation`, `@nodra/editor-core`, `@nodra/renderer-svg`, `@nodra/persistence`, and `@nodra/ui`; each exports `src/index.ts`.
+- Dependency direction is one-way: `domain` has no dependencies; `geometry` and `validation` depend on `domain`; `constraints` depends on domain/geometry; `editor-core` depends on domain/geometry/validation; `renderer-svg` depends on domain/geometry/constraints/validation; `persistence` depends on domain/validation; web composes the runtime packages. `ui` is standalone and is not currently a web dependency.
 - Import package APIs through `@nodra/*` workspace names, not package internals. Preserve the existing Spanish UI copy when changing UI artifacts.
 
 ## Verification

@@ -16,8 +16,8 @@ describe("editable path handles", () => {
     { kind: "control" as const, nodeId: "c", segmentIndex: 1, handle: "control2" as const, point: { x: 17, y: 3 } },
   ];
   const segments = [
-    { type: "cubicBezier" as const, startNodeId: "a", endNodeId: "b", control1: nodes[3]!.point, control2: nodes[4]!.point },
-    { type: "cubicBezier" as const, startNodeId: "b", endNodeId: "c", control1: nodes[5]!.point, control2: nodes[6]!.point },
+    { id: "fixture-segment-1", type: "cubicBezier" as const, startNodeId: "a", endNodeId: "b", control1: nodes[3]!.point, control2: nodes[4]!.point },
+    { id: "fixture-segment-2", type: "cubicBezier" as const, startNodeId: "b", endNodeId: "c", control1: nodes[5]!.point, control2: nodes[6]!.point },
   ];
   it("shows anchors before selection and neighbouring handles after selecting an anchor", () => {
     expect(visibleEditablePathNodeIndexes(nodes, segments, [])).toEqual([0, 1, 2]);
@@ -120,7 +120,7 @@ describe("Forma hit testing", () => {
       id: elementId("forma-open-path"),
       layerId: layer.id,
       nodes: [{ id: "a", anchor: { x: 10, y: 30 }, join: "corner" as const }, { id: "b", anchor: { x: 30, y: 30 }, join: "corner" as const }],
-      segments: [{ type: "line" as const, startNodeId: "a", endNodeId: "b" }],
+      segments: [{ id: "fixture-segment-3", type: "line" as const, startNodeId: "a", endNodeId: "b" }],
       closed: false,
       style: { stroke: "#000", strokeWidth: 1 },
     };
@@ -151,7 +151,7 @@ describe("Forma hit testing", () => {
       id: elementId("forma-malformed-glyph"),
       layerId: layer.id,
       position: { x: 0, y: 0 }, size: { width: 1, height: 1 }, rotation: 0,
-      contours: [{ nodes: [{ id: "known", anchor: { x: 0, y: 0 }, join: "corner" as const }], segments: [{ type: "line" as const, startNodeId: "known", endNodeId: "missing" }] }],
+      contours: [{ nodes: [{ id: "known", anchor: { x: 0, y: 0 }, join: "corner" as const }], segments: [{ id: "fixture-segment-4", type: "line" as const, startNodeId: "known", endNodeId: "missing" }] }],
       style: { stroke: "#000", strokeWidth: 1 },
     };
     const checked = { ...createDocument("forma-malformed-document", [layer]), elements: [malformedGlyph, degenerate, valid] } as unknown as DocumentSnapshot;
@@ -441,6 +441,13 @@ describe("drag geometry", () => {
     const line = { type: "line" as const, id: elementId("cut-hover-line"), layerId: layer.id, start: { x: 0, y: 0 }, end: { x: 10, y: 0 }, rotation: 0, style: { stroke: "#000", strokeWidth: 1 } };
     const hit = pickCuttableSegment({ ...document, elements: [line] }, { x: 5, y: 0.5 }, 1);
     expect(hit).toMatchObject({ elementId: line.id, segmentIndex: 0, start: { x: 0, y: 0 }, end: { x: 10, y: 0 } });
+  });
+
+  it("picks contour ring and boundary indexes for Cut", () => {
+    const layer = { id: layerId("cut-contour-hover"), name: "Cut contour hover", visible: true, order: 0 };
+    const document = createDocument("cut-contour-hover", [layer]);
+    const contour = { type: "contour" as const, id: elementId("cut-hover-contour"), layerId: layer.id, position: { x: 0, y: 0 }, size: { width: 10, height: 10 }, contours: [{ points: [{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }, { x: 0, y: 10 }, { x: 0, y: 0 }] }], fillRule: "evenodd" as const, rotation: 0, style: { stroke: "#000", strokeWidth: 1, fill: "#fff" } };
+    expect(pickCuttableSegment({ ...document, elements: [contour] }, { x: 5, y: 0.5 }, 1)).toMatchObject({ elementId: contour.id, ringIndex: 0, segmentIndex: 0 });
   });
 
   it("returns full ellipse quadrant points for cut hover feedback", () => {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { angularDimensionGeometry, bezierHandlePoint, boundsOf, boundsOfElements, boundsOutsidePage, connectableNode, connectableNodeAddress, closedElementToPolygon, cubicBezierBounds, cuttableSegments, cubicBezierDerivative, degreesToRadians, dimensionGeometry, dimensionKindForNodes, dimensionKindForPlacement, dimensionOffsetForAlignedPlacement, dimensionOffsetForPlacement, editableGeometryNodes, elementCenter, elementSegmentAt, elementToContour, evaluateCubicBezier, ELLIPSE_APPROXIMATION_SEGMENTS, groupCenter, groupHandlePoints, hitTest, mirrorHandleOffset, mmToScreen, pointMidpoint, radiansToDegrees, realGeometryNodes, resizeGroup, resizeHandle, rotatedLineEndpoints, rotateElements, rotationFromDrag, solveSketchConstraints, solveCircleConstraints, rotationHandlePoints, screenToMm, shapeResultContours, sketchClosedContours, splitCubicBezier, splitCuttableSegments, validateSize, visibleBezierHandleGuides } from "./index.js";
+import { angularDimensionGeometry, bezierHandlePoint, boundsOf, boundsOfElements, boundsOutsidePage, connectableNode, connectableNodeAddress, closedElementToPolygon, cubicBezierBounds, cuttableSegments, cubicBezierDerivative, degreesToRadians, dimensionGeometry, dimensionKindForNodes, dimensionKindForPlacement, dimensionOffsetForAlignedPlacement, dimensionOffsetForPlacement, editableGeometryNodes, elementCenter, elementSegmentAt, elementToContour, evaluateCubicBezier, ELLIPSE_APPROXIMATION_SEGMENTS, groupCenter, groupHandlePoints, hitTest, mirrorHandleOffset, mmToScreen, pointMidpoint, radiansToDegrees, realGeometryNodes, resizeGroup, resizeHandle, rotatedLineEndpoints, rotateElements, rotationFromDrag, solveSketchConstraints, solveCircleConstraints, rotationHandlePoints, screenToMm, shapeResultContours, sketchClosedContours, sketchEdgeAtAddress, sketchEdgeIndexAtAddress, splitCubicBezier, splitCuttableSegments, validateSize, visibleBezierHandleGuides } from "./index.js";
 import { elementId, layerId } from "@nodra/domain";
 
 const style = { stroke: "#000", strokeWidth: 0.2 };
@@ -12,12 +12,32 @@ describe("canonical millimetre geometry", () => {
     expect(result.status).toBe("underdefined");
     expect(result.sketch.nodes[1]?.point).toEqual({ x: 20, y: 0 });
   });
+  it("normalizes solved sketch angles across the signed-angle boundary", () => {
+    const sketch = { type: "sketch" as const, id: elementId("solver-angle"), layerId: layerId("l"), nodes: [{ id: "a", point: { x: 0, y: 0 } }, { id: "b", point: { x: 10, y: 0 } }], edges: [{ id: "ab", startNodeId: "a", endNodeId: "b" }], constraints: [{ id: "angle", kind: "angle" as const, references: [{ elementId: elementId("solver-angle"), nodeId: "a" }, { elementId: elementId("solver-angle"), nodeId: "b" }] as const, value: 350 }], style };
+    const result = solveSketchConstraints(sketch);
+    expect(result.status).toBe("underdefined");
+    expect(result.conflicts).toEqual([]);
+    expect(result.sketch.nodes[1]!.point.y).toBeLessThan(0);
+  });
+  it("counts local angle and distance as independent degrees of freedom", () => {
+    const sketch = { type: "sketch" as const, id: elementId("defined-angle"), layerId: layerId("l"), nodes: [{ id: "a", point: { x: 0, y: 0 } }, { id: "b", point: { x: 1e9, y: 0 } }], edges: [{ id: "ab", startNodeId: "a", endNodeId: "b" }], constraints: [{ id: "a-fixed", kind: "fixed" as const, references: [{ elementId: elementId("defined-angle"), nodeId: "a" }] as const }, { id: "b-angle", kind: "angle" as const, references: [{ elementId: elementId("defined-angle"), nodeId: "a" }, { elementId: elementId("defined-angle"), nodeId: "b" }] as const, value: 350 }, { id: "c-distance", kind: "distance" as const, references: [{ elementId: elementId("defined-angle"), nodeId: "a" }, { elementId: elementId("defined-angle"), nodeId: "b" }] as const, value: 1e9 }], style };
+    const result = solveSketchConstraints(sketch);
+    expect(result.status).toBe("defined");
+    expect(result.conflicts).toEqual([]);
+  });
   it("solves two-segment relations without mixing relation responsibilities", () => {
     const sketch = { type: "sketch" as const, id: elementId("solver-relations"), layerId: layerId("l"), nodes: [{ id: "a", point: { x: 0, y: 0 } }, { id: "b", point: { x: 10, y: 0 } }, { id: "c", point: { x: 0, y: 10 } }, { id: "d", point: { x: 3, y: 14 } }], edges: [{ id: "ab", startNodeId: "a", endNodeId: "b" }, { id: "cd", startNodeId: "c", endNodeId: "d" }], constraints: [{ id: "equal", kind: "equal" as const, references: [{ elementId: elementId("solver-relations"), nodeId: "a" }, { elementId: elementId("solver-relations"), nodeId: "b" }, { elementId: elementId("solver-relations"), nodeId: "c" }, { elementId: elementId("solver-relations"), nodeId: "d" }] as const }], style };
     const result = solveSketchConstraints(sketch);
     const [c, d] = [result.sketch.nodes[2]!.point, result.sketch.nodes[3]!.point];
     expect(Math.hypot(d.x - c.x, d.y - c.y)).toBeCloseTo(10);
     expect(Math.atan2(d.y - c.y, d.x - c.x)).toBeCloseTo(Math.atan2(4, 3));
+  });
+  it("solves canonical stable-edge segment relations", () => {
+    const sketch = { type: "sketch" as const, id: elementId("stable-relations"), layerId: layerId("l"), nodes: [{ id: "a", point: { x: 0, y: 0 } }, { id: "b", point: { x: 10, y: 0 } }, { id: "c", point: { x: 0, y: 10 } }, { id: "d", point: { x: 3, y: 14 } }], edges: [{ id: "ab", startNodeId: "a", endNodeId: "b" }, { id: "cd", startNodeId: "c", endNodeId: "d" }], constraints: [{ id: "parallel", kind: "parallel" as const, references: [{ elementId: elementId("stable-relations"), edgeId: "ab" }, { elementId: elementId("stable-relations"), edgeId: "cd" }] as const }], style };
+    const result = solveSketchConstraints(sketch);
+    expect(result.status).toBe("underdefined");
+    expect(result.conflicts).toEqual([]);
+    expect(result.sketch.nodes[3]!.point.y).toBeCloseTo(10);
   });
   it("rejects ambiguous zero-axis distances and detects reversed duplicates", () => {
         const sketch = { type: "sketch" as const, id: elementId("solver-safety"), layerId: layerId("l"), nodes: [{ id: "a", point: { x: 0, y: 0 } }, { id: "b", point: { x: 0, y: 5 } }], edges: [{ id: "ab", startNodeId: "a", endNodeId: "b" }], constraints: [{ id: "distance", kind: "distance-horizontal" as const, references: [{ elementId: elementId("solver-safety"), nodeId: "a" }, { elementId: elementId("solver-safety"), nodeId: "b" }] as const, value: 10 }, { id: "h1", kind: "horizontal" as const, references: [{ elementId: elementId("solver-safety"), nodeId: "a" }, { elementId: elementId("solver-safety"), nodeId: "b" }] as const }, { id: "h2", kind: "horizontal" as const, references: [{ elementId: elementId("solver-safety"), nodeId: "b" }, { elementId: elementId("solver-safety"), nodeId: "a" }] as const }], style };
@@ -39,6 +59,12 @@ describe("canonical millimetre geometry", () => {
     expect(elementSegmentAt(sketch, { x: 10, y: 5 }, 0.2)).toMatchObject({ segmentIndex: 1 });
     expect(sketchClosedContours({ ...sketch, edges: [...sketch.edges, { id: "ca", startNodeId: "c", endNodeId: "a" }] })).toHaveLength(1);
     expect(hitTest({ ...sketch, edges: [...sketch.edges, { id: "ca", startNodeId: "c", endNodeId: "a" }] }, { x: 8, y: 2 }, 0.1)).toBe(true);
+  });
+  it("resolves sketch edges by stable ID before legacy index", () => {
+    const sketch = { type: "sketch" as const, id: elementId("stable-edge"), layerId: layerId("l"), nodes: [{ id: "a", point: { x: 0, y: 0 } }, { id: "b", point: { x: 10, y: 0 } }, { id: "c", point: { x: 20, y: 0 } }], edges: [{ id: "ab", startNodeId: "a", endNodeId: "b" }, { id: "bc", startNodeId: "b", endNodeId: "c" }], style };
+    expect(sketchEdgeIndexAtAddress(sketch, { edgeId: "bc", edgeIndex: 0 })).toBe(1);
+    expect(sketchEdgeAtAddress(sketch, { edgeId: "missing", edgeIndex: 0 })).toBeUndefined();
+    expect(sketchEdgeAtAddress(sketch, { edgeIndex: 0 })?.id).toBe("ab");
   });
   it("returns bounded faces instead of every simple cycle", () => {
     const square = { type: "sketch" as const, id: elementId("square"), layerId: layerId("l"), nodes: [{ id: "a", point: { x: 0, y: 0 } }, { id: "b", point: { x: 10, y: 0 } }, { id: "c", point: { x: 10, y: 10 } }, { id: "d", point: { x: 0, y: 10 } }], edges: [{ id: "ab", startNodeId: "a", endNodeId: "b" }, { id: "bc", startNodeId: "b", endNodeId: "c" }, { id: "cd", startNodeId: "c", endNodeId: "d" }, { id: "da", startNodeId: "d", endNodeId: "a" }], style };
@@ -225,7 +251,7 @@ describe("canonical millimetre geometry", () => {
     expect(() => hitTest({ type: "line", id: elementId("line"), layerId: layerId("l"), start: { x: 0, y: 0 }, end: { x: 0, y: 0 }, rotation: 0, style }, { x: 0, y: 0 })).toThrow();
   });
   it("projects paths into shared anchors and directional handles", () => {
-    const path = { type: "path" as const, id: elementId("projection-path"), layerId: layerId("l"), nodes: [{ id: "a", anchor: { x: 0, y: 0 }, join: "symmetric" as const }, { id: "b", anchor: { x: 10, y: 0 }, join: "corner" as const }], segments: [{ type: "cubicBezier" as const, startNodeId: "a", endNodeId: "b", control1: { x: 3, y: 2 }, control2: { x: 7, y: 2 } }], closed: false, rotation: 0, style };
+    const path = { type: "path" as const, id: elementId("projection-path"), layerId: layerId("l"), nodes: [{ id: "a", anchor: { x: 0, y: 0 }, join: "symmetric" as const }, { id: "b", anchor: { x: 10, y: 0 }, join: "corner" as const }], segments: [{ id: "fixture-segment-1", type: "cubicBezier" as const, startNodeId: "a", endNodeId: "b", control1: { x: 3, y: 2 }, control2: { x: 7, y: 2 } }], closed: false, rotation: 0, style };
     expect(editableGeometryNodes(path).map((node) => node.kind)).toEqual(["anchor", "anchor", "handle", "handle"]);
     const active = visibleBezierHandleGuides(path, [0]);
     expect(active).toHaveLength(1);

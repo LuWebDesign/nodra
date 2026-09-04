@@ -20,11 +20,11 @@ export interface AlignmentGuide {
   readonly target: PointMm;
 }
 export interface NodeHit { readonly elementId: ElementId; readonly nodeIndex: number; readonly node: RealGeometryNode }
-export interface DimensionLineHit { readonly elementId: ElementId; readonly line: LineElement; readonly distance: number; readonly edgeIndex?: number }
+export interface DimensionLineHit { readonly elementId: ElementId; readonly line: LineElement; readonly distance: number; readonly edgeId?: string; readonly edgeIndex?: number }
 export interface CircleDimensionHit { readonly elementId: ElementId; readonly center: NodeHit; readonly rim: NodeHit; readonly distance: number }
 export type DimensionTarget = { readonly kind: "node"; readonly hit: NodeHit } | { readonly kind: "circle"; readonly hit: CircleDimensionHit } | { readonly kind: "line"; readonly hit: DimensionLineHit };
 export interface PathNodeHit { readonly elementId: ElementId; readonly node: PathGeometryNode & { readonly ringIndex?: number } }
-    export interface CuttableSegmentHit { readonly elementId: ElementId; readonly segmentIndex: number; readonly distance: number; readonly start: PointMm; readonly end: PointMm; readonly points?: readonly PointMm[] }
+    export interface CuttableSegmentHit { readonly elementId: ElementId; readonly segmentIndex: number; readonly ringIndex?: number; readonly distance: number; readonly start: PointMm; readonly end: PointMm; readonly points?: readonly PointMm[] }
 export type PathGuideDirection = "incoming" | "outgoing";
 export interface PathGuide {
   readonly elementId: ElementId;
@@ -112,7 +112,7 @@ export function pickPathNode(document: DocumentSnapshot, point: PointMm, zoom: n
           const element = document.elements.find((candidate) => candidate.id === segment.elementId);
           const arcPieces = element?.type === "ellipse" ? splitSegments.filter((candidate) => candidate.elementId === segment.elementId && candidate.segmentIndex === segment.segmentIndex) : undefined;
           const points = arcPieces ? [arcPieces[0]!.start, ...arcPieces.map((piece) => piece.end)] : undefined;
-          best = { elementId: segment.elementId, segmentIndex: segment.segmentIndex, distance, start: points?.[0] ?? segment.start, end: points?.at(-1) ?? segment.end, ...(points ? { points } : {}) };
+          best = { elementId: segment.elementId, segmentIndex: segment.segmentIndex, ...(segment.ringIndex === undefined ? {} : { ringIndex: segment.ringIndex }), distance, start: points?.[0] ?? segment.start, end: points?.at(-1) ?? segment.end, ...(points ? { points } : {}) };
         }
       }
       return best;
@@ -364,6 +364,15 @@ export function pickHoverNode(document: DocumentSnapshot, point: PointMm, zoom: 
 export function pickDimensionTarget(document: DocumentSnapshot, point: PointMm, zoom: number, tolerancePx = 8): DimensionTarget | undefined {
   if (![point.x, point.y, zoom, tolerancePx].every(Number.isFinite) || zoom <= 0 || tolerancePx < 0) return undefined;
   const visible = new Set(document.layers.filter((layer) => layer.visible).map((layer) => layer.id));
+  const priorityNode = pickNode(document, point, zoom, tolerancePx);
+  const priorityElement = priorityNode ? document.elements.find((element) => element.id === priorityNode.elementId) : undefined;
+  if (priorityNode?.node.kind === "cardinal" && priorityElement?.type === "ellipse" && priorityElement.size.width === priorityElement.size.height) {
+    const nodes = realGeometryNodes(priorityElement);
+    const centerIndex = nodes.findIndex((candidate) => candidate.kind === "center");
+    const center = nodes[centerIndex];
+    if (center) return { kind: "circle", hit: { elementId: priorityElement.id, center: { elementId: priorityElement.id, nodeIndex: centerIndex, node: center }, rim: priorityNode, distance: 0 } };
+  }
+  if (priorityNode && !(priorityElement?.type === "line" && priorityNode.node.kind === "center")) return { kind: "node", hit: priorityNode };
   let bestLine: DimensionLineHit | undefined;
   for (const element of document.elements) {
     if (!visible.has(element.layerId) || element.type !== "line") continue;

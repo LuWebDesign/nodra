@@ -17,8 +17,8 @@ const replaceNode = (spline: SplineElement, nodeId: string, update: (node: Splin
   return { success: true, spline: { ...spline, nodes } };
 };
 const segment = (start: SplineNode, end: SplineNode): PathElement["segments"][number] => start.outHandle || end.inHandle
-  ? { type: "cubicBezier", startNodeId: start.id, endNodeId: end.id, control1: resolveHandle(start.anchor, start.outHandle ?? { dx: 0, dy: 0 }), control2: resolveHandle(end.anchor, end.inHandle ?? { dx: 0, dy: 0 }) }
-  : { type: "line", startNodeId: start.id, endNodeId: end.id };
+  ? { id: `spline-segment:${start.id}:${end.id}`, type: "cubicBezier", startNodeId: start.id, endNodeId: end.id, control1: resolveHandle(start.anchor, start.outHandle ?? { dx: 0, dy: 0 }), control2: resolveHandle(end.anchor, end.inHandle ?? { dx: 0, dy: 0 }) }
+  : { id: `spline-segment:${start.id}:${end.id}`, type: "line", startNodeId: start.id, endNodeId: end.id };
 
 export function splineToPathElement(spline: SplineElement): PathElement {
   const segments: PathElement["segments"][number][] = spline.nodes.slice(1).map((node, index) => segment(spline.nodes[index]!, node));

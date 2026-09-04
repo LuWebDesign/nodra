@@ -9,4 +9,4 @@
 | Spatial queries | geometry functions | RBush | measured query volume warrants index | for small documents |
 | Import/export | none | DXF/PDF parser | format and trust boundary are specified | by assumption |
 
-Evaluate candidates for browser/TypeScript compatibility, license, maintenance, precision, bundle impact, performance, worker suitability, and API fit. Known finding: renderer schema classification needs a deliberate schema 3 versus invalid-input policy; treat this as a finding, not a fix in an audit.
+Evaluate candidates for browser/TypeScript compatibility, license, maintenance, precision, bundle impact, performance, worker suitability, and API fit. Renderer schema classification derives all migratable versions from `CURRENT_SCHEMA_VERSION`; structurally invalid documents within that range are `invalid`, while newer versions remain `unsupported`.

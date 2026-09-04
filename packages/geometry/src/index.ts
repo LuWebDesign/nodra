@@ -1,11 +1,11 @@
 import polygonClipping, { type MultiPolygon } from "polygon-clipping";
 import { hasBounds } from "@nodra/domain";
-    import type { ConnectableNodeAddress, ContourElement, DimensionElement, Element, ElementId, EllipseElement, GlyphElement, HandleOffset, LineElement, PathCubicSegment, PathElement, PointMm, RectangleElement, SizeMm, SketchConstraint, SketchElement, SplineElement, SplineNode } from "@nodra/domain";
+    import type { ConnectableNodeAddress, ContourElement, DimensionElement, Element, ElementId, EllipseElement, GlyphElement, HandleOffset, LineElement, PathCubicSegment, PathElement, PointMm, RectangleElement, SizeMm, SketchConstraint, SketchElement, SketchPointReference, SplineElement, SplineNode } from "@nodra/domain";
 
 export interface Bounds { readonly x: number; readonly y: number; readonly width: number; readonly height: number }
 export interface Viewport { readonly zoom: number; readonly panMm: PointMm }
 export interface PointPx { readonly x: number; readonly y: number }
-export interface CuttableSegment { readonly elementId: ElementId; readonly segmentIndex: number; readonly start: PointMm; readonly end: PointMm }
+export interface CuttableSegment { readonly elementId: ElementId; readonly segmentIndex: number; readonly start: PointMm; readonly end: PointMm; readonly ringIndex?: number }
 
 /** Projects supported Stage 1 objects into straight, cuttable boundary segments. */
 export function cuttableSegments(element: Element): readonly CuttableSegment[] {
@@ -38,7 +38,14 @@ export function cuttableSegments(element: Element): readonly CuttableSegment[] {
     const quadrantSize = ELLIPSE_APPROXIMATION_SEGMENTS / 4;
     return points.map((start, index) => ({ elementId: element.id, segmentIndex: Math.floor(index / quadrantSize), start, end: points[(index + 1) % points.length]! }));
   }
-      if (element.type !== "rectangle" || element.cornerRadius !== 0 || (element.cornerRadii !== undefined && Object.values(element.cornerRadii).some((radius) => radius !== 0))) return [];
+  if (element.type === "contour") {
+    return element.contours.flatMap((contour, ringIndex) => {
+      const vertices = contour.points.length > 1 && contour.points.at(-1)?.x === contour.points[0]?.x && contour.points.at(-1)?.y === contour.points[0]?.y ? contour.points.slice(0, -1) : contour.points;
+      if (vertices.length < 2) return [];
+      return vertices.map((start, segmentIndex) => ({ elementId: element.id, ringIndex, segmentIndex, start, end: vertices[(segmentIndex + 1) % vertices.length]! }));
+    });
+  }
+  if (element.type !== "rectangle" || element.cornerRadius !== 0 || (element.cornerRadii !== undefined && Object.values(element.cornerRadii).some((radius) => radius !== 0))) return [];
   const corners = rotatedCorners(element);
   return corners.map((start, index) => ({ elementId: element.id, segmentIndex: index, start, end: corners[(index + 1) % corners.length]! }));
 }
@@ -158,18 +165,29 @@ export interface SketchConstraintSolveResult { readonly sketch: SketchElement; r
 
 /** Applies the bounded, deterministic first-slice sketch constraints without guessing unsupported geometry. */
 export function solveSketchConstraints(sketch: SketchElement): SketchConstraintSolveResult {
-  const constraints = sketch.constraints ?? [];
+  type PointConstraint = Omit<SketchConstraint, "references"> & { readonly references: readonly SketchPointReference[] };
+  const constraints: readonly PointConstraint[] = (sketch.constraints ?? []).map((constraint) => {
+    if (constraint.references.every((reference) => "nodeId" in reference)) return { ...constraint, references: constraint.references };
+    const segmentRelation = constraint.kind === "parallel" || constraint.kind === "perpendicular" || constraint.kind === "equal";
+    if (!segmentRelation || constraint.references.length !== 2 || !constraint.references.every((reference) => "edgeId" in reference && reference.elementId === sketch.id)) return { ...constraint, references: [] };
+    const references = constraint.references.flatMap((reference) => {
+      if (!("edgeId" in reference)) return [];
+      const edge = sketch.edges.find((candidate) => candidate.id === reference.edgeId);
+      return edge ? [{ elementId: sketch.id, nodeId: edge.startNodeId }, { elementId: sketch.id, nodeId: edge.endNodeId }] : [];
+    });
+    return { ...constraint, references: references.length === 4 ? references : [] };
+  });
   const nodes = new Map(sketch.nodes.map((node) => [node.id, { ...node.point }]));
   const conflicts: string[] = [];
   const resolve = (reference: { readonly elementId: string; readonly nodeId: string }) => reference.elementId === sketch.id ? nodes.get(reference.nodeId) : undefined;
-  const refs = (constraint: SketchConstraint) => constraint.references.map(resolve);
+  const refs = (constraint: PointConstraint) => constraint.references.map(resolve);
   const referenceKey = (reference: { readonly elementId: string; readonly nodeId: string }) => `${reference.elementId}:${reference.nodeId}`;
-  const samePair = (a: SketchConstraint, b: SketchConstraint) => {
+  const samePair = (a: PointConstraint, b: PointConstraint) => {
     if (a.kind !== b.kind || a.references.length !== b.references.length) return false;
     const left = a.references.map(referenceKey).sort(); const right = b.references.map(referenceKey).sort();
     return left.every((key, index) => key === right[index]);
   };
-  const invalid = (constraint: SketchConstraint): boolean => {
+  const invalid = (constraint: PointConstraint): boolean => {
     if (constraint.references.some((reference) => reference.elementId !== sketch.id || !nodes.has(reference.nodeId))) return true;
     if ((constraint.kind === "fixed" && constraint.references.length !== 1) || ((constraint.kind === "parallel" || constraint.kind === "perpendicular" || constraint.kind === "equal") && constraint.references.length !== 4) || (constraint.kind !== "fixed" && constraint.kind !== "parallel" && constraint.kind !== "perpendicular" && constraint.kind !== "equal" && constraint.references.length !== 2)) return true;
     if (constraint.references.length === 2 && referenceKey(constraint.references[0]!) === referenceKey(constraint.references[1]!)) return true;
@@ -213,29 +231,40 @@ export function solveSketchConstraints(sketch: SketchElement): SketchConstraintS
     if (constraint.kind === "distance-horizontal") return Math.abs(Math.abs(second!.x - first.x) - constraint.value!) > 1e-6;
     if (constraint.kind === "distance-vertical") return Math.abs(Math.abs(second!.y - first.y) - constraint.value!) > 1e-6;
     if (constraint.kind === "distance") return Math.abs(Math.hypot(second!.x - first.x, second!.y - first.y) - constraint.value!) > 1e-6;
-    if (constraint.kind === "angle") return Math.abs(Math.atan2(second!.y - first.y, second!.x - first.x) - constraint.value! * Math.PI / 180) > 1e-6;
+    if (constraint.kind === "angle") { const difference = Math.atan2(second!.y - first.y, second!.x - first.x) - constraint.value! * Math.PI / 180; return Math.abs(Math.atan2(Math.sin(difference), Math.cos(difference))) > 1e-6; }
     return false;
   }).map((constraint) => constraint.id);
   conflicts.push(...failed.filter((id) => !conflicts.includes(id)));
   const duplicate = constraints.filter((constraint, index) => constraints.some((other, otherIndex) => otherIndex < index && samePair(constraint, other))).map((constraint) => constraint.id);
   conflicts.push(...duplicate.filter((id) => !conflicts.includes(id)));
   const rows: number[][] = [];
-  const addDifference = (firstId: string, secondId: string | undefined, axis: "x" | "y"): void => {
+  const nodeIndexes = new Map(sketch.nodes.map((node, index) => [node.id, index]));
+  const addRow = (entries: readonly { readonly nodeId: string; readonly x: number; readonly y: number }[]): void => {
     const row = Array.from({ length: sketch.nodes.length * 2 }, () => 0);
-    const firstIndex = sketch.nodes.findIndex((node) => node.id === firstId);
-    const secondIndex = secondId === undefined ? -1 : sketch.nodes.findIndex((node) => node.id === secondId);
-    if (firstIndex < 0 || (secondId !== undefined && secondIndex < 0)) return;
-    row[firstIndex * 2 + (axis === "x" ? 0 : 1)] = 1;
-    if (secondIndex >= 0) row[secondIndex * 2 + (axis === "x" ? 0 : 1)] = -1;
-    rows.push(row);
+    for (const entry of entries) { const index = nodeIndexes.get(entry.nodeId); if (index === undefined) return; row[index * 2] = (row[index * 2] ?? 0) + entry.x; row[index * 2 + 1] = (row[index * 2 + 1] ?? 0) + entry.y; }
+    const scale = Math.max(0, ...row.map(Math.abs));
+    if (scale > Number.EPSILON) rows.push(row.map((value) => value / scale));
   };
   for (const constraint of constraints) {
     if (invalid(constraint)) continue;
-    const first = constraint.references[0]!; const second = constraint.references[1];
-    if (constraint.kind === "fixed") { addDifference(first.nodeId, undefined, "x"); addDifference(first.nodeId, undefined, "y"); }
-    else if (constraint.kind === "coincident") { addDifference(first.nodeId, second!.nodeId, "x"); addDifference(first.nodeId, second!.nodeId, "y"); }
-    else if (constraint.kind === "horizontal" || constraint.kind === "distance-vertical") addDifference(first.nodeId, second!.nodeId, "y");
-    else addDifference(first.nodeId, second!.nodeId, "x");
+    const [first, second, third, fourth] = constraint.references;
+    if (constraint.kind === "fixed") { addRow([{ nodeId: first!.nodeId, x: 1, y: 0 }]); addRow([{ nodeId: first!.nodeId, x: 0, y: 1 }]); continue; }
+    if (constraint.kind === "coincident") { addRow([{ nodeId: first!.nodeId, x: -1, y: 0 }, { nodeId: second!.nodeId, x: 1, y: 0 }]); addRow([{ nodeId: first!.nodeId, x: 0, y: -1 }, { nodeId: second!.nodeId, x: 0, y: 1 }]); continue; }
+    if (constraint.kind === "horizontal" || constraint.kind === "distance-vertical") { addRow([{ nodeId: first!.nodeId, x: 0, y: -1 }, { nodeId: second!.nodeId, x: 0, y: 1 }]); continue; }
+    if (constraint.kind === "vertical" || constraint.kind === "distance-horizontal") { addRow([{ nodeId: first!.nodeId, x: -1, y: 0 }, { nodeId: second!.nodeId, x: 1, y: 0 }]); continue; }
+    const a = nodes.get(first!.nodeId)!; const b = nodes.get(second!.nodeId)!; const ux = b.x - a.x; const uy = b.y - a.y; const firstLength = Math.hypot(ux, uy);
+    if (constraint.kind === "distance" || constraint.kind === "angle") {
+      if (firstLength <= 1e-6) continue;
+      const x = constraint.kind === "distance" ? ux / firstLength : -uy / (firstLength * firstLength);
+      const y = constraint.kind === "distance" ? uy / firstLength : ux / (firstLength * firstLength);
+      addRow([{ nodeId: first!.nodeId, x: -x, y: -y }, { nodeId: second!.nodeId, x, y }]);
+      continue;
+    }
+    const c = nodes.get(third!.nodeId)!; const d = nodes.get(fourth!.nodeId)!; const vx = d.x - c.x; const vy = d.y - c.y; const secondLength = Math.hypot(vx, vy);
+    if (firstLength <= 1e-6 || secondLength <= 1e-6) continue;
+    if (constraint.kind === "parallel") addRow([{ nodeId: first!.nodeId, x: -vy, y: vx }, { nodeId: second!.nodeId, x: vy, y: -vx }, { nodeId: third!.nodeId, x: uy, y: -ux }, { nodeId: fourth!.nodeId, x: -uy, y: ux }]);
+    else if (constraint.kind === "perpendicular") addRow([{ nodeId: first!.nodeId, x: -vx, y: -vy }, { nodeId: second!.nodeId, x: vx, y: vy }, { nodeId: third!.nodeId, x: -ux, y: -uy }, { nodeId: fourth!.nodeId, x: ux, y: uy }]);
+    else addRow([{ nodeId: first!.nodeId, x: -ux / firstLength, y: -uy / firstLength }, { nodeId: second!.nodeId, x: ux / firstLength, y: uy / firstLength }, { nodeId: third!.nodeId, x: vx / secondLength, y: vy / secondLength }, { nodeId: fourth!.nodeId, x: -vx / secondLength, y: -vy / secondLength }]);
   }
   const rank = (matrix: readonly number[][]): number => {
     const values = matrix.map((row) => [...row]); let pivot = 0;
@@ -313,12 +342,22 @@ export const dimensionOffsetForAlignedPlacement = (start: PointMm, end: PointMm,
   return { x: -(end.y - start.y) / length * signed, y: (end.x - start.x) / length * signed };
 };
 const nodeReference = (reference: DimensionElement["references"][number]): reference is Extract<DimensionElement["references"][number], { nodeIndex: number }> => "nodeIndex" in reference;
+export interface SketchEdgeAddress { readonly edgeId?: string; readonly edgeIndex?: number }
+/** Resolves stable edge identity first and only falls back to a legacy index when no ID exists. */
+export const sketchEdgeIndexAtAddress = (sketch: SketchElement, address: SketchEdgeAddress): number | undefined => {
+  const index = address.edgeId !== undefined ? sketch.edges.findIndex((edge) => edge.id === address.edgeId) : address.edgeIndex ?? 0;
+  return index >= 0 && index < sketch.edges.length ? index : undefined;
+};
+export const sketchEdgeAtAddress = (sketch: SketchElement, address: SketchEdgeAddress): SketchElement["edges"][number] | undefined => {
+  const index = sketchEdgeIndexAtAddress(sketch, address);
+  return index === undefined ? undefined : sketch.edges[index];
+};
 const lineAt = (reference: DimensionElement["references"][number], elements: readonly Element[]): LineElement | undefined => {
   if (!("kind" in reference) || reference.kind !== "line") return undefined;
   const element = elements.find((candidate) => candidate.id === reference.elementId);
   if (element?.type === "line") return element;
   if (element?.type !== "sketch") return undefined;
-  const edge = element.edges[reference.edgeIndex ?? 0];
+  const edge = sketchEdgeAtAddress(element, reference);
   const nodes = new Map(element.nodes.map((node) => [node.id, node.point]));
   const start = edge ? nodes.get(edge.startNodeId) : undefined;
   const end = edge ? nodes.get(edge.endNodeId) : undefined;
@@ -330,7 +369,10 @@ export function angularDimensionGeometry(element: DimensionElement, elements: re
   if (!("kind" in firstReference) || firstReference.kind !== "line" || !("kind" in secondReference) || secondReference.kind !== "line") return undefined;
   const first = lineAt(firstReference, elements); const second = lineAt(secondReference, elements); if (!first || !second) return undefined;
   const [firstStart, firstEnd] = rotatedLineEndpoints(first); const [secondStart, secondEnd] = rotatedLineEndpoints(second);
-  const sameLine = firstReference.elementId === secondReference.elementId && (firstReference.edgeIndex ?? 0) === (secondReference.edgeIndex ?? 0);
+  const referencedElement = firstReference.elementId === secondReference.elementId ? elements.find((candidate) => candidate.id === firstReference.elementId) : undefined;
+  const firstEdgeIndex = referencedElement?.type === "sketch" ? sketchEdgeIndexAtAddress(referencedElement, firstReference) : undefined;
+  const secondEdgeIndex = referencedElement?.type === "sketch" ? sketchEdgeIndexAtAddress(referencedElement, secondReference) : undefined;
+  const sameLine = referencedElement?.type === "line" || referencedElement?.type === "sketch" && firstEdgeIndex !== undefined && firstEdgeIndex === secondEdgeIndex;
   if (sameLine) {
     const dx = firstEnd.x - firstStart.x; const dy = firstEnd.y - firstStart.y; const length = Math.hypot(dx, dy);
     if (length === 0) return undefined;

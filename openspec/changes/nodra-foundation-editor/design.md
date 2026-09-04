@@ -51,7 +51,7 @@ type DocumentSnapshot = { schemaVersion: 1; id: string; revision: number;
   origin: "top-left"; units: "mm"; layers: Layer[]; elements: Element[] };
 interface EditorCommand { apply(d: DocumentSnapshot): Result<Transaction>; }
 interface DocumentRepository { list(id: string): Promise<StoredRevision[]>; save(r: StoredRevision): Promise<void>; }
-interface SvgRenderer { render(d: DocumentSnapshot, v: Viewport): RenderResult; }
+interface SvgRenderer { render(d: DocumentSnapshot, v: Viewport, options?: { mode?: "editor" | "export" }): RenderResult; }
 interface Viewport { zoom: number; panMm: PointMm; screenToMm(p: PointPx): PointMm; mmToScreen(p: PointMm): PointPx; }
 ```
 Element IDs survive edits; operation metadata is optional, validated, serialized, and independent of visual color. Autosave captures a revision, cancels superseded timers, and refuses writes whose revision is older than the latest committed revision.

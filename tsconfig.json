@@ -19,6 +19,7 @@
     "allowJs": true,
     "baseUrl": ".",
     "paths": {
+      "@nodra/constraints": ["packages/constraints/src/index.ts"],
       "@nodra/domain": ["packages/domain/src/index.ts"],
       "@nodra/geometry": ["packages/geometry/src/index.ts"],
       "@nodra/validation": ["packages/validation/src/index.ts"],
