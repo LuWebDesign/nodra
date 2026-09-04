@@ -1118,7 +1118,9 @@ test("shows millimetre coordinate rulers around the workspace", async ({ page })
 test("exposes real contour vertices in Forma and edits one vertex", async ({ page }) => {
   await page.goto("/");
   await drawRectangle(page);
-  const first = await page.locator(".page-svg svg rect[data-element-id]").first().boundingBox();
+  const firstCreatedRectangle = page.locator(".page-svg svg rect[data-element-id]").first();
+  await expect.poll(() => firstCreatedRectangle.boundingBox()).not.toBeNull();
+  const first = await firstCreatedRectangle.boundingBox();
   expect(first).not.toBeNull();
   await page.getByRole("button", { name: "Rectángulo" }).click();
   const secondStart = { x: first!.x + first!.width / 2, y: first!.y + first!.height / 2 };
