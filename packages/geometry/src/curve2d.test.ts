@@ -123,6 +123,7 @@ describe("splitCurveAtParameters", () => {
     const fragments = splitCurveAtParameters(line, [0.7, 0.20000000001, 0.2, 1, 0, 0.70000000002]);
     expect(fragments.map((fragment) => fragment.sourceInterval)).toEqual([{ t0: 0, t1: 0.2 }, { t0: 0.2, t1: 0.7 }, { t0: 0.7, t1: 1 }]);
     expect(splitCurveAtParameters(line, [PARAMETER_EPSILON / 2, 1 - PARAMETER_EPSILON / 2])).toHaveLength(1);
+    expect(splitCurveAtParameters(line, [0.5, 0.5000000005], 1e-12).map((fragment) => fragment.sourceInterval)).toEqual([{ t0: 0, t1: 0.5 }, { t0: 0.5, t1: 0.5000000005 }, { t0: 0.5000000005, t1: 1 }]);
     const wholeCircle = splitCurveAtParameters(circle, []);
     expect(wholeCircle).toHaveLength(1);
     expect(wholeCircle[0]!.curve).toMatchObject({ type: "arc", fullTurn: true });
@@ -143,6 +144,7 @@ describe("splitCurveAtParameters", () => {
     expect(() => splitCurveAtParameters(line, [-0.01])).toThrow("parameters must be finite and within [0, 1]");
     expect(() => splitCurveAtParameters(line, [1.01])).toThrow("parameters must be finite and within [0, 1]");
     expect(() => splitCurveAtParameters(line, [Number.NaN])).toThrow("parameters must be finite and within [0, 1]");
+    expect(() => splitCurveAtParameters(line, [0.5], -1)).toThrow("parameterEpsilon");
     expect(() => pointAt({ type: "circle", center: { x: 0, y: 0 }, radius: 0 }, 0)).toThrow("curve radius must be positive");
     expect(() => closestParameter(cubic, { x: Number.POSITIVE_INFINITY, y: 0 })).toThrow("point must be finite");
     const extreme: LineCurve2D = { type: "line", start: { x: -Number.MAX_VALUE, y: 0 }, end: { x: Number.MAX_VALUE, y: 0 } };
