@@ -308,15 +308,17 @@ test("creates a cubic segment when placing an anchor with a drag", async ({ page
   await expect(page.locator(".page-svg svg path[data-element-id]")).toHaveAttribute("d", / C/);
 });
 
-test("cuts a Pen cubic through a Line sketch and supports undo and redo", async ({ page }) => {
+test("cuts a curved Pen segment after a straight segment and supports undo and redo", async ({ page }) => {
   await page.goto("/");
   const pageBounds = await page.locator(".page").boundingBox();
   expect(pageBounds).not.toBeNull();
   const start = { x: pageBounds!.x + 80, y: pageBounds!.y + 120 };
-  const end = { x: start.x + 120, y: start.y };
+  const straightEnd = { x: start.x + 60, y: start.y };
+  const end = { x: start.x + 140, y: start.y };
 
   await page.getByRole("button", { name: "Pluma" }).click();
   await page.mouse.click(start.x, start.y);
+  await page.mouse.click(straightEnd.x, straightEnd.y);
   await page.mouse.move(end.x, end.y);
   await page.mouse.down();
   await page.mouse.move(end.x, end.y + 50);
@@ -326,7 +328,7 @@ test("cuts a Pen cubic through a Line sketch and supports undo and redo", async 
   const curveId = await curve.getAttribute("data-element-id");
   const beforeCut = await curve.getAttribute("d");
 
-  await drawLine(page, { x: start.x + 60, y: start.y - 60 }, { x: start.x + 60, y: start.y + 40 });
+  await drawLine(page, { x: straightEnd.x + 40, y: start.y - 60 }, { x: straightEnd.x + 40, y: start.y + 40 });
   const sketchGroups = page.locator('.page-svg svg g[data-element-id]').filter({ has: page.locator("line") });
   await expect(sketchGroups).toHaveCount(1);
   const transversalId = await sketchGroups.getAttribute("data-element-id");
@@ -335,7 +337,7 @@ test("cuts a Pen cubic through a Line sketch and supports undo and redo", async 
 
   const clickedSide = await curve.evaluate((element) => {
     const path = element as SVGPathElement;
-    const point = path.getPointAtLength(path.getTotalLength() * 0.75);
+    const point = path.getPointAtLength(path.getTotalLength() * 0.8);
     const screen = new DOMPoint(point.x, point.y).matrixTransform(path.getScreenCTM()!);
     return { x: screen.x, y: screen.y };
   });
@@ -343,7 +345,7 @@ test("cuts a Pen cubic through a Line sketch and supports undo and redo", async 
   await page.mouse.click(clickedSide.x, clickedSide.y);
 
   const cutCurve = page.locator(`.page-svg svg path[data-element-id="${curveId}"]`);
-  await expect(cutCurve).toHaveAttribute("d", / C/);
+  await expect(cutCurve).toHaveAttribute("d", /L.*C/);
   await expect(cutCurve).not.toHaveAttribute("d", beforeCut!);
   await expect(transversal.locator(":scope > line")).toHaveCount(2);
   await page.getByRole("button", { name: "Deshacer" }).click();

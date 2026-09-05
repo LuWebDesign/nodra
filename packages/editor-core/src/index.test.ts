@@ -337,6 +337,39 @@ describe("editor core", () => {
     expect(redo(undo(cut)).document).toEqual(cut.document);
   });
 
+  it("cuts an interior cubic in a multi-segment path while preserving identities and dependencies", () => {
+    const multi: PathElement = { type: "path", id: elementId("interior-cubic-path"), layerId: layerId("default"), closed: false, style: rectangle.style,
+      nodes: [{ id: "a", anchor: { x: 0, y: 0 }, join: "corner" }, { id: "b", anchor: { x: 10, y: 0 }, join: "corner" }, { id: "c", anchor: { x: 20, y: 0 }, join: "corner" }, { id: "d", anchor: { x: 30, y: 0 }, join: "corner" }],
+      segments: [{ id: "before", type: "line", startNodeId: "a", endNodeId: "b" }, { id: "selected-cubic", type: "cubicBezier", startNodeId: "b", endNodeId: "c", control1: { x: 13, y: 6 }, control2: { x: 17, y: 6 } }, { id: "after", type: "line", startNodeId: "c", endNodeId: "d" }] };
+    const transversal: LineElement = { type: "line", id: elementId("interior-cubic-transversal"), layerId: layerId("default"), start: { x: 15, y: -10 }, end: { x: 15, y: 10 }, rotation: 0, style: rectangle.style };
+    const dimensionOnSurvivor: DimensionElement = { ...dimension, id: elementId("interior-cubic-dimension"), references: [{ kind: "node", elementId: multi.id, nodeIndex: 2, nodeId: "c" }, { kind: "node", elementId: multi.id, nodeIndex: 3, nodeId: "d" }] };
+    const connection = { id: "interior-cubic-connection", first: { elementId: multi.id, node: { kind: "path" as const, nodeId: "b" } }, second: { elementId: transversal.id, node: { kind: "line" as const, name: "start" as const } } };
+    const initial = createEditor({ ...document, elements: [multi, transversal, dimensionOnSurvivor], connections: [connection] });
+    const command = cutSegment(multi.id, 1, { x: 18, y: 3 });
+    const applied = command.apply(initial.document);
+    const cut = dispatch(initial, command);
+    expect(applied.success).toBe(true);
+    const survivor = cut.document.elements.find((element): element is PathElement => element.id === multi.id && element.type === "path");
+    expect(survivor?.segments.map((segment) => segment.id)).toEqual(["before", expect.any(String)]);
+    expect(survivor?.nodes.map((node) => node.id)).toEqual(["a", "b", expect.any(String)]);
+    expect(survivor?.segments[1]).toMatchObject({ type: "cubicBezier", startNodeId: "b", endNodeId: expect.any(String) });
+    expect(survivor?.segments[1]?.id).not.toBe("selected-cubic");
+    expect(applied.success && applied.topology?.referenceMap.get(`${multi.id}:segment:before`)).toMatchObject({ kind: "preserved" });
+    expect(applied.success && applied.topology?.referenceMap.get(`${multi.id}:segment:selected-cubic`)).toMatchObject({ kind: "replaced" });
+    expect(applied.success && applied.topology?.referenceMap.get(`${multi.id}:segment:after`)).toMatchObject({ kind: "removed" });
+    expect(applied.success ? applied.topology?.diagnostics : []).toHaveLength(1);
+    expect(cut.document.elements.find((element) => element.id === dimensionOnSurvivor.id)).toBeUndefined();
+    expect(cut.document.connections).toMatchObject([{ id: connection.id, first: { elementId: multi.id, node: { nodeId: "b" } }, second: { elementId: transversal.id, node: { nodeId: `${transversal.id}:start` } } }]);
+    expect(undo(cut).document).toEqual(initial.document);
+    expect(redo(undo(cut)).document).toEqual(cut.document);
+
+    const opposite = dispatch(initial, cutSegment(multi.id, 1, { x: 12, y: 3 }));
+    const oppositePath = opposite.document.elements.find((element): element is PathElement => element.id === multi.id && element.type === "path");
+    expect(oppositePath?.segments.map((segment) => segment.id)).toEqual([expect.any(String), "after"]);
+    expect(oppositePath?.segments[0]?.id).not.toBe("selected-cubic");
+    expect(opposite.document.elements.find((element) => element.id === dimensionOnSurvivor.id)).toBeDefined();
+  });
+
   it("rejects ambiguous or invalid cubic cuts without changing editor state", () => {
     const cubicPath: PathElement = { type: "path", id: elementId("ambiguous-cubic-cut"), layerId: layerId("default"), closed: false, style: rectangle.style,
       nodes: [{ id: "start", anchor: { x: 0, y: 0 }, join: "corner" }, { id: "end", anchor: { x: 10, y: 0 }, join: "corner" }],
