@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { cubicBezierLineIntersections, intersectCurves, lineSegmentIntersection, pointAt, type CircleCurve2D, type CubicBezierCurve2D, type Curve2D, type IntersectionPoint, type IntersectionResult, type LineCurve2D } from "./index.js";
+import { cubicBezierLineIntersections, intersectCurves, lineSegmentIntersection, pointAt, type ArcCurve2D, type CircleCurve2D, type CubicBezierCurve2D, type Curve2D, type IntersectionPoint, type IntersectionResult, type LineCurve2D } from "./index.js";
 
 const line = (start: { x: number; y: number }, end: { x: number; y: number }): LineCurve2D => ({ type: "line", start, end });
 const horizontal = line({ x: 0, y: 0 }, { x: 10, y: 0 });
@@ -208,9 +208,95 @@ describe("IntersectionEngine Line × Circle", () => {
     expect(points(translatedSecant).every(({ contact }) => contact === "crossing")).toBe(true);
   });
 
-  it("reports degenerate lines and leaves Line×Arc unsupported", () => {
+  it("reports degenerate lines", () => {
     expect(intersectCurves(line({ x: 0, y: 0 }, { x: 0, y: 0 }), circle)).toEqual({ kind: "unsupported", reason: "degenerate-line" });
-    expect(intersectCurves(line({ x: -10, y: 0 }, { x: 10, y: 0 }), { type: "arc", center: { x: 0, y: 0 }, radius: 5, startAngle: 0, endAngle: Math.PI, direction: "clockwise" })).toEqual({ kind: "unsupported", reason: "curve-pair" });
+  });
+});
+
+describe("IntersectionEngine Line/Circle × Arc", () => {
+  const circle: CircleCurve2D = { type: "circle", center: { x: 0, y: 0 }, radius: 5 };
+  const quarter: ArcCurve2D = { type: "arc", center: circle.center, radius: circle.radius, startAngle: 0, endAngle: Math.PI / 2, direction: "clockwise" };
+
+  it("filters line intersections to the finite angular sweep", () => {
+    const throughCenter = line({ x: -10, y: 0 }, { x: 10, y: 0 });
+    expect(points(intersectCurves(throughCenter, quarter))).toEqual([{ point: { x: 5, y: 0 }, firstParameter: 0.75, secondParameter: 0, contact: "endpoint" }]);
+    const crossing = points(intersectCurves(line({ x: -10, y: 3 }, { x: 10, y: 3 }), quarter));
+    expect(crossing).toHaveLength(1);
+    expect(crossing[0]).toMatchObject({ point: { x: expect.closeTo(4, 12), y: 3 }, firstParameter: 0.7, secondParameter: expect.closeTo(Math.atan2(3, 4) / (Math.PI / 2), 8), contact: "crossing" });
+    expectSymmetric(throughCenter, quarter);
+  });
+
+  it("supports counterclockwise and seam-wrapping arcs", () => {
+    const upper: ArcCurve2D = { ...quarter, endAngle: -Math.PI / 2, direction: "counterclockwise" };
+    expect(points(intersectCurves(line({ x: -10, y: -3 }, { x: 10, y: -3 }), upper))[0]).toMatchObject({ point: { x: expect.closeTo(4, 12), y: -3 }, contact: "crossing" });
+    const wrapping: ArcCurve2D = { ...quarter, startAngle: 3 * Math.PI / 2, endAngle: Math.PI / 2 };
+    expect(points(intersectCurves(line({ x: -10, y: 0 }, { x: 10, y: 0 }), wrapping))).toEqual([{ point: { x: 5, y: 0 }, firstParameter: 0.75, secondParameter: 0.5, contact: "crossing" }]);
+  });
+
+  it("distinguishes zero sweeps from full turns and classifies only real arc endpoints", () => {
+    const zero: ArcCurve2D = { ...quarter, endAngle: 0 };
+    expect(points(intersectCurves(line({ x: 0, y: 0 }, { x: 10, y: 0 }), zero))[0]).toMatchObject({ secondParameter: 0, contact: "endpoint" });
+    const full: ArcCurve2D = { ...zero, fullTurn: true };
+    const fullPoints = points(intersectCurves(line({ x: -10, y: 0 }, { x: 10, y: 0 }), full));
+    expect(fullPoints).toHaveLength(2);
+    expect(fullPoints.map(({ contact }) => contact)).toEqual(["crossing", "crossing"]);
+  });
+
+  it("filters circle intersections and preserves tangency", () => {
+    const other: CircleCurve2D = { type: "circle", center: { x: 6, y: 0 }, radius: 5 };
+    const lowerHalf: ArcCurve2D = { ...quarter, endAngle: Math.PI };
+    const result = points(intersectCurves(other, lowerHalf));
+    expect(result).toHaveLength(1);
+    expect(result[0]).toMatchObject({ point: { x: 3, y: 4 }, contact: "crossing" });
+    expectSymmetric(other, lowerHalf);
+    const tangentCircle: CircleCurve2D = { type: "circle", center: { x: 7, y: 0 }, radius: 2 };
+    expect(points(intersectCurves(tangentCircle, quarter))[0]).toMatchObject({ point: { x: expect.closeTo(5, 10), y: 0 }, secondParameter: 0, contact: "endpoint" });
+  });
+
+  it("returns parameterized overlaps for coincident partial, wrapping, and full arcs", () => {
+    expect(intersectCurves(circle, quarter)).toEqual({ kind: "overlap", spans: [{ firstInterval: { t0: 0, t1: 0.25 }, secondInterval: { t0: 0, t1: 1 } }], points: [] });
+    const wrapping: ArcCurve2D = { ...quarter, startAngle: 3 * Math.PI / 2, endAngle: Math.PI / 2 };
+    expect(intersectCurves(circle, wrapping)).toEqual({ kind: "overlap", spans: [
+      { firstInterval: { t0: 0, t1: 0.25 }, secondInterval: { t0: 0.5, t1: 1 } },
+      { firstInterval: { t0: 0.75, t1: 1 }, secondInterval: { t0: 0, t1: 0.5 } },
+    ], points: [] });
+    const full: ArcCurve2D = { ...quarter, endAngle: 0, fullTurn: true };
+    expect(intersectCurves(circle, full)).toEqual({ kind: "overlap", spans: [{ firstInterval: { t0: 0, t1: 1 }, secondInterval: { t0: 0, t1: 1 } }], points: [] });
+    expectSymmetric(circle, wrapping);
+    const counterclockwiseFromSeam: ArcCurve2D = { ...quarter, startAngle: 0, endAngle: -Math.PI / 2, direction: "counterclockwise" };
+    expect(intersectCurves(circle, counterclockwiseFromSeam)).toEqual({ kind: "overlap", spans: [{ firstInterval: { t0: 0.75, t1: 1 }, secondInterval: { t0: 0, t1: 1 } }], points: [] });
+    const counterclockwiseToSeam: ArcCurve2D = { ...quarter, startAngle: Math.PI / 2, endAngle: 0, direction: "counterclockwise" };
+    expect(intersectCurves(circle, counterclockwiseToSeam)).toEqual({ kind: "overlap", spans: [{ firstInterval: { t0: 0, t1: 0.25 }, secondInterval: { t0: 0, t1: 1 } }], points: [] });
+  });
+
+  it("chooses the nearest endpoint around an almost-full excluded seam", () => {
+    const almostFull: ArcCurve2D = { ...quarter, endAngle: -1e-9 };
+    const nearEndAngle = -8e-10;
+    const radial = line({ x: 0, y: 0 }, { x: 10 * Math.cos(nearEndAngle), y: 10 * Math.sin(nearEndAngle) });
+    expect(points(intersectCurves(radial, almostFull, { geometryEpsilon: 1e-8 }))[0]).toMatchObject({ secondParameter: 1, contact: "endpoint" });
+  });
+
+  it("uses model-space endpoint tolerance at large translated coordinates", () => {
+    const center = { x: 1e15, y: 1e15 };
+    const translated: ArcCurve2D = { ...quarter, center };
+    const radial = line(center, { x: center.x, y: center.y + 10 });
+    expect(points(intersectCurves(radial, translated))).toHaveLength(1);
+    expect(points(intersectCurves(radial, translated))[0]).toMatchObject({ secondParameter: 1, contact: "endpoint" });
+    const slightlyBeyond = Math.PI / 2 + 1e-9;
+    const localArc: ArcCurve2D = { ...quarter };
+    const tolerated = line({ x: 0, y: 0 }, { x: 10 * Math.cos(slightlyBeyond), y: 10 * Math.sin(slightlyBeyond) });
+    expect(points(intersectCurves(tolerated, localArc, { geometryEpsilon: 1e-8 }))[0]).toMatchObject({ secondParameter: 1, contact: "endpoint" });
+    const outside = Math.PI / 2 + 1e-7;
+    expect(intersectCurves(line({ x: 0, y: 0 }, { x: 10 * Math.cos(outside), y: 10 * Math.sin(outside) }), localArc, { geometryEpsilon: 1e-8 })).toEqual({ kind: "none" });
+  });
+
+  it("represents coincident zero and sub-tolerance sweeps as one endpoint", () => {
+    const zero: ArcCurve2D = { ...quarter, endAngle: 0 };
+    expect(intersectCurves(circle, zero)).toEqual({ kind: "points", points: [{ point: { x: 5, y: 0 }, firstParameter: 0, secondParameter: 0, contact: "endpoint" }] });
+    const microscopic: ArcCurve2D = { ...quarter, endAngle: 1e-12 };
+    expect(intersectCurves(circle, microscopic)).toEqual({ kind: "points", points: [{ point: { x: 5, y: 0 }, firstParameter: 0, secondParameter: 0, contact: "endpoint" }] });
+    const radial = line({ x: 0, y: 0 }, { x: 10 * Math.cos(5e-13), y: 10 * Math.sin(5e-13) });
+    expect(points(intersectCurves(radial, microscopic))[0]).toMatchObject({ secondParameter: 0, contact: "endpoint" });
   });
 });
 
