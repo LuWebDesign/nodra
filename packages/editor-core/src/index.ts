@@ -280,6 +280,84 @@ export const cutSketchEdge = (sketchId: ElementId, segmentIndex: number, cutPoin
   },
 });
 
+/** Cuts a selected sketch edge against exactly one interior cubic crossing.
+ * The sketch edge is destructive, while the cubic remains in-place and is
+ * replaced by its two exact De Casteljau pieces (including for closed paths).
+ */
+const cutSketchEdgeAgainstCubic = (document: DocumentSnapshot, sketch: SketchElement, edge: SketchElement["edges"][number], segmentIndex: number, clickPoint: PointMm): CommandResult | undefined => {
+  const visibleLayers = new Set(document.layers.filter((layer) => layer.visible).map((layer) => layer.id));
+  const start = sketch.nodes.find((node) => node.id === edge.startNodeId)?.point;
+  const end = sketch.nodes.find((node) => node.id === edge.endNodeId)?.point;
+  if (!start || !end) return { success: false, error: "Sketch edge nodes are invalid" };
+  const candidates = document.elements.flatMap((element) => {
+    if (element.type !== "path" || !visibleLayers.has(element.layerId)) return [];
+    const nodeById = new Map(element.nodes.map((node) => [node.id, node]));
+    return element.segments.flatMap((segment, pathSegmentIndex) => {
+      if (segment.type !== "cubicBezier") return [];
+      const first = nodeById.get(segment.startNodeId)?.anchor;
+      const last = nodeById.get(segment.endNodeId)?.anchor;
+      if (!first || !last) return [];
+      const curve: CubicBezier = { p0: first, p1: segment.control1, p2: segment.control2, p3: last };
+      let hits: ReturnType<typeof cubicBezierLineIntersections>;
+      try { hits = cubicBezierLineIntersections(curve, start, end, 1e-8); } catch { return []; }
+      return hits.filter((hit) => hit.curveT > 1e-8 && hit.curveT < 1 - 1e-8 && hit.lineT > 1e-8 && hit.lineT < 1 - 1e-8).map((hit) => ({ element, segment, pathSegmentIndex, curve, hit }));
+    });
+  });
+  if (!candidates.length) return undefined;
+  if (candidates.length !== 1) return { success: false, error: "The cubic must have exactly one interior transversal intersection" };
+  const crossing = candidates[0]!;
+  // The pointer selects the sketch edge. As with the existing destructive
+  // sketch cut semantics, the actual crossing is used rather than the raw
+  // pointer coordinate.
+  void clickPoint;
+  let pieces: readonly CubicBezier[];
+  try { pieces = splitCubicBezierAtParameters(crossing.curve, [crossing.hit.curveT]); } catch { return { success: false, error: "Unable to split cubic segment" }; }
+  if (pieces.length !== 2) return { success: false, error: "Unable to split cubic segment" };
+  if (sketch.edges.length <= 1) return { success: false, error: "A sketch must retain an edge" };
+  const path = crossing.element;
+  const pathSegment = crossing.segment;
+  const pathNodeId = sketchNodeId();
+  const pathNode: PathNode = { id: pathNodeId, anchor: pieces[0]!.p3, join: "corner" };
+  const pathStartIndex = path.nodes.findIndex((node) => node.id === pathSegment.startNodeId);
+  if (pathStartIndex < 0) return { success: false, error: "Cubic path nodes are invalid" };
+  const pathPieces: [PathSegment, PathSegment] = [
+    { id: pathSegmentId(), type: "cubicBezier", startNodeId: pathSegment.startNodeId, endNodeId: pathNodeId, control1: pieces[0]!.p1, control2: pieces[0]!.p2 },
+    { id: pathSegmentId(), type: "cubicBezier", startNodeId: pathNodeId, endNodeId: pathSegment.endNodeId, control1: pieces[1]!.p1, control2: pieces[1]!.p2 },
+  ];
+  const pathNodes = [...path.nodes];
+  pathNodes.splice(pathStartIndex + 1, 0, pathNode);
+  const nextPath: PathElement = { ...path, nodes: pathNodes, segments: [...path.segments.slice(0, crossing.pathSegmentIndex), ...pathPieces, ...path.segments.slice(crossing.pathSegmentIndex + 1)] };
+  const remainingEdges = sketch.edges.filter((_, index) => index !== segmentIndex);
+  const usedSketchNodes = new Set(remainingEdges.flatMap((candidate) => [candidate.startNodeId, candidate.endNodeId]));
+  const nextSketch: SketchElement = { ...sketch, nodes: sketch.nodes.filter((node) => usedSketchNodes.has(node.id)), edges: remainingEdges, ...(sketch.constraints ? { constraints: sketch.constraints.filter((constraint) => !constraintReferencesSketchEdge(constraint, sketch.id, edge)) } : {}) };
+  const elements = document.elements.map((element) => element.id === path.id ? nextPath : element.id === sketch.id ? nextSketch : element);
+  const pathSources = path.segments.map((candidate) => pathSegmentReference(path.id, candidate.id));
+  const pathDestinations = new Map<string, readonly TopologyReference[]>(pathSources.map((source) => [topologyReferenceKey(source), [source]]));
+  const pathReference = pathSegmentReference(path.id, pathSegment.id);
+  pathDestinations.set(topologyReferenceKey(pathReference), pathPieces.map((candidate) => pathSegmentReference(path.id, candidate.id)));
+  const sketchReference = sketchEdgeReference(sketch.id, edge.id);
+  const referenceMap = new Map<string, ReferenceResolution>();
+  for (const source of pathSources) referenceMap.set(topologyReferenceKey(source), topologyReferenceKey(source) === topologyReferenceKey(pathReference)
+    ? { kind: "replaced", references: pathPieces.map((candidate) => pathSegmentReference(path.id, candidate.id)) }
+    : { kind: "preserved", reference: source });
+  referenceMap.set(topologyReferenceKey(sketchReference), { kind: "removed", reason: "Sketch edge was deleted" });
+  const edit: TopologyEditResult = { elements, referenceMap, diagnostics: [{ code: "reference-removed", referenceKey: topologyReferenceKey(sketchReference), message: "Sketch edge was deleted" }] };
+  const documentConstraints = document.constraints?.filter((constraint) => !constraintReferencesSketchEdge(constraint, sketch.id, edge));
+  const base = documentConstraints && documentConstraints.length !== document.constraints?.length ? { ...document, constraints: documentConstraints } : document;
+  const withPathDimensions = remapPathDimensionElements(elements, path, [nextPath], referenceMap);
+  const remappedElements = remapSketchEdgeDimensionReferences({ ...edit, elements: withPathDimensions }, sketch.id, sketch.edges, nextSketch.edges);
+  const remapConnection = (reference: ExplicitConnection["first"]): ExplicitConnection["first"] | undefined => {
+    if (reference.elementId === sketch.id) return reference.node.kind === "sketch" && usedSketchNodes.has(reference.node.nodeId) ? reference : undefined;
+    if (reference.elementId !== path.id || reference.node.kind !== "path") return reference;
+    const address = reference.node;
+    if (address.nodeId === pathSegment.startNodeId && address.handle === "out") return { ...reference, node: { ...address } };
+    if (address.nodeId === pathSegment.endNodeId && address.handle === "in") return { ...reference, node: { ...address } };
+    return nextPath.nodes.some((node) => node.id === address.nodeId) && (address.handle === undefined || nextPath.segments.some((candidate) => candidate.type === "cubicBezier" && (address.handle === "out" ? candidate.startNodeId : candidate.endNodeId) === address.nodeId)) ? reference : undefined;
+  };
+  const connections = (document.connections ?? []).flatMap((connection) => { const first = remapConnection(connection.first); const second = remapConnection(connection.second); return first && second && !(first.elementId === second.elementId && JSON.stringify(first.node) === JSON.stringify(second.node)) ? [{ ...connection, first, second }] : []; });
+  return replaceTopology({ ...base, connections }, { ...edit, elements: remappedElements });
+};
+
 const cutSketchEdgeDestructive = (sketchId: ElementId, segmentIndex: number, cutPoint?: PointMm): EditorCommand => ({
   name: `sketch-cut-edge:${sketchId}:${segmentIndex}`,
   apply: (document) => {
@@ -289,6 +367,10 @@ const cutSketchEdgeDestructive = (sketchId: ElementId, segmentIndex: number, cut
     const edge = sketch.edges[segmentIndex]!;
     const startNode = sketch.nodes.find((node) => node.id === edge.startNodeId)!;
     const endNode = sketch.nodes.find((node) => node.id === edge.endNodeId)!;
+    if (cutPoint && [cutPoint.x, cutPoint.y].every(Number.isFinite)) {
+      const cubicResult = cutSketchEdgeAgainstCubic(document, sketch, edge, segmentIndex, cutPoint);
+      if (cubicResult) return cubicResult;
+    }
     const documentConstraints = document.constraints?.filter((constraint) => !constraintReferencesSketchEdge(constraint, sketch.id, edge));
     const baseDocument = documentConstraints && documentConstraints.length !== document.constraints?.length ? { ...document, constraints: documentConstraints } : document;
     if (cutPoint) {
@@ -1267,7 +1349,7 @@ export const cutSegment = (elementId: ElementId, segmentIndex: number, point?: P
     if (element.type === "sketch") return cutSketchEdgeDestructive(elementId, segmentIndex, point).apply(document);
     if (element.type === "contour") return cutContourSegment(elementId, ringIndex, segmentIndex, point).apply(document);
     if (element.type === "line") return cutLineAtPoint(elementId, point ?? element.start).apply(document);
-    if (element.type === "path" && element.segments[segmentIndex]?.type === "cubicBezier") return point ? cutOpenSingleCubicPath(document, element, point) : { success: false, error: "A cubic cut requires a click point" };
+    if (element.type === "path" && element.segments[segmentIndex]?.type === "cubicBezier") return point ? cutOpenCubicPath(document, element, segmentIndex, point) : { success: false, error: "A cubic cut requires a click point" };
     if (element.type === "rectangle" || element.type === "ellipse" || element.type === "path") return cutPathSegment(elementId, segmentIndex, point).apply(document);
     return { success: false, error: "Element segment is not cuttable" };
   },
@@ -1297,8 +1379,7 @@ export const splitPathSegment = (pathId: ElementId, segmentIndex: number, newNod
   const edit = topologyEditForPathSegmentReplacement(elements, path.id, segment.id, inserted);
   return replaceTopology(document, { ...edit, elements: remapPathDimensionElements(elements, path, [nextPath], edit.referenceMap) });
 } });
-const DEFAULT_CLOSED_FILL = "rgba(101,217,255,0.22)";
-export const closePath = (pathId: ElementId): EditorCommand => ({ name: `path-close:${pathId}`, apply: (document) => { const path = pathAt(document, pathId); if (!path || path.closed) return { success: false, error: "Path is already closed" }; const first = path.nodes[0]!; const last = path.nodes.at(-1)!; const nextPath = { ...path, style: { ...path.style, fill: path.style.fill ?? DEFAULT_CLOSED_FILL }, closed: true, segments: [...path.segments, { id: pathSegmentId(), type: "line" as const, startNodeId: last.id, endNodeId: first.id }] }; const sources = path.segments.map((segment) => pathSegmentReference(path.id, segment.id)); const destinations = new Map(sources.map((source) => [topologyReferenceKey(source), [source]] as const)); return replaceTopology(document, topologyEditForReferenceDestinations(document.elements.map((element) => element.id === path.id ? nextPath : element), sources, destinations, "Path segment was removed")); } });
+export const closePath = (pathId: ElementId): EditorCommand => ({ name: `path-close:${pathId}`, apply: (document) => { const path = pathAt(document, pathId); if (!path || path.closed) return { success: false, error: "Path is already closed" }; const first = path.nodes[0]!; const last = path.nodes.at(-1)!; const nextPath = { ...path, closed: true, segments: [...path.segments, { id: pathSegmentId(), type: "line" as const, startNodeId: last.id, endNodeId: first.id }] }; const sources = path.segments.map((segment) => pathSegmentReference(path.id, segment.id)); const destinations = new Map(sources.map((source) => [topologyReferenceKey(source), [source]] as const)); return replaceTopology(document, topologyEditForReferenceDestinations(document.elements.map((element) => element.id === path.id ? nextPath : element), sources, destinations, "Path segment was removed")); } });
 export const openPath = (pathId: ElementId): EditorCommand => ({ name: `path-open:${pathId}`, apply: (document) => {
   const path = pathAt(document, pathId); const removedSegment = path?.closed ? path.segments.at(-1) : undefined;
   if (!path || !removedSegment) return { success: false, error: "Path is already open" };
@@ -1340,13 +1421,12 @@ const lineControls = (start: PointMm, end: PointMm): { readonly control1: PointM
 });
 
 /**
- * First native line × single cubic vertical slice.  Flattening is deliberately
- * limited to deciding which of the two exact De Casteljau pieces was clicked;
- * the persisted controls always come from splitCubicBezierAtParameters.
+ * Exact transversal slice for a cubic segment in an open path. Flattening is
+ * limited to choosing the clicked side; persisted controls use De Casteljau.
  */
-const cutOpenSingleCubicPath = (document: DocumentSnapshot, path: PathElement, clickPoint: PointMm): CommandResult => {
-  if (path.closed || path.nodes.length !== 2 || path.segments.length !== 1) return { success: false, error: "Only an open path with one cubic segment is supported" };
-  const segment = path.segments[0];
+const cutOpenCubicPath = (document: DocumentSnapshot, path: PathElement, segmentIndex: number, clickPoint: PointMm): CommandResult => {
+  if (path.closed || !Number.isInteger(segmentIndex) || segmentIndex < 0 || segmentIndex >= path.segments.length) return { success: false, error: "Only an open path with a valid cubic segment is supported" };
+  const segment = path.segments[segmentIndex];
   if (!segment || segment.type !== "cubicBezier") return { success: false, error: "Only an open cubic path segment is supported" };
   const start = path.nodes.find((node) => node.id === segment.startNodeId);
   const end = path.nodes.find((node) => node.id === segment.endNodeId);
@@ -1390,7 +1470,18 @@ const cutOpenSingleCubicPath = (document: DocumentSnapshot, path: PathElement, c
   const survivorStartId = survivorIndex === 0 ? start.id : corner.id;
   const survivorEndId = survivorIndex === 0 ? corner.id : end.id;
   const survivorSegment: PathSegment = { id: pathSegmentId(), type: "cubicBezier", startNodeId: survivorStartId, endNodeId: survivorEndId, control1: survivor.p1, control2: survivor.p2 };
-  const nextPath: PathElement = { ...path, nodes: survivorIndex === 0 ? [start, corner] : [corner, end], segments: [survivorSegment] };
+  // Keep the surviving side in the original PathElement.  Unaffected segment and
+  // node identities are deliberately reused; only the cut node and cubic get IDs.
+  const survivingSegments = survivorIndex === 0
+    ? [...path.segments.slice(0, segmentIndex), survivorSegment]
+    : [survivorSegment, ...path.segments.slice(segmentIndex + 1)];
+  const survivingNodeIds = new Set(survivingSegments.flatMap((candidate) => [candidate.startNodeId, candidate.endNodeId]));
+  const nextNodes = path.nodes.filter((node) => survivingNodeIds.has(node.id));
+  const insertionIndex = survivorIndex === 0
+    ? nextNodes.findIndex((node) => node.id === start.id) + 1
+    : nextNodes.findIndex((node) => node.id === end.id);
+  nextNodes.splice(Math.max(0, insertionIndex), 0, corner);
+  const nextPath: PathElement = { ...path, nodes: nextNodes, segments: survivingSegments };
   const elements = document.elements.map((element) => element.id === path.id ? nextPath : element);
   if (crossing.sketch) {
     const transversal = crossing.sketch;
@@ -1408,11 +1499,13 @@ const cutOpenSingleCubicPath = (document: DocumentSnapshot, path: PathElement, c
     };
     const pathReference = pathSegmentReference(path.id, segment.id);
     const sketchReference = sketchEdgeReference(transversal.id, originalEdge.id);
+    const topologySources = path.segments.map((candidate) => pathSegmentReference(path.id, candidate.id));
+    const topologyDestinations = new Map<string, readonly TopologyReference[]>(topologySources.map((source) => [topologyReferenceKey(source), [source]]));
+    topologyDestinations.set(topologyReferenceKey(pathReference), [pathSegmentReference(path.id, survivorSegment.id)]);
+    for (const candidate of path.segments) if (candidate.id !== segment.id && !survivingSegments.some((survivorCandidate) => survivorCandidate.id === candidate.id)) topologyDestinations.set(topologyReferenceKey(pathSegmentReference(path.id, candidate.id)), []);
+    topologyDestinations.set(topologyReferenceKey(sketchReference), splitEdges.map((edge) => sketchEdgeReference(transversal.id, edge.id)));
     const transversalElements = elements.map((element) => element.id === transversal.id ? nextSketch : element);
-    const edit = topologyEditForReferenceDestinations(transversalElements, [pathReference, sketchReference], new Map([
-      [topologyReferenceKey(pathReference), [pathSegmentReference(path.id, survivorSegment.id)]],
-      [topologyReferenceKey(sketchReference), splitEdges.map((edge) => sketchEdgeReference(transversal.id, edge.id))],
-    ]), "Cut topology was removed");
+    const edit = topologyEditForReferenceDestinations(transversalElements, [...topologySources, sketchReference], topologyDestinations, "Cut topology was removed");
     const documentConstraints = document.constraints?.filter((constraint) => !constraintReferencesSketchEdge(constraint, transversal.id, originalEdge));
     const cutDocument = documentConstraints && documentConstraints.length !== document.constraints?.length ? { ...document, constraints: documentConstraints } : document;
     const removedHandle = survivorIndex === 0 ? "control2" : "control1";
@@ -1428,7 +1521,7 @@ const cutOpenSingleCubicPath = (document: DocumentSnapshot, path: PathElement, c
     const remapPathConnection = (reference: ExplicitConnection["first"]): ExplicitConnection["first"] | undefined => {
       if (reference.elementId !== path.id || reference.node.kind !== "path") return reference;
       const address = reference.node;
-      const survives = nextPath.nodes.some((node) => node.id === address.nodeId) && (address.handle === undefined || survivorSegment.startNodeId === address.nodeId && address.handle === "out" || survivorSegment.endNodeId === address.nodeId && address.handle === "in");
+      const survives = nextPath.nodes.some((node) => node.id === address.nodeId) && (address.handle === undefined || nextPath.segments.some((candidate) => candidate.type === "cubicBezier" && (address.handle === "out" ? candidate.startNodeId : candidate.endNodeId) === address.nodeId));
       return survives ? reference : undefined;
     };
     const connections = (document.connections ?? []).flatMap((connection) => {
@@ -1443,7 +1536,11 @@ const cutOpenSingleCubicPath = (document: DocumentSnapshot, path: PathElement, c
   const splitLine: PathElement = { type: "path", id: line.id, layerId: line.layerId, nodes: [{ id: lineStartId, anchor: crossing.lineStart, join: "corner" }, { id: lineCornerId, anchor: splitPoint, join: "corner" }, { id: lineEndId, anchor: crossing.lineEnd, join: "corner" }], segments: [{ id: `${line.id}:cut-start`, type: "line", startNodeId: lineStartId, endNodeId: lineCornerId }, { id: `${line.id}:cut-end`, type: "line", startNodeId: lineCornerId, endNodeId: lineEndId }], closed: false, style: line.style, ...(line.operation ? { operation: line.operation } : {}) };
   const lineElements = elements.map((element) => element.id === line.id ? splitLine : element);
   const sourceReference = pathSegmentReference(path.id, segment.id);
-  const edit = topologyEditForReferenceDestinations(lineElements, [sourceReference], new Map([[topologyReferenceKey(sourceReference), [pathSegmentReference(path.id, survivorSegment.id)]]]), "The removed cubic side has no surviving segment");
+  const topologySources = path.segments.map((candidate) => pathSegmentReference(path.id, candidate.id));
+  const topologyDestinations = new Map<string, readonly TopologyReference[]>(topologySources.map((source) => [topologyReferenceKey(source), [source]]));
+  topologyDestinations.set(topologyReferenceKey(sourceReference), [pathSegmentReference(path.id, survivorSegment.id)]);
+  for (const candidate of path.segments) if (candidate.id !== segment.id && !survivingSegments.some((survivorCandidate) => survivorCandidate.id === candidate.id)) topologyDestinations.set(topologyReferenceKey(pathSegmentReference(path.id, candidate.id)), []);
+  const edit = topologyEditForReferenceDestinations(lineElements, topologySources, topologyDestinations, "The removed cubic side has no surviving segment");
   const removedHandle = survivorIndex === 0 ? "control2" : "control1";
   const sourceNodes = realGeometryNodes(path);
   const elementsWithoutRemovedDependents = lineElements.filter((element) => !(element.type === "dimension" && element.references.some((reference) => {
@@ -1470,7 +1567,7 @@ const cutOpenSingleCubicPath = (document: DocumentSnapshot, path: PathElement, c
   const remapConnection = (reference: ExplicitConnection["first"]): ExplicitConnection["first"] | undefined => {
     if (reference.elementId === path.id && reference.node.kind === "path") {
       const address = reference.node;
-      const survives = nextPath.nodes.some((node) => node.id === address.nodeId) && (address.handle === undefined || survivorSegment.startNodeId === address.nodeId && address.handle === "out" || survivorSegment.endNodeId === address.nodeId && address.handle === "in");
+      const survives = nextPath.nodes.some((node) => node.id === address.nodeId) && (address.handle === undefined || nextPath.segments.some((candidate) => candidate.type === "cubicBezier" && (address.handle === "out" ? candidate.startNodeId : candidate.endNodeId) === address.nodeId));
       return survives ? reference : undefined;
     }
     if (reference.elementId === line.id && reference.node.kind === "line") {
