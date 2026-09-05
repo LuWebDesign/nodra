@@ -1,5 +1,5 @@
 import type { PointMm } from "@nodra/domain";
-import type { CubicBezierCurve2D, Curve2D, LineCurve2D } from "./curve2d.js";
+import type { CircleCurve2D, CubicBezierCurve2D, Curve2D, LineCurve2D } from "./curve2d.js";
 import { GEOMETRY_EPSILON, PARAMETER_EPSILON } from "./tolerances.js";
 
 export interface IntersectionOptions {
@@ -28,7 +28,9 @@ export type IntersectionResult =
 const ROOT_COEFFICIENT_EPSILON = Number.EPSILON * 128;
 const ROOT_VALUE_EPSILON = Number.EPSILON * 2048;
 const ANGULAR_EPSILON = Number.EPSILON * 128;
+const COORDINATE_ULP_FACTOR = 4;
 const ROOT_MAX_ITERATIONS = 128;
+const TAU = Math.PI * 2;
 const none = (): IntersectionResult => ({ kind: "none" });
 const clamp = (value: number): number => Math.max(0, Math.min(1, value));
 const cross = (first: PointMm, second: PointMm): number => first.x * second.y - first.y * second.x;
@@ -78,7 +80,7 @@ function coordinateTolerance(curves: readonly Curve2D[]): number {
     : curve.type === "cubicBezier"
       ? [curve.p0.x, curve.p0.y, curve.p1.x, curve.p1.y, curve.p2.x, curve.p2.y, curve.p3.x, curve.p3.y]
       : [curve.center.x, curve.center.y, curve.radius]);
-  return checkedNumber(Number.EPSILON * Math.max(1, ...coordinates.map(Math.abs)) * 128);
+  return checkedNumber(Number.EPSILON * Math.max(1, ...coordinates.map(Math.abs)) * COORDINATE_ULP_FACTOR);
 }
 
 interface LineFrame {
@@ -244,6 +246,37 @@ function intersectCubicLine(cubic: CubicBezierCurve2D, line: LineCurve2D, geomet
   return deduplicated.length ? { kind: "points", points: deduplicated } : none();
 }
 
+function circleParameter(circle: CircleCurve2D, point: PointMm): number {
+  const angle = Math.atan2(point.y - circle.center.y, point.x - circle.center.x);
+  return ((angle % TAU) + TAU) % TAU / TAU;
+}
+
+function intersectLineCircle(line: LineCurve2D, circle: CircleCurve2D, geometryEpsilon: number, parameterEpsilon: number): IntersectionResult {
+  const frame = lineFrame(line);
+  if (!frame) return { kind: "unsupported", reason: "degenerate-line" };
+  const centerOffset = subtract(circle.center, line.start);
+  const along = checkedNumber(dot(centerOffset, frame.direction));
+  const perpendicular = checkedNumber(cross(frame.direction, centerOffset));
+  const numericTolerance = checkedNumber(Number.EPSILON * Math.max(1, frame.length, circle.radius, Math.abs(centerOffset.x), Math.abs(centerOffset.y)) * COORDINATE_ULP_FACTOR);
+  const classificationTolerance = geometryEpsilon + numericTolerance;
+  const outputTolerance = geometryEpsilon + coordinateTolerance([line, circle]);
+  const radialGap = Math.abs(perpendicular) - circle.radius;
+  if (radialGap > classificationTolerance) return none();
+  const tangent = radialGap >= -numericTolerance;
+  const normalizedDistance = perpendicular / circle.radius;
+  const offset = tangent ? 0 : checkedNumber(circle.radius * Math.sqrt(Math.max(0, 1 - normalizedDistance * normalizedDistance)));
+  const lineParameterTolerance = Math.max(parameterEpsilon, classificationTolerance / frame.length);
+  const parameters = (offset === 0 ? [along / frame.length] : [(along - offset) / frame.length, (along + offset) / frame.length]).map(checkedNumber).sort((first, second) => first - second).filter((parameter, index, all) => index === 0 || parameter - all[index - 1]! > parameterEpsilon);
+  const points = parameters.flatMap((firstParameter): IntersectionPoint[] => {
+    if (firstParameter < -lineParameterTolerance || firstParameter > 1 + lineParameterTolerance) return [];
+    const lineT = clamp(firstParameter); const point = linePoint(line, lineT);
+    const radiusAtPoint = checkedNumber(Math.hypot(point.x - circle.center.x, point.y - circle.center.y));
+    if (Math.abs(radiusAtPoint - circle.radius) > outputTolerance) return [];
+    return [{ point, firstParameter: lineT, secondParameter: circleParameter(circle, point), contact: lineT <= parameterEpsilon || lineT >= 1 - parameterEpsilon ? "endpoint" : tangent ? "tangent" : "crossing" }];
+  });
+  return points.length ? { kind: "points", points } : none();
+}
+
 function swapResult(result: IntersectionResult): IntersectionResult {
   if (result.kind === "points") return { kind: "points", points: result.points.map((point) => ({ ...point, firstParameter: point.secondParameter, secondParameter: point.firstParameter })).sort((first, second) => first.firstParameter - second.firstParameter) };
   if (result.kind === "overlap") return { kind: "overlap", spans: result.spans.map((span) => ({ firstInterval: span.secondInterval, secondInterval: span.firstInterval })).sort((first, second) => first.firstInterval.t0 - second.firstInterval.t0), points: result.points.map((point) => ({ ...point, firstParameter: point.secondParameter, secondParameter: point.firstParameter })).sort((first, second) => first.firstParameter - second.firstParameter) };
@@ -257,5 +290,7 @@ export function intersectCurves(first: Curve2D, second: Curve2D, options?: Inter
   if (first.type === "line" && second.type === "line") return intersectLines(first, second, geometryEpsilon, parameterEpsilon);
   if (first.type === "cubicBezier" && second.type === "line") return intersectCubicLine(first, second, geometryEpsilon, parameterEpsilon);
   if (first.type === "line" && second.type === "cubicBezier") return swapResult(intersectCubicLine(second, first, geometryEpsilon, parameterEpsilon));
+  if (first.type === "line" && second.type === "circle") return intersectLineCircle(first, second, geometryEpsilon, parameterEpsilon);
+  if (first.type === "circle" && second.type === "line") return swapResult(intersectLineCircle(second, first, geometryEpsilon, parameterEpsilon));
   return { kind: "unsupported", reason: "curve-pair" };
 }
