@@ -1080,3 +1080,4 @@ export { GEOMETRY_EPSILON, PARAMETER_EPSILON } from "./tolerances.js";
 export * from "./curve2d.js";
 export * from "./curve2d-adapters.js";
 export * from "./intersection-engine.js";
+export * from "./curve-interval-selection.js";
