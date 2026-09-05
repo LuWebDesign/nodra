@@ -1,5 +1,6 @@
 import polygonClipping, { type MultiPolygon } from "polygon-clipping";
 import { hasBounds } from "@nodra/domain";
+import { lineElementToCurve } from "./curve2d-adapters.js";
     import type { ConnectableNodeAddress, ContourElement, DimensionElement, Element, ElementId, EllipseElement, GlyphElement, HandleOffset, LineElement, PathCubicSegment, PathElement, PointMm, RectangleElement, SizeMm, SketchConstraint, SketchElement, SketchPointReference, SplineElement, SplineNode } from "@nodra/domain";
 
 export interface Bounds { readonly x: number; readonly y: number; readonly width: number; readonly height: number }
@@ -702,7 +703,7 @@ export function contourVertexNodes(element: ContourElement): readonly ContourVer
 /** Projects any drawable element to the polygon representation used by the SVG/polygon model. */
 export function elementToContour(element: Element): ContourElement {
   const contours = element.type === "line"
-    ? [{ points: [element.start, element.end, element.start] }]
+    ? (() => { const { curve } = lineElementToCurve(element); return [{ points: [curve.start, curve.end, curve.start] }]; })()
     : element.type === "sketch" ? (sketchClosedContours(element).length ? sketchClosedContours(element).map((points) => ({ points })) : sketchSegments(element).map(([start, end]) => ({ points: [start, end, start] })))
     : element.type === "spline" ? [{ points: splinePoints(element) }]
     : element.type === "glyph" ? element.contours.map((contour) => ({ points: flattenPath(glyphPath(element, contour)) }))
@@ -809,11 +810,8 @@ export function shapeResultContours(operation: ShapeOperation, elements: readonl
 }
 
 export function rotatedLineEndpoints(element: LineElement): readonly [PointMm, PointMm] {
-  const center = elementCenter(element);
-  return [
-    transformPoint({ x: element.start.x - center.x, y: element.start.y - center.y }, center, element.rotation),
-    transformPoint({ x: element.end.x - center.x, y: element.end.y - center.y }, center, element.rotation),
-  ];
+  const { curve } = lineElementToCurve(element);
+  return [curve.start, curve.end];
 }
 
 export function rotationHandlePoints(element: Element, offsetMm: number): readonly PointMm[] {
@@ -1124,3 +1122,4 @@ export function radiansToDegrees(radians: number): number { return normalizeAngl
 
 export { GEOMETRY_EPSILON, PARAMETER_EPSILON } from "./tolerances.js";
 export * from "./curve2d.js";
+export * from "./curve2d-adapters.js";
