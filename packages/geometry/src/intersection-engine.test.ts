@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { cubicBezierLineIntersections, intersectCurves, lineSegmentIntersection, pointAt, type CubicBezierCurve2D, type Curve2D, type IntersectionPoint, type IntersectionResult, type LineCurve2D } from "./index.js";
+import { cubicBezierLineIntersections, intersectCurves, lineSegmentIntersection, pointAt, type CircleCurve2D, type CubicBezierCurve2D, type Curve2D, type IntersectionPoint, type IntersectionResult, type LineCurve2D } from "./index.js";
 
 const line = (start: { x: number; y: number }, end: { x: number; y: number }): LineCurve2D => ({ type: "line", start, end });
 const horizontal = line({ x: 0, y: 0 }, { x: 10, y: 0 });
@@ -154,11 +154,71 @@ describe("IntersectionEngine Line × Cubic", () => {
   });
 });
 
+describe("IntersectionEngine Line × Circle", () => {
+  const circle: CircleCurve2D = { type: "circle", center: { x: 0, y: 0 }, radius: 5 };
+
+  it("returns two secant points with clockwise circle parameters", () => {
+    const secant = line({ x: -10, y: 0 }, { x: 10, y: 0 });
+    const result = intersectCurves(secant, circle);
+    expectPointParameters(result, [[0.25, 0.5], [0.75, 0]]);
+    expect(points(result).map(({ contact }) => contact)).toEqual(["crossing", "crossing"]);
+    expect(points(result).map(({ point }) => point)).toEqual([{ x: -5, y: 0 }, { x: 5, y: 0 }]);
+    expectSymmetric(secant, circle);
+    const circleFirst = points(intersectCurves(circle, secant));
+    expect(circleFirst.map(({ firstParameter, secondParameter }) => [firstParameter, secondParameter])).toEqual([[0, 0.75], [0.5, 0.25]]);
+  });
+
+  it("deduplicates a tangent and preserves the top-left clockwise quarter parameter", () => {
+    const result = intersectCurves(line({ x: -10, y: 5 }, { x: 10, y: 5 }), circle);
+    expectPointParameters(result, [[0.5, 0.25]]);
+    expect(points(result)[0]).toMatchObject({ point: { x: 0, y: 5 }, contact: "tangent" });
+    expect(points(intersectCurves(circle, line({ x: -10, y: 5 }, { x: 10, y: 5 })))[0]).toMatchObject({ firstParameter: 0.25, secondParameter: 0.5, contact: "tangent" });
+  });
+
+  it("classifies only finite-line endpoints, never the circular seam", () => {
+    const seamCrossing = intersectCurves(line({ x: 0, y: 0 }, { x: 10, y: 0 }), circle);
+    expect(points(seamCrossing)[0]).toMatchObject({ firstParameter: 0.5, secondParameter: 0, contact: "crossing" });
+    const endpointLine = line({ x: 5, y: 0 }, { x: 10, y: 0 });
+    const endpoint = intersectCurves(endpointLine, circle);
+    expect(points(endpoint)[0]).toMatchObject({ firstParameter: 0, secondParameter: 0, contact: "endpoint" });
+    expect(points(intersectCurves(circle, endpointLine))[0]).toMatchObject({ firstParameter: 0, secondParameter: 0, contact: "endpoint" });
+  });
+
+  it("returns one point when the finite segment clips a secant and none for misses", () => {
+    const clipped = intersectCurves(line({ x: -10, y: 0 }, { x: 0, y: 0 }), circle);
+    expect(points(clipped)).toHaveLength(1);
+    expect(points(clipped)[0]).toMatchObject({ point: { x: -5, y: 0 }, firstParameter: 0.5, secondParameter: 0.5, contact: "crossing" });
+    expect(intersectCurves(line({ x: -10, y: 6 }, { x: 10, y: 6 }), circle)).toEqual({ kind: "none" });
+    expect(intersectCurves(line({ x: 6, y: 0 }, { x: 10, y: 0 }), circle)).toEqual({ kind: "none" });
+  });
+
+  it("uses model-space tolerance around tangency without collapsing an interior secant", () => {
+    expect(intersectCurves(line({ x: -10, y: 5 + 5e-9 }, { x: 10, y: 5 + 5e-9 }), circle, { geometryEpsilon: 1e-8 })).toMatchObject({ kind: "points", points: [{ contact: "tangent" }] });
+    const nearSecant = intersectCurves(line({ x: -10, y: 5 - 5e-9 }, { x: 10, y: 5 - 5e-9 }), circle, { geometryEpsilon: 1e-8 });
+    expect(points(nearSecant)).toHaveLength(2);
+    expect(points(nearSecant).every(({ contact }) => contact === "crossing")).toBe(true);
+    expect(intersectCurves(line({ x: -10, y: 5 + 2e-8 }, { x: 10, y: 5 + 2e-8 }), circle, { geometryEpsilon: 1e-8 })).toEqual({ kind: "none" });
+    const translated: CircleCurve2D = { type: "circle", center: { x: 1e9, y: -1e9 }, radius: 5 };
+    const translatedResult = intersectCurves(line({ x: 1e9 - 10, y: -1e9 }, { x: 1e9 + 10, y: -1e9 }), translated, { geometryEpsilon: 1e-6 });
+    expect(points(translatedResult)).toHaveLength(2);
+    const veryTranslated: CircleCurve2D = { type: "circle", center: { x: 1e15, y: 1e15 }, radius: 5 };
+    expect(intersectCurves(line({ x: 1e15 - 10, y: 1e15 + 20 }, { x: 1e15 + 10, y: 1e15 + 20 }), veryTranslated, { geometryEpsilon: 1e-8 })).toEqual({ kind: "none" });
+    const translatedSecant = intersectCurves(line({ x: 1e15 - 10, y: 1e15 + 4.5 }, { x: 1e15 + 10, y: 1e15 + 4.5 }), veryTranslated, { geometryEpsilon: 1e-8 });
+    expect(points(translatedSecant)).toHaveLength(2);
+    expect(points(translatedSecant).every(({ contact }) => contact === "crossing")).toBe(true);
+  });
+
+  it("reports degenerate lines and leaves Arc/Circle pairs unsupported", () => {
+    expect(intersectCurves(line({ x: 0, y: 0 }, { x: 0, y: 0 }), circle)).toEqual({ kind: "unsupported", reason: "degenerate-line" });
+    expect(intersectCurves(circle, circle)).toEqual({ kind: "unsupported", reason: "curve-pair" });
+    expect(intersectCurves(line({ x: -10, y: 0 }, { x: 10, y: 0 }), { type: "arc", center: { x: 0, y: 0 }, radius: 5, startAngle: 0, endAngle: Math.PI, direction: "clockwise" })).toEqual({ kind: "unsupported", reason: "curve-pair" });
+  });
+});
+
 describe("IntersectionEngine contract and legacy compatibility", () => {
   it("reports unsupported pairs explicitly and validates every Curve2D kind", () => {
     const bezier = cubic([-1, -1, 1, 1]);
     expect(intersectCurves(bezier, bezier)).toEqual({ kind: "unsupported", reason: "curve-pair" });
-    expect(intersectCurves(horizontal, { type: "circle", center: { x: 0, y: 0 }, radius: 1 })).toEqual({ kind: "unsupported", reason: "curve-pair" });
     expect(() => intersectCurves(horizontal, { type: "circle", center: { x: Number.NaN, y: 0 }, radius: 1 })).toThrow("curve coordinates must be finite");
     expect(() => intersectCurves(horizontal, { type: "arc", center: { x: 0, y: 0 }, radius: 0, startAngle: 0, endAngle: 1, direction: "clockwise" })).toThrow("curve radius must be positive");
   });
