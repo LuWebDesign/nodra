@@ -142,23 +142,24 @@ function polynomialAt(polynomial: readonly number[], parameter: number): number 
   for (let index = polynomial.length - 1; index >= 0; index -= 1) value = checkedNumber(value * parameter + polynomial[index]!);
   return value;
 }
-function rootsInUnit(polynomial: readonly number[], parameterEpsilon: number, valueEpsilon = ROOT_VALUE_EPSILON): number[] {
+function rootsInUnit(polynomial: readonly number[], parameterEpsilon: number, valueEpsilon = ROOT_VALUE_EPSILON, refineToMachinePrecision = false): number[] {
   if (!polynomial.every(Number.isFinite)) throw new Error("intersection polynomial must be finite");
   const scale = Math.max(...polynomial.map(Math.abs));
   if (scale === 0) return [];
   const coefficients = polynomial.map((value) => value / scale);
   while (coefficients.length > 1 && Math.abs(coefficients.at(-1)!) <= ROOT_COEFFICIENT_EPSILON) coefficients.pop();
   if (coefficients.length <= 1) return [];
-  const critical = rootsInUnit(polynomialDerivative(coefficients), parameterEpsilon);
+  const critical = rootsInUnit(polynomialDerivative(coefficients), parameterEpsilon, ROOT_VALUE_EPSILON, refineToMachinePrecision);
   const boundaries = deduplicatedParameters([0, ...critical, 1], parameterEpsilon);
   const roots: number[] = [];
   for (const boundary of boundaries) if (Math.abs(polynomialAt(coefficients, boundary)) <= valueEpsilon) roots.push(boundary);
   for (let index = 0; index + 1 < boundaries.length; index += 1) {
     let low = boundaries[index]!; let high = boundaries[index + 1]!; let lowValue = polynomialAt(coefficients, low); const highValue = polynomialAt(coefficients, high);
     if (Math.abs(lowValue) <= valueEpsilon || Math.abs(highValue) <= valueEpsilon || (lowValue < 0) === (highValue < 0)) continue;
-    for (let iteration = 0; iteration < ROOT_MAX_ITERATIONS && high - low > Math.max(parameterEpsilon, Number.EPSILON); iteration += 1) {
+    const rootPrecision = refineToMachinePrecision ? Number.EPSILON : Math.max(parameterEpsilon, Number.EPSILON);
+    for (let iteration = 0; iteration < ROOT_MAX_ITERATIONS && high - low > rootPrecision; iteration += 1) {
       const middle = (low + high) / 2; const middleValue = polynomialAt(coefficients, middle);
-      if (Math.abs(middleValue) <= ROOT_VALUE_EPSILON) { low = middle; high = middle; break; }
+      if (middleValue === 0 || (!refineToMachinePrecision && Math.abs(middleValue) <= ROOT_VALUE_EPSILON)) { low = middle; high = middle; break; }
       if ((lowValue < 0) === (middleValue < 0)) { low = middle; lowValue = middleValue; } else high = middle;
     }
     roots.push((low + high) / 2);
@@ -169,11 +170,20 @@ function bezierPower(values: readonly [number, number, number, number]): readonl
   const [p0, p1, p2, p3] = values;
   return [p0, checkedNumber(3 * (p1 - p0)), checkedNumber(3 * (p0 - 2 * p1 + p2)), checkedNumber(-p0 + 3 * p1 - 3 * p2 + p3)];
 }
+function squaredPolynomial(first: readonly number[], second: readonly number[]): number[] {
+  const result = Array.from<number>({ length: first.length + second.length - 1 }).fill(0);
+  for (let firstIndex = 0; firstIndex < first.length; firstIndex += 1) {
+    for (let secondIndex = 0; secondIndex < second.length; secondIndex += 1) {
+      result[firstIndex + secondIndex] = checkedNumber(result[firstIndex + secondIndex]! + first[firstIndex]! * second[secondIndex]!);
+    }
+  }
+  return result;
+}
 function deduplicatedParameters(parameters: readonly number[], parameterEpsilon: number): number[] {
   return [...parameters].map(clamp).sort((first, second) => first - second).filter((parameter, index, all) => index === 0 || parameter - all[index - 1]! > parameterEpsilon);
 }
-function tangentContact(polynomial: readonly number[], parameter: number, parameterEpsilon: number, valueEpsilon: number): boolean {
-  const sampleOffset = Math.max(Math.cbrt(ROOT_VALUE_EPSILON), parameterEpsilon * 4);
+function tangentContact(polynomial: readonly number[], parameter: number, parameterEpsilon: number, valueEpsilon: number, neighborDistance = Number.POSITIVE_INFINITY): boolean {
+  const sampleOffset = Math.min(Math.max(Math.cbrt(ROOT_VALUE_EPSILON), parameterEpsilon * 4), neighborDistance / 3);
   const before = Math.max(0, parameter - sampleOffset); const after = Math.min(1, parameter + sampleOffset);
   if (before === parameter || after === parameter) return false;
   const beforeValue = polynomialAt(polynomial, before); const afterValue = polynomialAt(polynomial, after);
@@ -277,6 +287,56 @@ function intersectLineCircle(line: LineCurve2D, circle: CircleCurve2D, geometryE
   return points.length ? { kind: "points", points } : none();
 }
 
+function intersectCubicCircle(cubic: CubicBezierCurve2D, circle: CircleCurve2D, geometryEpsilon: number, parameterEpsilon: number): IntersectionResult {
+  const controls = [cubic.p0, cubic.p1, cubic.p2, cubic.p3] as const;
+  const offsets = controls.map((point) => subtract(point, circle.center)) as unknown as readonly [PointMm, PointMm, PointMm, PointMm];
+  const localScale = Math.max(circle.radius, ...offsets.flatMap((point) => [Math.abs(point.x), Math.abs(point.y)]));
+  const numericTolerance = checkedNumber(Number.EPSILON * Math.max(1, localScale) * COORDINATE_ULP_FACTOR);
+  const classificationTolerance = geometryEpsilon + numericTolerance;
+  const constantCubic = controls.slice(1).every((point) => Math.hypot(point.x - cubic.p0.x, point.y - cubic.p0.y) <= numericTolerance);
+  if (constantCubic) {
+    const radialGap = Math.hypot(offsets[0].x, offsets[0].y) - circle.radius;
+    if (Math.abs(radialGap) > classificationTolerance) return none();
+    const point = checkedPoint(cubic.p0);
+    return { kind: "points", points: [{ point, firstParameter: 0, secondParameter: circleParameter(circle, point), contact: "endpoint" }] };
+  }
+  const localCubic: CubicBezierCurve2D = { type: "cubicBezier", p0: offsets[0], p1: offsets[1], p2: offsets[2], p3: offsets[3] };
+  const normalizedX = offsets.map((point) => point.x / localScale) as unknown as readonly [number, number, number, number];
+  const normalizedY = offsets.map((point) => point.y / localScale) as unknown as readonly [number, number, number, number];
+  const xPolynomial = bezierPower(normalizedX); const yPolynomial = bezierPower(normalizedY);
+  const xSquared = squaredPolynomial(xPolynomial, xPolynomial); const ySquared = squaredPolynomial(yPolynomial, yPolynomial);
+  const radialPolynomial = xSquared.map((value, index) => checkedNumber(value + ySquared[index]!));
+  radialPolynomial[0] = checkedNumber(radialPolynomial[0]! - (circle.radius / localScale) ** 2);
+  const exactRoots = rootsInUnit(radialPolynomial, parameterEpsilon, ROOT_VALUE_EPSILON, true);
+  const stationaryRoots = rootsInUnit(polynomialDerivative(radialPolynomial), parameterEpsilon, ROOT_VALUE_EPSILON, true);
+  const toleratedStationaryRoots = stationaryRoots.filter((parameter, index) => {
+    const localPoint = cubicPoint(localCubic, parameter);
+    const radialGap = Math.hypot(localPoint.x, localPoint.y) - circle.radius;
+    const neighborDistance = Math.min(parameter - (stationaryRoots[index - 1] ?? 0), (stationaryRoots[index + 1] ?? 1) - parameter);
+    const sampleOffset = Math.min(Math.cbrt(ROOT_VALUE_EPSILON), neighborDistance / 3);
+    const value = polynomialAt(radialPolynomial, parameter);
+    const localMinimum = value <= polynomialAt(radialPolynomial, parameter - sampleOffset) && value <= polynomialAt(radialPolynomial, parameter + sampleOffset);
+    return localMinimum && radialGap >= -numericTolerance && radialGap <= classificationTolerance;
+  });
+  const toleratedEndpoints = [0, 1].filter((parameter) => {
+    const localPoint = cubicPoint(localCubic, parameter);
+    return Math.abs(Math.hypot(localPoint.x, localPoint.y) - circle.radius) <= classificationTolerance;
+  });
+  const parameters = deduplicatedParameters([...exactRoots, ...toleratedStationaryRoots, ...toleratedEndpoints], parameterEpsilon);
+  const outputTolerance = geometryEpsilon + coordinateTolerance([cubic, circle]);
+  const points = parameters.flatMap((firstParameter, index): IntersectionPoint[] => {
+    const point = cubicPoint(cubic, firstParameter); const localPoint = cubicPoint(localCubic, firstParameter);
+    const localResidual = Math.abs(Math.hypot(localPoint.x, localPoint.y) - circle.radius);
+    const outputResidual = Math.abs(Math.hypot(point.x - circle.center.x, point.y - circle.center.y) - circle.radius);
+    if (localResidual > classificationTolerance || outputResidual > outputTolerance) return [];
+    const contact: IntersectionContact = firstParameter <= parameterEpsilon || firstParameter >= 1 - parameterEpsilon
+      ? "endpoint"
+      : tangentContact(radialPolynomial, firstParameter, parameterEpsilon, ROOT_VALUE_EPSILON, Math.min(firstParameter - (parameters[index - 1] ?? 0), (parameters[index + 1] ?? 1) - firstParameter)) ? "tangent" : "crossing";
+    return [{ point, firstParameter, secondParameter: circleParameter(circle, point), contact }];
+  });
+  return points.length ? { kind: "points", points } : none();
+}
+
 function intersectCircles(first: CircleCurve2D, second: CircleCurve2D, geometryEpsilon: number): IntersectionResult {
   const centerOffset = subtract(second.center, first.center);
   const centerDistance = checkedNumber(Math.hypot(centerOffset.x, centerOffset.y));
@@ -326,5 +386,7 @@ export function intersectCurves(first: Curve2D, second: Curve2D, options?: Inter
   if (first.type === "line" && second.type === "circle") return intersectLineCircle(first, second, geometryEpsilon, parameterEpsilon);
   if (first.type === "circle" && second.type === "line") return swapResult(intersectLineCircle(second, first, geometryEpsilon, parameterEpsilon));
   if (first.type === "circle" && second.type === "circle") return intersectCircles(first, second, geometryEpsilon);
+  if (first.type === "cubicBezier" && second.type === "circle") return intersectCubicCircle(first, second, geometryEpsilon, parameterEpsilon);
+  if (first.type === "circle" && second.type === "cubicBezier") return swapResult(intersectCubicCircle(second, first, geometryEpsilon, parameterEpsilon));
   return { kind: "unsupported", reason: "curve-pair" };
 }

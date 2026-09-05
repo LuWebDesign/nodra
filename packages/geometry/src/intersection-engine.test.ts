@@ -214,6 +214,89 @@ describe("IntersectionEngine Line × Circle", () => {
   });
 });
 
+describe("IntersectionEngine Circle × Cubic", () => {
+  const circle: CircleCurve2D = { type: "circle", center: { x: 0, y: 0 }, radius: 5 };
+  const straightCubic: CubicBezierCurve2D = { type: "cubicBezier", p0: { x: -10, y: 0 }, p1: { x: -10 / 3, y: 0 }, p2: { x: 10 / 3, y: 0 }, p3: { x: 10, y: 0 } };
+
+  it("returns ordered crossings with cubic and clockwise circle parameters", () => {
+    const result = intersectCurves(straightCubic, circle);
+    expectPointParameters(result, [[0.25, 0.5], [0.75, 0]]);
+    expect(points(result).map(({ contact }) => contact)).toEqual(["crossing", "crossing"]);
+    expectSymmetric(straightCubic, circle);
+    expect(points(intersectCurves(circle, straightCubic)).map(({ firstParameter }) => ({ parameter: firstParameter }))).toEqual([{ parameter: 0 }, { parameter: 0.5 }]);
+  });
+
+  it("finds all six intersections of a looping cubic", () => {
+    const looping: CubicBezierCurve2D = {
+      type: "cubicBezier",
+      p0: { x: -6.292612313373148, y: 0.9902684468016094 },
+      p1: { x: 14.980806977144098, y: -13.351108519598013 },
+      p2: { x: -13.620872581330813, y: 1.1680503393885182 },
+      p3: { x: -0.024218587625133736, y: -5.455267476317969 },
+    };
+    const intersections = points(intersectCurves(looping, circle));
+    expect(intersections).toHaveLength(6);
+    expect(intersections.map(({ firstParameter }) => firstParameter)).toEqual([
+      expect.closeTo(0.0213257268, 8), expect.closeTo(0.2172982386, 8), expect.closeTo(0.5297032142, 8),
+      expect.closeTo(0.6662982259, 8), expect.closeTo(0.9001134508, 8), expect.closeTo(0.9638866954, 8),
+    ]);
+    expect(intersections.every(({ contact }) => contact === "crossing")).toBe(true);
+    expect(intersections.every((intersection, index) => index === 0 || intersection.firstParameter > intersections[index - 1]!.firstParameter)).toBe(true);
+    expectSymmetric(looping, circle);
+  });
+
+  it("classifies tangency and preserves an interior near-tangent pair", () => {
+    const horizontalAt = (y: number): CubicBezierCurve2D => ({ type: "cubicBezier", p0: { x: -2, y }, p1: { x: -2 / 3, y }, p2: { x: 2 / 3, y }, p3: { x: 2, y } });
+    expect(points(intersectCurves(horizontalAt(5), circle))).toMatchObject([{ firstParameter: expect.closeTo(0.5, 12), secondParameter: 0.25, contact: "tangent" }]);
+    const interior = points(intersectCurves(horizontalAt(5 - 5e-9), circle, { geometryEpsilon: 1e-8 }));
+    expect(interior).toHaveLength(2);
+    expect(interior.every(({ contact }) => contact === "crossing")).toBe(true);
+    expect(intersectCurves(horizontalAt(5 + 5e-9), circle, { geometryEpsilon: 1e-8 })).toMatchObject({ kind: "points", points: [{ contact: "tangent" }] });
+    expect(intersectCurves(horizontalAt(5 + 2e-8), circle, { geometryEpsilon: 1e-8 })).toEqual({ kind: "none" });
+    const nearExteriorMaximum: CubicBezierCurve2D = { type: "cubicBezier", p0: { x: 0, y: 4.75 + 5e-9 }, p1: { x: 0, y: 5 + 1 / 12 + 5e-9 }, p2: { x: 0, y: 5 + 1 / 12 + 5e-9 }, p3: { x: 0, y: 4.75 + 5e-9 } };
+    const maximumCrossings = points(intersectCurves(nearExteriorMaximum, circle, { geometryEpsilon: 1e-8 }));
+    expect(maximumCrossings).toHaveLength(2);
+    expect(maximumCrossings.every(({ contact }) => contact === "crossing")).toBe(true);
+  });
+
+  it("distinguishes a fourth-order tangency, a triple crossing, and tightly clustered roots", () => {
+    const fourthOrder: CubicBezierCurve2D = { type: "cubicBezier", p0: { x: 0.25, y: 5 }, p1: { x: -1 / 12, y: 5 }, p2: { x: -1 / 12, y: 5 }, p3: { x: 0.25, y: 5 } };
+    expect(points(intersectCurves(fourthOrder, circle))).toMatchObject([{ firstParameter: expect.closeTo(0.5, 8), contact: "tangent" }]);
+    const tripleCrossing: CubicBezierCurve2D = { type: "cubicBezier", p0: { x: 0, y: 4.875 }, p1: { x: 0, y: 5.125 }, p2: { x: 0, y: 4.875 }, p3: { x: 0, y: 5.125 } };
+    expect(points(intersectCurves(tripleCrossing, circle))).toMatchObject([{ firstParameter: expect.closeTo(0.5, 8), contact: "crossing" }]);
+    const clustered: CubicBezierCurve2D = { type: "cubicBezier", p0: { x: -2, y: 5 - 1e-10 }, p1: { x: -2 / 3, y: 5 - 1e-10 }, p2: { x: 2 / 3, y: 5 - 1e-10 }, p3: { x: 2, y: 5 - 1e-10 } };
+    const clusteredPoints = points(intersectCurves(clustered, circle, { geometryEpsilon: 1e-8 }));
+    expect(clusteredPoints).toHaveLength(2);
+    expect(clusteredPoints[1]!.firstParameter - clusteredPoints[0]!.firstParameter).toBeLessThan(1e-4);
+    expect(clusteredPoints.every(({ contact }) => contact === "crossing")).toBe(true);
+    const merged = points(intersectCurves(clustered, circle, { geometryEpsilon: 1e-8, parameterEpsilon: 1e-3 }));
+    expect(merged).toHaveLength(1);
+    expect(merged[0]!.contact).toBe("tangent");
+  });
+
+  it("gives cubic endpoints precedence and never treats the circle seam as an endpoint", () => {
+    const endpoint: CubicBezierCurve2D = { type: "cubicBezier", p0: { x: 5, y: 0 }, p1: { x: 6, y: 0 }, p2: { x: 7, y: 0 }, p3: { x: 8, y: 0 } };
+    expect(points(intersectCurves(endpoint, circle))[0]).toEqual({ point: { x: 5, y: 0 }, firstParameter: 0, secondParameter: 0, contact: "endpoint" });
+    expect(points(intersectCurves(circle, endpoint))[0]).toMatchObject({ firstParameter: 0, secondParameter: 0, contact: "endpoint" });
+    expect(points(intersectCurves(straightCubic, circle))[1]).toMatchObject({ firstParameter: expect.closeTo(0.75, 12), secondParameter: 0, contact: "crossing" });
+  });
+
+  it("canonicalizes a constant cubic on the circle and rejects one away from it", () => {
+    const constant = (point: { x: number; y: number }): CubicBezierCurve2D => ({ type: "cubicBezier", p0: point, p1: point, p2: point, p3: point });
+    expect(intersectCurves(constant({ x: 0, y: 5 }), circle)).toEqual({ kind: "points", points: [{ point: { x: 0, y: 5 }, firstParameter: 0, secondParameter: 0.25, contact: "endpoint" }] });
+    expect(intersectCurves(constant({ x: 0, y: 6 }), circle)).toEqual({ kind: "none" });
+  });
+
+  it("preserves local geometry after a large translation", () => {
+    const center = { x: 1e15, y: 1e15 };
+    const translatedCircle: CircleCurve2D = { type: "circle", center, radius: 5 };
+    const translatedCubic: CubicBezierCurve2D = { type: "cubicBezier", p0: { x: center.x - 10, y: center.y }, p1: { x: center.x - 10 / 3, y: center.y }, p2: { x: center.x + 10 / 3, y: center.y }, p3: { x: center.x + 10, y: center.y } };
+    const result = intersectCurves(translatedCubic, translatedCircle);
+    expect(points(result)).toHaveLength(2);
+    expect(points(result).every(({ contact }) => contact === "crossing")).toBe(true);
+  });
+});
+
 describe("IntersectionEngine Circle × Circle", () => {
   const first: CircleCurve2D = { type: "circle", center: { x: 0, y: 0 }, radius: 5 };
 
