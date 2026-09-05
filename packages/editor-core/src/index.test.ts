@@ -337,6 +337,33 @@ describe("editor core", () => {
     expect(redo(undo(cut)).document).toEqual(cut.document);
   });
 
+  it("removes only the selected sketch edge and splits open or closed cubic paths exactly", () => {
+    for (const closed of [false, true]) {
+      const path: PathElement = { type: "path", id: elementId(`selected-sketch-cubic-${closed ? "closed" : "open"}`), layerId: layerId("default"), closed, style: rectangle.style,
+        nodes: [{ id: "start", anchor: { x: 0, y: 0 }, join: "corner" }, { id: "end", anchor: { x: 10, y: 0 }, join: "corner" }],
+        segments: [{ id: "curve", type: "cubicBezier", startNodeId: "start", endNodeId: "end", control1: { x: 3, y: 6 }, control2: { x: 7, y: 6 } }, ...(closed ? [{ id: "closing", type: "line" as const, startNodeId: "end", endNodeId: "start" }] : [])] };
+      const sketch: SketchElement = { type: "sketch", id: elementId(`selected-sketch-edge-${closed ? "closed" : "open"}`), layerId: layerId("default"), style: rectangle.style,
+        nodes: [{ id: "a", point: { x: 5, y: -10 } }, { id: "b", point: { x: 5, y: 10 } }, { id: "c", point: { x: 20, y: 10 } }],
+        edges: [{ id: "selected", startNodeId: "a", endNodeId: "b" }, { id: "other", startNodeId: "b", endNodeId: "c" }, { id: "third", startNodeId: "c", endNodeId: "a" }] };
+      const initial = createEditor({ ...document, elements: [path, sketch] });
+      const command = cutSegment(sketch.id, 0, { x: 5, y: 4.5 });
+      const applied = command.apply(initial.document);
+      expect(applied.success).toBe(true);
+      const result = applied.success ? applied.document.elements : [];
+      const nextPath = result.find((element): element is PathElement => element.id === path.id && element.type === "path");
+      const nextSketch = result.find((element): element is SketchElement => element.id === sketch.id && element.type === "sketch");
+      expect(nextPath?.closed).toBe(closed);
+      expect(nextPath?.segments).toHaveLength(closed ? 3 : 2);
+      const intersectionNode = nextPath?.nodes.find((node) => node.id !== "start" && node.id !== "end");
+      expect(intersectionNode?.anchor).toEqual({ x: 5, y: 4.5 });
+      expect(nextSketch).toBeDefined();
+      expect(nextSketch?.edges.map((edge) => edge.id)).toEqual(["other", "third"]);
+      expect(nextSketch?.nodes.map((node) => node.id)).toEqual(["a", "b", "c"]);
+      expect(applied.success ? applied.topology?.referenceMap.get(`${path.id}:segment:curve`) : undefined).toMatchObject({ kind: "replaced" });
+      expect(applied.success ? applied.topology?.referenceMap.get(`${sketch.id}:edge:selected`) : undefined).toMatchObject({ kind: "removed" });
+    }
+  });
+
   it("cuts an interior cubic in a multi-segment path while preserving identities and dependencies", () => {
     const multi: PathElement = { type: "path", id: elementId("interior-cubic-path"), layerId: layerId("default"), closed: false, style: rectangle.style,
       nodes: [{ id: "a", anchor: { x: 0, y: 0 }, join: "corner" }, { id: "b", anchor: { x: 10, y: 0 }, join: "corner" }, { id: "c", anchor: { x: 20, y: 0 }, join: "corner" }, { id: "d", anchor: { x: 30, y: 0 }, join: "corner" }],
