@@ -345,7 +345,7 @@ test("cuts a curved Pen segment after a straight segment and supports undo and r
   await page.mouse.move(clickedSide.x, clickedSide.y);
   const hoverCurve = page.locator(".cut-segment-hover-overlay path");
   await expect(hoverCurve).toHaveCount(1);
-  await expect(hoverCurve).toHaveCSS("fill", "rgba(0, 0, 0, 0)");
+  await expect(hoverCurve).toHaveCSS("fill", "none");
   await expect(page.locator(".cut-segment-hover-overlay polyline")).toHaveCount(0);
   await page.mouse.click(clickedSide.x, clickedSide.y);
 
