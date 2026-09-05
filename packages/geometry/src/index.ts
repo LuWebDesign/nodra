@@ -1121,3 +1121,6 @@ export function screenToMm(point: PointPx, viewport: Viewport): PointMm { assert
 export function normalizeAngle(angle: number): number { assertFinite(angle, "angle"); return ((angle % TAU) + TAU) % TAU; }
 export function degreesToRadians(degrees: number): number { assertFinite(degrees, "degrees"); return normalizeAngle(degrees * Math.PI / 180); }
 export function radiansToDegrees(radians: number): number { return normalizeAngle(radians) * 180 / Math.PI; }
+
+export { GEOMETRY_EPSILON, PARAMETER_EPSILON } from "./tolerances.js";
+export * from "./curve2d.js";
