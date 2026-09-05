@@ -247,6 +247,71 @@ describe("editor core", () => {
     expect(result?.type === "path" ? result.nodes.some((node) => node.anchor.x === 10 && node.anchor.y === 0) : false).toBe(true);
   });
 
+  it("cuts one cubic side exactly, splits the native line, maps topology, and preserves endpoint connections", () => {
+    const cubicPath: PathElement = { type: "path", id: elementId("cubic-cut-path"), layerId: layerId("default"), closed: false, style: rectangle.style,
+      nodes: [{ id: "cubic-start", anchor: { x: 0, y: 0 }, join: "corner" }, { id: "cubic-end", anchor: { x: 10, y: 0 }, join: "corner" }],
+      segments: [{ id: "cubic-original", type: "cubicBezier", startNodeId: "cubic-start", endNodeId: "cubic-end", control1: { x: 3, y: 6 }, control2: { x: 7, y: 6 } }] };
+    const line: LineElement = { type: "line", id: elementId("cubic-cut-line"), layerId: layerId("default"), start: { x: 5, y: -10 }, end: { x: 5, y: 10 }, rotation: 0, style: rectangle.style };
+    const survivingConnection = { id: "cubic-cut-survivor", first: { elementId: cubicPath.id, node: { kind: "path" as const, nodeId: "cubic-start", handle: "out" as const } }, second: { elementId: line.id, node: { kind: "line" as const, name: "start" as const } } };
+    const removedConnection = { id: "cubic-cut-removed", first: { elementId: cubicPath.id, node: { kind: "path" as const, nodeId: "cubic-end", handle: "in" as const } }, second: { elementId: line.id, node: { kind: "line" as const, name: "end" as const } } };
+    const survivingDimension: DimensionElement = { ...dimension, id: elementId("cubic-cut-surviving-dimension"), references: [{ kind: "node", elementId: cubicPath.id, nodeIndex: 2 }, { kind: "node", elementId: cubicPath.id, nodeIndex: 0, nodeId: "cubic-start" }] };
+    const removedDimension: DimensionElement = { ...dimension, id: elementId("cubic-cut-removed-dimension"), references: [{ kind: "node", elementId: cubicPath.id, nodeIndex: 3 }, { kind: "node", elementId: cubicPath.id, nodeIndex: 1, nodeId: "cubic-end" }] };
+    const unsupportedLineDimension: DimensionElement = { ...dimension, id: elementId("cubic-cut-line-dimension"), kind: "angular", references: [{ kind: "line", elementId: line.id }, { kind: "line", elementId: line.id }] };
+    const lineEndpointDimension: DimensionElement = { ...dimension, id: elementId("cubic-cut-line-endpoint-dimension"), references: [{ kind: "node", elementId: line.id, nodeIndex: 0 }, { kind: "node", elementId: cubicPath.id, nodeIndex: 0, nodeId: "cubic-start" }] };
+    const initial = createEditor({ ...document, elements: [cubicPath, line, survivingDimension, removedDimension, unsupportedLineDimension, lineEndpointDimension], connections: [survivingConnection, removedConnection] });
+    const command = cutSegment(cubicPath.id, 0, { x: 8, y: 3 });
+    const applied = command.apply(initial.document);
+    const cut = dispatch(initial, command);
+    const survivor = cut.document.elements.find((element): element is PathElement => element.id === cubicPath.id && element.type === "path");
+    const splitLine = cut.document.elements.find((element): element is PathElement => element.id === line.id && element.type === "path");
+
+    expect(applied.success).toBe(true);
+    expect(survivor?.nodes.map((node) => node.anchor)).toEqual([{ x: 0, y: 0 }, { x: 5, y: 4.5 }]);
+    expect(survivor?.segments).toHaveLength(1);
+    expect(survivor?.segments[0]).toMatchObject({ type: "cubicBezier", control1: { x: 1.5, y: 3 }, control2: { x: 3.25, y: 4.5 } });
+    expect(survivor?.segments[0]?.id).not.toBe(cubicPath.segments[0]!.id);
+    expect(splitLine?.segments).toHaveLength(2);
+    expect(splitLine?.nodes[1]?.anchor).toEqual(survivor?.nodes[1]?.anchor);
+    expect(splitLine?.nodes.some((node) => node.anchor.x === 5 && node.anchor.y === 4.5)).toBe(true);
+    const topology = applied.success ? applied.topology?.referenceMap.get(`${cubicPath.id}:segment:cubic-original`) : undefined;
+    expect(topology?.kind).toBe("replaced");
+    expect(topology?.kind === "replaced" ? topology.references : []).toHaveLength(1);
+    expect(topology?.kind === "replaced" && topology.references[0]?.kind === "path-segment" ? topology.references[0].segmentId : undefined).not.toBe("cubic-original");
+    expect(cut.document.connections).toEqual([{ ...survivingConnection, second: { elementId: line.id, node: { kind: "path", nodeId: `${line.id}:start` } } }]);
+    const remappedSurvivingDimension = cut.document.elements.find((element): element is DimensionElement => element.id === survivingDimension.id && element.type === "dimension");
+    expect(remappedSurvivingDimension?.references[0]).toMatchObject({ elementId: cubicPath.id, nodeIndex: 2 });
+    expect(survivor ? realGeometryNodes(survivor)[2]?.point : undefined).toEqual({ x: 1.5, y: 3 });
+    expect(cut.document.elements.some((element) => element.id === removedDimension.id)).toBe(false);
+    expect(cut.document.elements.some((element) => element.id === unsupportedLineDimension.id)).toBe(false);
+    expect(cut.document.elements.find((element) => element.id === lineEndpointDimension.id)).toMatchObject({ references: [{ elementId: line.id, nodeId: `${line.id}:start` }, { elementId: cubicPath.id, nodeId: "cubic-start" }] });
+    const opposite = dispatch(initial, cutSegment(cubicPath.id, 0, { x: 2, y: 3 }));
+    const oppositeSurvivor = opposite.document.elements.find((element): element is PathElement => element.id === cubicPath.id && element.type === "path");
+    expect(oppositeSurvivor?.nodes.map((node) => node.anchor)).toEqual([{ x: 5, y: 4.5 }, { x: 10, y: 0 }]);
+    expect(oppositeSurvivor?.segments[0]).toMatchObject({ type: "cubicBezier", control1: { x: 6.75, y: 4.5 }, control2: { x: 8.5, y: 3 } });
+    expect(opposite.document.connections).toEqual([{ ...removedConnection, second: { elementId: line.id, node: { kind: "path", nodeId: `${line.id}:end` } } }]);
+    expect(opposite.document.elements.some((element) => element.id === survivingDimension.id)).toBe(false);
+    expect(opposite.document.elements.some((element) => element.id === removedDimension.id)).toBe(true);
+    expect(opposite.document.elements.some((element) => element.id === unsupportedLineDimension.id)).toBe(false);
+    expect(opposite.document.elements.some((element) => element.id === lineEndpointDimension.id)).toBe(false);
+    expect(cut.undo).toHaveLength(1);
+    expect(undo(cut).document).toEqual(initial.document);
+    expect(redo(undo(cut)).document).toEqual(cut.document);
+  });
+
+  it("rejects ambiguous or invalid cubic cuts without changing editor state", () => {
+    const cubicPath: PathElement = { type: "path", id: elementId("ambiguous-cubic-cut"), layerId: layerId("default"), closed: false, style: rectangle.style,
+      nodes: [{ id: "start", anchor: { x: 0, y: 0 }, join: "corner" }, { id: "end", anchor: { x: 10, y: 0 }, join: "corner" }],
+      segments: [{ id: "curve", type: "cubicBezier", startNodeId: "start", endNodeId: "end", control1: { x: 3, y: 6 }, control2: { x: 7, y: 6 } }] };
+    const first: LineElement = { type: "line", id: elementId("ambiguous-first"), layerId: layerId("default"), start: { x: 4, y: -10 }, end: { x: 4, y: 10 }, rotation: 0, style: rectangle.style };
+    const second: LineElement = { ...first, id: elementId("ambiguous-second"), start: { x: 6, y: -10 }, end: { x: 6, y: 10 } };
+    const initial = createEditor({ ...document, elements: [cubicPath, first, second] });
+
+    expect(dispatch(initial, cutSegment(cubicPath.id, 0, { x: 2, y: 3 }))).toBe(initial);
+    expect(dispatch(initial, cutSegment(cubicPath.id, 0, { x: Number.NaN, y: 0 }))).toBe(initial);
+    expect(dispatch(initial, cutSegment(cubicPath.id, 0))).toBe(initial);
+    expect(initial.undo).toHaveLength(0);
+  });
+
   it("cuts one segment of two crossing native lines and restores them atomically", () => {
     const horizontal: LineElement = { type: "line", id: elementId("crossing-native-horizontal"), layerId: layerId("default"), start: { x: 0, y: 0 }, end: { x: 20, y: 0 }, rotation: 0, style: rectangle.style };
     const vertical: LineElement = { type: "line", id: elementId("crossing-native-vertical"), layerId: layerId("default"), start: { x: 10, y: -10 }, end: { x: 10, y: 10 }, rotation: 0, style: rectangle.style };
