@@ -208,10 +208,69 @@ describe("IntersectionEngine Line × Circle", () => {
     expect(points(translatedSecant).every(({ contact }) => contact === "crossing")).toBe(true);
   });
 
-  it("reports degenerate lines and leaves Arc/Circle pairs unsupported", () => {
+  it("reports degenerate lines and leaves Line×Arc unsupported", () => {
     expect(intersectCurves(line({ x: 0, y: 0 }, { x: 0, y: 0 }), circle)).toEqual({ kind: "unsupported", reason: "degenerate-line" });
-    expect(intersectCurves(circle, circle)).toEqual({ kind: "unsupported", reason: "curve-pair" });
     expect(intersectCurves(line({ x: -10, y: 0 }, { x: 10, y: 0 }), { type: "arc", center: { x: 0, y: 0 }, radius: 5, startAngle: 0, endAngle: Math.PI, direction: "clockwise" })).toEqual({ kind: "unsupported", reason: "curve-pair" });
+  });
+});
+
+describe("IntersectionEngine Circle × Circle", () => {
+  const first: CircleCurve2D = { type: "circle", center: { x: 0, y: 0 }, radius: 5 };
+
+  it("returns two crossing points ordered by the first clockwise parameter", () => {
+    const second: CircleCurve2D = { type: "circle", center: { x: 6, y: 0 }, radius: 5 };
+    const result = intersectCurves(first, second);
+    const intersections = points(result);
+    expect(intersections).toHaveLength(2);
+    expect(intersections[0]).toMatchObject({ point: { x: 3, y: 4 }, firstParameter: expect.closeTo(Math.atan2(4, 3) / (2 * Math.PI), 8), secondParameter: expect.closeTo(Math.atan2(4, -3) / (2 * Math.PI), 8), contact: "crossing" });
+    expect(intersections[1]).toMatchObject({ point: { x: 3, y: -4 }, contact: "crossing" });
+    expectSymmetric(first, second);
+  });
+
+  it("classifies external and internal tangencies without treating seams as endpoints", () => {
+    const external: CircleCurve2D = { type: "circle", center: { x: 7, y: 0 }, radius: 2 };
+    expect(points(intersectCurves(first, external))[0]).toMatchObject({ point: { x: expect.closeTo(5, 10), y: 0 }, firstParameter: 0, secondParameter: 0.5, contact: "tangent" });
+    const internal: CircleCurve2D = { type: "circle", center: { x: 3, y: 0 }, radius: 2 };
+    expect(points(intersectCurves(first, internal))[0]).toMatchObject({ point: { x: expect.closeTo(5, 10), y: 0 }, firstParameter: 0, secondParameter: 0, contact: "tangent" });
+    expectSymmetric(first, external);
+  });
+
+  it("returns none for separated, contained, and unequal concentric circles", () => {
+    expect(intersectCurves(first, { type: "circle", center: { x: 20, y: 0 }, radius: 2 })).toEqual({ kind: "none" });
+    expect(intersectCurves(first, { type: "circle", center: { x: 1, y: 0 }, radius: 1 })).toEqual({ kind: "none" });
+    expect(intersectCurves(first, { type: "circle", center: { x: 0, y: 0 }, radius: 4 })).toEqual({ kind: "none" });
+  });
+
+  it("represents coincident circles as one complete overlap", () => {
+    const coincident: CircleCurve2D = { ...first };
+    expect(intersectCurves(first, coincident)).toEqual({ kind: "overlap", spans: [{ firstInterval: { t0: 0, t1: 1 }, secondInterval: { t0: 0, t1: 1 } }], points: [] });
+    expectSymmetric(first, coincident);
+  });
+
+  it("does not collapse distinct nearly concentric circles into overlap", () => {
+    const shifted: CircleCurve2D = { type: "circle", center: { x: 5e-9, y: 0 }, radius: 5 };
+    const result = intersectCurves(first, shifted, { geometryEpsilon: 1e-8 });
+    expect(result.kind).toBe("points");
+    expect(points(result)).toHaveLength(2);
+  });
+
+  it("keeps an interior near-tangent pair as two crossings and tolerates an exterior tangent", () => {
+    const interior: CircleCurve2D = { type: "circle", center: { x: 10 - 5e-9, y: 0 }, radius: 5 };
+    const interiorResult = intersectCurves(first, interior, { geometryEpsilon: 1e-8 });
+    expect(points(interiorResult)).toHaveLength(2);
+    expect(points(interiorResult).every(({ contact }) => contact === "crossing")).toBe(true);
+    const exterior: CircleCurve2D = { type: "circle", center: { x: 10 + 5e-9, y: 0 }, radius: 5 };
+    expect(intersectCurves(first, exterior, { geometryEpsilon: 1e-8 })).toMatchObject({ kind: "points", points: [{ contact: "tangent" }] });
+    expect(intersectCurves(first, { ...exterior, center: { x: 10 + 2e-8, y: 0 } }, { geometryEpsilon: 1e-8 })).toEqual({ kind: "none" });
+  });
+
+  it("preserves classification at large translated coordinates", () => {
+    const translatedFirst: CircleCurve2D = { type: "circle", center: { x: 1e15, y: 1e15 }, radius: 5 };
+    const translatedSecond: CircleCurve2D = { type: "circle", center: { x: 1e15 + 6, y: 1e15 }, radius: 5 };
+    const result = intersectCurves(translatedFirst, translatedSecond, { geometryEpsilon: 1e-8 });
+    expect(points(result)).toHaveLength(2);
+    expect(points(result).every(({ contact }) => contact === "crossing")).toBe(true);
+    expect(intersectCurves(translatedFirst, { ...translatedSecond, center: { x: 1e15 + 20, y: 1e15 } }, { geometryEpsilon: 1e-8 })).toEqual({ kind: "none" });
   });
 });
 
