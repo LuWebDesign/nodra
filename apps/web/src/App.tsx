@@ -40,7 +40,6 @@ const saveProjectMirror = (project: ProjectSnapshot): void => {
 };
 const defaultStyle = { stroke: "#000000", strokeWidth: 1 };
 const pointAlignedToNodeGuides = (point: PointMm, guides: readonly CreationGuide[]): PointMm => guides.reduce((current, guide) => guide.target.y === guide.source.y ? { x: guide.target.x, y: current.y } : { x: current.x, y: guide.target.y }, point);
-const defaultClosedFill = "rgba(101,217,255,0.22)";
 const isPropertyElement = (element: Element): element is PropertyElement => element.type === "rectangle" || element.type === "ellipse";
 const isRotatableElement = (element: Element): element is RotatableElement => hasRotation(element);
 const palette = [
@@ -1415,7 +1414,7 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
       <div className="panel-title">CIERRE DEL TRAZADO</div>
       <p className="muted">{selectedElement.closed ? "Este trazado está cerrado y conserva sus anclas y controles." : "Cierra el trazado seleccionado con un solo comando."}</p>
       <button type="button" aria-label={selectedElement.closed ? "Reabrir trazado" : "Cerrar trazado"} onClick={() => setEditorState(dispatch(editorRef.current, selectedElement.closed ? openPath(selectedElement.id) : closePath(selectedElement.id)))}>{selectedElement.closed ? "Reabrir trazado" : "Cerrar trazado"}</button>
-      {selectedElement.closed && <p className="muted path-fill-hint">Relleno: {selectedElement.style.fill ?? defaultClosedFill}. Elija un color en COLORES para cambiar el relleno; los objetos abiertos mantienen solo el contorno.</p>}
+      {selectedElement.closed && <p className="muted path-fill-hint">Relleno: {selectedElement.style.fill ?? selectedElement.style.stroke}. Elija un color en COLORES para cambiar el relleno; los objetos abiertos mantienen solo el contorno.</p>}
      </section> : null;
      const splineClosureControls = selectedElement?.type === "spline" ? <section className="path-join-card path-closure-card" role="group" aria-label="Cierre de la spline">
        <div className="panel-title">CIERRE DE LA SPLINE</div>

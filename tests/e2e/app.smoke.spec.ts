@@ -229,12 +229,12 @@ test("closes a Pluma silhouette by clicking its first anchor and supports fill a
   await page.mouse.click(firstBounds!.x + firstBounds!.width / 2, firstBounds!.y + firstBounds!.height / 2);
   await expect(page.locator(".page-svg svg path[data-element-id]")).toHaveAttribute("d", / Z$/);
   await expect(page.getByRole("button", { name: "Reabrir trazado" })).toBeVisible();
-  await expect(page.getByText("Relleno: rgba(101,217,255,0.22)")).toBeVisible();
+  await expect(page.getByText("Relleno: #000000")).toBeVisible();
 
   await page.getByRole("button", { name: "Azul", exact: true }).click();
   await expect(page.locator(".page-svg svg path[data-element-id]")).toHaveAttribute("fill", "#3b82f6");
   await page.getByRole("button", { name: "Deshacer" }).click();
-  await expect(page.locator(".page-svg svg path[data-element-id]")).toHaveAttribute("fill", "rgba(101,217,255,0.22)");
+  await expect(page.locator(".page-svg svg path[data-element-id]")).toHaveAttribute("fill", "#000000");
   await page.getByRole("button", { name: "Rehacer" }).click();
   await expect(page.locator(".page-svg svg path[data-element-id]")).toHaveAttribute("fill", "#3b82f6");
 });
