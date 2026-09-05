@@ -443,10 +443,86 @@ describe("IntersectionEngine Circle × Circle", () => {
   });
 });
 
+describe("IntersectionEngine Cubic × Cubic", () => {
+  it("finds transverse, tangent, and triple crossings without flattening", () => {
+    expectPointParameters(intersectCurves(cubic([-1, 0, 1, 0]), cubic([0, -1, 0, 1])), [[0.2113248654, 0.2113248654], [0.7886751346, 0.7886751346]]);
+    const horizontal = cubic([0, 0, 0, 0]);
+    const tangent = intersectCurves(cubic([0.25, -1 / 12, -1 / 12, 0.25]), horizontal);
+    expectPointParameters(tangent, [[0.5, 0.5]]);
+    expect(points(tangent)[0]?.contact).toBe("tangent");
+    const triple = intersectCurves(cubic([-1, 1, -1, 1]), horizontal);
+    expectPointParameters(triple, [[0.5, 0.5]]);
+    expect(points(triple)[0]?.contact).toBe("crossing");
+  });
+
+  it("refines a non-rational even-multiplicity contact in both parameters", () => {
+    const parameter = Math.SQRT1_2; const squared = parameter ** 2;
+    const tangent: CubicBezierCurve2D = {
+      type: "cubicBezier",
+      p0: { x: 0, y: squared }, p1: { x: 10 / 3, y: squared - 2 * parameter / 3 },
+      p2: { x: 20 / 3, y: squared - 4 * parameter / 3 + 1 / 3 }, p3: { x: 10, y: (1 - parameter) ** 2 },
+    };
+    const horizontal = cubic([0, 0, 0, 0]);
+    const result = intersectCurves(tangent, horizontal);
+    expectPointParameters(result, [[parameter, parameter]]);
+    expect(points(result)[0]!.contact).toBe("tangent");
+    expectSymmetric(tangent, horizontal);
+  });
+
+  it("supports effective polynomial degrees below three and a genuinely cubic coordinate", () => {
+    const first: CubicBezierCurve2D = { type: "cubicBezier", p0: { x: 0, y: 0 }, p1: { x: 0, y: 1 / 3 }, p2: { x: 0, y: 2 / 3 }, p3: { x: 1, y: 1 } };
+    const second: CubicBezierCurve2D = { type: "cubicBezier", p0: { x: 1, y: 0 }, p1: { x: 1, y: 1 / 3 }, p2: { x: 1, y: 2 / 3 }, p3: { x: 0, y: 1 } };
+    const parameter = 2 ** (-1 / 3);
+    expectPointParameters(intersectCurves(first, second), [[parameter, parameter]]);
+  });
+
+  it("handles endpoints, misses, translation, and symmetry", () => {
+    const first = cubic([0, 1, 1, 1]);
+    const second: CubicBezierCurve2D = { ...first, p0: { x: 0, y: 0 }, p1: { x: 4, y: 1 }, p2: { x: 7, y: 1 }, p3: { x: 10, y: 2 } };
+    expect(points(intersectCurves(first, second))[0]?.contact).toBe("endpoint");
+    expect(intersectCurves(cubic([-1, 0, 1, 0]), cubic([10, 10, 10, 10]))).toEqual({ kind: "none" });
+    const translated = (curve: CubicBezierCurve2D): CubicBezierCurve2D => ({ ...curve, p0: { x: curve.p0.x + 1e15, y: curve.p0.y + 1e15 }, p1: { x: curve.p1.x + 1e15, y: curve.p1.y + 1e15 }, p2: { x: curve.p2.x + 1e15, y: curve.p2.y + 1e15 }, p3: { x: curve.p3.x + 1e15, y: curve.p3.y + 1e15 } });
+    const direct = intersectCurves(cubic([-1, 0, 1, 0]), cubic([0, -1, 0, 1]));
+    const reverse = intersectCurves(cubic([0, -1, 0, 1]), cubic([-1, 0, 1, 0]));
+    expectPointParameters(reverse, points(direct).map(({ firstParameter, secondParameter }) => [secondParameter, firstParameter]));
+    expect(points(intersectCurves(translated(cubic([-1, 0, 1, 0])), translated(cubic([0, -1, 0, 1]))))).toHaveLength(2);
+    const translatedFirst = translated(cubic([0, 0, 0, 0])); const translatedSeparated = translated(cubic([0.5, 0.5, 0.5, 0.5]));
+    expect(intersectCurves(translatedFirst, translatedSeparated)).toEqual({ kind: "none" });
+  });
+
+  it("distinguishes collinear point contact, disjoint ranges, and shared portions", () => {
+    const vertical = (start: number, end: number): CubicBezierCurve2D => ({ type: "cubicBezier", p0: { x: 0, y: start }, p1: { x: 0, y: start + (end - start) / 3 }, p2: { x: 0, y: start + 2 * (end - start) / 3 }, p3: { x: 0, y: end } });
+    expect(intersectCurves(vertical(0, 5), vertical(5, 10))).toEqual({ kind: "points", points: [{ point: { x: 0, y: 5 }, firstParameter: 1, secondParameter: 0, contact: "endpoint" }] });
+    expect(intersectCurves(vertical(0, 4), vertical(5, 10))).toEqual({ kind: "none" });
+    expect(intersectCurves(vertical(0, 6), vertical(5, 10))).toEqual({ kind: "unsupported", reason: "coincident-curve-portions" });
+    expectSymmetric(vertical(0, 5), vertical(5, 10));
+  });
+
+  it("canonicalizes a constant cubic as one endpoint parameter", () => {
+    const point = { x: 5, y: 0 };
+    const constant: CubicBezierCurve2D = { type: "cubicBezier", p0: point, p1: point, p2: point, p3: point };
+    const horizontal = cubic([0, 0, 0, 0]);
+    expect(intersectCurves(constant, horizontal)).toEqual({ kind: "points", points: [{ point, firstParameter: 0, secondParameter: 0.5, contact: "endpoint" }] });
+    expectSymmetric(constant, horizontal);
+  });
+
+  it("reports exact full overlap and uncertified coincident portions distinctly", () => {
+    const base = cubic([-1, 0, 1, 0]);
+    expect(intersectCurves(base, base)).toMatchObject({ kind: "overlap", spans: [{ firstInterval: { t0: 0, t1: 1 }, secondInterval: { t0: 0, t1: 1 } }] });
+    expect(intersectCurves(base, { ...base, p0: base.p3, p1: base.p2, p2: base.p1, p3: base.p0 })).toMatchObject({ kind: "overlap" });
+    const collinear = cubic([0, 0, 0, 0]);
+    expect(intersectCurves(collinear, { ...collinear, p0: { x: 5, y: 0 }, p1: { x: 20 / 3, y: 0 }, p2: { x: 25 / 3, y: 0 }, p3: { x: 10, y: 0 } })).toEqual({ kind: "unsupported", reason: "coincident-curve-portions" });
+    const disjoint: CubicBezierCurve2D = { ...collinear, p0: { x: 20, y: 0 }, p1: { x: 70 / 3, y: 0 }, p2: { x: 80 / 3, y: 0 }, p3: { x: 30, y: 0 } };
+    expect(intersectCurves(collinear, disjoint)).toEqual({ kind: "none" });
+    const nearlyEqual: CubicBezierCurve2D = { ...base, p0: { ...base.p0, y: base.p0.y + 5e-9 }, p1: { ...base.p1, y: base.p1.y + 5e-9 }, p2: { ...base.p2, y: base.p2.y + 5e-9 }, p3: { ...base.p3, y: base.p3.y + 5e-9 } };
+    expect(intersectCurves(base, nearlyEqual, { geometryEpsilon: 1e-8 }).kind).not.toBe("overlap");
+  });
+});
+
 describe("IntersectionEngine contract and legacy compatibility", () => {
   it("reports unsupported pairs explicitly and validates every Curve2D kind", () => {
     const bezier = cubic([-1, -1, 1, 1]);
-    expect(intersectCurves(bezier, bezier)).toEqual({ kind: "unsupported", reason: "curve-pair" });
+    expect(intersectCurves(bezier, bezier)).toMatchObject({ kind: "overlap" });
     expect(() => intersectCurves(horizontal, { type: "circle", center: { x: Number.NaN, y: 0 }, radius: 1 })).toThrow("curve coordinates must be finite");
     expect(() => intersectCurves(horizontal, { type: "arc", center: { x: 0, y: 0 }, radius: 0, startAngle: 0, endAngle: 1, direction: "clockwise" })).toThrow("curve radius must be positive");
   });

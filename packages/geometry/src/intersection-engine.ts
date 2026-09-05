@@ -23,7 +23,7 @@ export type IntersectionResult =
   | { readonly kind: "none" }
   | { readonly kind: "points"; readonly points: readonly IntersectionPoint[] }
   | { readonly kind: "overlap"; readonly spans: readonly IntersectionSpan[]; readonly points: readonly IntersectionPoint[] }
-  | { readonly kind: "unsupported"; readonly reason: "curve-pair" | "degenerate-line" };
+  | { readonly kind: "unsupported"; readonly reason: "curve-pair" | "degenerate-line" | "coincident-curve-portions" };
 
 const ROOT_COEFFICIENT_EPSILON = Number.EPSILON * 128;
 const ROOT_VALUE_EPSILON = Number.EPSILON * 2048;
@@ -55,6 +55,19 @@ function cubicPoint(curve: CubicBezierCurve2D, parameter: number): PointMm {
   return checkedPoint({
     x: inverse ** 3 * curve.p0.x + 3 * inverse ** 2 * parameter * curve.p1.x + 3 * inverse * parameter ** 2 * curve.p2.x + parameter ** 3 * curve.p3.x,
     y: inverse ** 3 * curve.p0.y + 3 * inverse ** 2 * parameter * curve.p1.y + 3 * inverse * parameter ** 2 * curve.p2.y + parameter ** 3 * curve.p3.y,
+  });
+}
+function cubicDerivativeAt(curve: CubicBezierCurve2D, parameter: number): PointMm {
+  const inverse = 1 - parameter;
+  return checkedPoint({
+    x: 3 * (inverse ** 2 * (curve.p1.x - curve.p0.x) + 2 * inverse * parameter * (curve.p2.x - curve.p1.x) + parameter ** 2 * (curve.p3.x - curve.p2.x)),
+    y: 3 * (inverse ** 2 * (curve.p1.y - curve.p0.y) + 2 * inverse * parameter * (curve.p2.y - curve.p1.y) + parameter ** 2 * (curve.p3.y - curve.p2.y)),
+  });
+}
+function cubicSecondDerivativeAt(curve: CubicBezierCurve2D, parameter: number): PointMm {
+  return checkedPoint({
+    x: 6 * ((1 - parameter) * (curve.p2.x - 2 * curve.p1.x + curve.p0.x) + parameter * (curve.p3.x - 2 * curve.p2.x + curve.p1.x)),
+    y: 6 * ((1 - parameter) * (curve.p2.y - 2 * curve.p1.y + curve.p0.y) + parameter * (curve.p3.y - 2 * curve.p2.y + curve.p1.y)),
   });
 }
 function validateCurve(curve: Curve2D): void {
@@ -445,6 +458,213 @@ function intersectCircles(first: CircleCurve2D, second: CircleCurve2D, geometryE
   return points.length ? { kind: "points", points } : none();
 }
 
+type Polynomial = number[];
+function polynomialAdd(first: readonly number[], second: readonly number[], sign = 1): Polynomial {
+  const result = Array.from<number>({ length: Math.max(first.length, second.length) }).fill(0);
+  for (let i = 0; i < result.length; i += 1) result[i] = checkedNumber((first[i] ?? 0) + sign * (second[i] ?? 0));
+  return result;
+}
+function polynomialMultiply(first: readonly number[], second: readonly number[]): Polynomial {
+  const result = Array.from<number>({ length: first.length + second.length - 1 }).fill(0);
+  for (let i = 0; i < first.length; i += 1) for (let j = 0; j < second.length; j += 1) result[i + j] = checkedNumber(result[i + j]! + first[i]! * second[j]!);
+  return result;
+}
+function polynomialDeterminant(matrix: readonly (readonly Polynomial[])[]): Polynomial {
+  const size = matrix.length; const used = Array<boolean>(size).fill(false); const result: Polynomial = [0];
+  const visit = (row: number, sign: number, product: Polynomial): void => {
+    if (row === size) { while (result.length < product.length) result.push(0); for (let i = 0; i < product.length; i += 1) result[i] = checkedNumber(result[i]! + sign * product[i]!); return; }
+    for (let column = 0; column < size; column += 1) if (!used[column]) {
+      used[column] = true;
+      let inversions = 0; for (let prior = column + 1; prior < size; prior += 1) if (used[prior]) inversions += 1;
+      visit(row + 1, sign * (inversions % 2 ? -1 : 1), polynomialMultiply(product, matrix[row]![column]!));
+      used[column] = false;
+    }
+  };
+  visit(0, 1, [1]); return result;
+}
+function cubicDistanceCandidates(cubic: CubicBezierCurve2D, point: PointMm, parameterEpsilon: number): number[] {
+  const x = bezierPower([cubic.p0.x - point.x, cubic.p1.x - point.x, cubic.p2.x - point.x, cubic.p3.x - point.x]);
+  const y = bezierPower([cubic.p0.y - point.y, cubic.p1.y - point.y, cubic.p2.y - point.y, cubic.p3.y - point.y]);
+  const distanceDerivative = polynomialAdd(polynomialMultiply(x, polynomialDerivative(x)), polynomialMultiply(y, polynomialDerivative(y)));
+  return deduplicatedParameters([0, ...rootsInUnit(distanceDerivative, parameterEpsilon, ROOT_VALUE_EPSILON, true), 1], parameterEpsilon);
+}
+function refineCubicParameters(first: CubicBezierCurve2D, second: CubicBezierCurve2D, initialFirst: number, initialSecond: number, parameterEpsilon: number): readonly [number, number] | undefined {
+  let firstParameter = initialFirst; let secondParameter = initialSecond;
+  for (let iteration = 0; iteration < 64; iteration += 1) {
+    const difference = subtract(cubicPoint(first, firstParameter), cubicPoint(second, secondParameter));
+    const firstDerivative = cubicDerivativeAt(first, firstParameter); const secondDerivative = cubicDerivativeAt(second, secondParameter);
+    const determinant = cross(firstDerivative, secondDerivative);
+    const derivativeScale = Math.hypot(firstDerivative.x, firstDerivative.y) * Math.hypot(secondDerivative.x, secondDerivative.y);
+    let firstStep: number; let secondStep: number;
+    if (Math.abs(determinant) > Math.max(ANGULAR_EPSILON, parameterEpsilon * 4) * derivativeScale) {
+      firstStep = cross(secondDerivative, difference) / determinant; secondStep = cross(firstDerivative, difference) / determinant;
+    } else {
+      const firstSecondDerivative = cubicSecondDerivativeAt(first, firstParameter); const secondSecondDerivative = cubicSecondDerivativeAt(second, secondParameter);
+      const firstGradient = dot(difference, firstDerivative); const secondGradient = -dot(difference, secondDerivative);
+      const firstHessian = dot(firstDerivative, firstDerivative) + dot(difference, firstSecondDerivative);
+      const secondHessian = dot(secondDerivative, secondDerivative) - dot(difference, secondSecondDerivative);
+      const mixedHessian = -dot(firstDerivative, secondDerivative); const hessianDeterminant = firstHessian * secondHessian - mixedHessian ** 2;
+      if (Math.abs(hessianDeterminant) <= Number.EPSILON * Math.max(Number.MIN_VALUE, Math.abs(firstHessian * secondHessian), mixedHessian ** 2)) break;
+      firstStep = (-firstGradient * secondHessian + mixedHessian * secondGradient) / hessianDeterminant;
+      secondStep = (-firstHessian * secondGradient + mixedHessian * firstGradient) / hessianDeterminant;
+    }
+    const nextFirst = firstParameter + firstStep; const nextSecond = secondParameter + secondStep;
+    if (![nextFirst, nextSecond].every(Number.isFinite) || nextFirst < -parameterEpsilon || nextFirst > 1 + parameterEpsilon || nextSecond < -parameterEpsilon || nextSecond > 1 + parameterEpsilon) return undefined;
+    firstParameter = clamp(nextFirst); secondParameter = clamp(nextSecond);
+    if (Math.max(Math.abs(firstStep), Math.abs(secondStep)) <= Number.EPSILON * 4) break;
+  }
+  return [firstParameter, secondParameter];
+}
+
+function sameCubic(first: CubicBezierCurve2D, second: CubicBezierCurve2D): boolean {
+  return [first.p0, first.p1, first.p2, first.p3].every((point, index) => {
+    const other = [second.p0, second.p1, second.p2, second.p3][index]!;
+    return point.x === other.x && point.y === other.y;
+  });
+}
+function reversedCubic(first: CubicBezierCurve2D, second: CubicBezierCurve2D): boolean {
+  return [first.p0, first.p1, first.p2, first.p3].every((point, index) => {
+    const other = [second.p3, second.p2, second.p1, second.p0][index]!;
+    return point.x === other.x && point.y === other.y;
+  });
+}
+function cubicPointIntersections(cubic: CubicBezierCurve2D, point: PointMm, geometryEpsilon: number, parameterEpsilon: number): number[] {
+  const offsets = [cubic.p0, cubic.p1, cubic.p2, cubic.p3].map((control) => subtract(control, point)) as [PointMm, PointMm, PointMm, PointMm];
+  const scale = Math.max(...offsets.flatMap((offset) => [Math.abs(offset.x), Math.abs(offset.y)]));
+  const local: CubicBezierCurve2D = { type: "cubicBezier", p0: offsets[0], p1: offsets[1], p2: offsets[2], p3: offsets[3] };
+  const x = bezierPower(offsets.map((offset) => offset.x / scale) as [number, number, number, number]);
+  const y = bezierPower(offsets.map((offset) => offset.y / scale) as [number, number, number, number]);
+  const polynomial = Math.max(...x.map(Math.abs)) >= Math.max(...y.map(Math.abs)) ? x : y;
+  const candidates = rootsInUnit(polynomial, parameterEpsilon, ROOT_VALUE_EPSILON, true);
+  const localTolerance = geometryEpsilon + Number.EPSILON * Math.max(1, scale) * COORDINATE_ULP_FACTOR;
+  const outputTolerance = geometryEpsilon + coordinateTolerance([cubic]);
+  return candidates.filter((parameter) => {
+    const localPoint = cubicPoint(local, parameter); const outputPoint = cubicPoint(cubic, parameter);
+    return Math.hypot(localPoint.x, localPoint.y) <= localTolerance && Math.hypot(outputPoint.x - point.x, outputPoint.y - point.y) <= outputTolerance;
+  });
+}
+function cubicCubicTangent(first: CubicBezierCurve2D, second: CubicBezierCurve2D, firstParameter: number, secondParameter: number, parameterEpsilon: number): boolean {
+  const firstDerivative = cubicDerivativeAt(first, firstParameter); const secondDerivative = cubicDerivativeAt(second, secondParameter);
+  const firstSpeed = Math.hypot(firstDerivative.x, firstDerivative.y); const secondSpeed = Math.hypot(secondDerivative.x, secondDerivative.y);
+  if (firstSpeed > 0 && secondSpeed > 0 && Math.abs(cross(firstDerivative, secondDerivative)) > Math.max(ANGULAR_EPSILON, parameterEpsilon * 4) * firstSpeed * secondSpeed) return false;
+  const reference = secondSpeed > 0 ? secondDerivative : firstDerivative;
+  if (Math.hypot(reference.x, reference.y) === 0) return true;
+  const baseOffset = Math.max(Math.cbrt(ROOT_VALUE_EPSILON), parameterEpsilon * 4);
+  const firstOffset = Math.min(baseOffset, firstParameter / 2, (1 - firstParameter) / 2);
+  if (firstOffset <= Number.EPSILON) return true;
+  const orientation = firstSpeed > 0 && secondSpeed > 0 && dot(firstDerivative, secondDerivative) < 0 ? -1 : 1;
+  const proportionalOffset = firstSpeed > 0 && secondSpeed > 0 ? firstOffset * firstSpeed / secondSpeed : firstOffset;
+  const secondOffset = Math.min(proportionalOffset, orientation > 0 ? secondParameter / 2 : (1 - secondParameter) / 2, orientation > 0 ? (1 - secondParameter) / 2 : secondParameter / 2);
+  if (secondOffset <= Number.EPSILON) return true;
+  const beforeDifference = subtract(cubicPoint(first, firstParameter - firstOffset), cubicPoint(second, secondParameter - orientation * secondOffset));
+  const afterDifference = subtract(cubicPoint(first, firstParameter + firstOffset), cubicPoint(second, secondParameter + orientation * secondOffset));
+  const beforeSide = cross(reference, beforeDifference); const afterSide = cross(reference, afterDifference);
+  return beforeSide === 0 || afterSide === 0 || (beforeSide < 0) === (afterSide < 0);
+}
+
+function intersectCubicsOneWay(first: CubicBezierCurve2D, second: CubicBezierCurve2D, geometryEpsilon: number, parameterEpsilon: number): IntersectionResult {
+  const outputTolerance = geometryEpsilon + coordinateTolerance([first, second]);
+  if (sameCubic(first, second)) return { kind: "overlap", spans: [{ firstInterval: { t0: 0, t1: 1 }, secondInterval: { t0: 0, t1: 1 } }], points: [] };
+  if (reversedCubic(first, second)) return { kind: "overlap", spans: [{ firstInterval: { t0: 0, t1: 1 }, secondInterval: { t0: 0, t1: 1 } }], points: [] };
+  const firstControls = [first.p0, first.p1, first.p2, first.p3]; const secondControls = [second.p0, second.p1, second.p2, second.p3];
+  const firstConstant = firstControls.slice(1).every((point) => point.x === first.p0.x && point.y === first.p0.y);
+  const secondConstant = secondControls.slice(1).every((point) => point.x === second.p0.x && point.y === second.p0.y);
+  if (firstConstant && secondConstant) return Math.hypot(first.p0.x - second.p0.x, first.p0.y - second.p0.y) <= outputTolerance ? { kind: "points", points: [{ point: checkedPoint(first.p0), firstParameter: 0, secondParameter: 0, contact: "endpoint" }] } : none();
+  if (firstConstant || secondConstant) {
+    const constant = firstConstant ? first : second; const moving = firstConstant ? second : first; const parameters = cubicPointIntersections(moving, constant.p0, geometryEpsilon, parameterEpsilon);
+    const points = parameters.map((movingParameter) => ({ point: checkedPoint(constant.p0), firstParameter: firstConstant ? 0 : movingParameter, secondParameter: firstConstant ? movingParameter : 0, contact: "endpoint" as const }));
+    return points.length ? { kind: "points", points } : none();
+  }
+  // Eliminate the second parameter from the two cubic equations with a 6x6 Sylvester determinant.
+  // Coordinates are translated/scaled first: this avoids catastrophic cancellation for translated drawings.
+  const origin = first.p0;
+  const localControls = firstControls.concat(secondControls).map((point) => subtract(point, origin));
+  const scale = Math.max(...localControls.flatMap((point) => [Math.abs(point.x), Math.abs(point.y)]));
+  const numericTolerance = Number.EPSILON * Math.max(1, scale) * COORDINATE_ULP_FACTOR;
+  const classificationTolerance = geometryEpsilon + numericTolerance;
+  const a = localControls.slice(0, 4).map((point) => ({ x: point.x / scale, y: point.y / scale }));
+  const b = localControls.slice(4).map((point) => ({ x: point.x / scale, y: point.y / scale }));
+  const localFirst: CubicBezierCurve2D = { type: "cubicBezier", p0: a[0]!, p1: a[1]!, p2: a[2]!, p3: a[3]! };
+  const localSecond: CubicBezierCurve2D = { type: "cubicBezier", p0: b[0]!, p1: b[1]!, p2: b[2]!, p3: b[3]! };
+  const px = bezierPower(a.map((p) => p.x) as [number, number, number, number]); const py = bezierPower(a.map((p) => p.y) as [number, number, number, number]);
+  const qx = bezierPower(b.map((p) => p.x) as [number, number, number, number]); const qy = bezierPower(b.map((p) => p.y) as [number, number, number, number]);
+  const equation = (q: readonly number[], p: readonly number[]): Polynomial[] => {
+    const coefficients = q.map((coefficient, index) => index === 0 ? polynomialAdd([coefficient], p, -1) : [coefficient]);
+    const scale = Math.max(...q.map(Math.abs));
+    while (coefficients.length > 1 && Math.abs(q[coefficients.length - 1]!) <= ROOT_COEFFICIENT_EPSILON * scale) coefficients.pop();
+    return coefficients;
+  };
+  const sylvester = (x: Polynomial[], y: Polynomial[]): Polynomial[][] => {
+    const xDegree = x.length - 1; const yDegree = y.length - 1; const size = xDegree + yDegree;
+    const matrix: Polynomial[][] = Array.from({ length: size }, () => Array.from({ length: size }, (): Polynomial => [0]));
+    for (let row = 0; row < yDegree; row += 1) for (let column = 0; column <= xDegree; column += 1) matrix[row]![column + row] = x[column]!;
+    for (let row = 0; row < xDegree; row += 1) for (let column = 0; column <= yDegree; column += 1) matrix[row + yDegree]![column + row] = y[column]!;
+    return matrix;
+  };
+  const xEquation = equation(qx, px); const yEquation = equation(qy, py);
+  const resultant = polynomialDeterminant(sylvester(xEquation, yEquation));
+  const resultantScale = Math.max(...resultant.map(Math.abs));
+  if (resultantScale === 0) {
+    const directionCandidate = firstControls.slice(1).map((point) => subtract(point, first.p0)).sort((left, right) => Math.hypot(right.x, right.y) - Math.hypot(left.x, left.y))[0]!;
+    const directionLength = Math.hypot(directionCandidate.x, directionCandidate.y);
+    const direction = directionLength > 0 ? { x: directionCandidate.x / directionLength, y: directionCandidate.y / directionLength } : undefined;
+    const onSupportingLine = direction && firstControls.concat(secondControls).every((point) => Math.abs(cross(direction, subtract(point, first.p0))) <= classificationTolerance);
+    if (!direction || !onSupportingLine) return { kind: "unsupported", reason: "coincident-curve-portions" };
+    const scalarPolynomial = (controls: readonly PointMm[]): readonly [number, number, number, number] => bezierPower(controls.map((point) => dot(subtract(point, first.p0), direction)) as [number, number, number, number]);
+    const scalarRange = (polynomial: readonly number[]): readonly [number, number] => {
+      const candidates = [0, 1, ...rootsInUnit(polynomialDerivative(polynomial), parameterEpsilon, ROOT_VALUE_EPSILON, true)];
+      const values = candidates.map((parameter) => polynomialAt(polynomial, parameter));
+      return [Math.min(...values), Math.max(...values)];
+    };
+    const firstScalar = scalarPolynomial(firstControls); const secondScalar = scalarPolynomial(secondControls);
+    const firstRange = scalarRange(firstScalar); const secondRange = scalarRange(secondScalar);
+    const overlapStart = Math.max(firstRange[0], secondRange[0]); const overlapEnd = Math.min(firstRange[1], secondRange[1]);
+    if (overlapEnd < overlapStart - classificationTolerance) return none();
+    if (overlapEnd - overlapStart > classificationTolerance) return { kind: "unsupported", reason: "coincident-curve-portions" };
+    const contactScalar = (overlapStart + overlapEnd) / 2;
+    const contactPoint = checkedPoint({ x: first.p0.x + direction.x * contactScalar, y: first.p0.y + direction.y * contactScalar });
+    const firstParameters = cubicPointIntersections(first, contactPoint, geometryEpsilon, parameterEpsilon);
+    const secondParameters = cubicPointIntersections(second, contactPoint, geometryEpsilon, parameterEpsilon);
+    const contacts = firstParameters.flatMap((firstParameter): IntersectionPoint[] => secondParameters.map((secondParameter) => ({ point: cubicPoint(first, firstParameter), firstParameter, secondParameter, contact: endpointContact(firstParameter, secondParameter, parameterEpsilon) ? "endpoint" : "tangent" })));
+    return contacts.length ? { kind: "points", points: contacts } : none();
+  }
+  const rawFirstParameters = rootsInUnit(resultant, parameterEpsilon, ROOT_VALUE_EPSILON, true);
+  const normalizedResultant = resultant.map((coefficient) => coefficient / resultantScale);
+  const repeatedCandidates = rootsInUnit(polynomialDerivative(normalizedResultant), parameterEpsilon, ROOT_VALUE_EPSILON, true)
+    .filter((parameter) => Math.abs(polynomialAt(normalizedResultant, parameter)) <= ROOT_VALUE_EPSILON);
+  const repeatedNeighborhood = Math.max(Math.cbrt(ROOT_VALUE_EPSILON), parameterEpsilon * 4);
+  const firstParameters = deduplicatedParameters(rawFirstParameters.map((parameter) => repeatedCandidates.find((candidate) => Math.abs(candidate - parameter) <= repeatedNeighborhood) ?? parameter), parameterEpsilon);
+  const points: IntersectionPoint[] = [];
+  for (const resultantFirstParameter of firstParameters) {
+    const localResultantPoint = cubicPoint(localFirst, resultantFirstParameter);
+    for (const candidateSecondParameter of cubicDistanceCandidates(localSecond, localResultantPoint, parameterEpsilon)) {
+      const refined = refineCubicParameters(localFirst, localSecond, resultantFirstParameter, candidateSecondParameter, parameterEpsilon);
+      if (!refined) continue;
+      const [firstParameter, secondParameter] = refined;
+      const localFirstPoint = cubicPoint(localFirst, firstParameter); const localSecondPoint = cubicPoint(localSecond, secondParameter);
+      if (Math.hypot(localFirstPoint.x - localSecondPoint.x, localFirstPoint.y - localSecondPoint.y) * scale > classificationTolerance) continue;
+      const firstPoint = cubicPoint(first, firstParameter); const secondPoint = cubicPoint(second, secondParameter);
+      if (Math.hypot(firstPoint.x - secondPoint.x, firstPoint.y - secondPoint.y) > outputTolerance) continue;
+      if (points.some((item) => Math.abs(item.firstParameter - firstParameter) <= parameterEpsilon && Math.abs(item.secondParameter - secondParameter) <= parameterEpsilon)) continue;
+      const tangent = cubicCubicTangent(localFirst, localSecond, firstParameter, secondParameter, parameterEpsilon);
+      points.push({ point: firstPoint, firstParameter, secondParameter, contact: endpointContact(firstParameter, secondParameter, parameterEpsilon) ? "endpoint" : tangent ? "tangent" : "crossing" });
+    }
+  }
+  points.sort((left, right) => left.firstParameter - right.firstParameter);
+  return points.length ? { kind: "points", points } : none();
+}
+
+function intersectCubics(first: CubicBezierCurve2D, second: CubicBezierCurve2D, geometryEpsilon: number, parameterEpsilon: number): IntersectionResult {
+  const direct = intersectCubicsOneWay(first, second, geometryEpsilon, parameterEpsilon);
+  if (direct.kind !== "points") return direct;
+  const reverse = intersectCubicsOneWay(second, first, geometryEpsilon, parameterEpsilon);
+  if (reverse.kind === "unsupported") return reverse;
+  if (reverse.kind !== "points") return none();
+  const certificationTolerance = Math.max(parameterEpsilon, Math.cbrt(ROOT_VALUE_EPSILON));
+  const certified = direct.points.filter((intersection) => reverse.points.some((candidate) => Math.abs(candidate.firstParameter - intersection.secondParameter) <= certificationTolerance && Math.abs(candidate.secondParameter - intersection.firstParameter) <= certificationTolerance && Math.hypot(candidate.point.x - intersection.point.x, candidate.point.y - intersection.point.y) <= geometryEpsilon + coordinateTolerance([first, second])));
+  return certified.length ? { kind: "points", points: certified } : none();
+}
+
 function swapResult(result: IntersectionResult): IntersectionResult {
   if (result.kind === "points") return { kind: "points", points: result.points.map((point) => ({ ...point, firstParameter: point.secondParameter, secondParameter: point.firstParameter })).sort((first, second) => first.firstParameter - second.firstParameter) };
   if (result.kind === "overlap") return { kind: "overlap", spans: result.spans.map((span) => ({ firstInterval: span.secondInterval, secondInterval: span.firstInterval })).sort((first, second) => first.firstInterval.t0 - second.firstInterval.t0), points: result.points.map((point) => ({ ...point, firstParameter: point.secondParameter, secondParameter: point.firstParameter })).sort((first, second) => first.firstParameter - second.firstParameter) };
@@ -456,6 +676,7 @@ export function intersectCurves(first: Curve2D, second: Curve2D, options?: Inter
   validateCurve(first); validateCurve(second);
   const { geometryEpsilon, parameterEpsilon } = optionsOrDefaults(options);
   if (first.type === "line" && second.type === "line") return intersectLines(first, second, geometryEpsilon, parameterEpsilon);
+  if (first.type === "cubicBezier" && second.type === "cubicBezier") return intersectCubics(first, second, geometryEpsilon, parameterEpsilon);
   if (first.type === "cubicBezier" && second.type === "line") return intersectCubicLine(first, second, geometryEpsilon, parameterEpsilon);
   if (first.type === "line" && second.type === "cubicBezier") return swapResult(intersectCubicLine(second, first, geometryEpsilon, parameterEpsilon));
   if (first.type === "line" && second.type === "circle") return intersectLineCircle(first, second, geometryEpsilon, parameterEpsilon);
