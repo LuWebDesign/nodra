@@ -1,5 +1,5 @@
 import type { PointMm } from "@nodra/domain";
-import type { CircleCurve2D, CubicBezierCurve2D, Curve2D, LineCurve2D } from "./curve2d.js";
+import type { ArcCurve2D, CircleCurve2D, CubicBezierCurve2D, Curve2D, LineCurve2D } from "./curve2d.js";
 import { GEOMETRY_EPSILON, PARAMETER_EPSILON } from "./tolerances.js";
 
 export interface IntersectionOptions {
@@ -261,6 +261,29 @@ function circleParameter(circle: CircleCurve2D, point: PointMm): number {
   return ((angle % TAU) + TAU) % TAU / TAU;
 }
 
+function normalizedAngle(angle: number): number { return ((angle % TAU) + TAU) % TAU; }
+function arcSweep(arc: ArcCurve2D): number {
+  if (arc.fullTurn) return TAU;
+  const direction = arc.direction === "clockwise" ? 1 : -1;
+  return normalizedAngle((arc.endAngle - arc.startAngle) * direction);
+}
+function arcParameterAtPoint(arc: ArcCurve2D, point: PointMm, geometryEpsilon: number, parameterEpsilon: number): number | undefined {
+  const direction = arc.direction === "clockwise" ? 1 : -1; const sweep = arcSweep(arc);
+  const angle = Math.atan2(point.y - arc.center.y, point.x - arc.center.x);
+  const progress = normalizedAngle((angle - arc.startAngle) * direction);
+  const numericTolerance = coordinateTolerance([arc]);
+  const angularTolerance = (geometryEpsilon + numericTolerance) / arc.radius;
+  if (arc.fullTurn) return progress / TAU;
+  if (sweep * arc.radius <= geometryEpsilon + numericTolerance || sweep / TAU <= parameterEpsilon) return Math.min(progress, TAU - progress) <= angularTolerance ? 0 : undefined;
+  if (progress <= sweep) return progress / sweep;
+  const distanceFromEnd = progress - sweep; const distanceFromStart = TAU - progress;
+  if (Math.min(distanceFromEnd, distanceFromStart) > angularTolerance) return undefined;
+  return distanceFromEnd <= distanceFromStart ? 1 : 0;
+}
+function arcEndpoint(parameter: number, arc: ArcCurve2D, parameterEpsilon: number): boolean {
+  return !arc.fullTurn && (parameter <= parameterEpsilon || parameter >= 1 - parameterEpsilon);
+}
+
 function intersectLineCircle(line: LineCurve2D, circle: CircleCurve2D, geometryEpsilon: number, parameterEpsilon: number): IntersectionResult {
   const frame = lineFrame(line);
   if (!frame) return { kind: "unsupported", reason: "degenerate-line" };
@@ -337,6 +360,58 @@ function intersectCubicCircle(cubic: CubicBezierCurve2D, circle: CircleCurve2D, 
   return points.length ? { kind: "points", points } : none();
 }
 
+function intersectLineArc(line: LineCurve2D, arc: ArcCurve2D, geometryEpsilon: number, parameterEpsilon: number): IntersectionResult {
+  const circle: CircleCurve2D = { type: "circle", center: arc.center, radius: arc.radius };
+  const result = intersectLineCircle(line, circle, geometryEpsilon, parameterEpsilon);
+  if (result.kind !== "points") return result;
+  const points = result.points.flatMap((intersection): IntersectionPoint[] => {
+    const secondParameter = arcParameterAtPoint(arc, intersection.point, geometryEpsilon, parameterEpsilon);
+    if (secondParameter === undefined) return [];
+    return [{ ...intersection, secondParameter, contact: intersection.contact === "endpoint" || arcEndpoint(secondParameter, arc, parameterEpsilon) ? "endpoint" : intersection.contact }];
+  });
+  return points.length ? { kind: "points", points } : none();
+}
+
+function coincidentCircleArcSpans(arc: ArcCurve2D, geometryEpsilon: number, parameterEpsilon: number): readonly IntersectionSpan[] {
+  if (arc.fullTurn) return [{ firstInterval: { t0: 0, t1: 1 }, secondInterval: { t0: 0, t1: 1 } }];
+  const sweep = arcSweep(arc);
+  const spatialTolerance = geometryEpsilon + coordinateTolerance([arc]);
+  if (sweep * arc.radius <= spatialTolerance || sweep / TAU <= parameterEpsilon) return [];
+  const start = normalizedAngle(arc.startAngle) / TAU; const fraction = sweep / TAU;
+  const signedFraction = arc.direction === "clockwise" ? fraction : -fraction;
+  const end = start + signedFraction;
+  if (end >= 0 && end <= 1) return [{ firstInterval: { t0: Math.min(start, end), t1: Math.max(start, end) }, secondInterval: { t0: 0, t1: 1 } }];
+  const seamParameter = signedFraction > 0 ? (1 - start) / signedFraction : -start / signedFraction;
+  const spans = signedFraction > 0
+    ? [
+        { firstInterval: { t0: 0, t1: end - 1 }, secondInterval: { t0: seamParameter, t1: 1 } },
+        { firstInterval: { t0: start, t1: 1 }, secondInterval: { t0: 0, t1: seamParameter } },
+      ]
+    : [
+        { firstInterval: { t0: 0, t1: start }, secondInterval: { t0: 0, t1: seamParameter } },
+        { firstInterval: { t0: end + 1, t1: 1 }, secondInterval: { t0: seamParameter, t1: 1 } },
+      ];
+  return spans.filter(({ firstInterval, secondInterval }) => firstInterval.t1 - firstInterval.t0 > Number.EPSILON && secondInterval.t1 - secondInterval.t0 > Number.EPSILON).sort((first, second) => first.firstInterval.t0 - second.firstInterval.t0);
+}
+
+function intersectCircleArc(circle: CircleCurve2D, arc: ArcCurve2D, geometryEpsilon: number, parameterEpsilon: number): IntersectionResult {
+  const supportingCircle: CircleCurve2D = { type: "circle", center: arc.center, radius: arc.radius };
+  const result = intersectCircles(circle, supportingCircle, geometryEpsilon);
+  if (result.kind === "overlap") {
+    const spans = coincidentCircleArcSpans(arc, geometryEpsilon, parameterEpsilon);
+    if (spans.length) return { kind: "overlap", spans, points: [] };
+    const angle = arc.startAngle; const point = checkedPoint({ x: arc.center.x + arc.radius * Math.cos(angle), y: arc.center.y + arc.radius * Math.sin(angle) });
+    return { kind: "points", points: [{ point, firstParameter: circleParameter(circle, point), secondParameter: 0, contact: "endpoint" }] };
+  }
+  if (result.kind !== "points") return result;
+  const points = result.points.flatMap((intersection): IntersectionPoint[] => {
+    const secondParameter = arcParameterAtPoint(arc, intersection.point, geometryEpsilon, parameterEpsilon);
+    if (secondParameter === undefined) return [];
+    return [{ ...intersection, secondParameter, contact: arcEndpoint(secondParameter, arc, parameterEpsilon) ? "endpoint" : intersection.contact }];
+  });
+  return points.length ? { kind: "points", points } : none();
+}
+
 function intersectCircles(first: CircleCurve2D, second: CircleCurve2D, geometryEpsilon: number): IntersectionResult {
   const centerOffset = subtract(second.center, first.center);
   const centerDistance = checkedNumber(Math.hypot(centerOffset.x, centerOffset.y));
@@ -388,5 +463,9 @@ export function intersectCurves(first: Curve2D, second: Curve2D, options?: Inter
   if (first.type === "circle" && second.type === "circle") return intersectCircles(first, second, geometryEpsilon);
   if (first.type === "cubicBezier" && second.type === "circle") return intersectCubicCircle(first, second, geometryEpsilon, parameterEpsilon);
   if (first.type === "circle" && second.type === "cubicBezier") return swapResult(intersectCubicCircle(second, first, geometryEpsilon, parameterEpsilon));
+  if (first.type === "line" && second.type === "arc") return intersectLineArc(first, second, geometryEpsilon, parameterEpsilon);
+  if (first.type === "arc" && second.type === "line") return swapResult(intersectLineArc(second, first, geometryEpsilon, parameterEpsilon));
+  if (first.type === "circle" && second.type === "arc") return intersectCircleArc(first, second, geometryEpsilon, parameterEpsilon);
+  if (first.type === "arc" && second.type === "circle") return swapResult(intersectCircleArc(second, first, geometryEpsilon, parameterEpsilon));
   return { kind: "unsupported", reason: "curve-pair" };
 }
