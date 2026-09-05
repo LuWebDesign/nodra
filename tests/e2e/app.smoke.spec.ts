@@ -342,6 +342,9 @@ test("cuts a curved Pen segment after a straight segment and supports undo and r
     return { x: screen.x, y: screen.y };
   });
   await page.getByRole("button", { name: "Cortar segmentos" }).click();
+  await page.mouse.move(clickedSide.x, clickedSide.y);
+  await expect(page.locator(".cut-segment-hover-overlay path")).toHaveCount(1);
+  await expect(page.locator(".cut-segment-hover-overlay polyline")).toHaveCount(0);
   await page.mouse.click(clickedSide.x, clickedSide.y);
 
   const cutCurve = page.locator(`.page-svg svg path[data-element-id="${curveId}"]`);
