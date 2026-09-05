@@ -308,6 +308,52 @@ test("creates a cubic segment when placing an anchor with a drag", async ({ page
   await expect(page.locator(".page-svg svg path[data-element-id]")).toHaveAttribute("d", / C/);
 });
 
+test("cuts a Pen cubic through a Line sketch and supports undo and redo", async ({ page }) => {
+  await page.goto("/");
+  const pageBounds = await page.locator(".page").boundingBox();
+  expect(pageBounds).not.toBeNull();
+  const start = { x: pageBounds!.x + 80, y: pageBounds!.y + 120 };
+  const end = { x: start.x + 120, y: start.y };
+
+  await page.getByRole("button", { name: "Pluma" }).click();
+  await page.mouse.click(start.x, start.y);
+  await page.mouse.move(end.x, end.y);
+  await page.mouse.down();
+  await page.mouse.move(end.x, end.y + 50);
+  await page.mouse.up();
+  const curve = page.locator(".page-svg svg path[data-element-id]").first();
+  await expect(curve).toHaveAttribute("d", / C/);
+  const curveId = await curve.getAttribute("data-element-id");
+  const beforeCut = await curve.getAttribute("d");
+
+  await drawLine(page, { x: start.x + 60, y: start.y - 60 }, { x: start.x + 60, y: start.y + 40 });
+  const sketchGroups = page.locator('.page-svg svg g[data-element-id]').filter({ has: page.locator("line") });
+  await expect(sketchGroups).toHaveCount(1);
+  const transversalId = await sketchGroups.getAttribute("data-element-id");
+  const transversal = page.locator(`.page-svg svg g[data-element-id="${transversalId}"]`);
+  await expect(transversal.locator(":scope > line")).toHaveCount(1);
+
+  const clickedSide = await curve.evaluate((element) => {
+    const path = element as SVGPathElement;
+    const point = path.getPointAtLength(path.getTotalLength() * 0.75);
+    const screen = new DOMPoint(point.x, point.y).matrixTransform(path.getScreenCTM()!);
+    return { x: screen.x, y: screen.y };
+  });
+  await page.getByRole("button", { name: "Cortar segmentos" }).click();
+  await page.mouse.click(clickedSide.x, clickedSide.y);
+
+  const cutCurve = page.locator(`.page-svg svg path[data-element-id="${curveId}"]`);
+  await expect(cutCurve).toHaveAttribute("d", / C/);
+  await expect(cutCurve).not.toHaveAttribute("d", beforeCut!);
+  await expect(transversal.locator(":scope > line")).toHaveCount(2);
+  await page.getByRole("button", { name: "Deshacer" }).click();
+  await expect(curve).toHaveAttribute("d", beforeCut!);
+  await expect(transversal.locator(":scope > line")).toHaveCount(1);
+  await page.getByRole("button", { name: "Rehacer" }).click();
+  await expect(cutCurve).not.toHaveAttribute("d", beforeCut!);
+  await expect(transversal.locator(":scope > line")).toHaveCount(2);
+});
+
 test("edits rectangle dimensions around its center with proportional lock and undo", async ({ page }) => {
   await page.goto("/");
   await drawRectangle(page);

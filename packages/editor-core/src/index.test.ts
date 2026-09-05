@@ -298,6 +298,45 @@ describe("editor core", () => {
     expect(redo(undo(cut)).document).toEqual(cut.document);
   });
 
+  it("cuts a cubic against a single visible sketch edge with exact topology and endpoint preservation", () => {
+    const cubicPath: PathElement = { type: "path", id: elementId("cubic-sketch-path"), layerId: layerId("default"), closed: false, style: rectangle.style,
+      nodes: [{ id: "start", anchor: { x: 0, y: 0 }, join: "corner" }, { id: "end", anchor: { x: 10, y: 0 }, join: "corner" }],
+      segments: [{ id: "curve", type: "cubicBezier", startNodeId: "start", endNodeId: "end", control1: { x: 3, y: 6 }, control2: { x: 7, y: 6 } }] };
+    const transversal: SketchElement = { type: "sketch", id: elementId("cubic-sketch-transversal"), layerId: layerId("default"), style: rectangle.style,
+      nodes: [{ id: "left", point: { x: 5, y: -10 } }, { id: "right", point: { x: 5, y: 10 } }], edges: [{ id: "edge", startNodeId: "left", endNodeId: "right" }],
+      constraints: [{ id: "preserved-vertical", kind: "vertical", references: [{ elementId: elementId("cubic-sketch-transversal"), nodeId: "left" }, { elementId: elementId("cubic-sketch-transversal"), nodeId: "right" }] }] };
+    const unrelated = createSketchLine(elementId("cubic-sketch-unrelated"), layerId("default"), rectangle.style, { x: 20, y: 0 }, { x: 30, y: 0 });
+    const edgeDimension: DimensionElement = { ...dimension, id: elementId("cubic-sketch-edge-dimension"), kind: "angular", references: [{ kind: "line", elementId: transversal.id, edgeId: "edge" }, { kind: "line", elementId: transversal.id, edgeId: "edge" }] };
+    const removedHandleDimension: DimensionElement = { ...dimension, id: elementId("cubic-sketch-removed-handle-dimension"), references: [{ kind: "node", elementId: cubicPath.id, nodeIndex: 3 }, { kind: "node", elementId: cubicPath.id, nodeIndex: 1, nodeId: "end" }] };
+    const connection = { id: "sketch-endpoint", first: { elementId: transversal.id, node: { kind: "sketch" as const, nodeId: "left" } }, second: { elementId: unrelated.id, node: { kind: "sketch" as const, nodeId: unrelated.nodes[0]!.id } } };
+    const survivingPathConnection = { id: "surviving-path-handle", first: { elementId: cubicPath.id, node: { kind: "path" as const, nodeId: "start", handle: "out" as const } }, second: { elementId: unrelated.id, node: { kind: "sketch" as const, nodeId: unrelated.nodes[1]!.id } } };
+    const removedPathConnection = { id: "removed-path-handle", first: { elementId: cubicPath.id, node: { kind: "path" as const, nodeId: "end", handle: "in" as const } }, second: { elementId: transversal.id, node: { kind: "sketch" as const, nodeId: "right" } } };
+    const affectedConstraint = { id: "affected-document-constraint", kind: "equal" as const, references: [{ elementId: transversal.id, edgeId: "edge" }, { elementId: unrelated.id, edgeId: unrelated.edges[0]!.id }] as const };
+    const unrelatedConstraint = { id: "unrelated-constraint", kind: "coincident" as const, references: [{ elementId: unrelated.id, nodeId: unrelated.nodes[0]!.id }, { elementId: unrelated.id, nodeId: unrelated.nodes[1]!.id }] as const };
+    const initial = createEditor({ ...document, elements: [cubicPath, transversal, unrelated, edgeDimension, removedHandleDimension], connections: [connection, survivingPathConnection, removedPathConnection], constraints: [affectedConstraint, unrelatedConstraint] });
+    const applied = cutSegment(cubicPath.id, 0, { x: 8, y: 3 }).apply(initial.document);
+    const cut = dispatch(initial, cutSegment(cubicPath.id, 0, { x: 8, y: 3 }));
+    expect(applied.success).toBe(true);
+    const result = cut.document.elements.find((element): element is SketchElement => element.id === transversal.id && element.type === "sketch");
+    expect(result).toMatchObject({ id: transversal.id, style: transversal.style, nodes: expect.arrayContaining([{ id: "left", point: { x: 5, y: -10 } }, { id: "right", point: { x: 5, y: 10 } }]) });
+    expect(result?.edges).toHaveLength(2);
+    expect(result?.nodes.find((node) => node.id !== "left" && node.id !== "right")?.point).toEqual({ x: 5, y: 4.5 });
+    const topology = applied.success ? applied.topology?.referenceMap.get(`${transversal.id}:edge:edge`) : undefined;
+    const pathTopology = applied.success ? applied.topology?.referenceMap.get(`${cubicPath.id}:segment:curve`) : undefined;
+    expect(topology?.kind).toBe("replaced");
+    expect(topology?.kind === "replaced" ? topology.references : []).toHaveLength(2);
+    expect(pathTopology?.kind).toBe("replaced");
+    expect(pathTopology?.kind === "replaced" ? pathTopology.references : []).toHaveLength(1);
+    expect(result?.constraints).toEqual(transversal.constraints);
+    expect(cut.document.constraints).toEqual([unrelatedConstraint]);
+    expect(cut.document.connections).toEqual([connection, survivingPathConnection]);
+    expect(cut.document.elements.find((element) => element.id === edgeDimension.id)).toMatchObject({ references: [{ kind: "line", elementId: transversal.id }, { kind: "line", elementId: transversal.id }] });
+    expect(cut.document.elements.some((element) => element.id === removedHandleDimension.id)).toBe(false);
+    expect(cut.undo).toHaveLength(1);
+    expect(undo(cut).document).toEqual(initial.document);
+    expect(redo(undo(cut)).document).toEqual(cut.document);
+  });
+
   it("rejects ambiguous or invalid cubic cuts without changing editor state", () => {
     const cubicPath: PathElement = { type: "path", id: elementId("ambiguous-cubic-cut"), layerId: layerId("default"), closed: false, style: rectangle.style,
       nodes: [{ id: "start", anchor: { x: 0, y: 0 }, join: "corner" }, { id: "end", anchor: { x: 10, y: 0 }, join: "corner" }],
@@ -305,8 +344,15 @@ describe("editor core", () => {
     const first: LineElement = { type: "line", id: elementId("ambiguous-first"), layerId: layerId("default"), start: { x: 4, y: -10 }, end: { x: 4, y: 10 }, rotation: 0, style: rectangle.style };
     const second: LineElement = { ...first, id: elementId("ambiguous-second"), start: { x: 6, y: -10 }, end: { x: 6, y: 10 } };
     const initial = createEditor({ ...document, elements: [cubicPath, first, second] });
+    const sketchTransversal = createSketchLine(elementId("ambiguous-sketch"), layerId("default"), rectangle.style, { x: 4, y: -10 }, { x: 4, y: 10 });
+    const mixedInitial = createEditor({ ...document, elements: [cubicPath, first, sketchTransversal] });
+    const multiEdgeBase = createSketchLine(elementId("unsupported-multi-edge-sketch"), layerId("default"), rectangle.style, { x: 4, y: -10 }, { x: 4, y: 10 });
+    const multiEdgeSketch: SketchElement = { ...multiEdgeBase, nodes: [...multiEdgeBase.nodes, { id: "extra-start", point: { x: 20, y: 0 } }, { id: "extra-end", point: { x: 30, y: 0 } }], edges: [...multiEdgeBase.edges, { id: "extra-edge", startNodeId: "extra-start", endNodeId: "extra-end" }] };
+    const multiEdgeInitial = createEditor({ ...document, elements: [cubicPath, multiEdgeSketch] });
 
     expect(dispatch(initial, cutSegment(cubicPath.id, 0, { x: 2, y: 3 }))).toBe(initial);
+    expect(dispatch(mixedInitial, cutSegment(cubicPath.id, 0, { x: 2, y: 3 }))).toBe(mixedInitial);
+    expect(dispatch(multiEdgeInitial, cutSegment(cubicPath.id, 0, { x: 2, y: 3 }))).toBe(multiEdgeInitial);
     expect(dispatch(initial, cutSegment(cubicPath.id, 0, { x: Number.NaN, y: 0 }))).toBe(initial);
     expect(dispatch(initial, cutSegment(cubicPath.id, 0))).toBe(initial);
     expect(initial.undo).toHaveLength(0);
