@@ -1,5 +1,5 @@
 import type { PointMm } from "@nodra/domain";
-import { closestParameter, type Curve2D } from "./curve2d.js";
+import { closestParameter, pointAt, splitCurveAtParameters, type Curve2D, type CurveFragment } from "./curve2d.js";
 import { PARAMETER_EPSILON } from "./tolerances.js";
 
 export interface CurveParameterInterval {
@@ -10,6 +10,11 @@ export interface CurveParameterInterval {
 
 export interface CurveIntervalSelectionOptions {
   readonly parameterEpsilon?: number;
+}
+
+export interface CurveIntervalPartition {
+  readonly selected: readonly CurveFragment[];
+  readonly remainder: readonly CurveFragment[];
 }
 
 export type CurveIntervalSelectionResult =
@@ -84,4 +89,35 @@ export function selectRemovableCurveInterval(
     return { kind: "selected", interval: { start: cuts.at(-1)!, end: cuts[0]!, wrapsSeam: true }, cursorParameter, cuts };
   }
   return { kind: "rejected", reason: "cursor-on-cut" };
+}
+
+/** Splits a curve exactly and partitions fragments without mutating the source.
+ * A wrapping selection is returned in traversal order: start→1, then 0→end. */
+export function partitionCurveByInterval(
+  curve: Curve2D,
+  interval: CurveParameterInterval,
+  options?: CurveIntervalSelectionOptions,
+): CurveIntervalPartition {
+  pointAt(curve, 0);
+  const parameterEpsilon = toleranceOrDefault(options);
+  if (![interval.start, interval.end].every((parameter) => Number.isFinite(parameter) && parameter >= 0 && parameter <= 1)) throw new Error("interval parameters must be finite and within [0, 1]");
+  const start = interval.start <= parameterEpsilon ? 0 : interval.start >= 1 - parameterEpsilon ? 1 : interval.start;
+  const end = interval.end <= parameterEpsilon ? 0 : interval.end >= 1 - parameterEpsilon ? 1 : interval.end;
+  const closed = isClosed(curve);
+  if (interval.wrapsSeam && !closed) throw new Error("only closed curves can use seam-wrapping intervals");
+  if ((!interval.wrapsSeam && end < start) || (interval.wrapsSeam && end >= start)) throw new Error("interval orientation does not match wrapsSeam");
+  const selectedLength = interval.wrapsSeam ? 1 - start + end : end - start;
+  if (selectedLength <= parameterEpsilon) throw new Error("selected interval must be non-degenerate");
+  const fragments = splitCurveAtParameters(curve, [start, end], parameterEpsilon);
+  const selected = fragments.filter(({ sourceInterval }) => {
+    const middle = (sourceInterval.t0 + sourceInterval.t1) / 2;
+    return interval.wrapsSeam ? middle >= start || middle <= end : middle >= start && middle <= end;
+  });
+  const selectedSet = new Set(selected);
+  const remainder = fragments.filter((fragment) => !selectedSet.has(fragment));
+  if (interval.wrapsSeam) selected.sort((first, second) => {
+    const firstAfterStart = first.sourceInterval.t0 >= start; const secondAfterStart = second.sourceInterval.t0 >= start;
+    return firstAfterStart === secondAfterStart ? first.sourceInterval.t0 - second.sourceInterval.t0 : firstAfterStart ? -1 : 1;
+  });
+  return { selected, remainder };
 }
