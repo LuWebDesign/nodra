@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createDocument, elementId, layerId, type DocumentSnapshot } from "@nodra/domain";
 import { validateDocument } from "@nodra/validation";
-import { canActivateRotation, circleGeometry, centerPageInCanvas, clientPointToCanvas, clientPointToPage, creationGuides, directionalGuide, hasNonCollinearPoints, hoveredSelectionCenter, INITIAL_ZOOM, isDrawingTool, marqueeSelection, MAX_ZOOM, MIN_ZOOM, movementExceedsThreshold, normalizeBounds, normalizeDrag, pagePointToScreen, screenDeltaToMm, screenPointToMm, viewportPointToCanvas, containsBounds, elementsContainedBy, pickDimensionTarget, pickElement, pickFormaElement, pickFormaNode, pickFormaSegment, pickHoverNode, pickCuttableSegment, pickNode, pointerDownIntent, selectedNodeAnchor, selectionCenter, selectionFrame, snapCreationPoint, snapMoveDelta, visibleEditablePathNodeIndexes, zoomAtPoint } from "./interaction.js";
+import { canActivateRotation, circleGeometry, centerPageInCanvas, clientPointToCanvas, clientPointToPage, creationGuides, directionalGuide, hasNonCollinearPoints, hoveredSelectionCenter, INITIAL_ZOOM, isDrawingTool, marqueeSelection, MAX_ZOOM, MIN_ZOOM, movementExceedsThreshold, normalizeBounds, normalizeDrag, pagePointToScreen, screenDeltaToMm, screenPointToMm, viewportPointToCanvas, containsBounds, elementsContainedBy, pickDimensionTarget, pickElement, pickFormaElement, pickFormaNode, pickFormaSegment, pickHoverNode, pickCutIntervalPreview, pickCuttableSegment, pickNode, pointerDownIntent, selectedNodeAnchor, selectionCenter, selectionFrame, snapCreationPoint, snapMoveDelta, visibleEditablePathNodeIndexes, zoomAtPoint } from "./interaction.js";
 import { geometryPatch, geometryValue } from "./propertyBar.js";
 import { dimensionKindForNodes, dimensionOffsetForPlacement, pointMidpoint } from "@nodra/geometry";
 
@@ -441,6 +441,69 @@ describe("drag geometry", () => {
     const line = { type: "line" as const, id: elementId("cut-hover-line"), layerId: layer.id, start: { x: 0, y: 0 }, end: { x: 10, y: 0 }, rotation: 0, style: { stroke: "#000", strokeWidth: 1 } };
     const hit = pickCuttableSegment({ ...document, elements: [line] }, { x: 5, y: 0.5 }, 1);
     expect(hit).toMatchObject({ elementId: line.id, segmentIndex: 0, start: { x: 0, y: 0 }, end: { x: 10, y: 0 } });
+  });
+
+  it("derives an exact interval preview between visible intersections", () => {
+    const layer = { id: layerId("cut-preview"), name: "Preview", visible: true, order: 0 };
+    const document = createDocument("cut-preview", [layer]);
+    const style = { stroke: "#000", strokeWidth: 1 };
+    const target = { type: "line" as const, id: elementId("cut-preview-target"), layerId: layer.id, start: { x: 0, y: 0 }, end: { x: 10, y: 0 }, rotation: 0, style };
+    const first = { ...target, id: elementId("cut-preview-first"), start: { x: 3, y: -5 }, end: { x: 3, y: 5 } };
+    const second = { ...target, id: elementId("cut-preview-second"), start: { x: 7, y: -5 }, end: { x: 7, y: 5 } };
+    const preview = pickCutIntervalPreview({ ...document, elements: [target, first, second] }, { x: 5, y: 0 }, 10);
+    expect(preview?.hit).toMatchObject({ elementId: target.id, segmentIndex: 0 });
+    expect(preview?.fragments).toEqual([{ curve: { type: "line", start: { x: 3, y: 0 }, end: { x: 7, y: 0 } }, sourceInterval: { t0: 0.3, t1: 0.7 } }]);
+  });
+
+  it("previews an exact De Casteljau fragment for a cubic path segment", () => {
+    const layer = { id: layerId("cut-cubic-preview"), name: "Preview", visible: true, order: 0 };
+    const document = createDocument("cut-cubic-preview", [layer]); const style = { stroke: "#000", strokeWidth: 1 };
+    const path = { type: "path" as const, id: elementId("cut-cubic-target"), layerId: layer.id, nodes: [{ id: "a", anchor: { x: 0, y: 0 }, join: "corner" as const }, { id: "b", anchor: { x: 10, y: 0 }, join: "corner" as const }], segments: [{ id: "curve", type: "cubicBezier" as const, startNodeId: "a", endNodeId: "b", control1: { x: 10 / 3, y: 10 }, control2: { x: 20 / 3, y: -10 } }], closed: false, rotation: 0, style };
+    const cutter = (x: number, suffix: string) => ({ type: "line" as const, id: elementId(`cut-cubic-${suffix}`), layerId: layer.id, start: { x, y: -20 }, end: { x, y: 20 }, rotation: 0, style });
+    const preview = pickCutIntervalPreview({ ...document, elements: [path, cutter(3, "first"), cutter(7, "second")] }, { x: 5, y: 0 }, 10);
+    expect(preview?.hit.elementId).toBe(path.id);
+    expect(preview?.fragments).toHaveLength(1);
+    expect(preview?.fragments[0]?.curve.type).toBe("cubicBezier");
+    expect(preview?.fragments[0]?.sourceInterval.t0).toBeCloseTo(0.3, 8);
+    expect(preview?.fragments[0]?.sourceInterval.t1).toBeCloseTo(0.7, 8);
+  });
+
+  it("previews circular intervals as exact arcs rather than hover polylines", () => {
+    const layer = { id: layerId("cut-circle-preview"), name: "Preview", visible: true, order: 0 };
+    const document = createDocument("cut-circle-preview", [layer]); const style = { stroke: "#000", strokeWidth: 1 };
+    const target = { type: "ellipse" as const, id: elementId("cut-circle-target"), layerId: layer.id, position: { x: 0, y: 0 }, size: { width: 10, height: 10 }, rotation: 0, style };
+    const cutter = { type: "line" as const, id: elementId("cut-circle-line"), layerId: layer.id, start: { x: -5, y: 5 }, end: { x: 15, y: 5 }, rotation: 0, style };
+    const preview = pickCutIntervalPreview({ ...document, elements: [target, cutter] }, { x: 5, y: 0 }, 10);
+    expect(preview?.hit.elementId).toBe(target.id);
+    expect(preview?.fragments).toHaveLength(1);
+    expect(preview?.fragments[0]).toMatchObject({ curve: { type: "arc", center: { x: 5, y: 5 }, radius: 5 }, sourceInterval: { t0: 0.5, t1: 1 } });
+  });
+
+  it("picks and previews native Spline spans through the exact fallback", () => {
+    const layer = { id: layerId("cut-spline-preview"), name: "Preview", visible: true, order: 0 };
+    const document = createDocument("cut-spline-preview", [layer]); const style = { stroke: "#000", strokeWidth: 1 };
+    const spline = { type: "spline" as const, id: elementId("cut-spline-target"), layerId: layer.id, nodes: [{ id: "a", anchor: { x: 0, y: 0 }, continuity: "smooth" as const }, { id: "b", anchor: { x: 10, y: 0 }, continuity: "smooth" as const }], closed: false, style };
+    const cutter = (x: number, suffix: string) => ({ type: "line" as const, id: elementId(`cut-spline-${suffix}`), layerId: layer.id, start: { x, y: -5 }, end: { x, y: 5 }, rotation: 0, style });
+    const preview = pickCutIntervalPreview({ ...document, elements: [spline, cutter(3, "first"), cutter(7, "second")] }, { x: 5, y: 0 }, 10);
+    expect(preview?.hit).toMatchObject({ elementId: spline.id, segmentIndex: 0 });
+    expect(preview?.fragments).toHaveLength(1);
+    expect(preview?.fragments[0]?.curve.type).toBe("cubicBezier");
+  });
+
+  it("excludes tangencies, overlaps, and hidden cutters from preview boundaries", () => {
+    const visible = { id: layerId("cut-filter-visible"), name: "Visible", visible: true, order: 0 };
+    const hidden = { id: layerId("cut-filter-hidden"), name: "Hidden", visible: false, order: 1 };
+    const document = createDocument("cut-filter-preview", [visible, hidden]); const style = { stroke: "#000", strokeWidth: 1 };
+    const target = { type: "line" as const, id: elementId("cut-filter-target"), layerId: visible.id, start: { x: 0, y: 5 }, end: { x: 10, y: 5 }, rotation: 0, style };
+    const tangent = { type: "ellipse" as const, id: elementId("cut-filter-tangent"), layerId: visible.id, position: { x: 0, y: -5 }, size: { width: 10, height: 10 }, rotation: 0, style };
+    const crossing = { ...target, id: elementId("cut-filter-crossing"), start: { x: 8, y: 0 }, end: { x: 8, y: 10 } };
+    const hiddenCrossing = { ...crossing, id: elementId("cut-filter-hidden-crossing"), layerId: hidden.id, start: { x: 3, y: 0 }, end: { x: 3, y: 10 } };
+    const preview = pickCutIntervalPreview({ ...document, elements: [target, tangent, crossing, hiddenCrossing] }, { x: 6, y: 5 }, 10);
+    expect(preview?.fragments).toEqual([{ curve: { type: "line", start: { x: 0, y: 5 }, end: { x: 8, y: 5 } }, sourceInterval: { t0: 0, t1: 0.8 } }]);
+    const coincident = { ...target, id: elementId("cut-filter-overlap") };
+    expect(pickCutIntervalPreview({ ...document, elements: [target, crossing, coincident] }, { x: 6, y: 5 }, 10)?.fragments).toEqual([]);
+    const unsupportedRectangle = { type: "rectangle" as const, id: elementId("cut-filter-rectangle"), layerId: visible.id, position: { x: 4, y: 0 }, size: { width: 2, height: 10 }, cornerRadius: 0, rotation: 0, style };
+    expect(pickCutIntervalPreview({ ...document, elements: [target, crossing, unsupportedRectangle] }, { x: 5, y: 5 }, 10)?.fragments).toEqual([]);
   });
 
   it("picks contour ring and boundary indexes for Cut", () => {
