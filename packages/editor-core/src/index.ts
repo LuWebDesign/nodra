@@ -28,7 +28,7 @@ import {
   withElements,
 } from "@nodra/domain";
 import { validateDocument } from "@nodra/validation";
-import { boundsOfElements, connectableNodeAddress, contourWithPoints, directionVector, elementCenter, elementToContour, dimensionGeometry, glyphGeometryNodes, groupCenter, mirrorHandleOffset, realGeometryNodes, resizeGroup, rotateElements, shapeResultContours, transformPoint, splitCuttableSegments, classifyCutGraph, cuttableSegments, lineSegmentIntersection, rotatedLineEndpoints, sketchEdgeAtAddress, sketchEdgeIndexAtAddress, solveSketchConstraints, solveCircleConstraints, cubicBezierLineIntersections, splitCubicBezierAtParameters, flattenCubicBezier, type CubicBezier, type Direction } from "@nodra/geometry";
+import { boundsOfElements, connectableNodeAddress, contourWithPoints, directionVector, elementCenter, elementToContour, dimensionGeometry, elementToCurves, glyphGeometryNodes, groupCenter, intersectCurves, lineElementToCurve, mirrorHandleOffset, partitionCurveByInterval, realGeometryNodes, resizeGroup, rotateElements, selectRemovableCurveInterval, shapeResultContours, tangentAt, transformPoint, splitCuttableSegments, classifyCutGraph, cuttableSegments, lineSegmentIntersection, rotatedLineEndpoints, sketchEdgeAtAddress, sketchEdgeIndexAtAddress, solveSketchConstraints, solveCircleConstraints, cubicBezierLineIntersections, splitCubicBezierAtParameters, flattenCubicBezier, type CubicBezier, type Direction, type LineCurve2D, type SourcedCurve2D } from "@nodra/geometry";
 import { insertSplineNode, moveSplineHandle as moveSplineHandleData, moveSplineNode as moveSplineNodeData } from "./spline.js";
 import { topologyReferenceKey, type ReferenceResolution, type TopologyEditResult, type TopologyReference } from "./topology.js";
 
@@ -970,13 +970,59 @@ const cutPointDistance = (piece: CutPieceGraph, point: PointMm | undefined): num
   return Math.hypot(point.x - (piece.piece.start.x + t * dx), point.y - (piece.piece.start.y + t * dy));
 };
 
+const transversalCurveIntersection = (first: SourcedCurve2D, second: SourcedCurve2D, firstParameter: number, secondParameter: number): boolean => {
+  const firstTangent = tangentAt(first.curve, firstParameter); const secondTangent = tangentAt(second.curve, secondParameter);
+  const scale = Math.hypot(firstTangent.x, firstTangent.y) * Math.hypot(secondTangent.x, secondTangent.y);
+  return scale > 0 && Math.abs(firstTangent.x * secondTangent.y - firstTangent.y * secondTangent.x) > 1e-9 * scale;
+};
+
+type ExactLineCutSelection = { readonly kind: "selected"; readonly curve: LineCurve2D } | { readonly kind: "rejected" } | { readonly kind: "fallback" };
+
+/** Returns the exact selected line fragment only when every participating source is persistently linear. */
+const selectedExactLineFragment = (document: DocumentSnapshot, line: LineElement, point: PointMm): ExactLineCutSelection => {
+  const target = lineElementToCurve(line); const visibleLayers = new Set(document.layers.filter((layer) => layer.visible).map((layer) => layer.id)); const cuts: number[] = [];
+  for (const element of document.elements) {
+    if (!visibleLayers.has(element.layerId)) continue;
+    const candidates = elementToCurves(element);
+    if (candidates.length === 0) {
+      const touchesUnsupported = cuttableSegments(element).some((segment) => lineSegmentIntersection(target.curve.start, target.curve.end, segment.start, segment.end, 1e-8) !== undefined);
+      if (touchesUnsupported) return { kind: "fallback" };
+      continue;
+    }
+    const elementCuts: number[] = [];
+    for (const candidate of candidates) {
+      if (candidate.source.kind === "line-element" && candidate.source.elementId === line.id) continue;
+      const result = intersectCurves(target.curve, candidate.curve);
+      if (result.kind === "overlap" || result.kind === "unsupported") return { kind: "fallback" };
+      if (result.kind !== "points") continue;
+      const transversal = result.points.filter(({ firstParameter, secondParameter }) => transversalCurveIntersection(target, candidate, firstParameter, secondParameter));
+      if (transversal.length && candidate.curve.type !== "line") return { kind: "fallback" };
+      elementCuts.push(...transversal.map(({ firstParameter }) => firstParameter));
+    }
+    if (elementCuts.length && candidates.some(({ curve }) => curve.type !== "line")) return { kind: "fallback" };
+    cuts.push(...elementCuts);
+  }
+  const selection = selectRemovableCurveInterval(target.curve, cuts, point);
+  if (selection.kind === "rejected") return selection.reason === "cursor-on-cut" ? { kind: "rejected" } : { kind: "fallback" };
+  const selected = partitionCurveByInterval(target.curve, selection.interval).selected;
+  return selected.length === 1 && selected[0]?.curve.type === "line" ? { kind: "selected", curve: selected[0].curve } : { kind: "fallback" };
+};
+
 /** Rebuilds only the straight planar component containing the selected edge. */
-const cutStraightComponent = (document: DocumentSnapshot, elementIdToCut: ElementId, segmentIndex: number, point?: PointMm): CommandResult => {
+const cutStraightComponent = (document: DocumentSnapshot, elementIdToCut: ElementId, segmentIndex: number, point?: PointMm, exactSelectedLine?: LineCurve2D): CommandResult => {
   const selectedElement = document.elements.find((element) => element.id === elementIdToCut);
   if (!selectedElement || (selectedElement.type !== "line" && selectedElement.type !== "rectangle" && selectedElement.type !== "ellipse" && selectedElement.type !== "path")) return { success: false, error: "Only straight lines, ellipse arcs, rectangle edges, and line paths can be cut" };
   if (selectedElement.type === "path" && selectedElement.segments[segmentIndex]?.type !== "line") return { success: false, error: "Only straight path segments can be cut" };
-  const sources = document.elements.flatMap((element): CutPieceGraph[] => cuttableSegments(element).flatMap((piece) => element.type === "path" && element.segments[piece.segmentIndex]?.type === "cubicBezier" ? [] : [{ piece, source: element }]));
-  const curveSources = document.elements.flatMap((element): CutPieceGraph[] => {
+  const visibleLayers = exactSelectedLine ? new Set(document.layers.filter((layer) => layer.visible).map((layer) => layer.id)) : undefined;
+  const componentSourceElements = visibleLayers
+    ? document.elements.filter((element) => {
+      if (!visibleLayers.has(element.layerId)) return false;
+      const curves = elementToCurves(element);
+      return curves.length > 0 && curves.every(({ curve }) => curve.type === "line");
+    })
+    : document.elements;
+  const sources = componentSourceElements.flatMap((element): CutPieceGraph[] => cuttableSegments(element).flatMap((piece) => element.type === "path" && element.segments[piece.segmentIndex]?.type === "cubicBezier" ? [] : [{ piece, source: element }]));
+  const curveSources = componentSourceElements.flatMap((element): CutPieceGraph[] => {
     if (element.type !== "path") return [];
     const nodes = new Map(element.nodes.map((node) => [node.id, node.anchor]));
     return element.segments.flatMap((segment, segmentIndex) => {
@@ -988,7 +1034,10 @@ const cutStraightComponent = (document: DocumentSnapshot, elementIdToCut: Elemen
   const split = splitCuttableSegments(sources.map(({ piece }) => piece));
   const graph = [...split.map((piece) => ({ piece, source: document.elements.find((element) => element.id === piece.elementId)! })), ...curveSources];
   const candidates = graph.filter(({ piece }) => piece.elementId === elementIdToCut && piece.segmentIndex === segmentIndex);
-  const selected = candidates.reduce<CutPieceGraph | undefined>((best, candidate) => !best || cutPointDistance(candidate, point) < cutPointDistance(best, point) ? candidate : best, undefined);
+  const samePoint = (first: PointMm, second: PointMm): boolean => Math.hypot(first.x - second.x, first.y - second.y) <= 1e-7;
+  const selected = exactSelectedLine
+    ? candidates.find(({ piece }) => samePoint(piece.start, exactSelectedLine.start) && samePoint(piece.end, exactSelectedLine.end) || samePoint(piece.start, exactSelectedLine.end) && samePoint(piece.end, exactSelectedLine.start))
+    : candidates.reduce<CutPieceGraph | undefined>((best, candidate) => !best || cutPointDistance(candidate, point) < cutPointDistance(best, point) ? candidate : best, undefined);
   if (!selected || !selected.source) return { success: false, error: "The selected segment is not cuttable" };
   const key = (pointValue: PointMm) => `${Math.round(pointValue.x / 1e-8)}:${Math.round(pointValue.y / 1e-8)}`;
   const connected = new Set<CutPieceGraph>([selected]); let changed = true;
@@ -1148,7 +1197,14 @@ const cutStraightComponent = (document: DocumentSnapshot, elementIdToCut: Elemen
   return replaceTopology({ ...document, connections }, edit);
 };
 
-export const cutLineAtPoint = (lineId: ElementId, point: PointMm): EditorCommand => ({ name: `cut-line-at:${lineId}`, apply: (document) => cutStraightComponent(document, lineId, 0, point) });
+export const cutLineAtPoint = (lineId: ElementId, point: PointMm): EditorCommand => ({ name: `cut-line-at:${lineId}`, apply: (document) => {
+  const line = document.elements.find((element): element is LineElement => element.id === lineId && element.type === "line");
+  if (!line || ![point.x, point.y].every(Number.isFinite)) return { success: false, error: "Line or cut point is invalid" };
+  const selection = (() => { try { return selectedExactLineFragment(document, line, point); } catch { return { kind: "fallback" } as const; } })();
+  if (selection.kind === "rejected") return { success: false, error: "Cut cursor lies on an intersection" };
+  try { return cutStraightComponent(document, lineId, 0, point, selection.kind === "selected" ? selection.curve : undefined); }
+  catch { return { success: false, error: "Unable to cut line geometry safely" }; }
+} });
 export const cutPathSegment = (pathId: ElementId, segmentIndex: number, point?: PointMm): EditorCommand => ({ name: `cut-segment:${pathId}:${segmentIndex}`, apply: (document) => {
   const path = pathAt(document, pathId); const segment = path?.segments[segmentIndex];
   const hasCubic = path?.segments.some((candidate) => candidate.type === "cubicBezier") ?? false;

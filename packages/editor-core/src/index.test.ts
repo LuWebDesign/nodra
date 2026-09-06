@@ -381,6 +381,64 @@ describe("editor core", () => {
     expect(redo(undo(cut)).document).toEqual(cut.document);
   });
 
+  it("uses the exact visible line interval and leaves hidden cutters untouched", () => {
+    const hiddenLayer = { id: layerId("hidden-cutters"), name: "Hidden", visible: false, order: 1 };
+    const horizontal: LineElement = { type: "line", id: elementId("visible-interval-horizontal"), layerId: layerId("default"), start: { x: 0, y: 0 }, end: { x: 20, y: 0 }, rotation: 0, style: rectangle.style };
+    const visible: LineElement = { type: "line", id: elementId("visible-interval-cutter"), layerId: layerId("default"), start: { x: 10, y: -10 }, end: { x: 10, y: 10 }, rotation: 0, style: rectangle.style };
+    const hidden: LineElement = { type: "line", id: elementId("hidden-interval-cutter"), layerId: hiddenLayer.id, start: { x: 5, y: -10 }, end: { x: 5, y: 10 }, rotation: 0, style: rectangle.style };
+    const source = { ...document, layers: [...document.layers, hiddenLayer], elements: [horizontal, visible, hidden] };
+    const initial = createEditor(source);
+
+    const cut = dispatch(initial, cutSegment(horizontal.id, 0, { x: 7, y: 0 }));
+    const hiddenResult = cut.document.elements.find((element) => element.id === hidden.id);
+    const paths = cut.document.elements.filter((element): element is PathElement => element.type === "path");
+    const segmentKeys = paths.flatMap((path) => {
+      const nodes = new Map(path.nodes.map((node) => [node.id, node.anchor]));
+      return path.segments.map((segment) => {
+        const start = nodes.get(segment.startNodeId)!; const end = nodes.get(segment.endNodeId)!;
+        return [`${start.x},${start.y}`, `${end.x},${end.y}`].sort().join("|");
+      });
+    });
+
+    expect(hiddenResult).toMatchObject(hidden);
+    expect(segmentKeys.sort()).toEqual(["10,-10|10,0", "10,0|10,10", "10,0|20,0"].sort());
+    expect(cut.undo).toHaveLength(1);
+    expect(undo(cut).document).toEqual(source);
+    expect(redo(undo(cut)).document).toEqual(cut.document);
+  });
+
+  it("rejects an exact click on an interior line intersection without history", () => {
+    const target: LineElement = { type: "line", id: elementId("cursor-on-cut-target"), layerId: layerId("default"), start: { x: 0, y: 0 }, end: { x: 30, y: 0 }, rotation: 0, style: rectangle.style };
+    const first: LineElement = { type: "line", id: elementId("cursor-on-cut-first"), layerId: layerId("default"), start: { x: 10, y: -10 }, end: { x: 10, y: 10 }, rotation: 0, style: rectangle.style };
+    const second: LineElement = { ...first, id: elementId("cursor-on-cut-second"), start: { x: 20, y: -10 }, end: { x: 20, y: 10 } };
+    const initial = createEditor({ ...document, elements: [target, first, second] });
+    const command = cutSegment(target.id, 0, { x: 10, y: 0 });
+
+    expect(command.apply(initial.document)).toEqual({ success: false, error: "Cut cursor lies on an intersection" });
+    expect(dispatch(initial, command)).toBe(initial);
+    expect(initial.undo).toHaveLength(0);
+  });
+
+  it("does not treat or rebuild a tangent circle as a linear cutter", () => {
+    const target: LineElement = { type: "line", id: elementId("tangent-circle-target"), layerId: layerId("default"), start: { x: 0, y: 5 }, end: { x: 20, y: 5 }, rotation: 0, style: rectangle.style };
+    const crossing: LineElement = { type: "line", id: elementId("tangent-circle-crossing"), layerId: layerId("default"), start: { x: 10, y: 0 }, end: { x: 10, y: 10 }, rotation: 0, style: rectangle.style };
+    const tangent = { type: "ellipse" as const, id: elementId("tangent-circle"), layerId: layerId("default"), position: { x: 0, y: -5 }, size: { width: 10, height: 10 }, rotation: 0, style: rectangle.style };
+    const initial = createEditor({ ...document, elements: [target, crossing, tangent] });
+
+    const cut = dispatch(initial, cutSegment(target.id, 0, { x: 7, y: 5 }));
+    const tangentResult = cut.document.elements.find((element) => element.id === tangent.id);
+    const paths = cut.document.elements.filter((element): element is PathElement => element.type === "path");
+    const hasTargetRemainder = paths.some((path) => {
+      const nodes = new Map(path.nodes.map((node) => [node.id, node.anchor]));
+      return path.segments.some((segment) => nodes.get(segment.startNodeId)?.x === 10 && nodes.get(segment.endNodeId)?.x === 20 && nodes.get(segment.startNodeId)?.y === 5 && nodes.get(segment.endNodeId)?.y === 5);
+    });
+
+    expect(tangentResult).toMatchObject(tangent);
+    expect(hasTargetRemainder).toBe(true);
+    expect(cut.undo).toHaveLength(1);
+    expect(undo(cut).document).toEqual(initial.document);
+  });
+
   it("cuts the segment between two distinct crossings in one operation", () => {
     const horizontal: LineElement = { type: "line", id: elementId("multi-cross-horizontal"), layerId: layerId("default"), start: { x: 0, y: 0 }, end: { x: 30, y: 0 }, rotation: 0, style: rectangle.style };
     const firstCrossing: LineElement = { type: "line", id: elementId("multi-cross-first"), layerId: layerId("default"), start: { x: 10, y: -10 }, end: { x: 10, y: 10 }, rotation: 0, style: rectangle.style };
