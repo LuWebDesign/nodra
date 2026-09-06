@@ -115,6 +115,14 @@ describe("DexieProjectRepository", () => {
     expect(recovered.ok && recovered.revision.document).toMatchObject({ pages: [{ id: "page-1" }, { id: "page-2" }] });
   });
 
+  it("round-trips native arc elements through project persistence", async () => {
+    db = await repository();
+    const source = { ...document(), elements: [{ type: "arc" as const, id: elementId("arc-1"), layerId: layerId("layer-1"), center: { x: 20, y: 20 }, radius: 10, startAngle: 0, endAngle: Math.PI / 2, direction: "clockwise" as const, style: { stroke: "#000", strokeWidth: 1 } }] };
+    expect((await db.saveProject(metadata, source)).ok).toBe(true);
+    const recovered = await db.getProject(metadata.id);
+    expect(recovered.ok && recovered.revision.document).toMatchObject({ elements: [{ type: "arc", center: { x: 20, y: 20 }, radius: 10, direction: "clockwise" }] });
+  });
+
   it("round-trips native spline elements through project persistence", async () => {
     db = await repository();
     const source = { ...document(), elements: [{ type: "spline" as const, id: elementId("spline-1"), layerId: layerId("layer-1"), nodes: [{ id: "a", anchor: { x: 0, y: 0 }, continuity: "smooth" as const }, { id: "b", anchor: { x: 10, y: 0 }, continuity: "smooth" as const }], closed: true, style: { stroke: "#000", fill: "#fff", strokeWidth: 1 } }] };

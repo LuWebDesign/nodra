@@ -1,6 +1,7 @@
 import polygonClipping, { type MultiPolygon } from "polygon-clipping";
 import { hasBounds } from "@nodra/domain";
-import { lineElementToCurve } from "./curve2d-adapters.js";
+import { arcElementToCurve, lineElementToCurve } from "./curve2d-adapters.js";
+import { closestParameter, curveBounds, pointAt } from "./curve2d.js";
 import { intersectCurves } from "./intersection-engine.js";
     import type { CircleElement, ConnectableNodeAddress, ContourElement, DimensionElement, Element, ElementId, EllipseElement, GlyphElement, HandleOffset, LineElement, PathCubicSegment, PathElement, PointMm, RectangleElement, SizeMm, SketchConstraint, SketchElement, SketchPointReference, SplineElement, SplineNode } from "@nodra/domain";
 
@@ -139,6 +140,11 @@ export function connectableNodeAddress(element: Element, nodeIndex: number): Con
   const node = realGeometryNodes(element)[nodeIndex];
   if (!node) return undefined;
   if (element.type === "line") return { kind: "line", name: nodeIndex === 0 ? "start" : nodeIndex === 2 ? "end" : "center" };
+  if (element.type === "arc") {
+    if (nodeIndex === 0) return { kind: "named", name: "center" };
+    if (nodeIndex === 1) return { kind: "named", name: "start" };
+    return { kind: "named", name: "end" };
+  }
   if (element.type === "path" || element.type === "spline") return node.nodeId ? { kind: element.type, nodeId: node.nodeId, ...(node.handle === "control1" ? { handle: "out" as const } : node.handle === "control2" ? { handle: "in" as const } : {}) } : undefined;
   if (element.type === "sketch") return node.nodeId ? { kind: "sketch", nodeId: node.nodeId } : undefined;
   const names = element.type === "rectangle" ? ["nw", "ne", "se", "sw", "center", "n", "e", "s", "w"] : ["center", "n", "e", "s", "w"];
@@ -407,7 +413,7 @@ export function dimensionGeometry(element: DimensionElement, elements: readonly 
   const end = (endReference.nodeId ? endNodes.find((node) => node.nodeId === endReference.nodeId) : endNodes[endReference.nodeIndex])?.point;
   if (!start || !end) return undefined;
   const midpoint = pointMidpoint(start, end);
-  if ((element.kind === "radius" || element.kind === "diameter") && startElement.type === "circle" && endElement.id === startElement.id) {
+  if ((element.kind === "radius" || element.kind === "diameter") && (startElement.type === "circle" || startElement.type === "arc") && endElement.id === startElement.id) {
     const centerNode = realGeometryNodes(startElement).find((node) => node.kind === "center");
     const center = centerNode?.point;
     const rim = Math.hypot(start.x - (center?.x ?? start.x), start.y - (center?.y ?? start.y)) > Math.hypot(end.x - (center?.x ?? end.x), end.y - (center?.y ?? end.y)) ? start : end;
@@ -629,7 +635,7 @@ const assertPositive = (value: number, name: string): void => { assertFinite(val
 const rotate = (point: PointMm, angle: number): PointMm => ({ x: point.x * Math.cos(angle) - point.y * Math.sin(angle), y: point.x * Math.sin(angle) + point.y * Math.cos(angle) });
 
 export function elementCenter(element: Element): PointMm {
-  return element.type === "dimension" ? element.offset : element.type === "line"
+  return element.type === "arc" ? element.center : element.type === "dimension" ? element.offset : element.type === "line"
     ? { x: (element.start.x + element.end.x) / 2, y: (element.start.y + element.end.y) / 2 }
     : element.type === "contour" ? groupCenter(contourBounds(element))
     : element.type === "path" ? groupCenter(pathBounds(element))
@@ -751,7 +757,7 @@ function primitivePolygon(element: RectangleElement | EllipseElement): [number, 
 }
 
 export function closedElementToPolygon(element: Element): MultiPolygon {
-  if (element.type === "line" || element.type === "dimension" || element.type === "text") throw new Error("Shape operations require closed objects");
+  if (element.type === "line" || element.type === "arc" || element.type === "dimension" || element.type === "text") throw new Error("Shape operations require closed objects");
   if (element.type === "sketch") { const contours = sketchClosedContours(element); if (!contours.length) throw new Error("Shape operations require closed objects"); return [contours.map((contour) => contour.map((point) => [point.x, point.y] as [number, number]))]; }
   if (element.type === "path") { if (!element.closed) throw new Error("Shape operations require closed objects"); return [[flattenPath(element, 0.01).map((point) => [point.x, point.y] as [number, number])]]; }
   if (element.type === "circle") return [[primitiveCirclePolygon(element)]];
@@ -809,7 +815,7 @@ export function rotationHandlePoints(element: Element, offsetMm: number): readon
     const bounds = glyphBounds(element);
     return rotationHandlePoints({ type: "rectangle", id: element.id, layerId: element.layerId, position: { x: bounds.x, y: bounds.y }, size: { width: Math.max(bounds.width, 1), height: Math.max(bounds.height, 1) }, cornerRadius: 0, rotation: 0, style: element.style }, offsetMm);
   }
-  if (element.type === "circle") return [];
+  if (element.type === "circle" || element.type === "arc") return [];
   return rotatedCorners(element).map((corner) => {
     const distance = Math.hypot(corner.x - center.x, corner.y - center.y);
     if (distance === 0) return corner;
@@ -845,6 +851,10 @@ export function rotatedCorners(element: RectangleElement | EllipseElement): read
 
 /** Returns connection/alignment points in document space, independent of resize handles. */
 export function realGeometryNodes(element: Element): readonly RealGeometryNode[] {
+  if (element.type === "arc") {
+    const sourced = arcElementToCurve(element).curve;
+    return [{ kind: "center", nodeId: "center", point: element.center }, { kind: "endpoint", nodeId: "start", point: pointAt(sourced, 0) }, { kind: "endpoint", nodeId: "end", point: pointAt(sourced, 1) }];
+  }
   if (element.type === "dimension") return [];
   if (element.type === "line") {
     const [start, end] = rotatedLineEndpoints(element);
@@ -965,6 +975,7 @@ export function resizeHandle(element: RectangleElement | EllipseElement | Circle
 }
 
 export function boundsOf(element: Element): Bounds {
+  if (element.type === "arc") return curveBounds(arcElementToCurve(element).curve);
   if (element.type === "dimension") return { x: element.offset.x - 1, y: element.offset.y - 1, width: 2, height: 2 };
   if (element.type === "line") {
     const [start, end] = rotatedLineEndpoints(element);
@@ -1026,6 +1037,8 @@ export function resizeGroup(elements: readonly Element[], handle: ResizeHandle, 
         ? { ...e, position: { x: handle.includes("w") ? x : e.position.x, y: handle.includes("n") ? y : e.position.y }, scaleX: (e.scaleX ?? 1) * Math.abs(sx), scaleY: (e.scaleY ?? 1) * Math.abs(sy) }
      : e.type === "circle"
        ? { ...e, center: { x: x + (e.center.x - bounds.x) * sx, y: y + (e.center.y - bounds.y) * sy }, radius: e.radius * Math.max(Math.abs(sx), Math.abs(sy)) }
+       : e.type === "arc"
+         ? { ...e, center: { x: x + (e.center.x - bounds.x) * sx, y: y + (e.center.y - bounds.y) * sy }, radius: e.radius * Math.max(Math.abs(sx), Math.abs(sy)) }
        : { ...e, position: { x: x + (elementCenter(e).x - bounds.x) * sx - e.size.width * sx / 2, y: y + (elementCenter(e).y - bounds.y) * sy - e.size.height * sy / 2 }, size: { width: e.size.width * sx, height: e.size.height * sy } });
 }
 export function rotateElements(elements: readonly Element[], center: PointMm, delta: number): readonly Element[] {
@@ -1053,6 +1066,8 @@ export function rotateElements(elements: readonly Element[], center: PointMm, de
           ? { ...element, nodes: element.nodes.map(rotateSplineNode) }
           : element.type === "circle"
             ? { ...element, center: rotatePoint(element.center) }
+          : element.type === "arc"
+            ? { ...element, center: rotatePoint(element.center), startAngle: normalizeAngle(element.startAngle + delta), endAngle: normalizeAngle(element.endAngle + delta) }
           : (() => {
             const c = rotatePoint(elementCenter(element));
             return { ...element, position: { x: c.x - element.size.width / 2, y: c.y - element.size.height / 2 }, rotation: normalizeAngle(element.rotation + delta) };
@@ -1068,6 +1083,12 @@ const lineDistanceToSegment = (point: PointMm, start: PointMm, end: PointMm): nu
 
 export function hitTest(element: Element, point: PointMm, toleranceMm = 0): boolean {
   assertFinite(toleranceMm, "toleranceMm"); if (toleranceMm < 0) throw new Error("toleranceMm must not be negative");
+  if (element.type === "arc") {
+    const curve = arcElementToCurve(element).curve;
+    const parameter = closestParameter(curve, point);
+    const nearest = pointAt(curve, parameter);
+    return Math.hypot(point.x - nearest.x, point.y - nearest.y) <= toleranceMm;
+  }
   if (element.type === "dimension") { const geometry = dimensionGeometry(element, []); return Boolean(geometry && Math.hypot(point.x - geometry.text.x, point.y - geometry.text.y) <= Math.max(toleranceMm, 2)); }
   if (element.type === "line") {
     const [start, end] = rotatedLineEndpoints(element);

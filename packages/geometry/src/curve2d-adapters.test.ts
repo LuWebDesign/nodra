@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { elementId, layerId, type CircleElement, type EllipseElement, type PathElement, type SketchElement, type SplineElement } from "@nodra/domain";
-import { circleElementToCurve, elementToContour, elementToCurves, ellipseElementToCurve, lineElementToCurve, pathSegmentToCurve, rotatedLineEndpoints, sketchEdgeToCurve, splineSpanToCurve } from "./index.js";
+import { elementId, layerId, type ArcElement, type CircleElement, type EllipseElement, type PathElement, type SketchElement, type SplineElement } from "@nodra/domain";
+import { arcElementToCurve, circleElementToCurve, elementToContour, elementToCurves, ellipseElementToCurve, lineElementToCurve, pathSegmentToCurve, rotatedLineEndpoints, sketchEdgeToCurve, splineSpanToCurve } from "./index.js";
 
 const style = { stroke: "#000", strokeWidth: 1 };
 const layer = layerId("layer");
@@ -113,6 +113,14 @@ describe("Curve2D source adapters", () => {
     expect(elementToCurves(circle)).toEqual([circleElementToCurve(circle)]);
     expect(() => circleElementToCurve({ ...circle, radius: Number.NaN })).toThrow("finite and positive");
     expect(() => circleElementToCurve({ ...circle, radius: 0 })).toThrow("finite and positive");
+  });
+
+  it("adapts canonical ArcElements exactly with stable provenance", () => {
+    const arc: ArcElement = { type: "arc", id: elementId("arc"), layerId: layer, center: { x: 5, y: 7 }, radius: 3, startAngle: 0, endAngle: Math.PI / 2, direction: "clockwise", style };
+    expect(arcElementToCurve(arc)).toEqual({ curve: { type: "arc", center: { x: 5, y: 7 }, radius: 3, startAngle: 0, endAngle: Math.PI / 2, direction: "clockwise" }, source: { kind: "arc-element", elementId: arc.id }, sourceIndex: 0 });
+    expect(elementToCurves(arc)).toEqual([arcElementToCurve(arc)]);
+    expect(() => arcElementToCurve({ ...arc, endAngle: 0 })).toThrow("canonical partial sweep");
+    expect(() => arcElementToCurve({ ...arc, startAngle: Math.PI * 2 })).toThrow("canonical partial sweep");
   });
 
   it("keeps legacy oval EllipseElements unsupported by the circle adapter", () => {

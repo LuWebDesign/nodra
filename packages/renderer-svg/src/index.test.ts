@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createDocument, elementId, layerId, withElements, type DocumentSnapshot } from "@nodra/domain";
+import { createDocument, elementId, layerId, withElements, type ArcElement, type DocumentSnapshot } from "@nodra/domain";
 import { renderSvg } from "./index.js";
 
 const layer = { id: layerId("design"), name: "Design", visible: true, order: 0 } as const;
@@ -174,6 +174,32 @@ describe("SVG renderer boundary", () => {
       expect(result.svg).toContain('<tspan x="10" dy="0">first</tspan><tspan x="10" dy="12">second</tspan>');
       expect(result.svg).not.toContain("first\\nsecond");
     }
+  });
+
+  it("renders canonical arcs as exact open SVG arcs in both directions", () => {
+    const arcs = [
+      { type: "arc", id: elementId("arc-cw"), layerId: layer.id, center: { x: 20, y: 20 }, radius: 10, startAngle: 0, endAngle: Math.PI / 2, direction: "clockwise", style: { stroke: "#123", fill: "#f00", strokeWidth: 0.5 } },
+      { type: "arc", id: elementId("arc-ccw"), layerId: layer.id, center: { x: 50, y: 20 }, radius: 10, startAngle: 0, endAngle: Math.PI / 2, direction: "counterclockwise", style },
+    ] as const;
+    const source = withElements(createDocument("arcs", [layer]), arcs);
+    const result = renderSvg(source, { zoom: 2, panMm: { x: 5, y: 10 } });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.svg).toContain('data-element-id="arc-cw" d="M50 20 A 20 20 0 0 1 30 40"');
+      expect(result.svg).toContain('data-element-id="arc-ccw" d="M110 20 A 20 20 0 1 0 90 40"');
+      expect(result.svg).toContain('data-element-id="arc-cw" d="M50 20 A 20 20 0 0 1 30 40" stroke="#123" stroke-width="0.5" fill="none"');
+    }
+  });
+
+  it("normalizes arc seam direction and emits the large-arc flag without mutating patterned sources", () => {
+    const arc: ArcElement = { type: "arc", id: elementId("arc-seam"), layerId: layer.id, center: { x: 20, y: 20 }, radius: 10, startAngle: (350 * Math.PI) / 180, endAngle: (10 * Math.PI) / 180, direction: "counterclockwise" as const, style: { stroke: "#123", fill: "url(#pattern)", strokeWidth: 0.5 } };
+    const source = withElements(createDocument("arc-seam", [layer]), [arc]);
+    const before = structuredClone(source);
+    const result = renderSvg(source, { zoom: 1, panMm: { x: 0, y: 0 } });
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.svg).toContain('d="M29.848078 18.263518 A 10 10 0 1 0 29.848078 21.736482"');
+    expect(result.success && result.svg).toContain('fill="none"');
+    expect(source).toEqual(before);
   });
 
   it("renders text strokes with the configured positive model width", () => {

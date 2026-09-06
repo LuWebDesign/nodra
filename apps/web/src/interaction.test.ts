@@ -435,6 +435,19 @@ describe("drag geometry", () => {
     expect(target).toMatchObject({ kind: "circle", hit: { elementId: circle.id, center: { node: { nodeId: "center" } } } });
   });
 
+  it("selects persisted arcs only on their sweep and exposes stable arc nodes", () => {
+    const layer = { id: layerId("arc-interaction"), name: "Arcs", visible: true, order: 0 };
+    const arc = { type: "arc" as const, id: elementId("arc-target"), layerId: layer.id, center: { x: 20, y: 20 }, radius: 10, startAngle: 0, endAngle: Math.PI / 2, direction: "clockwise" as const, style: { stroke: "#000", strokeWidth: 1 } };
+    const document = { ...createDocument("arc-interaction", [layer]), elements: [arc] };
+    expect(pickElement(document, { x: 20 + Math.SQRT1_2 * 10, y: 20 + Math.SQRT1_2 * 10 }, 1)).toBe(arc.id);
+    expect(pickElement(document, { x: 10, y: 20 }, 1)).toBeUndefined();
+    expect(pickNode(document, { x: 30, y: 20 }, 1)).toMatchObject({ elementId: arc.id, nodeIndex: 1, node: { nodeId: "start" } });
+    expect(pickNode(document, { x: 20, y: 30 }, 1)).toMatchObject({ elementId: arc.id, nodeIndex: 2, node: { nodeId: "end" } });
+    expect(pickDimensionTarget(document, { x: 20 + Math.SQRT1_2 * 10, y: 20 + Math.SQRT1_2 * 10 }, 1, 1)).toMatchObject({ kind: "circle", hit: { elementId: arc.id, center: { node: { nodeId: "center" } }, rim: { node: { nodeId: "start" } } } });
+    expect(pickDimensionTarget(document, { x: 20, y: 30 }, 1, 1)).toMatchObject({ kind: "circle", hit: { rim: { node: { nodeId: "end" } } } });
+    expect(marqueeSelection(document, { x: 19, y: 19 }, { x: 31, y: 31 })).toEqual([arc.id]);
+  });
+
   it("returns the exact cuttable segment endpoints for hover feedback", () => {
     const layer = { id: layerId("cut-hover"), name: "Cut hover", visible: true, order: 0 };
     const document = createDocument("cut-hover", [layer]);

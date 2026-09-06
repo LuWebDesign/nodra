@@ -25,6 +25,28 @@ describe("native document validation", () => {
     const project = { schemaVersion: 6, id: "legacy-project", revision: 0, origin: "top-left", units: "mm", preferences: { lineGuidesEnabled: true, lineGuideAngle: 45 }, pages: [{ id: "page-1", page: base.page, layers: base.layers, elements: [legacyCircle] }], activePageId: "page-1" };
     expect(migrateProject(project)).toMatchObject({ schemaVersion: CURRENT_SCHEMA_VERSION, pages: [{ elements: [{ type: "circle", center: { x: 8, y: 10 }, radius: 6 }] }] });
   });
+  it("validates canonical arcs, stable nodes, and exact arc extents", () => {
+    const base = createDocument("arc-doc", [{ id: layerId("layer-1"), name: "Design", visible: true, order: 0 }]);
+    const arc = { type: "arc" as const, id: elementId("arc"), layerId: layerId("layer-1"), center: { x: 5, y: 20 }, radius: 10, startAngle: 0, endAngle: Math.PI / 2, direction: "counterclockwise" as const, style: { stroke: "#000", strokeWidth: 1 } };
+    const radius = { type: "dimension" as const, id: "radius", layerId: "layer-1", kind: "radius" as const, references: [{ kind: "node" as const, elementId: "arc", nodeIndex: 0, nodeId: "center" }, { kind: "node" as const, elementId: "arc", nodeIndex: 2, nodeId: "end" }] as const, offset: { x: 8, y: 0 }, precision: 2, units: "mm" as const, rotation: 0 as const, style: { stroke: "#2563eb", strokeWidth: 0.45 } };
+    const connection = { id: "arc-end", first: { elementId: arc.id, node: { kind: "named" as const, name: "end" as const } }, second: { elementId: arc.id, node: { kind: "named" as const, name: "center" as const } } };
+    expect(validateDocument({ ...base, elements: [arc, radius], connections: [connection] }).success).toBe(true);
+    expect(validateDocument({ ...base, elements: [arc, { ...radius, driving: false }] }).success).toBe(true);
+    const invalidDrivingRadius = { ...radius, driving: true, constraintId: "unsupported" };
+    expect(validateDocument({ ...base, elements: [arc, invalidDrivingRadius] }).success).toBe(false);
+    const project = { schemaVersion: CURRENT_SCHEMA_VERSION, id: base.id, revision: 0, origin: "top-left", units: "mm", preferences: { lineGuidesEnabled: true, lineGuideAngle: 45 }, pages: [{ id: "page-1", page: base.page, layers: base.layers, elements: [arc, radius], connections: [connection] }], activePageId: "page-1" };
+    expect(validateProject(project).success).toBe(true);
+    expect(validateProject({ ...project, pages: [{ ...project.pages[0], elements: [arc, invalidDrivingRadius] }] }).success).toBe(false);
+    expect(validateDocument({ ...base, elements: [{ ...arc, startAngle: 0, endAngle: 0 }] }).success).toBe(false);
+    expect(validateDocument({ ...base, elements: [{ ...arc, startAngle: -0.1 }] }).success).toBe(false);
+    expect(validateDocument({ ...base, elements: [{ ...arc, endAngle: Math.PI * 2 }] }).success).toBe(false);
+    expect(validateDocument({ ...base, elements: [{ ...arc, radius: 0 }] }).success).toBe(false);
+    expect(validateDesign([arc], { width: 30, height: 30 }).ready).toBe(false);
+    const clockwiseQuarter = { ...arc, direction: "clockwise" as const };
+    expect(validateDesign([clockwiseQuarter], { width: 30, height: 30 }).ready).toBe(true);
+    expect(validateDesign([clockwiseQuarter], { width: 10, height: 30 }).outsideElementCount).toBe(1);
+  });
+
   it("includes complete circle extents in page readiness", () => {
     const style = { stroke: "#000", strokeWidth: 1 };
     const inside = { type: "circle" as const, id: elementId("inside"), layerId: layerId("layer-1"), center: { x: 10, y: 10 }, radius: 10, style };
@@ -38,6 +60,12 @@ describe("native document validation", () => {
     expect(validateDocument({ ...document, elements: [path] }).success).toBe(true);
     expect(validateDocument({ ...document, elements: [{ ...path, segments: [] }] }).success).toBe(false);
   });
+  it("migrates schema 8 documents and projects explicitly to schema 9", () => {
+    const base = createDocument("schema-8", []);
+    expect(migrateDocument({ ...base, schemaVersion: 8 })).toMatchObject({ schemaVersion: 9 });
+    expect(migrateProject({ schemaVersion: 8, id: "p", revision: 0, origin: "top-left", units: "mm", preferences: { lineGuidesEnabled: true, lineGuideAngle: 45 }, pages: [{ id: "page-1", page: base.page, layers: [], elements: [] }], activePageId: "page-1" })).toMatchObject({ schemaVersion: 9 });
+  });
+
   it("round-trips valid records", () => {
     const document = createDocument("doc-1", [{ id: layerId("layer-1"), name: "Design", visible: true, order: 0 }]);
     const result = parseDocument(serializeDocument(document));
