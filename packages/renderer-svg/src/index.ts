@@ -73,6 +73,11 @@ function renderElement(element: Element, viewport: Viewport, document: DocumentS
     const radius = Math.min(element.cornerRadius * viewport.zoom, width / 2, height / 2);
     return `<rect data-element-id="${escapeAttribute(element.id)}" x="${number(position.x)}" y="${number(position.y)}" width="${number(width)}" height="${number(height)}" rx="${number(radius)}" ry="${number(radius)}" transform="${transform(element, center.x, center.y)}" ${visualAttributes(element)} />`;
   }
+  if (element.type === "circle") {
+    const center = screen(element.center);
+    const radius = element.radius * viewport.zoom;
+    return `<circle data-element-id="${escapeAttribute(element.id)}" cx="${number(center.x)}" cy="${number(center.y)}" r="${number(radius)}" ${visualAttributes(element)} />`;
+  }
   if (element.type === "ellipse") {
     const position = screen(element.position);
     const width = element.size.width * viewport.zoom;
@@ -186,7 +191,7 @@ export function renderSvg(document: unknown, viewport: unknown, options: unknown
   const checked = validateDocument(document);
   if (!checked.success) {
     const candidate = typeof document === "object" && document !== null ? document as { schemaVersion?: unknown; elements?: unknown } : undefined;
-         const unsupported = !SUPPORTED_SCHEMA_VERSIONS.has(candidate?.schemaVersion as number) || (Array.isArray(candidate?.elements) && candidate.elements.some((element) => typeof element === "object" && element !== null && !["rectangle", "ellipse", "line", "sketch", "dimension", "contour", "path", "spline", "text", "glyph"].includes((element as { type?: unknown }).type as string)));
+         const unsupported = !SUPPORTED_SCHEMA_VERSIONS.has(candidate?.schemaVersion as number) || (Array.isArray(candidate?.elements) && candidate.elements.some((element) => typeof element === "object" && element !== null && !["rectangle", "circle", "ellipse", "line", "sketch", "dimension", "contour", "path", "spline", "text", "glyph"].includes((element as { type?: unknown }).type as string)));
     return { success: false, reason: unsupported ? "unsupported" : "invalid", error: checked.error.slice(0, 512), issues: checked.issues.slice(0, MAX_ISSUES).map((issue) => `${issue.path.join(".") || "document"}: ${issue.message}`) };
   }
   const checkedViewport = viewportResult(viewport);

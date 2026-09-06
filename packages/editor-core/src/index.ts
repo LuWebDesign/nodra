@@ -26,6 +26,7 @@ import {
   nextRevision,
   revision,
   withElements,
+  isCircleElement,
 } from "@nodra/domain";
 import { validateDocument } from "@nodra/validation";
 import { boundsOfElements, connectableNodeAddress, contourWithPoints, directionVector, elementCenter, elementToContour, dimensionGeometry, elementToCurves, glyphGeometryNodes, groupCenter, intersectCurves, lineElementToCurve, mirrorHandleOffset, partitionCurveByInterval, realGeometryNodes, resizeGroup, rotateElements, selectRemovableCurveInterval, shapeResultContours, tangentAt, transformPoint, splitCuttableSegments, classifyCutGraph, cuttableSegments, lineSegmentIntersection, rotatedLineEndpoints, sketchEdgeAtAddress, sketchEdgeIndexAtAddress, solveSketchConstraints, solveCircleConstraints, cubicBezierLineIntersections, splitCubicBezierAtParameters, flattenCubicBezier, type CubicBezier, type Direction, type LineCurve2D, type SourcedCurve2D } from "@nodra/geometry";
@@ -35,7 +36,7 @@ import { topologyReferenceKey, type ReferenceResolution, type TopologyEditResult
 export * from "./spline.js";
 export * from "./topology.js";
 
-export type ElementPatch = { readonly position?: PointMm; readonly size?: SizeMm; readonly rotation?: number; readonly cornerRadius?: number; readonly cornerRadii?: { readonly topLeft: number; readonly topRight: number; readonly bottomRight: number; readonly bottomLeft: number }; readonly style?: VisualStyle; readonly operation?: OperationMetadata; readonly start?: PointMm; readonly end?: PointMm; readonly text?: string; readonly fontFamily?: string; readonly fontSize?: number; readonly fontWeight?: "normal" | "bold"; readonly fontStyle?: "normal" | "italic"; readonly textAlign?: "left" | "center" | "right"; readonly lineHeight?: number; readonly scaleX?: number; readonly scaleY?: number };
+export type ElementPatch = { readonly position?: PointMm; readonly size?: SizeMm; readonly center?: PointMm; readonly radius?: number; readonly rotation?: number; readonly cornerRadius?: number; readonly cornerRadii?: { readonly topLeft: number; readonly topRight: number; readonly bottomRight: number; readonly bottomLeft: number }; readonly style?: VisualStyle; readonly operation?: OperationMetadata; readonly start?: PointMm; readonly end?: PointMm; readonly text?: string; readonly fontFamily?: string; readonly fontSize?: number; readonly fontWeight?: "normal" | "bold"; readonly fontStyle?: "normal" | "italic"; readonly textAlign?: "left" | "center" | "right"; readonly lineHeight?: number; readonly scaleX?: number; readonly scaleY?: number };
 export interface ContourNodeAddress { readonly ringIndex: number; readonly pointIndex: number }
 export interface ContourSegmentAddress { readonly ringIndex: number; readonly segmentIndex: number }
 export type StylePatch = { readonly stroke?: string; readonly fill?: string | null; readonly strokeWidth?: number };
@@ -459,6 +460,7 @@ export const moveElement = (id: ElementId, delta: PointMm): EditorCommand => ({
     if (element.type === "text") return replaceElements(document, document.elements.map((current) => current.id === id && current.type === "text" ? { ...current, position: { x: current.position.x + delta.x, y: current.position.y + delta.y } } : current));
     if (element.type === "spline") return replaceElements(document, document.elements.map((current) => current.id === id && current.type === "spline" ? { ...current, nodes: current.nodes.map((node) => ({ ...node, anchor: { x: node.anchor.x + delta.x, y: node.anchor.y + delta.y } })) } : current));
     if (element.type === "sketch") return replaceElements(document, document.elements.map((current) => current.id === id && current.type === "sketch" ? { ...current, nodes: current.nodes.map((node) => ({ ...node, point: { x: node.point.x + delta.x, y: node.point.y + delta.y } })) } : current));
+    if (element.type === "circle") return replaceElements(document, document.elements.map((current) => current.id === id && current.type === "circle" ? { ...current, center: { x: current.center.x + delta.x, y: current.center.y + delta.y } } : current));
     return replaceElements(document, document.elements.map((current) => current.id === id && (current.type === "rectangle" || current.type === "ellipse") ? { ...current, position: { x: current.position.x + delta.x, y: current.position.y + delta.y } } : current));
   },
 });
@@ -480,6 +482,7 @@ export const moveElements = (ids: readonly ElementId[], delta: PointMm): EditorC
       if (element.type === "text") return { ...element, position: { x: element.position.x + delta.x, y: element.position.y + delta.y } };
       if (element.type === "spline") return { ...element, nodes: element.nodes.map((node) => ({ ...node, anchor: { x: node.anchor.x + delta.x, y: node.anchor.y + delta.y } })) };
       if (element.type === "sketch") return { ...element, nodes: element.nodes.map((node) => ({ ...node, point: { x: node.point.x + delta.x, y: node.point.y + delta.y } })) };
+      if (element.type === "circle") return { ...element, center: { x: element.center.x + delta.x, y: element.center.y + delta.y } };
       if (element.type === "rectangle" || element.type === "ellipse") return { ...element, position: { x: element.position.x + delta.x, y: element.position.y + delta.y } };
       return element;
     }));
@@ -500,7 +503,7 @@ export const resizeElementsToDimensions = (ids: readonly ElementId[], size: Size
 } });
 export const rotateElementsAroundCenter = (ids: readonly ElementId[], delta: number): EditorCommand => ({ name: `rotate-group:${ids.join(",")}`, apply: (document) => { const selected = new Set(ids); const elements = document.elements.filter((e) => selected.has(e.id)); if (!elements.length || elements.length !== selected.size) return { success: false, error: "Invalid group selection" }; const next = rotateElements(elements, groupCenter(boundsOfElements(elements)), delta); return replaceElements(document, document.elements.map((e) => next.find((n) => n.id === e.id) ?? e)); } });
 
-export const resizeElement = (id: ElementId, position: PointMm, size: SizeMm): EditorCommand => updateElement(id, { position, size });
+export const resizeElement = (id: ElementId, position: PointMm, size: SizeMm): EditorCommand => ({ name: `resize:${id}`, apply: (document) => { const current = document.elements.find((element) => element.id === id); if (current?.type === "circle") return updateElement(id, { center: { x: position.x + size.width / 2, y: position.y + size.height / 2 }, radius: size.width / 2 }).apply(document); return updateElement(id, { position, size }).apply(document); } });
 const connectedSide = (document: DocumentSnapshot, id: ElementId, axis: "x" | "y"): { leftOrTop: boolean; rightOrBottom: boolean } => {
   const result = { leftOrTop: false, rightOrBottom: false };
   const sides = (address: ConnectableNodeAddress): readonly ("left" | "right" | "top" | "bottom")[] => {
@@ -524,11 +527,22 @@ const connectedSide = (document: DocumentSnapshot, id: ElementId, axis: "x" | "y
   return result;
 };
 /** Inspector resize: a connected side is fixed; otherwise the dimension is resized around its center. */
-export const resizeElementToDimensions = (id: ElementId, field: "width" | "height", value: number, aspectLock = false): EditorCommand => ({
+export const resizeElementToDimensions = (id: ElementId, field: "width" | "height" | "radius", value: number, aspectLock = false): EditorCommand => ({
   name: `resize-property:${id}:${field}`,
   apply: (document) => {
-    const element = document.elements.find((candidate): candidate is Extract<Element, { type: "rectangle" | "ellipse" }> => candidate.id === id && (candidate.type === "rectangle" || candidate.type === "ellipse"));
+    const element = document.elements.find((candidate): candidate is Extract<Element, { type: "rectangle" | "ellipse" | "circle" }> => candidate.id === id && (candidate.type === "rectangle" || candidate.type === "ellipse" || candidate.type === "circle"));
     if (!element || !Number.isFinite(value) || value <= 0) return { success: false, error: "Dimensions must be positive" };
+    if (element.type === "circle") {
+      const radius = field === "radius" ? value : value / 2;
+      const horizontal = connectedSide(document, id, "x"); const vertical = connectedSide(document, id, "y");
+      if (horizontal.leftOrTop && horizontal.rightOrBottom || vertical.leftOrTop && vertical.rightOrBottom) return { success: false, error: "Circle resize would break opposite connections" };
+      const center = {
+        x: horizontal.leftOrTop ? element.center.x - element.radius + radius : horizontal.rightOrBottom ? element.center.x + element.radius - radius : element.center.x,
+        y: vertical.leftOrTop ? element.center.y - element.radius + radius : vertical.rightOrBottom ? element.center.y + element.radius - radius : element.center.y,
+      };
+      if (radius === element.radius && center.x === element.center.x && center.y === element.center.y) return { success: true, document };
+      return replaceElements(document, document.elements.map((candidate) => candidate.id === id && candidate.type === "circle" ? { ...candidate, center, radius } : candidate));
+    }
     const target = aspectLock ? (field === "width" ? { width: value, height: value * element.size.height / element.size.width } : { width: value * element.size.width / element.size.height, height: value }) : { ...element.size, [field]: value };
     if (![target.width, target.height].every((candidate) => Number.isFinite(candidate) && candidate > 0)) return { success: false, error: "Dimensions must be positive" };
     const horizontal = connectedSide(document, id, "x");
@@ -1011,7 +1025,7 @@ const selectedExactLineFragment = (document: DocumentSnapshot, line: LineElement
 /** Rebuilds only the straight planar component containing the selected edge. */
 const cutStraightComponent = (document: DocumentSnapshot, elementIdToCut: ElementId, segmentIndex: number, point?: PointMm, exactSelectedLine?: LineCurve2D): CommandResult => {
   const selectedElement = document.elements.find((element) => element.id === elementIdToCut);
-  if (!selectedElement || (selectedElement.type !== "line" && selectedElement.type !== "rectangle" && selectedElement.type !== "ellipse" && selectedElement.type !== "path")) return { success: false, error: "Only straight lines, ellipse arcs, rectangle edges, and line paths can be cut" };
+  if (!selectedElement || (selectedElement.type !== "line" && selectedElement.type !== "rectangle" && selectedElement.type !== "ellipse" && selectedElement.type !== "circle" && selectedElement.type !== "path")) return { success: false, error: "Only straight lines, ellipse arcs, rectangle edges, and line paths can be cut" };
   if (selectedElement.type === "path" && selectedElement.segments[segmentIndex]?.type !== "line") return { success: false, error: "Only straight path segments can be cut" };
   const visibleLayers = exactSelectedLine ? new Set(document.layers.filter((layer) => layer.visible).map((layer) => layer.id)) : undefined;
   const componentSourceElements = visibleLayers
@@ -1046,7 +1060,7 @@ const cutStraightComponent = (document: DocumentSnapshot, elementIdToCut: Elemen
   const component = [...connected];
   const selectedEdge = edgeKey(selected.piece.start, selected.piece.end);
   const remaining = component.filter(({ piece, source }) => {
-    if (selected.source.type === "ellipse" && source.type === "ellipse") return !(piece.elementId === selected.piece.elementId && piece.segmentIndex === selected.piece.segmentIndex);
+    if ((selected.source.type === "ellipse" || selected.source.type === "circle") && (source.type === "ellipse" || source.type === "circle")) return !(piece.elementId === selected.piece.elementId && piece.segmentIndex === selected.piece.segmentIndex);
     if (edgeKey(piece.start, piece.end) !== selectedEdge) return true;
     return source.type === "path" && source.segments[piece.segmentIndex]?.type === "cubicBezier";
   });
@@ -1066,10 +1080,10 @@ const cutStraightComponent = (document: DocumentSnapshot, elementIdToCut: Elemen
   const usedElementIds = new Set(document.elements.filter((element) => !componentElements.has(element.id)).map((element) => element.id));
   const nextElementId = (base: string): ElementId => { let candidate = base; let suffix = 1; while (usedElementIds.has(elementId(candidate))) candidate = `${base}:${suffix++}`; const id = elementId(candidate); usedElementIds.add(id); return id; };
   const sourceFor = (pieces: readonly CutPieceGraph[]) => pieces[0]?.source ?? selected.source;
-  const ellipseCubic = (ellipse: Extract<Element, { type: "ellipse" }>, start: PointMm, end: PointMm): Pick<Extract<PathSegment, { type: "cubicBezier" }>, "control1" | "control2"> => {
-    const center = elementCenter(ellipse); const rx = ellipse.size.width / 2; const ry = ellipse.size.height / 2; const cos = Math.cos(-ellipse.rotation); const sin = Math.sin(-ellipse.rotation);
+  const ellipseCubic = (ellipse: Extract<Element, { type: "ellipse" | "circle" }>, start: PointMm, end: PointMm): Pick<Extract<PathSegment, { type: "cubicBezier" }>, "control1" | "control2"> => {
+    const center = elementCenter(ellipse); const rx = ellipse.type === "circle" ? ellipse.radius : ellipse.size.width / 2; const ry = ellipse.type === "circle" ? ellipse.radius : ellipse.size.height / 2; const rotation = ellipse.type === "circle" ? 0 : ellipse.rotation; const cos = Math.cos(-rotation); const sin = Math.sin(-rotation);
     const localAngle = (pointValue: PointMm) => { const dx = pointValue.x - center.x; const dy = pointValue.y - center.y; return Math.atan2((dx * sin + dy * cos) / ry, (dx * cos - dy * sin) / rx); };
-    const tangent = (angle: number): PointMm => transformPoint({ x: -rx * Math.sin(angle), y: ry * Math.cos(angle) }, { x: 0, y: 0 }, ellipse.rotation);
+    const tangent = (angle: number): PointMm => transformPoint({ x: -rx * Math.sin(angle), y: ry * Math.cos(angle) }, { x: 0, y: 0 }, rotation);
     const a0 = localAngle(start); const a1 = localAngle(end); let delta = a1 - a0; while (delta <= -Math.PI) delta += Math.PI * 2; while (delta > Math.PI) delta -= Math.PI * 2;
     const k = 4 / 3 * Math.tan(delta / 4); const t0 = tangent(a0); const t1 = tangent(a1);
     return { control1: { x: start.x + t0.x * k, y: start.y + t0.y * k }, control2: { x: end.x - t1.x * k, y: end.y - t1.y * k } };
@@ -1107,9 +1121,9 @@ const cutStraightComponent = (document: DocumentSnapshot, elementIdToCut: Elemen
     for (let pieceIndex = 0; pieceIndex < pieces.length;) {
       const first = pieces[pieceIndex]!; let lastIndex = pieceIndex;
       const sourcePathSegment = first.source.type === "path" ? first.source.segments[first.piece.segmentIndex] : undefined;
-      while (lastIndex + 1 < pieces.length && (first.source.type === "ellipse" || sourcePathSegment?.type === "cubicBezier") && pieces[lastIndex + 1]!.piece.elementId === first.piece.elementId && pieces[lastIndex + 1]!.piece.segmentIndex === first.piece.segmentIndex) lastIndex += 1;
+      while (lastIndex + 1 < pieces.length && (first.source.type === "ellipse" || first.source.type === "circle" || sourcePathSegment?.type === "cubicBezier") && pieces[lastIndex + 1]!.piece.elementId === first.piece.elementId && pieces[lastIndex + 1]!.piece.segmentIndex === first.piece.segmentIndex) lastIndex += 1;
       const last = pieces[lastIndex]!; const startNodeId = appendNode(first.piece.start); const endNodeId = appendNode(last.piece.end);
-      const generated = first.source.type === "ellipse" ? { id: pathSegmentId(), type: "cubicBezier" as const, startNodeId, endNodeId, ...ellipseCubic(first.source, first.piece.start, last.piece.end) } : sourcePathSegment?.type === "cubicBezier" ? (() => {
+      const generated = first.source.type === "ellipse" || first.source.type === "circle" ? { id: pathSegmentId(), type: "cubicBezier" as const, startNodeId, endNodeId, ...ellipseCubic(first.source, first.piece.start, last.piece.end) } : sourcePathSegment?.type === "cubicBezier" ? (() => {
         const sourceStart = first.source.type === "path" ? first.source.nodes.find((node) => node.id === sourcePathSegment.startNodeId)?.anchor : undefined;
         const forward = sourceStart !== undefined && key(first.piece.start) === key(sourceStart);
         return { id: pathSegmentId(), type: "cubicBezier" as const, startNodeId, endNodeId, control1: forward ? sourcePathSegment.control1 : sourcePathSegment.control2, control2: forward ? sourcePathSegment.control2 : sourcePathSegment.control1 };
@@ -1324,7 +1338,7 @@ export const cutSegment = (elementId: ElementId, segmentIndex: number, point?: P
     if (element.type === "contour") return cutContourSegment(elementId, ringIndex, segmentIndex, point).apply(document);
     if (element.type === "line") return cutLineAtPoint(elementId, point ?? element.start).apply(document);
     if (element.type === "path" && element.segments[segmentIndex]?.type === "cubicBezier") return point ? cutOpenSingleCubicPath(document, element, point) : { success: false, error: "A cubic cut requires a click point" };
-    if (element.type === "rectangle" || element.type === "ellipse" || element.type === "path") return cutPathSegment(elementId, segmentIndex, point).apply(document);
+    if (element.type === "rectangle" || element.type === "ellipse" || element.type === "circle" || element.type === "path") return cutPathSegment(elementId, segmentIndex, point).apply(document);
     return { success: false, error: "Element segment is not cuttable" };
   },
 });
@@ -1725,21 +1739,16 @@ export const updateDimensionValue = (dimensionId: ElementId, value: number): Edi
     }
     if ((dimension.kind === "radius" || dimension.kind === "diameter") && dimension.driving !== true) return { success: false, error: "Only driving circular dimensions can change a circle" };
         if (dimension.kind === "radius" || dimension.kind === "diameter") {
-      if (target?.type !== "ellipse" || target.size.width !== target.size.height) return { success: false, error: "Circular driving dimensions require a circle" };
-      const first = dimension.references[0]; const second = dimension.references[1];
-      if (!("kind" in first) || !("kind" in second) || first.kind !== "node" || second.kind !== "node" || !first.nodeId || !second.nodeId || ![first.nodeId, second.nodeId].includes("center") || first.nodeId === second.nodeId) return { success: false, error: "Radius driving references require center and rim nodes" };
-      const circleConstraint = dimension.driving && dimension.constraintId ? target.circleConstraints?.find((candidate) => candidate.id === dimension.constraintId) : undefined;
-      if (dimension.driving && (!circleConstraint || (dimension.kind === "radius" ? circleConstraint.kind !== "radius" : circleConstraint.kind !== "diameter"))) return { success: false, error: "Driving radius dimension does not match a circle size constraint" };
-      const rimId = first.nodeId === "center" ? second.nodeId : first.nodeId;
-      const center = elementCenter(target); const rim = realGeometryNodes(target).find((node) => node.nodeId === rimId)?.point;
-      if (!rim) return { success: false, error: "Radius driving rim reference is invalid" };
-      const currentRadius = Math.hypot(rim.x - center.x, rim.y - center.y);
-      if (!Number.isFinite(currentRadius) || currentRadius <= 0) return { success: false, error: "Radius driving circle is degenerate" };
-      const radius = dimension.kind === "diameter" ? value / 2 : value;
-          const position = { x: center.x - radius, y: center.y - radius };
-      const updatedConstraints = circleConstraint ? target.circleConstraints?.map((candidate) => candidate.id === circleConstraint.id ? { ...candidate, value } : candidate) : target.circleConstraints;
-      const updated = { ...target, position, size: { width: radius * 2, height: radius * 2 }, ...(updatedConstraints ? { circleConstraints: updatedConstraints } : {}) };
-      return replaceElements(document, document.elements.map((element) => element.id === target.id ? updated : element));
+      if (target?.type === "circle") {
+        const first = dimension.references[0]; const second = dimension.references[1];
+        if (!("kind" in first) || !("kind" in second) || first.kind !== "node" || second.kind !== "node" || !first.nodeId || !second.nodeId || ![first.nodeId, second.nodeId].includes("center") || first.nodeId === second.nodeId) return { success: false, error: "Radius driving references require center and rim nodes" };
+        const drivingConstraint = target.circleConstraints?.find((constraint) => constraint.id === dimension.constraintId);
+        if (!drivingConstraint || drivingConstraint.kind !== dimension.kind || drivingConstraint.driving !== true) return { success: false, error: "Driving circular dimension constraint is missing or mismatched" };
+        const radius = dimension.kind === "diameter" ? value / 2 : value;
+        const updated = { ...target, radius, circleConstraints: target.circleConstraints!.map((constraint) => constraint.id === dimension.constraintId ? { ...constraint, value } : constraint) };
+        return replaceElements(document, document.elements.map((element) => element.id === target.id ? updated : element));
+      }
+      return { success: false, error: "Circular driving dimensions require a circle" };
     }
     if (target?.type === "line") {
       const first = dimension.references[0]; const second = dimension.references[1];
@@ -2000,8 +2009,8 @@ export const solveSketch = (sketchId: ElementId): EditorCommand => ({
 export const addCircleConstraint = (circleId: ElementId, constraint: CircleConstraint): EditorCommand => ({
   name: `circle-constraint-add:${circleId}:${constraint.id}`,
   apply: (document) => {
-    const circle = document.elements.find((element): element is Extract<Element, { type: "ellipse" }> => element.id === circleId && element.type === "ellipse");
-    if (!circle || circle.size.width !== circle.size.height) return { success: false, error: "Circle not found or is not circular" };
+    const circle = document.elements.find((element): element is Extract<Element, { type: "circle" }> => element.id === circleId && isCircleElement(element));
+    if (!circle) return { success: false, error: "Circle not found or is not circular" };
     if (!constraint.id || circle.circleConstraints?.some((candidate) => candidate.id === constraint.id) || constraint.kind.endsWith("horizontal") && constraint.value === undefined || constraint.kind.endsWith("vertical") && constraint.value === undefined || (constraint.kind === "radius" || constraint.kind === "diameter") && (!Number.isFinite(constraint.value) || constraint.value === undefined || constraint.value <= 0)) return { success: false, error: "Invalid circle constraint" };
     const result = solveCircleConstraints({ ...circle, circleConstraints: [...(circle.circleConstraints ?? []), constraint] });
     if (result.status === "conflict") return { success: false, error: "Circle constraints are in conflict" };
@@ -2012,8 +2021,8 @@ export const addCircleConstraint = (circleId: ElementId, constraint: CircleConst
 export const updateCircleConstraint = (circleId: ElementId, constraintId: string, constraint: CircleConstraint): EditorCommand => ({
   name: `circle-constraint-update:${circleId}:${constraintId}`,
   apply: (document) => {
-    const circle = document.elements.find((element): element is Extract<Element, { type: "ellipse" }> => element.id === circleId && element.type === "ellipse");
-    if (!circle || circle.size.width !== circle.size.height) return { success: false, error: "Circle not found or is not circular" };
+    const circle = document.elements.find((element): element is Extract<Element, { type: "circle" }> => element.id === circleId && isCircleElement(element));
+    if (!circle) return { success: false, error: "Circle not found or is not circular" };
     if (constraint.id !== constraintId || constraint.value === undefined || !Number.isFinite(constraint.value) || (constraint.kind === "radius" || constraint.kind === "diameter") && constraint.value <= 0) return { success: false, error: "Invalid circle constraint" };
     if (!circle.circleConstraints?.some((candidate) => candidate.id === constraintId)) return { success: false, error: "Circle constraint not found" };
     const constraints = circle.circleConstraints.map((candidate) => candidate.id === constraintId ? constraint : candidate);
@@ -2026,7 +2035,7 @@ export const updateCircleConstraint = (circleId: ElementId, constraintId: string
 export const deleteCircleConstraint = (circleId: ElementId, constraintId: string): EditorCommand => ({
   name: `circle-constraint-delete:${circleId}:${constraintId}`,
   apply: (document) => {
-    const circle = document.elements.find((element): element is Extract<Element, { type: "ellipse" }> => element.id === circleId && element.type === "ellipse");
+    const circle = document.elements.find((element): element is Extract<Element, { type: "circle" }> => element.id === circleId && isCircleElement(element));
     if (!circle || !circle.circleConstraints?.some((candidate) => candidate.id === constraintId)) return { success: false, error: "Circle constraint not found" };
     const result = solveCircleConstraints({ ...circle, circleConstraints: circle.circleConstraints.filter((candidate) => candidate.id !== constraintId) });
     return replaceElements(document, document.elements.map((element) => element.id === circleId ? result.circle : element));
@@ -2042,8 +2051,8 @@ export const setDimensionDriving = (dimensionId: ElementId, driving: boolean): E
     const constraintId = dimension.constraintId ?? `dimension:${dimension.id}`;
     const updatedDimension = driving ? { ...dimension, driving: true, constraintId } : Object.fromEntries(Object.entries({ ...dimension, driving: false }).filter(([key]) => key !== "constraintId")) as unknown as DimensionElement;
     if (dimension.kind === "radius" || dimension.kind === "diameter") {
-      const target = document.elements.find((element): element is Extract<Element, { type: "ellipse" }> => element.id === targetId && element.type === "ellipse");
-      if (!target || target.size.width !== target.size.height) return { success: false, error: "Driving dimension target is not a circle" };
+      const target = document.elements.find((element): element is Extract<Element, { type: "circle" }> => element.id === targetId && isCircleElement(element));
+      if (!target) return { success: false, error: "Driving dimension target is not a circle" };
       const existing = target.circleConstraints ?? [];
       const value = dimensionGeometry(dimension, document.elements)?.value;
       if (driving && (!value || !Number.isFinite(value) || value <= 0)) return { success: false, error: "Circular dimension has no valid value" };
@@ -2067,8 +2076,8 @@ export const setDimensionDriving = (dimensionId: ElementId, driving: boolean): E
 export const solveCircle = (circleId: ElementId): EditorCommand => ({
   name: `circle-solve:${circleId}`,
   apply: (document) => {
-    const circle = document.elements.find((element): element is Extract<Element, { type: "ellipse" }> => element.id === circleId && element.type === "ellipse");
-    if (!circle || circle.size.width !== circle.size.height) return { success: false, error: "Circle not found or is not circular" };
+    const circle = document.elements.find((element): element is Extract<Element, { type: "circle" }> => element.id === circleId && isCircleElement(element));
+    if (!circle) return { success: false, error: "Circle not found or is not circular" };
     const result = solveCircleConstraints(circle);
     if (result.status === "conflict") return { success: false, error: "Circle constraints are in conflict" };
     return replaceElements(document, document.elements.map((element) => element.id === circleId ? result.circle : element));
@@ -2109,10 +2118,14 @@ export const updateElementNode = (id: ElementId, nodeIndex: number, point: Point
       if (!node.nodeId) return { success: false, error: "Spline node not found" };
       return updateSplineNode(id, node.nodeId, point).apply(document);
     }
-    if (node.kind === "center" || ((current.type === "rectangle" || current.type === "ellipse") && node.kind === "corner")) {
+    if (current.type === "circle" && node.kind === "cardinal") {
+      const radius = Math.hypot(point.x - current.center.x, point.y - current.center.y);
+      return radius > 0 && Number.isFinite(radius) ? updateElement(id, { radius }).apply(document) : { success: false, error: "Circle radius must be positive" };
+    }
+    if (node.kind === "center" || ((current.type === "rectangle" || current.type === "ellipse" || current.type === "circle") && node.kind === "corner")) {
       return moveElement(id, { x: point.x - node.point.x, y: point.y - node.point.y }).apply(document);
     }
-    const handle = current.type === "rectangle" || current.type === "ellipse"
+    const handle = current.type === "rectangle" || current.type === "ellipse" || current.type === "circle"
       ? node.kind === "corner" ? (["nw", "ne", "se", "sw"] as const)[nodes.filter((candidate) => candidate.kind === "corner").findIndex((candidate) => candidate === node)]
         : node.kind === "cardinal" ? (["n", "e", "s", "w"] as const)[nodes.filter((candidate) => candidate.kind === "cardinal").findIndex((candidate) => candidate === node)]
         : undefined
@@ -2211,6 +2224,7 @@ export const deleteContourNodes = (id: ElementId, addresses: readonly ContourNod
 
 const translateElement = (element: Element, delta: PointMm, id: ElementId): Element => {
   if (element.type === "dimension") return { ...element, id, offset: { x: element.offset.x + delta.x, y: element.offset.y + delta.y } };
+  if (element.type === "circle") return { ...element, id, center: { x: element.center.x + delta.x, y: element.center.y + delta.y } };
   if (element.type === "line") return { ...element, id, start: { x: element.start.x + delta.x, y: element.start.y + delta.y }, end: { x: element.end.x + delta.x, y: element.end.y + delta.y } };
   if (element.type === "contour") return { ...contourWithPoints(element, element.contours.map((contour) => contour.points.map((point) => ({ x: point.x + delta.x, y: point.y + delta.y })))), id, rotation: element.rotation };
   if (element.type === "path") return { ...translatePath(element, delta), id };
@@ -2265,6 +2279,7 @@ export const flipElements = (ids: readonly ElementId[], axis: FlipAxis): EditorC
       if (element.type === "spline") return { ...element, nodes: element.nodes.map((node) => ({ ...node, anchor: horizontal ? { x: center.x * 2 - node.anchor.x, y: node.anchor.y } : { x: node.anchor.x, y: center.y * 2 - node.anchor.y }, ...(node.inHandle ? { inHandle: horizontal ? { dx: -node.inHandle.dx, dy: node.inHandle.dy } : { dx: node.inHandle.dx, dy: -node.inHandle.dy } } : {}), ...(node.outHandle ? { outHandle: horizontal ? { dx: -node.outHandle.dx, dy: node.outHandle.dy } : { dx: node.outHandle.dx, dy: -node.outHandle.dy } } : {}) })) };
       if (element.type === "sketch") return { ...element, nodes: element.nodes.map((node) => ({ ...node, point: horizontal ? { x: center.x * 2 - node.point.x, y: node.point.y } : { x: node.point.x, y: center.y * 2 - node.point.y } })) };
       if (element.type === "text") return { ...element, position: horizontal ? { x: center.x * 2 - element.position.x - element.size.width, y: element.position.y } : { x: element.position.x, y: center.y * 2 - element.position.y - element.size.height }, rotation: -element.rotation };
+      if (element.type === "circle") return { ...element, center: horizontal ? { x: center.x * 2 - element.center.x, y: element.center.y } : { x: element.center.x, y: center.y * 2 - element.center.y } };
       const moved = element.type === "line"
         ? { ...element, start: { x: element.start.x + delta.x, y: element.start.y + delta.y }, end: { x: element.end.x + delta.x, y: element.end.y + delta.y } }
         : { ...element, position: { x: element.position.x + delta.x, y: element.position.y + delta.y } };

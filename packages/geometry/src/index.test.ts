@@ -106,23 +106,23 @@ describe("canonical millimetre geometry", () => {
     expect(geometry && geometry.lineEnd.x - geometry.lineStart.x).toBeCloseTo(geometry ? geometry.lineEnd.y - geometry.lineStart.y : 0);
   });
 
-  it("calculates an automatic diameter from an ellipse center and rim node", () => {
-    const ellipse = { type: "ellipse" as const, id: elementId("diameter-ellipse"), layerId: layerId("l"), position: { x: 10, y: 10 }, size: { width: 20, height: 20 }, rotation: 0, style };
-    const dimension = { type: "dimension" as const, id: elementId("diameter"), layerId: layerId("l"), kind: "diameter" as const, references: [{ kind: "node" as const, elementId: ellipse.id, nodeIndex: 0, nodeId: "center" }, { kind: "node" as const, elementId: ellipse.id, nodeIndex: 1, nodeId: "n" }] as const, offset: { x: 0, y: -8 }, precision: 2, units: "mm" as const, rotation: 0 as const, style };
-    expect(dimensionGeometry(dimension, [ellipse])?.value).toBe(20);
+  it("calculates an automatic diameter from a native circle center and rim node", () => {
+    const circle = { type: "circle" as const, id: elementId("diameter-circle"), layerId: layerId("l"), center: { x: 20, y: 20 }, radius: 10, style };
+    const dimension = { type: "dimension" as const, id: elementId("diameter"), layerId: layerId("l"), kind: "diameter" as const, references: [{ kind: "node" as const, elementId: circle.id, nodeIndex: 0, nodeId: "center" }, { kind: "node" as const, elementId: circle.id, nodeIndex: 1, nodeId: "n" }] as const, offset: { x: 0, y: -8 }, precision: 2, units: "mm" as const, rotation: 0 as const, style };
+    expect(dimensionGeometry(dimension, [circle])?.value).toBe(20);
   });
-  it("solves circle center and size constraints as three independent degrees of freedom", () => {
-    const circle = { type: "ellipse" as const, id: elementId("parametric-circle"), layerId: layerId("l"), position: { x: 10, y: 20 }, size: { width: 20, height: 20 }, rotation: 0, style, circleConstraints: [{ id: "cx", kind: "center-horizontal" as const, value: 30 }, { id: "cy", kind: "center-vertical" as const, value: 40 }, { id: "diameter", kind: "diameter" as const, value: 50 }] };
+  it("solves CircleElement center and radius constraints as three independent degrees of freedom", () => {
+    const circle = { type: "circle" as const, id: elementId("parametric-circle"), layerId: layerId("l"), center: { x: 20, y: 30 }, radius: 10, style, circleConstraints: [{ id: "cx", kind: "center-horizontal" as const, value: 30 }, { id: "cy", kind: "center-vertical" as const, value: 40 }, { id: "diameter", kind: "diameter" as const, value: 50 }] };
     const result = solveCircleConstraints(circle);
     expect(result.status).toBe("defined");
-    expect(result.circle.position).toEqual({ x: 5, y: 15 });
-    expect(result.circle.size).toEqual({ width: 50, height: 50 });
+    expect(result.circle.center).toEqual({ x: 30, y: 40 });
+    expect(result.circle.radius).toBe(25);
   });
 
-  it("calculates a radius from an ellipse center and rim node", () => {
-    const ellipse = { type: "ellipse" as const, id: elementId("radius-ellipse"), layerId: layerId("l"), position: { x: 10, y: 10 }, size: { width: 20, height: 20 }, rotation: 0, style };
-    const dimension = { type: "dimension" as const, id: elementId("radius"), layerId: layerId("l"), kind: "radius" as const, references: [{ kind: "node" as const, elementId: ellipse.id, nodeIndex: 0, nodeId: "center" }, { kind: "node" as const, elementId: ellipse.id, nodeIndex: 1, nodeId: "n" }] as const, offset: { x: 8, y: -8 }, precision: 2, units: "mm" as const, rotation: 0 as const, style };
-    const geometry = dimensionGeometry(dimension, [ellipse]);
+  it("calculates a radius from a native circle center and rim node", () => {
+    const circle = { type: "circle" as const, id: elementId("radius-circle"), layerId: layerId("l"), center: { x: 20, y: 20 }, radius: 10, style };
+    const dimension = { type: "dimension" as const, id: elementId("radius"), layerId: layerId("l"), kind: "radius" as const, references: [{ kind: "node" as const, elementId: circle.id, nodeIndex: 0, nodeId: "center" }, { kind: "node" as const, elementId: circle.id, nodeIndex: 1, nodeId: "n" }] as const, offset: { x: 8, y: -8 }, precision: 2, units: "mm" as const, rotation: 0 as const, style };
+    const geometry = dimensionGeometry(dimension, [circle]);
     expect(geometry?.kind).toBe("radius");
     expect(geometry?.value).toBe(10);
     expect(geometry?.lineStart).toEqual({ x: 20, y: 20 });
@@ -162,8 +162,8 @@ describe("canonical millimetre geometry", () => {
     expect(elementSegmentAt(rectangle, { x: 20, y: 20 }, 0.1)).toMatchObject({ elementId: rectangle.id, segmentIndex: 0 });
     expect(rectangle.type).toBe("rectangle");
   });
-  it("projects ellipse quadrants as cuttable segments that split at line intersections", () => {
-    const circle = { type: "ellipse" as const, id: elementId("cut-circle"), layerId: layerId("l"), position: { x: -5, y: -5 }, size: { width: 10, height: 10 }, rotation: 0, style };
+  it("projects CircleElement quadrants as cuttable segments that split at line intersections", () => {
+    const circle = { type: "circle" as const, id: elementId("cut-circle"), layerId: layerId("l"), center: { x: 0, y: 0 }, radius: 5, style };
     const top = { elementId: elementId("top"), segmentIndex: 0, start: { x: 0, y: 0 }, end: { x: 10, y: 0 } };
     const left = { elementId: elementId("left"), segmentIndex: 0, start: { x: 0, y: 0 }, end: { x: 0, y: 10 } };
     const segments = cuttableSegments(circle);
@@ -332,6 +332,20 @@ describe("canonical millimetre geometry", () => {
     expect(hitTest(rectangle, { x: 10, y: 20 })).toBe(true);
     expect(hitTest(rectangle, { x: 31, y: 20 })).toBe(false);
   });
+  it("computes native circle bounds, cardinal nodes, and stroke hit tolerance", () => {
+    const circle = { type: "circle" as const, id: elementId("direct-circle"), layerId: layerId("l"), center: { x: 20, y: 30 }, radius: 10, style };
+    expect(boundsOf(circle)).toEqual({ x: 10, y: 20, width: 20, height: 20 });
+    expect(realGeometryNodes(circle).map(({ kind, nodeId, point }) => ({ kind, nodeId, point }))).toEqual([
+      { kind: "center", nodeId: "center", point: { x: 20, y: 30 } },
+      { kind: "cardinal", nodeId: "n", point: { x: 20, y: 20 } },
+      { kind: "cardinal", nodeId: "e", point: { x: 30, y: 30 } },
+      { kind: "cardinal", nodeId: "s", point: { x: 20, y: 40 } },
+      { kind: "cardinal", nodeId: "w", point: { x: 10, y: 30 } },
+    ]);
+    expect(hitTest(circle, { x: 30, y: 30 })).toBe(true);
+    expect(hitTest(circle, { x: 30.5, y: 30 }, 0.5)).toBe(true);
+    expect(hitTest(circle, { x: 20, y: 30 })).toBe(true);
+  });
   it("hit-tests text as a scaled, rotated rectangle rather than an ellipse", () => {
     const text = { type: "text" as const, id: elementId("text-hit"), layerId: layerId("l"), position: { x: 10, y: 20 }, size: { width: 20, height: 10 }, scaleX: 2, scaleY: 0.5, text: "Text", fontFamily: "Arial", fontSize: 24, fontWeight: "normal" as const, fontStyle: "normal" as const, textAlign: "left" as const, lineHeight: 1.2, rotation: Math.PI / 4, style };
     const center = { x: 30, y: 22.5 };
@@ -372,6 +386,9 @@ describe("canonical millimetre geometry", () => {
     expect(resizeHandle(rectangle, "sw", { x: 10, y: 30 })).toEqual({ position: { x: 10, y: 20 }, size: { width: 20, height: 10 } });
   });
   it("resizes side handles on one axis and enforces minimum dimensions", () => {
+    const circle = { type: "circle" as const, id: elementId("resize-circle"), layerId: layerId("l"), center: { x: 10, y: 10 }, radius: 5, style };
+    expect(resizeHandle(circle, "e", { x: 25, y: 999 })).toEqual({ position: { x: 5, y: 0 }, size: { width: 20, height: 20 } });
+    expect(resizeHandle(circle, "n", { x: -999, y: -10 })).toEqual({ position: { x: -2.5, y: -10 }, size: { width: 25, height: 25 } });
     expect(resizeHandle(rectangle, "e", { x: 35, y: 999 })).toEqual({ position: { x: 10, y: 20 }, size: { width: 25, height: 10 } });
     expect(resizeHandle(rectangle, "w", { x: 25, y: -999 })).toEqual({ position: { x: 25, y: 20 }, size: { width: 5, height: 10 } });
     expect(resizeHandle(rectangle, "n", { x: -999, y: 24 })).toEqual({ position: { x: 10, y: 24 }, size: { width: 20, height: 6 } });

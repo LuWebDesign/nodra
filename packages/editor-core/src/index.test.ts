@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createDocument, elementId, layerId, type DimensionElement, type Element, type EllipseElement, type LineElement, type GlyphElement, type PathElement, type PointMm, type RectangleElement, type SketchElement, type SplineElement, type TextElement } from "@nodra/domain";
+import { createDocument, elementId, layerId, type DimensionElement, type Element, type EllipseElement, type CircleElement, type LineElement, type GlyphElement, type PathElement, type PointMm, type RectangleElement, type SketchElement, type SplineElement, type TextElement } from "@nodra/domain";
 import { addDocumentConstraint, deleteDocumentConstraint, addSketchConstraint, addSketchSegmentRelation, addToSelection, appendSketchEdge, appendSplineNode, beginGesture, cancelGesture, clearSelection, closePath, closeSplineElement, commitGesture, createEditor, createElement, createPathCubicNode, createSketchLine, cutContourSegment, cutLineAtPoint, cutPathSegment, cutSegment, cutSketchEdge, splitPathLineAt, deleteContourNodes, deleteElement, deleteElementNodes, deletePathNodes, deleteSketchConstraint, dispatch, duplicateElements, flipElements, insertContourNode, invalidDimensionIdsForShapeOperation, moveElement, moveElements, movePathNode, movePathHandle, openPath, previewGesture, previewGestureFromBase, redo, reversePath, removeFromSelection, reorderLayer, resizeElement, resizeElementToDimensions, resizeElements, resizeElementsToDimensions, rotateElementsAroundCenter, select, selectForPointerDown, setDimensionDriving, updateCircleConstraint, deleteCircleConstraint, solveCircle, setLayerVisibility, setPathJoin, shapeOperation, splitPathSegment, toggleSelection, topologyEditForPathSegmentReplacement, topologyReferenceKey, undo, updateContourNode, updateDimensionValue, updateElement, updateElementNode, updateElementStyles, updateSketchConstraint, updateDocumentConstraint, updateSplineHandle, updateSplineNode } from "./index.js";
 import { boundsOfElements, realGeometryNodes } from "@nodra/geometry";
 import type { Direction } from "@nodra/geometry";
@@ -422,7 +422,7 @@ describe("editor core", () => {
   it("does not treat or rebuild a tangent circle as a linear cutter", () => {
     const target: LineElement = { type: "line", id: elementId("tangent-circle-target"), layerId: layerId("default"), start: { x: 0, y: 5 }, end: { x: 20, y: 5 }, rotation: 0, style: rectangle.style };
     const crossing: LineElement = { type: "line", id: elementId("tangent-circle-crossing"), layerId: layerId("default"), start: { x: 10, y: 0 }, end: { x: 10, y: 10 }, rotation: 0, style: rectangle.style };
-    const tangent = { type: "ellipse" as const, id: elementId("tangent-circle"), layerId: layerId("default"), position: { x: 0, y: -5 }, size: { width: 10, height: 10 }, rotation: 0, style: rectangle.style };
+    const tangent: CircleElement = { type: "circle", id: elementId("tangent-circle"), layerId: layerId("default"), center: { x: 5, y: 0 }, radius: 5, style: rectangle.style };
     const initial = createEditor({ ...document, elements: [target, crossing, tangent] });
 
     const cut = dispatch(initial, cutSegment(target.id, 0, { x: 7, y: 5 }));
@@ -791,7 +791,7 @@ it("converts a zero-radius rectangle to an open path when cutting one edge", () 
   });
   it("uses circle intersections to keep a trimmed rectangle corner filled and closed", () => {
     const filled = { ...rectangle, id: elementId("circle-corner-rectangle"), position: { x: 0, y: 0 }, size: { width: 20, height: 20 }, style: { ...rectangle.style, fill: "#f00" } };
-    const circle: EllipseElement = { type: "ellipse", id: elementId("corner-circle"), layerId: rectangle.layerId, position: { x: -5, y: -5 }, size: { width: 10, height: 10 }, rotation: 0, style: rectangle.style };
+    const circle: CircleElement = { type: "circle", id: elementId("corner-circle"), layerId: rectangle.layerId, center: { x: 0, y: 0 }, radius: 5, style: rectangle.style };
     const connection = { id: "corner-circle-connection", first: { elementId: circle.id, node: { kind: "named" as const, name: "center" as const } }, second: { elementId: filled.id, node: { kind: "named" as const, name: "nw" as const } } };
     const segmentWithEndpoints = (elements: readonly Element[], predicate: (start: PointMm, end: PointMm) => boolean): { readonly path: PathElement; readonly segmentIndex: number } | undefined => {
       for (const element of elements) if (element.type === "path") for (let segmentIndex = 0; segmentIndex < element.segments.length; segmentIndex += 1) {
@@ -1038,49 +1038,69 @@ it("converts a zero-radius rectangle to an open path when cutting one edge", () 
     const resizedHeight = dispatch(createEditor({ ...document, elements: [rectangle, bottomRight], connections: [bottomConnection] }), resizeElementToDimensions(rectangle.id, "height", 10, true));
     expect(resizedHeight.document.elements.find((element) => element.id === rectangle.id)).toMatchObject({ position: { x: -9, y: -3 }, size: { width: 20, height: 10 } });
   });
-  it("solves an ellipse with explicit circle constraints atomically", () => {
-    const circle: EllipseElement = { type: "ellipse", id: elementId("parametric-circle"), layerId: rectangle.layerId, position: { x: 10, y: 20 }, size: { width: 20, height: 20 }, rotation: 0, style: rectangle.style, circleConstraints: [{ id: "cx", kind: "center-horizontal", value: 30 }, { id: "cy", kind: "center-vertical", value: 40 }, { id: "d", kind: "diameter", value: 50 }] };
+  it("resizes a circle radius while preserving a connected cardinal side", () => {
+    const circle: CircleElement = { type: "circle", id: elementId("connected-circle"), layerId: rectangle.layerId, center: { x: 20, y: 20 }, radius: 10, style: rectangle.style };
+    const anchor = { ...rectangle, id: elementId("circle-anchor") };
+    const west = { id: "circle-west", first: { elementId: circle.id, node: { kind: "named" as const, name: "w" as const } }, second: { elementId: anchor.id, node: { kind: "named" as const, name: "center" as const } } };
+    const resized = dispatch(createEditor({ ...document, elements: [circle, anchor], connections: [west] }), resizeElementToDimensions(circle.id, "radius", 15));
+    expect(resized.document.elements.find((element) => element.id === circle.id)).toMatchObject({ type: "circle", center: { x: 25, y: 20 }, radius: 15 });
+    expect(resized.undo).toHaveLength(1);
+    const east = { id: "circle-east", first: { elementId: circle.id, node: { kind: "named" as const, name: "e" as const } }, second: { elementId: anchor.id, node: { kind: "named" as const, name: "n" as const } } };
+    const blocked = createEditor({ ...document, elements: [circle, anchor], connections: [west, east] });
+    expect(dispatch(blocked, resizeElementToDimensions(circle.id, "radius", 15))).toBe(blocked);
+  });
+
+  it("solves a CircleElement with explicit circle constraints atomically", () => {
+    const circle: CircleElement = { type: "circle", id: elementId("parametric-circle"), layerId: rectangle.layerId, center: { x: 20, y: 30 }, radius: 10, style: rectangle.style, circleConstraints: [{ id: "cx", kind: "center-horizontal", value: 30 }, { id: "cy", kind: "center-vertical", value: 40 }, { id: "d", kind: "diameter", value: 50 }] };
     const state = dispatch(createEditor({ ...document, elements: [circle] }), solveCircle(circle.id));
-    expect((state.document.elements[0] as EllipseElement).position).toEqual({ x: 5, y: 15 });
-    expect((state.document.elements[0] as EllipseElement).size).toEqual({ width: 50, height: 50 });
+    expect((state.document.elements[0] as CircleElement).center).toEqual({ x: 30, y: 40 });
+    expect((state.document.elements[0] as CircleElement).radius).toBe(25);
     expect(state.undo).toHaveLength(1);
   });
 
   it("updates a circle radius through explicit center and rim references", () => {
-    const circle: EllipseElement = { type: "ellipse", id: elementId("circle"), layerId: rectangle.layerId, position: { x: 10, y: 10 }, size: { width: 20, height: 20 }, rotation: 0, style: rectangle.style, circleConstraints: [{ id: "radius-driving-constraint", kind: "radius", value: 10, driving: true }] };
+    const circle: CircleElement = { type: "circle", id: elementId("circle"), layerId: rectangle.layerId, center: { x: 20, y: 20 }, radius: 10, style: rectangle.style, circleConstraints: [{ id: "radius-driving-constraint", kind: "radius", value: 10, driving: true }] };
     const radius: DimensionElement = { type: "dimension", id: elementId("radius-driving"), layerId: rectangle.layerId, kind: "radius", driving: true, constraintId: "radius-driving-constraint", references: [{ kind: "node", elementId: circle.id, nodeIndex: 0, nodeId: "center" }, { kind: "node", elementId: circle.id, nodeIndex: 2, nodeId: "e" }], offset: { x: 8, y: 0 }, precision: 2, units: "mm", rotation: 0, style: rectangle.style };
     const state = dispatch(createEditor({ ...document, elements: [circle, radius] }), updateDimensionValue(radius.id, 15));
-    expect((state.document.elements[0] as EllipseElement).size).toEqual({ width: 30, height: 30 });
-    expect((state.document.elements[0] as EllipseElement).position).toEqual({ x: 5, y: 5 });
+    expect((state.document.elements[0] as CircleElement).radius).toBe(15);
+    expect((state.document.elements[0] as CircleElement).center).toEqual({ x: 20, y: 20 });
     expect(state.undo).toHaveLength(1);
   });
 
+  it("rejects a driving circle dimension whose persisted constraint is missing", () => {
+    const circle: CircleElement = { type: "circle", id: elementId("missing-driving-circle"), layerId: rectangle.layerId, center: { x: 20, y: 20 }, radius: 10, style: rectangle.style };
+    const radius: DimensionElement = { type: "dimension", id: elementId("missing-driving-radius"), layerId: rectangle.layerId, kind: "radius", driving: true, constraintId: "missing", references: [{ kind: "node", elementId: circle.id, nodeIndex: 0, nodeId: "center" }, { kind: "node", elementId: circle.id, nodeIndex: 2, nodeId: "e" }], offset: { x: 8, y: 0 }, precision: 2, units: "mm", rotation: 0, style: rectangle.style };
+    const initial = createEditor({ ...document, elements: [circle, radius] });
+    expect(dispatch(initial, updateDimensionValue(radius.id, 15))).toBe(initial);
+    expect(initial.undo).toHaveLength(0);
+  });
+
   it("updates a circle diameter through explicit center and rim references", () => {
-        const circle: EllipseElement = { type: "ellipse", id: elementId("diameter-circle"), layerId: rectangle.layerId, position: { x: 10, y: 10 }, size: { width: 20, height: 20 }, rotation: 0, style: rectangle.style, circleConstraints: [{ id: "diameter-driving-constraint", kind: "diameter", value: 20, driving: true }] };
+        const circle: CircleElement = { type: "circle", id: elementId("diameter-circle"), layerId: rectangle.layerId, center: { x: 20, y: 20 }, radius: 10, style: rectangle.style, circleConstraints: [{ id: "diameter-driving-constraint", kind: "diameter", value: 20, driving: true }] };
         const diameter: DimensionElement = { type: "dimension", id: elementId("diameter-driving"), layerId: rectangle.layerId, kind: "diameter", driving: true, constraintId: "diameter-driving-constraint", references: [{ kind: "node", elementId: circle.id, nodeIndex: 0, nodeId: "center" }, { kind: "node", elementId: circle.id, nodeIndex: 2, nodeId: "e" }], offset: { x: 8, y: 0 }, precision: 2, units: "mm", rotation: 0, style: rectangle.style };
         const state = dispatch(createEditor({ ...document, elements: [circle, diameter] }), updateDimensionValue(diameter.id, 30));
-        expect((state.document.elements[0] as EllipseElement).size).toEqual({ width: 30, height: 30 });
-        expect((state.document.elements[0] as EllipseElement).position).toEqual({ x: 5, y: 5 });
+        expect((state.document.elements[0] as CircleElement).radius).toBe(15);
+        expect((state.document.elements[0] as CircleElement).center).toEqual({ x: 20, y: 20 });
         expect(state.undo).toHaveLength(1);
       });
 
       it("updates and deletes circle constraints atomically", () => {
-        const circle: EllipseElement = { type: "ellipse", id: elementId("circle-constraints"), layerId: rectangle.layerId, position: { x: 10, y: 10 }, size: { width: 20, height: 20 }, rotation: 0, style: rectangle.style, circleConstraints: [{ id: "radius", kind: "radius", value: 10 }] };
+        const circle: CircleElement = { type: "circle", id: elementId("circle-constraints"), layerId: rectangle.layerId, center: { x: 20, y: 20 }, radius: 10, style: rectangle.style, circleConstraints: [{ id: "radius", kind: "radius", value: 10 }] };
         const base = dispatch(createEditor({ ...document, elements: [circle] }), updateCircleConstraint(circle.id, "radius", { id: "radius", kind: "radius", value: 15 }));
-        expect((base.document.elements[0] as EllipseElement).size.width).toBe(30);
+        expect((base.document.elements[0] as CircleElement).radius).toBe(15);
         const removed = dispatch(base, deleteCircleConstraint(circle.id, "radius"));
-        expect((removed.document.elements[0] as EllipseElement).circleConstraints).toEqual([]);
+        expect((removed.document.elements[0] as CircleElement).circleConstraints).toEqual([]);
         expect(removed.undo).toHaveLength(2);
       });
 
       it("converts a circular dimension to a driving constraint", () => {
-    const circle: EllipseElement = { type: "ellipse", id: elementId("circle-driving"), layerId: rectangle.layerId, position: { x: 10, y: 10 }, size: { width: 20, height: 20 }, rotation: 0, style: rectangle.style };
+    const circle: CircleElement = { type: "circle", id: elementId("circle-driving"), layerId: rectangle.layerId, center: { x: 20, y: 20 }, radius: 10, style: rectangle.style };
     const radius: DimensionElement = { type: "dimension", id: elementId("radius-driving-toggle"), layerId: rectangle.layerId, kind: "radius", references: [{ kind: "node", elementId: circle.id, nodeIndex: 0, nodeId: "center" }, { kind: "node", elementId: circle.id, nodeIndex: 2, nodeId: "e" }], offset: { x: 8, y: 0 }, precision: 2, units: "mm", rotation: 0, style: rectangle.style };
     const state = dispatch(createEditor({ ...document, elements: [circle, radius] }), setDimensionDriving(radius.id, true));
     expect(state.document.elements[1]).toMatchObject({ driving: true, constraintId: "dimension:" + radius.id });
-    expect((state.document.elements[0] as EllipseElement).circleConstraints).toMatchObject([{ kind: "radius", value: 10, driving: true }]);
+    expect((state.document.elements[0] as CircleElement).circleConstraints).toMatchObject([{ kind: "radius", value: 10, driving: true }]);
     const updated = dispatch(state, updateDimensionValue(radius.id, 15));
-    expect((updated.document.elements[0] as EllipseElement).circleConstraints?.[0]?.value).toBe(15);
+    expect((updated.document.elements[0] as CircleElement).circleConstraints?.[0]?.value).toBe(15);
   });
 
   it("converts a sketch length dimension to a persistent driving constraint", () => {
@@ -1415,6 +1435,14 @@ it("moves a dimension by changing only its placement offset and supports undo", 
     expect(selected.selection).toEqual([rectangle.id]);
     expect(selected.undo).toHaveLength(1);
     expect(selected.document.revision).toBe(1);
+  });
+
+  it("creates a CircleElement with canonical center and radius geometry", () => {
+    const circle: CircleElement = { type: "circle", id: elementId("created-circle"), layerId: layerId("default"), center: { x: 24, y: 18 }, radius: 7.5, style: rectangle.style };
+    const state = dispatch(createEditor(document), createElement(circle));
+    expect(state.document.elements).toEqual([circle]);
+    expect(state.undo).toHaveLength(1);
+    expect(undo(state).document.elements).toEqual([]);
   });
 
   it("commits one completed gesture as one history entry", () => {

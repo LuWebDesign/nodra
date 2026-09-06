@@ -1,8 +1,37 @@
 import { describe, expect, it } from "vitest";
-import { CURRENT_SCHEMA_VERSION, createDocument, layerId } from "@nodra/domain";
-import { migrateDocument, parseDocument, serializeDocument, validateDocument, validateProject } from "./index.js";
+import { CURRENT_SCHEMA_VERSION, createDocument, elementId, layerId } from "@nodra/domain";
+import { migrateDocument, migrateProject, parseDocument, serializeDocument, validateDesign, validateDocument, validateProject } from "./index.js";
 
 describe("native document validation", () => {
+  it("migrates schema 7 circular ellipses to canonical circles while retaining legacy ellipses", () => {
+    const base = createDocument("migration", [{ id: layerId("layer-1"), name: "Design", visible: true, order: 0 }]);
+    const circle = { type: "ellipse", id: "circle", layerId: "layer-1", position: { x: 10, y: 20 }, size: { width: 20, height: 20 }, rotation: 0, style: { stroke: "#000", strokeWidth: 1 }, operation: { operation: "cut", order: 1 }, circleConstraints: [{ id: "radius-10", kind: "radius", value: 10, driving: true }] };
+    const ellipse = { type: "ellipse", id: "ellipse", layerId: "layer-1", position: { x: 10, y: 20 }, size: { width: 20, height: 10 }, rotation: 0, style: circle.style };
+    const anchor = { type: "rectangle", id: "anchor", layerId: "layer-1", position: { x: 40, y: 20 }, size: { width: 10, height: 10 }, cornerRadius: 0, rotation: 0, style: circle.style };
+    const radius = { type: "dimension", id: "radius", layerId: "layer-1", kind: "radius", references: [{ kind: "node", elementId: "circle", nodeIndex: 0, nodeId: "center" }, { kind: "node", elementId: "circle", nodeIndex: 2, nodeId: "e" }], offset: { x: 0, y: -8 }, precision: 2, units: "mm", rotation: 0, style: circle.style };
+    const connection = { id: "circle-east", first: { elementId: "circle", node: { kind: "named", name: "e" } }, second: { elementId: "anchor", node: { kind: "named", name: "center" } } };
+    const migrated = migrateDocument({ ...base, schemaVersion: 7, elements: [circle, ellipse, anchor, radius], connections: [connection] });
+    expect(migrated).toMatchObject({ schemaVersion: CURRENT_SCHEMA_VERSION, elements: [{ type: "circle", id: "circle", center: { x: 20, y: 30 }, radius: 10, circleConstraints: circle.circleConstraints }, { type: "ellipse", id: "ellipse" }, { id: "anchor" }, { id: "radius", references: radius.references }], connections: [connection] });
+    const project = { schemaVersion: 7, id: "project", revision: 0, origin: "top-left", units: "mm", preferences: { lineGuidesEnabled: true, lineGuideAngle: 45 }, pages: [{ id: "page-1", page: base.page, layers: base.layers, elements: [circle], connections: [] }], activePageId: "page-1" };
+    expect(migrateProject(project)).toMatchObject({ schemaVersion: CURRENT_SCHEMA_VERSION, pages: [{ elements: [{ type: "circle" }] }] });
+    expect(validateDocument(migrated).success).toBe(true);
+  });
+  it("applies circle canonicalization throughout older document and project migrations", () => {
+    const base = createDocument("legacy-circle", [{ id: layerId("layer-1"), name: "Design", visible: true, order: 0 }]);
+    const legacyCircle = { type: "ellipse", id: "legacy-circle", layerId: "layer-1", position: { x: 2, y: 4 }, size: { width: 12, height: 12 }, rotation: Math.PI / 4, flipX: true, style: { stroke: "#000", strokeWidth: 1 }, circleConstraints: [{ id: "radius", kind: "radius", value: 6, driving: true }] };
+    const migrated = migrateDocument({ ...base, schemaVersion: 6, elements: [legacyCircle] });
+    expect(migrated).toMatchObject({ schemaVersion: CURRENT_SCHEMA_VERSION, elements: [{ type: "circle", center: { x: 8, y: 10 }, radius: 6, circleConstraints: legacyCircle.circleConstraints }] });
+    expect(validateDocument(migrated).success).toBe(true);
+    const project = { schemaVersion: 6, id: "legacy-project", revision: 0, origin: "top-left", units: "mm", preferences: { lineGuidesEnabled: true, lineGuideAngle: 45 }, pages: [{ id: "page-1", page: base.page, layers: base.layers, elements: [legacyCircle] }], activePageId: "page-1" };
+    expect(migrateProject(project)).toMatchObject({ schemaVersion: CURRENT_SCHEMA_VERSION, pages: [{ elements: [{ type: "circle", center: { x: 8, y: 10 }, radius: 6 }] }] });
+  });
+  it("includes complete circle extents in page readiness", () => {
+    const style = { stroke: "#000", strokeWidth: 1 };
+    const inside = { type: "circle" as const, id: elementId("inside"), layerId: layerId("layer-1"), center: { x: 10, y: 10 }, radius: 10, style };
+    const outside = { ...inside, id: elementId("outside"), center: { x: 5, y: 10 } };
+    expect(validateDesign([inside], { width: 100, height: 100 })).toMatchObject({ ready: true, outsideElementCount: 0 });
+    expect(validateDesign([outside], { width: 100, height: 100 })).toMatchObject({ ready: false, outsideElementCount: 1 });
+  });
   it("validates ordered open cubic path topology", () => {
     const document = createDocument("doc-1", [{ id: layerId("layer-1"), name: "Design", visible: true, order: 0 }]);
     const path = { type: "path", id: "bezier", layerId: "layer-1", nodes: [{ id: "a", anchor: { x: 0, y: 0 }, join: "corner" }, { id: "b", anchor: { x: 10, y: 0 }, join: "corner" }], segments: [{ id: "fixture-segment-1", type: "cubicBezier", startNodeId: "a", endNodeId: "b", control1: { x: 2, y: 5 }, control2: { x: 8, y: -5 } }], closed: false, rotation: 0, style: { stroke: "#000", strokeWidth: 1 } };
@@ -69,12 +98,12 @@ describe("native document validation", () => {
       });
       it("accepts explicit radius and diameter dimensions on circle nodes", () => {
         const base = createDocument("radius-doc", [{ id: layerId("layer-1"), name: "Design", visible: true, order: 0 }]);
-        const ellipse = { type: "ellipse" as const, id: "circle", layerId: "layer-1", position: { x: 10, y: 10 }, size: { width: 20, height: 20 }, rotation: 0, style: { stroke: "#000", strokeWidth: 1 }, circleConstraints: [{ id: "cx", kind: "center-horizontal" as const, value: 0 }, { id: "cy", kind: "center-vertical" as const, value: -5 }] };
+        const circle = { type: "circle" as const, id: "circle", layerId: "layer-1", center: { x: 20, y: 20 }, radius: 10, style: { stroke: "#000", strokeWidth: 1 }, circleConstraints: [{ id: "cx", kind: "center-horizontal" as const, value: 0 }, { id: "cy", kind: "center-vertical" as const, value: -5 }] };
         const reference = [{ kind: "node" as const, elementId: "circle", nodeIndex: 0, nodeId: "center" }, { kind: "node" as const, elementId: "circle", nodeIndex: 2, nodeId: "e" }] as const;
         const radius = { type: "dimension" as const, id: "radius", layerId: "layer-1", kind: "radius" as const, references: reference, offset: { x: 8, y: 0 }, precision: 2, units: "mm" as const, rotation: 0 as const, style: { stroke: "#2563eb", strokeWidth: 0.45 } };
         const diameter = { ...radius, id: "diameter", kind: "diameter" as const };
-        expect(validateDocument({ ...base, elements: [ellipse, radius] }).success).toBe(true);
-        expect(validateDocument({ ...base, elements: [ellipse, diameter] }).success).toBe(true);
+        expect(validateDocument({ ...base, elements: [circle, radius] }).success).toBe(true);
+        expect(validateDocument({ ...base, elements: [circle, diameter] }).success).toBe(true);
       });
 
       it("rejects invalid circular constraints and non-circular diameter targets", () => {
@@ -100,9 +129,9 @@ describe("native document validation", () => {
   });
   it("accepts explicit radius dimensions on circle nodes", () => {
     const base = createDocument("radius-doc", [{ id: layerId("layer-1"), name: "Design", visible: true, order: 0 }]);
-    const ellipse = { type: "ellipse" as const, id: "circle", layerId: "layer-1", position: { x: 10, y: 10 }, size: { width: 20, height: 20 }, rotation: 0, style: { stroke: "#000", strokeWidth: 1 }, circleConstraints: [{ id: "cx", kind: "center-horizontal" as const, value: 0 }, { id: "cy", kind: "center-vertical" as const, value: -5 }] };
+    const circle = { type: "circle" as const, id: "circle", layerId: "layer-1", center: { x: 20, y: 20 }, radius: 10, style: { stroke: "#000", strokeWidth: 1 }, circleConstraints: [{ id: "cx", kind: "center-horizontal" as const, value: 0 }, { id: "cy", kind: "center-vertical" as const, value: -5 }] };
     const radius = { type: "dimension" as const, id: "radius", layerId: "layer-1", kind: "radius" as const, references: [{ kind: "node" as const, elementId: "circle", nodeIndex: 0, nodeId: "center" }, { kind: "node" as const, elementId: "circle", nodeIndex: 2, nodeId: "e" }] as const, offset: { x: 8, y: 0 }, precision: 2, units: "mm" as const, rotation: 0 as const, style: { stroke: "#2563eb", strokeWidth: 0.45 } };
-    expect(validateDocument({ ...base, elements: [ellipse, radius] }).success).toBe(true);
+    expect(validateDocument({ ...base, elements: [circle, radius] }).success).toBe(true);
   });
 
   it("normalizes legacy node references and validates connected angular lines", () => {

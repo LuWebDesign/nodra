@@ -1,4 +1,4 @@
-export const CURRENT_SCHEMA_VERSION = 7 as const;
+export const CURRENT_SCHEMA_VERSION = 8 as const;
 
 export type SchemaVersion = typeof CURRENT_SCHEMA_VERSION;
 export type DocumentId = string & { readonly __brand: "DocumentId" };
@@ -53,6 +53,16 @@ export interface RectangleElement {
 }
 export type CircleConstraintKind = "center-horizontal" | "center-vertical" | "radius" | "diameter";
 export interface CircleConstraint { readonly id: string; readonly kind: CircleConstraintKind; readonly value?: number; readonly driving?: boolean }
+export interface CircleElement {
+  readonly type: "circle";
+  readonly id: ElementId;
+  readonly layerId: LayerId;
+  readonly center: PointMm;
+  readonly radius: number;
+  readonly style: VisualStyle;
+  readonly operation?: OperationMetadata;
+  readonly circleConstraints?: readonly CircleConstraint[];
+}
 export interface EllipseElement {
   readonly type: "ellipse";
   readonly id: ElementId;
@@ -64,8 +74,6 @@ export interface EllipseElement {
   readonly flipY?: boolean;
   readonly style: VisualStyle;
   readonly operation?: OperationMetadata;
-  /** Optional parametric constraints; valid only for circular ellipses (equal width and height). */
-  readonly circleConstraints?: readonly CircleConstraint[];
 }
 export interface LineElement {
   readonly type: "line";
@@ -173,7 +181,7 @@ export interface TextElement { readonly type: "text"; readonly id: ElementId; re
 export interface GlyphContour { readonly nodes: readonly PathNode[]; readonly segments: readonly PathSegment[] }
 /** Editable outline for one laid-out font glyph; multiple contours preserve holes. */
 export interface GlyphElement { readonly type: "glyph"; readonly id: ElementId; readonly layerId: LayerId; readonly position: PointMm; readonly size: SizeMm; readonly glyph: string; readonly contours: readonly GlyphContour[]; readonly fillRule: "evenodd"; readonly rotation: number; readonly flipX?: boolean; readonly flipY?: boolean; readonly style: VisualStyle; readonly operation?: OperationMetadata }
-export type Element = RectangleElement | EllipseElement | LineElement | SketchElement | DimensionElement | ContourElement | PathElement | SplineElement | TextElement | GlyphElement;
+export type Element = RectangleElement | CircleElement | EllipseElement | LineElement | SketchElement | DimensionElement | ContourElement | PathElement | SplineElement | TextElement | GlyphElement;
 export type ConnectableNodeAddress =
   | { readonly kind: "named"; readonly name: "nw" | "n" | "ne" | "e" | "se" | "s" | "sw" | "w" | "center" }
   | { readonly kind: "line"; readonly name: "start" | "end" | "center" }
@@ -186,6 +194,7 @@ export interface DocumentCapabilities { readonly spline?: 1 }
     export const hasRotation = (element: Element): element is RotatableElement => "rotation" in element && typeof element.rotation === "number";
 
     export const isLineElement = (element: Element): element is LineElement => element.type === "line";
+    export const isCircleElement = (element: Element): element is CircleElement => element.type === "circle";
 
 /** Elements that expose an axis-aligned document-space bounding box. */
     export type BoundedElement = Extract<Element, { readonly position: PointMm; readonly size: SizeMm }>;

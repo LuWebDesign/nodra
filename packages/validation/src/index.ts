@@ -18,12 +18,13 @@ const rectangle = z.object({ ...common, type: z.literal("rectangle"), position: 
 const circleConstraint = z.object({ id: nonEmptyId, kind: z.enum(["center-horizontal", "center-vertical", "radius", "diameter"]), value: finite, driving: z.boolean().optional() }).strict().superRefine((value, ctx) => {
   if ((value.kind === "radius" || value.kind === "diameter") && value.value <= 0) ctx.addIssue({ code: "custom", message: "Circle size constraints require a positive value", path: ["value"] });
 });
-const ellipse = z.object({ ...common, type: z.literal("ellipse"), position: point, size, circleConstraints: z.array(circleConstraint).optional() }).strict().superRefine((value, ctx) => {
+const circle = z.object({ id: nonEmptyId, layerId: nonEmptyId, type: z.literal("circle"), center: point, radius: finite.gt(0), style, operation: operation.optional(), circleConstraints: z.array(circleConstraint).optional() }).strict().superRefine((value, ctx) => {
   const constraints = value.circleConstraints ?? [];
-  if (constraints.length > 0 && value.size.width !== value.size.height) ctx.addIssue({ code: "custom", message: "Circle constraints require a circular ellipse", path: ["circleConstraints"] });
   const ids = constraints.map((constraint) => constraint.id);
   if (new Set(ids).size !== ids.length) ctx.addIssue({ code: "custom", message: "Circle constraint IDs must be unique", path: ["circleConstraints"] });
 });
+// Schema 8 keeps ellipse as the legacy oval primitive. Circular semantics live only on CircleElement.
+const ellipse = z.object({ ...common, type: z.literal("ellipse"), position: point, size }).strict();
 export const line = z.object({ ...common, type: z.literal("line"), start: point, end: point }).strict().superRefine((value, ctx) => {
   if (value.start.x === value.end.x && value.start.y === value.end.y) ctx.addIssue({ code: "custom", message: "Line endpoints must differ", path: ["end"] });
 });
@@ -127,7 +128,7 @@ const glyph = z.object({ ...common, type: z.literal("glyph"), position: point, s
   if (new Set(ids).size !== ids.length) ctx.addIssue({ code: "custom", message: "Glyph node IDs must be unique across contours", path: ["contours"] });
   if (new Set(segmentIds).size !== segmentIds.length) ctx.addIssue({ code: "custom", message: "Glyph segment IDs must be unique across contours", path: ["contours"] });
 });
-export const elementSchema = z.discriminatedUnion("type", [rectangle, ellipse, line, sketch, dimension, contour, path, splineElementSchema, textElement, glyph]);
+export const elementSchema = z.discriminatedUnion("type", [rectangle, circle, ellipse, line, sketch, dimension, contour, path, splineElementSchema, textElement, glyph]);
 export const layerSchema = z.object({ id: nonEmptyId, name: z.string().min(1), visible: z.boolean(), order: finite.int().nonnegative() }).strict();
 const documentFields = { id: nonEmptyId, revision: finite.int().nonnegative(), origin: z.literal("top-left"), units: z.literal("mm"), page: size, layers: z.array(layerSchema), elements: z.array(elementSchema), constraints: z.array(sketchConstraint).optional(), connections: z.array(explicitConnection).default([]) };
 const validateConnections = (elements: readonly z.infer<typeof elementSchema>[], connections: readonly z.infer<typeof explicitConnection>[], ctx: z.RefinementCtx, path: (string | number)[] = []) => {
@@ -141,7 +142,7 @@ const validateConnections = (elements: readonly z.infer<typeof elementSchema>[],
     refs.forEach((reference, referenceIndex) => {
       const element = byId.get(reference.elementId);
       const address = reference.node;
-      const validNamed = address.kind === "named" && (element?.type === "rectangle" || element?.type === "ellipse" && ["center", "n", "e", "s", "w"].includes(address.name));
+      const validNamed = address.kind === "named" && (element?.type === "rectangle" || (element?.type === "circle" || element?.type === "ellipse") && ["center", "n", "e", "s", "w"].includes(address.name));
       const valid = element && (validNamed || (address.kind === "line" && element.type === "line") || (address.kind === "path" && element.type === "path") || (address.kind === "spline" && element.type === "spline") || (address.kind === "sketch" && element.type === "sketch"));
       if (!element) ctx.addIssue({ code: "custom", message: "Connection references an unknown element", path: [...path, index, referenceIndex === 0 ? "first" : "second", "elementId"] });
       else if (!valid) ctx.addIssue({ code: "custom", message: "Connection node address is invalid for its element", path: [...path, index, referenceIndex === 0 ? "first" : "second", "node"] });
@@ -209,12 +210,12 @@ const documentSchema = z.object({ schemaVersion: z.literal(CURRENT_SCHEMA_VERSIO
            if (!start || !end || (start.x === end.x && start.y === end.y)) ctx.addIssue({ code: "custom", message: "Dimension sketch-edge references must not be degenerate", path: ["elements", index, "references", referenceIndex] });
          }
       } else {
-        const nodeCount = target?.type === "line" ? 3 : target?.type === "sketch" ? target.nodes.length : target?.type === "rectangle" ? 9 : target?.type === "ellipse" || target?.type === "text" ? 5 : target?.type === "contour" ? target.contours.reduce((count, contour) => count + Math.max(0, contour.points.length - 1) * 2, 0) : target?.type === "path" ? target.nodes.length + target.segments.filter((segment) => segment.type === "cubicBezier").length * 2 : target?.type === "spline" ? target.nodes.reduce((count, node) => count + 1 + Number(node.inHandle !== undefined) + Number(node.outHandle !== undefined), 0) : target?.type === "glyph" ? target.contours.reduce((count, contour) => count + contour.nodes.length + contour.segments.filter((segment) => segment.type === "cubicBezier").length * 2, 0) : undefined;
+        const nodeCount = target?.type === "line" ? 3 : target?.type === "sketch" ? target.nodes.length : target?.type === "rectangle" ? 9 : target?.type === "circle" || target?.type === "ellipse" || target?.type === "text" ? 5 : target?.type === "contour" ? target.contours.reduce((count, contour) => count + Math.max(0, contour.points.length - 1) * 2, 0) : target?.type === "path" ? target.nodes.length + target.segments.filter((segment) => segment.type === "cubicBezier").length * 2 : target?.type === "spline" ? target.nodes.reduce((count, node) => count + 1 + Number(node.inHandle !== undefined) + Number(node.outHandle !== undefined), 0) : target?.type === "glyph" ? target.contours.reduce((count, contour) => count + contour.nodes.length + contour.segments.filter((segment) => segment.type === "cubicBezier").length * 2, 0) : undefined;
         if (nodeCount === undefined || reference.nodeIndex >= nodeCount) ctx.addIssue({ code: "custom", message: "Dimension node reference is out of range", path: ["elements", index, "references", referenceIndex, "nodeIndex"] });
             if (reference.nodeId !== undefined) {
               const stableNodeIdsByIndex: readonly (string | undefined)[] = target?.type === "line" ? ["start", "center", "end"]
                 : target?.type === "rectangle" ? ["nw", "ne", "se", "sw", "center", "n", "e", "s", "w"]
-                  : target?.type === "ellipse" ? ["center", "n", "e", "s", "w"]
+                  : target?.type === "circle" || target?.type === "ellipse" ? ["center", "n", "e", "s", "w"]
                     : target?.type === "sketch" ? target.nodes.map((node) => node.id)
                       : target?.type === "path" ? [...target.nodes.map((node) => node.id), ...target.segments.flatMap((segment) => segment.type === "cubicBezier" ? [undefined, undefined] : [])]
                         : target?.type === "spline" ? target.nodes.flatMap((node) => [node.id, ...(node.inHandle ? [undefined] : []), ...(node.outHandle ? [undefined] : [])])
@@ -226,8 +227,8 @@ const documentSchema = z.object({ schemaVersion: z.literal(CURRENT_SCHEMA_VERSIO
     if (element.type === "dimension" && (element.kind === "radius" || element.kind === "diameter")) {
       const [first, second] = element.references;
       const target = first.kind === "node" && second.kind === "node" && first.elementId === second.elementId ? value.elements.find((candidate) => candidate.id === first.elementId) : undefined;
-      const nodeIds = target?.type === "ellipse" ? new Set(["center", "n", "e", "s", "w"]) : undefined;
-      if (target?.type !== "ellipse" || first.kind !== "node" || second.kind !== "node" || first.nodeId === undefined || second.nodeId === undefined || !nodeIds?.has(first.nodeId) || !nodeIds.has(second.nodeId) || first.nodeId === second.nodeId || first.nodeId !== "center" && second.nodeId !== "center") ctx.addIssue({ code: "custom", message: "Radius dimensions require distinct center and cardinal nodes on one circle", path: ["elements", index, "references"] });
+      const nodeIds = target?.type === "circle" ? new Set(["center", "n", "e", "s", "w"]) : undefined;
+      if (target?.type !== "circle" || first.kind !== "node" || second.kind !== "node" || first.nodeId === undefined || second.nodeId === undefined || !nodeIds?.has(first.nodeId) || !nodeIds.has(second.nodeId) || first.nodeId === second.nodeId || first.nodeId !== "center" && second.nodeId !== "center") ctx.addIssue({ code: "custom", message: "Radius dimensions require distinct center and cardinal nodes on one circle", path: ["elements", index, "references"] });
     }
     if (element.type === "dimension" && element.kind === "angular" && element.references.every((reference) => reference.kind === "line")) {
       const first = value.elements.find((candidate) => candidate.id === element.references[0].elementId);
@@ -298,7 +299,7 @@ const migrateLegacySegments = (segments: unknown, prefix: string): unknown => {
   });
 };
 const legacyStableNodeIndex = (target: Record<string, unknown>, nodeId: string): number | undefined => {
-  const named = target.type === "line" ? ["start", "center", "end"] : target.type === "rectangle" ? ["nw", "ne", "se", "sw", "center", "n", "e", "s", "w"] : target.type === "ellipse" ? ["center", "n", "e", "s", "w"] : undefined;
+  const named = target.type === "line" ? ["start", "center", "end"] : target.type === "rectangle" ? ["nw", "ne", "se", "sw", "center", "n", "e", "s", "w"] : target.type === "circle" || target.type === "ellipse" ? ["center", "n", "e", "s", "w"] : undefined;
   if (named) { const index = named.indexOf(nodeId); return index >= 0 ? index : undefined; }
   if (target.type === "sketch" || target.type === "path") {
     const nodes = Array.isArray(target.nodes) ? target.nodes : []; const index = nodes.findIndex((node) => typeof node === "object" && node !== null && !Array.isArray(node) && (node as Record<string, unknown>).id === nodeId);
@@ -441,6 +442,22 @@ const normalizeStableConstraintReferences = (input: unknown): unknown => {
   return normalizePage(candidate);
 };
 
+const migrateSchema7CircleElements = (input: unknown): unknown => {
+  const migrateElements = (elements: unknown): unknown => Array.isArray(elements) ? elements.map((element) => {
+    if (typeof element !== "object" || element === null || Array.isArray(element)) return element;
+    const candidate = element as Record<string, unknown>;
+    if (candidate.type !== "ellipse" || typeof candidate.id !== "string" || typeof candidate.position !== "object" || candidate.position === null || Array.isArray(candidate.position) || typeof candidate.size !== "object" || candidate.size === null || Array.isArray(candidate.size)) return element;
+    const position = candidate.position as Record<string, unknown>; const size = candidate.size as Record<string, unknown>;
+    if (typeof position.x !== "number" || typeof position.y !== "number" || typeof size.width !== "number" || typeof size.height !== "number" || size.width !== size.height || size.width <= 0) return element;
+    const rest = { ...candidate }; delete rest.position; delete rest.size; delete rest.rotation; delete rest.flipX; delete rest.flipY;
+    return { ...rest, type: "circle", center: { x: position.x + size.width / 2, y: position.y + size.height / 2 }, radius: size.width / 2 };
+  }) : elements;
+  if (typeof input !== "object" || input === null || Array.isArray(input)) return input;
+  const candidate = input as Record<string, unknown>;
+  if (Array.isArray(candidate.elements)) return { ...candidate, elements: migrateElements(candidate.elements) };
+  if (Array.isArray(candidate.pages)) return { ...candidate, pages: candidate.pages.map((page) => typeof page === "object" && page !== null && !Array.isArray(page) ? { ...(page as Record<string, unknown>), elements: migrateElements((page as Record<string, unknown>).elements) } : page) };
+  return input;
+};
 const migrateLegacyPages = (pages: unknown): unknown => Array.isArray(pages) ? pages.map((page) => {
   if (typeof page !== "object" || page === null || Array.isArray(page)) return page;
   const candidate = page as Record<string, unknown>;
@@ -449,9 +466,10 @@ const migrateLegacyPages = (pages: unknown): unknown => Array.isArray(pages) ? p
 export function migrateDocument(input: JsonValue): JsonValue {
   if (typeof input !== "object" || input === null || Array.isArray(input)) return input;
   const candidate = input as Record<string, unknown>;
-  if (candidate.schemaVersion === 1) return { ...candidate, schemaVersion: CURRENT_SCHEMA_VERSION, page: { width: 1200, height: 900 }, elements: migrateLegacyElements(candidate.elements), connections: [] };
+  if (candidate.schemaVersion === 7) return { ...migrateSchema7CircleElements(candidate) as Record<string, unknown>, schemaVersion: CURRENT_SCHEMA_VERSION };
+  if (candidate.schemaVersion === 1) return { ...migrateSchema7CircleElements({ ...candidate, page: { width: 1200, height: 900 }, elements: migrateLegacyElements(candidate.elements), connections: [] }) as Record<string, unknown>, schemaVersion: CURRENT_SCHEMA_VERSION };
   if (candidate.schemaVersion === 2 || candidate.schemaVersion === 3 || candidate.schemaVersion === 4 || candidate.schemaVersion === 5 || candidate.schemaVersion === 6) {
-    return { ...candidate, schemaVersion: CURRENT_SCHEMA_VERSION, page: candidate.page ?? { width: 1200, height: 900 }, elements: migrateLegacyElements(candidate.elements), connections: candidate.connections ?? [] };
+    return { ...migrateSchema7CircleElements({ ...candidate, page: candidate.page ?? { width: 1200, height: 900 }, elements: migrateLegacyElements(candidate.elements), connections: candidate.connections ?? [] }) as Record<string, unknown>, schemaVersion: CURRENT_SCHEMA_VERSION };
   }
   return input;
 }
@@ -481,9 +499,10 @@ export function validateProject(input: unknown): { readonly success: true; reado
 export function migrateProject(input: unknown): unknown {
   if (typeof input !== "object" || input === null || Array.isArray(input)) return input;
   const candidate = input as Record<string, unknown>;
+  if (candidate.schemaVersion === 7) return { ...migrateSchema7CircleElements(candidate) as Record<string, unknown>, schemaVersion: CURRENT_SCHEMA_VERSION };
   if (candidate.schemaVersion !== 1 && candidate.schemaVersion !== 2 && candidate.schemaVersion !== 3 && candidate.schemaVersion !== 4 && candidate.schemaVersion !== 5 && candidate.schemaVersion !== 6) return input;
   const pages = migrateLegacyPages(candidate.pages);
-  return { ...candidate, schemaVersion: CURRENT_SCHEMA_VERSION, pages };
+  return { ...migrateSchema7CircleElements({ ...candidate, pages }) as Record<string, unknown>, schemaVersion: CURRENT_SCHEMA_VERSION };
 }
 
 export function serializeDocument(document: DocumentSnapshot): string {
@@ -511,6 +530,7 @@ const elementPoints = (element: Element): readonly PointMm[] => {
     case "spline": return element.nodes.map((node) => node.anchor);
     case "sketch": return element.nodes.map((node) => node.point);
     case "contour": return element.contours.flatMap((contour) => contour.points);
+    case "circle": return [{ x: element.center.x - element.radius, y: element.center.y - element.radius }, { x: element.center.x + element.radius, y: element.center.y + element.radius }];
     case "dimension": return [];
     default: return hasBounds(element) ? [element.position, { x: element.position.x + element.size.width, y: element.position.y + element.size.height }] : [];
   }

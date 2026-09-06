@@ -1,6 +1,6 @@
 # Domain and geometry decisions
 
-The domain currently has schemaVersion 7, stable branded IDs, revisions, pages/layers, rectangle/ellipse/line/sketch/dimension elements, styles, and inert laser operation metadata. Coordinates and sizes are millimetres with a top-left origin. Geometry provides bounds, rotation, hit testing, viewport conversion, resize handles, selection helpers, and deterministic sketch-constraint solving. Validation uses Zod and migrations.
+The domain currently has schemaVersion 8, stable branded IDs, revisions, pages/layers, native center/radius circles, legacy oval ellipses, rectangle/line/sketch/dimension elements, styles, and inert laser operation metadata. Coordinates and sizes are millimetres with a top-left origin. Geometry provides bounds, rotation, hit testing, viewport conversion, resize handles, selection helpers, and deterministic sketch-constraint solving. Validation uses Zod and migrations.
 
 | Area | Current solution | Candidate to evaluate | Use when | Do not use when |
 |---|---|---|---|---|

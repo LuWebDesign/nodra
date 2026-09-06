@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { elementId, layerId, type EllipseElement, type PathElement, type SketchElement, type SplineElement } from "@nodra/domain";
-import { elementToContour, elementToCurves, ellipseElementToCurve, lineElementToCurve, pathSegmentToCurve, rotatedLineEndpoints, sketchEdgeToCurve, splineSpanToCurve } from "./index.js";
+import { elementId, layerId, type CircleElement, type EllipseElement, type PathElement, type SketchElement, type SplineElement } from "@nodra/domain";
+import { circleElementToCurve, elementToContour, elementToCurves, ellipseElementToCurve, lineElementToCurve, pathSegmentToCurve, rotatedLineEndpoints, sketchEdgeToCurve, splineSpanToCurve } from "./index.js";
 
 const style = { stroke: "#000", strokeWidth: 1 };
 const layer = layerId("layer");
@@ -107,12 +107,19 @@ describe("Curve2D source adapters", () => {
     expect(elementToCurves({ ...spline, nodes: [], closed: true })).toEqual([]);
   });
 
-  it("adapts only exact positive circular EllipseElements", () => {
-    const circle: EllipseElement = { type: "ellipse", id: elementId("circle"), layerId: layer, position: { x: 2, y: 4 }, size: { width: 6, height: 6 }, rotation: 1, flipX: true, flipY: true, style };
-    expect(ellipseElementToCurve(circle)).toEqual({ curve: { type: "circle", center: { x: 5, y: 7 }, radius: 3 }, source: { kind: "ellipse-element", elementId: circle.id }, sourceIndex: 0 });
-    expect(ellipseElementToCurve({ ...circle, size: { width: 6, height: 5.999999999 } })).toBeUndefined();
-    expect(() => ellipseElementToCurve({ ...circle, size: { width: Number.NaN, height: 6 } })).toThrow("finite and positive");
-    expect(() => ellipseElementToCurve({ ...circle, size: { width: 0, height: 0 } })).toThrow("finite and positive");
+  it("adapts canonical CircleElements with stable provenance", () => {
+    const circle: CircleElement = { type: "circle", id: elementId("circle"), layerId: layer, center: { x: 5, y: 7 }, radius: 3, style };
+    expect(circleElementToCurve(circle)).toEqual({ curve: { type: "circle", center: { x: 5, y: 7 }, radius: 3 }, source: { kind: "circle-element", elementId: circle.id }, sourceIndex: 0 });
+    expect(elementToCurves(circle)).toEqual([circleElementToCurve(circle)]);
+    expect(() => circleElementToCurve({ ...circle, radius: Number.NaN })).toThrow("finite and positive");
+    expect(() => circleElementToCurve({ ...circle, radius: 0 })).toThrow("finite and positive");
+  });
+
+  it("keeps legacy oval EllipseElements unsupported by the circle adapter", () => {
+    const ellipse: EllipseElement = { type: "ellipse", id: elementId("oval"), layerId: layer, position: { x: 2, y: 4 }, size: { width: 6, height: 5 }, rotation: 1, style };
+    expect(ellipseElementToCurve(ellipse)).toBeUndefined();
+    expect(elementToCurves(ellipse)).toEqual([]);
+    expect(() => ellipseElementToCurve({ ...ellipse, size: { width: Number.NaN, height: 5 } })).toThrow("finite and positive");
   });
 
   it("keeps unsupported elements empty and never mutates source entities", () => {
