@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { pointAt, selectRemovableCurveInterval, type ArcCurve2D, type CircleCurve2D, type CubicBezierCurve2D, type LineCurve2D } from "./index.js";
+import { elementId } from "@nodra/domain";
+import { pointAt, selectRemovableCurveInterval, selectSourcedCurveInterval, type ArcCurve2D, type CircleCurve2D, type CubicBezierCurve2D, type LineCurve2D, type SourcedCurve2D } from "./index.js";
 
 const line: LineCurve2D = { type: "line", start: { x: 0, y: 0 }, end: { x: 10, y: 0 } };
 const circle: CircleCurve2D = { type: "circle", center: { x: 0, y: 0 }, radius: 5 };
@@ -70,5 +71,24 @@ describe("selectRemovableCurveInterval", () => {
     expect(() => selectRemovableCurveInterval(line, [0.5], { x: Number.POSITIVE_INFINITY, y: 0 })).toThrow("cursor coordinates");
     expect(() => selectRemovableCurveInterval(line, [0.5], { x: 0, y: 0 }, { parameterEpsilon: 0.5 })).toThrow("parameterEpsilon");
     expect(() => selectRemovableCurveInterval({ ...circle, radius: 0 }, [0.25], { x: 0, y: 0 })).toThrow("curve radius");
+  });
+});
+
+
+describe("selectSourcedCurveInterval", () => {
+  const sourced = (curve: SourcedCurve2D["curve"], id: string, sourceIndex = 0): SourcedCurve2D => ({ curve, source: { kind: "line-element", elementId: elementId(id) }, sourceIndex });
+  const target = sourced({ type: "line", start: { x: 0, y: 5 }, end: { x: 10, y: 5 } }, "target");
+
+  it("uses only transversal intersections and excludes the target source", () => {
+    const sameSource = sourced(target.curve, "target");
+    const tangent = sourced({ type: "circle", center: { x: 5, y: 0 }, radius: 5 }, "tangent");
+    const left = sourced({ type: "line", start: { x: 3, y: 0 }, end: { x: 3, y: 10 } }, "left");
+    const right = sourced({ type: "line", start: { x: 7, y: 0 }, end: { x: 7, y: 10 } }, "right");
+    expect(selectSourcedCurveInterval(target, [sameSource, tangent, left, right], { x: 5, y: 5 })).toMatchObject({ kind: "selected", interval: { start: 0.3, end: 0.7, wrapsSeam: false } });
+  });
+
+  it("vetoes overlapping intersections with a tagged unsupported result", () => {
+    const overlap = sourced({ type: "line", start: { x: 2, y: 5 }, end: { x: 8, y: 5 } }, "overlap");
+    expect(selectSourcedCurveInterval(target, [overlap], { x: 5, y: 5 })).toEqual({ kind: "unsupported" });
   });
 });

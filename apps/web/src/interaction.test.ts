@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createDocument, elementId, layerId, type DocumentSnapshot } from "@nodra/domain";
 import { validateDocument } from "@nodra/validation";
-import { canActivateRotation, circleGeometry, centerPageInCanvas, clientPointToCanvas, clientPointToPage, creationGuides, directionalGuide, hasNonCollinearPoints, hoveredSelectionCenter, INITIAL_ZOOM, isDrawingTool, marqueeSelection, MAX_ZOOM, MIN_ZOOM, movementExceedsThreshold, normalizeBounds, normalizeDrag, pagePointToScreen, screenDeltaToMm, screenPointToMm, viewportPointToCanvas, containsBounds, elementsContainedBy, pickDimensionTarget, pickElement, pickFormaElement, pickFormaNode, pickFormaSegment, pickHoverNode, pickCutIntervalPreview, pickCuttableSegment, pickNode, pointerDownIntent, selectedNodeAnchor, selectionCenter, selectionFrame, snapCreationPoint, snapMoveDelta, visibleEditablePathNodeIndexes, zoomAtPoint } from "./interaction.js";
+import { canActivateRotation, circleGeometry, centerPageInCanvas, clientPointToCanvas, clientPointToPage, creationGuides, directionalGuide, hasNonCollinearPoints, hoveredSelectionCenter, INITIAL_ZOOM, isDrawingTool, marqueeSelection, MAX_ZOOM, MIN_ZOOM, movementExceedsThreshold, nodeAlignmentGuides, normalizeBounds, normalizeDrag, pagePointToScreen, screenDeltaToMm, screenPointToMm, viewportPointToCanvas, containsBounds, elementsContainedBy, pickDimensionTarget, pickElement, pickFormaElement, pickFormaNode, pickFormaSegment, pickHoverNode, pickCutIntervalPreview, pickCuttableSegment, pickNode, pointerDownIntent, selectedNodeAnchor, selectionCenter, selectionFrame, snapCreationPoint, snapMoveDelta, visibleEditablePathNodeIndexes, zoomAtPoint } from "./interaction.js";
 import { geometryPatch, geometryValue } from "./propertyBar.js";
 import { dimensionKindForNodes, dimensionOffsetForPlacement, pointMidpoint } from "@nodra/geometry";
 
@@ -253,6 +253,13 @@ describe("click creation geometry", () => {
     expect(snapCreationPoint(document, { x: 20.5, y: 20 }, 1, 8)).toEqual({ point: { x: 20, y: 20 }, kind: "center" });
   });
 
+  it("does not collapse a line endpoint onto its source for a zero-length alignment guide", () => {
+    const layer = { id: layerId("line-guide-layer"), name: "Guides", visible: true, order: 0 };
+    const circle = { type: "circle" as const, id: elementId("line-guide-circle"), layerId: layer.id, center: { x: 20, y: 20 }, radius: 10, style: { stroke: "#000", strokeWidth: 1 } };
+    const document = { ...createDocument("line-guide", [layer]), elements: [circle] };
+    expect(nodeAlignmentGuides(document, { x: 0, y: 20 }, { x: 40, y: 20 }, 1, 5)).toEqual([]);
+  });
+
   it("uses one screen tolerance and excludes hidden geometry from creation snapping", () => {
     const visible = { id: layerId("creation-snap-visible"), name: "Visible", visible: true, order: 0 };
     const hidden = { id: layerId("creation-snap-hidden"), name: "Hidden", visible: false, order: 1 };
@@ -490,6 +497,16 @@ describe("drag geometry", () => {
     expect(preview?.hit.elementId).toBe(target.id);
     expect(preview?.fragments).toHaveLength(1);
     expect(preview?.fragments[0]).toMatchObject({ curve: { type: "arc", center: { x: 5, y: 5 }, radius: 5 }, sourceInterval: { t0: 0.5, t1: 1 } });
+    const vertical = { ...cutter, id: elementId("cut-circle-vertical"), start: { x: 5, y: -5 }, end: { x: 5, y: 15 } };
+    const multi = pickCutIntervalPreview({ ...document, elements: [target, cutter, vertical] }, { x: 8.5, y: 8.5 }, 10);
+    expect(multi?.fragments).toHaveLength(1);
+    expect(multi?.fragments[0]?.sourceInterval).toEqual({ t0: 0, t1: 0.25 });
+    expect(pickCutIntervalPreview({ ...document, elements: [target, cutter] }, { x: 10, y: 5 }, 10)?.fragments).toEqual([]);
+    const tangent = { ...cutter, id: elementId("cut-circle-tangent"), start: { x: -5, y: 0 }, end: { x: 15, y: 0 } };
+    expect(pickCutIntervalPreview({ ...document, elements: [target, tangent] }, { x: 5, y: 10 }, 10)?.fragments).toEqual([]);
+    const unsupportedTangent = { type: "rectangle" as const, id: elementId("cut-circle-unsupported-tangent"), layerId: layer.id, position: { x: 3, y: -4 }, size: { width: 4, height: 4 }, cornerRadius: 0, rotation: 0, style };
+    const lowerPreview = pickCutIntervalPreview({ ...document, elements: [target, cutter] }, { x: 5, y: 10 }, 10);
+    expect(pickCutIntervalPreview({ ...document, elements: [target, cutter, unsupportedTangent] }, { x: 5, y: 10 }, 10)?.fragments).toEqual(lowerPreview?.fragments);
   });
 
   it("picks and previews native Spline spans through the exact fallback", () => {

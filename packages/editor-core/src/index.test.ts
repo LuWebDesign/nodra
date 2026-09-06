@@ -16,6 +16,83 @@ const arc: ArcElement = { type: "arc", id: elementId("arc"), layerId: layerId("d
 const glyph: GlyphElement = { type: "glyph", id: elementId("glyph"), layerId: layerId("default"), position: { x: 0, y: 0 }, size: { width: 20, height: 20 }, glyph: "O", fillRule: "evenodd", rotation: 0, style: rectangle.style, contours: [{ nodes: [{ id: "ga", anchor: { x: 0, y: 0 }, join: "smooth" }, { id: "gb", anchor: { x: 10, y: 0 }, join: "smooth" }, { id: "gc", anchor: { x: 10, y: 10 }, join: "smooth" }, { id: "gd", anchor: { x: 0, y: 10 }, join: "smooth" }], segments: [{ id: "fixture-segment-2", type: "cubicBezier", startNodeId: "ga", endNodeId: "gb", control1: { x: 3, y: -2 }, control2: { x: 7, y: -2 } }, { id: "fixture-segment-3", type: "cubicBezier", startNodeId: "gb", endNodeId: "gc", control1: { x: 12, y: 3 }, control2: { x: 12, y: 7 } }, { id: "fixture-segment-4", type: "cubicBezier", startNodeId: "gc", endNodeId: "gd", control1: { x: 7, y: 12 }, control2: { x: 3, y: 12 } }, { id: "fixture-segment-5", type: "cubicBezier", startNodeId: "gd", endNodeId: "ga", control1: { x: -2, y: 7 }, control2: { x: -2, y: 3 } }] }] };
 
 describe("editor core", () => {
+  it("cuts a circle exactly into one canonical arc and supports undo/redo", () => {
+    const circle: CircleElement = { type: "circle", id: elementId("exact-circle"), layerId: layerId("default"), center: { x: 10, y: 10 }, radius: 5, style: { ...rectangle.style, fill: "red" }, operation: { operation: "cut", order: 2 } };
+    const cutter: LineElement = { type: "line", id: elementId("exact-circle-cutter"), layerId: layerId("default"), start: { x: 0, y: 10 }, end: { x: 20, y: 10 }, rotation: 0, style: rectangle.style };
+    const initial = createEditor({ ...document, elements: [circle, cutter] });
+    const cut = dispatch(initial, cutSegment(circle.id, 0, { x: 10, y: 15 }));
+    const result = cut.document.elements.find((element) => element.id === circle.id);
+    expect(result).toMatchObject({ type: "arc", id: circle.id, layerId: circle.layerId, style: circle.style, operation: circle.operation, startAngle: Math.PI, endAngle: 0, direction: "clockwise" });
+    expect(result?.type).not.toBe("path");
+    expect(cut.undo).toHaveLength(1);
+    expect(undo(cut).document).toEqual(initial.document);
+    expect(redo(undo(cut)).document).toEqual(cut.document);
+  });
+
+  it("handles seam-wrapping circle removal without splitting the surviving arc", () => {
+    const circle: CircleElement = { type: "circle", id: elementId("seam-circle"), layerId: rectangle.layerId, center: { x: 10, y: 10 }, radius: 5, style: rectangle.style };
+    const cutter: LineElement = { type: "line", id: elementId("seam-cutter"), layerId: rectangle.layerId, start: { x: 10, y: 0 }, end: { x: 10, y: 20 }, rotation: 0, style: rectangle.style };
+    const result = dispatch(createEditor({ ...document, elements: [circle, cutter] }), cutSegment(circle.id, 0, { x: 15, y: 10 })).document.elements[0];
+    expect(result).toMatchObject({ type: "arc", id: circle.id, startAngle: Math.PI / 2, endAngle: Math.PI * 1.5, direction: "clockwise" });
+  });
+
+  it("merges all unremoved intervals into one arc when several cutters cross a circle", () => {
+    const circle: CircleElement = { type: "circle", id: elementId("multi-circle"), layerId: rectangle.layerId, center: { x: 10, y: 10 }, radius: 5, style: rectangle.style };
+    const horizontal: LineElement = { type: "line", id: elementId("multi-horizontal"), layerId: rectangle.layerId, start: { x: 0, y: 10 }, end: { x: 20, y: 10 }, rotation: 0, style: rectangle.style };
+    const vertical: LineElement = { ...horizontal, id: elementId("multi-vertical"), start: { x: 10, y: 0 }, end: { x: 10, y: 20 } };
+    const result = dispatch(createEditor({ ...document, elements: [circle, horizontal, vertical] }), cutSegment(circle.id, 0, { x: 13, y: 13 })).document.elements[0];
+    expect(result).toMatchObject({ type: "arc", id: circle.id, startAngle: Math.PI / 2, endAngle: 0, direction: "clockwise" });
+  });
+
+  it("keeps circle Trim dependencies only through valid stable arc references", () => {
+    const circle: CircleElement = { type: "circle", id: elementId("dependent-circle"), layerId: rectangle.layerId, center: { x: 10, y: 10 }, radius: 5, style: rectangle.style, circleConstraints: [{ id: "radius-5", kind: "radius", value: 5, driving: true }] };
+    const cutter: LineElement = { type: "line", id: elementId("dependent-cutter"), layerId: rectangle.layerId, start: { x: 0, y: 10 }, end: { x: 20, y: 10 }, rotation: 0, style: rectangle.style };
+    const anchor = { ...rectangle, id: elementId("dependent-anchor"), position: { x: 40, y: 40 } };
+    const radial: DimensionElement = { type: "dimension", id: elementId("dependent-radius"), layerId: rectangle.layerId, kind: "radius", driving: true, constraintId: "radius-5", references: [{ kind: "node", elementId: circle.id, nodeIndex: 0, nodeId: "center" }, { kind: "node", elementId: circle.id, nodeIndex: 1, nodeId: "n" }], offset: { x: 0, y: -8 }, precision: 2, units: "mm", rotation: 0, style: rectangle.style };
+    const linear: DimensionElement = { type: "dimension", id: elementId("removed-linear"), layerId: rectangle.layerId, kind: "vertical", references: [{ kind: "node", elementId: circle.id, nodeIndex: 1, nodeId: "n" }, { kind: "node", elementId: anchor.id, nodeIndex: 4, nodeId: "center" }], offset: { x: -8, y: 0 }, precision: 2, units: "mm", rotation: 0, style: rectangle.style };
+    const connections = [
+      { id: "center-survives", first: { elementId: circle.id, node: { kind: "named" as const, name: "center" as const } }, second: { elementId: anchor.id, node: { kind: "named" as const, name: "center" as const } } },
+      { id: "east-survives", first: { elementId: circle.id, node: { kind: "named" as const, name: "e" as const } }, second: { elementId: anchor.id, node: { kind: "named" as const, name: "e" as const } } },
+      { id: "north-removed", first: { elementId: circle.id, node: { kind: "named" as const, name: "n" as const } }, second: { elementId: anchor.id, node: { kind: "named" as const, name: "n" as const } } },
+    ];
+    const result = dispatch(createEditor({ ...document, elements: [circle, cutter, anchor, radial, linear], connections }), cutSegment(circle.id, 0, { x: 10, y: 15 }));
+    const survivingArc = result.document.elements.find((element) => element.id === circle.id);
+    expect(survivingArc).toMatchObject({ type: "arc" });
+    expect(survivingArc).not.toHaveProperty("circleConstraints");
+    expect(result.document.elements.find((element) => element.id === radial.id)).toMatchObject({ type: "dimension", references: [{ nodeId: "center", nodeIndex: 0 }, { nodeId: "start", nodeIndex: 1 }] });
+    expect(result.document.elements.find((element) => element.id === radial.id)).not.toHaveProperty("driving");
+    expect(result.document.elements.some((element) => element.id === linear.id)).toBe(false);
+    expect(result.document.connections).toEqual([
+      { ...connections[0], first: { elementId: circle.id, node: { kind: "named", name: "center" } } },
+      { ...connections[1], first: { elementId: circle.id, node: { kind: "named", name: "end" } } },
+    ]);
+  });
+
+  it("rejects tangent, hidden, coincident, unsupported, and cursor-on-cut circle mutations", () => {
+    const visible = { id: layerId("circle-visible"), name: "Visible", visible: true, order: 0 };
+    const hidden = { id: layerId("circle-hidden"), name: "Hidden", visible: false, order: 1 };
+    const base = createDocument("circle-noops", [visible, hidden]);
+    const circle: CircleElement = { type: "circle", id: elementId("noop-circle"), layerId: visible.id, center: { x: 10, y: 10 }, radius: 5, style: rectangle.style };
+    const tangent: LineElement = { type: "line", id: elementId("tangent"), layerId: visible.id, start: { x: 0, y: 5 }, end: { x: 20, y: 5 }, rotation: 0, style: rectangle.style };
+    const tangentState = createEditor({ ...base, elements: [circle, tangent] });
+    expect(dispatch(tangentState, cutSegment(circle.id, 0, { x: 10, y: 15 }))).toBe(tangentState);
+    const hiddenSecant: LineElement = { ...tangent, id: elementId("hidden-secant"), layerId: hidden.id, start: { x: 0, y: 10 }, end: { x: 20, y: 10 } };
+    const hiddenState = createEditor({ ...base, elements: [circle, hiddenSecant] });
+    expect(dispatch(hiddenState, cutSegment(circle.id, 0, { x: 10, y: 15 }))).toBe(hiddenState);
+    const coincident = { ...circle, id: elementId("coincident-circle") };
+    const overlapState = createEditor({ ...base, elements: [circle, coincident] });
+    expect(dispatch(overlapState, cutSegment(circle.id, 0, { x: 10, y: 15 }))).toBe(overlapState);
+    const unsupported = { ...rectangle, id: elementId("unsupported-cutter"), layerId: visible.id, position: { x: 4, y: 8 }, size: { width: 12, height: 4 } };
+    const unsupportedState = createEditor({ ...base, elements: [circle, unsupported] });
+    expect(dispatch(unsupportedState, cutSegment(circle.id, 0, { x: 10, y: 15 }))).toBe(unsupportedState);
+    const secant: LineElement = { ...tangent, id: elementId("secant"), start: { x: 0, y: 10 }, end: { x: 20, y: 10 } };
+    const unsupportedTangent = { ...rectangle, id: elementId("unsupported-tangent"), layerId: visible.id, position: { x: 8, y: 0 }, size: { width: 4, height: 5 } };
+    const tangentFallbackResult = dispatch(createEditor({ ...base, elements: [circle, secant, unsupportedTangent] }), cutSegment(circle.id, 0, { x: 10, y: 15 }));
+    expect(tangentFallbackResult.document.elements[0]?.type).toBe("arc");
+    const boundaryState = createEditor({ ...base, elements: [circle, secant] });
+    expect(dispatch(boundaryState, cutSegment(circle.id, 0, { x: 15, y: 10 }))).toBe(boundaryState);
+  });
+
   it("keys stable topology references without conflating edge and segment identities", () => {
     expect(topologyReferenceKey({ kind: "sketch-edge", elementId: elementId("shape"), edgeId: "shared" })).toBe("shape:edge:shared");
     expect(topologyReferenceKey({ kind: "path-segment", elementId: elementId("shape"), segmentId: "shared" })).toBe("shape:segment:shared");

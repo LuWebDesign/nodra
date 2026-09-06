@@ -358,6 +358,44 @@ test("cuts a Pen cubic through a Line sketch and supports undo and redo", async 
   await expect(transversal.locator(":scope > line")).toHaveCount(2);
 });
 
+test("trims a native circle into one exact arc and restores it with undo", async ({ page }) => {
+  await page.goto("/");
+  const pageBounds = await page.locator(".page").boundingBox();
+  expect(pageBounds).not.toBeNull();
+  const center = { x: pageBounds!.x + 180, y: pageBounds!.y + 180 };
+  const radius = 60;
+  await page.getByRole("button", { name: "Círculo" }).click();
+  await page.mouse.click(center.x, center.y);
+  await page.mouse.move(center.x + radius, center.y);
+  await page.mouse.click(center.x + radius, center.y);
+  const circle = page.locator(".page-svg svg circle[data-element-id]");
+  await expect(circle).toHaveCount(1);
+  const circleId = await circle.getAttribute("data-element-id");
+  const circleBox = await visibleBoundingBox(circle);
+  const renderedCenter = { x: circleBox.x + circleBox.width / 2, y: circleBox.y + circleBox.height / 2 };
+  const lineStart = { x: circleBox.x - 30, y: renderedCenter.y };
+  const lineEnd = { x: circleBox.x + circleBox.width + 30, y: renderedCenter.y };
+
+  await page.getByRole("button", { name: "Línea" }).click();
+  await page.mouse.click(lineStart.x, lineStart.y);
+  await page.mouse.move(lineEnd.x, lineEnd.y);
+  await page.mouse.click(lineEnd.x, lineEnd.y);
+  await page.getByRole("button", { name: "Cortar segmentos" }).click();
+  await page.mouse.move(renderedCenter.x, circleBox.y + circleBox.height);
+  await expect(page.locator('.cut-segment-hover-overlay path[d*=" A "]')).toBeVisible();
+  await page.mouse.click(renderedCenter.x, circleBox.y + circleBox.height);
+
+  await expect(page.locator(`.page-svg svg circle[data-element-id="${circleId}"]`)).toHaveCount(0);
+  const arc = page.locator(`.page-svg svg path[data-element-id="${circleId}"]`);
+  await expect(arc).toHaveCount(1);
+  await expect(arc).toHaveAttribute("d", / A /);
+  await page.getByRole("button", { name: "Deshacer" }).click();
+  await expect(page.locator(`.page-svg svg circle[data-element-id="${circleId}"]`)).toHaveCount(1);
+  await expect(arc).toHaveCount(0);
+  await page.getByRole("button", { name: "Rehacer" }).click();
+  await expect(arc).toHaveCount(1);
+});
+
 test("edits rectangle dimensions around its center with proportional lock and undo", async ({ page }) => {
   await page.goto("/");
   await drawRectangle(page);

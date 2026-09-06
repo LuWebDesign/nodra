@@ -1,5 +1,7 @@
 import type { PointMm } from "@nodra/domain";
-import { closestParameter, pointAt, splitCurveAtParameters, type Curve2D, type CurveFragment } from "./curve2d.js";
+import { closestParameter, pointAt, splitCurveAtParameters, tangentAt, type Curve2D, type CurveFragment } from "./curve2d.js";
+import type { SourcedCurve2D } from "./curve2d-adapters.js";
+import { intersectCurves } from "./intersection-engine.js";
 import { PARAMETER_EPSILON } from "./tolerances.js";
 
 export interface CurveParameterInterval {
@@ -29,6 +31,8 @@ export type CurveIntervalSelectionResult =
       readonly reason: "insufficient-cuts" | "cursor-on-cut";
     };
 
+export type SourcedCurveIntervalSelectionResult = CurveIntervalSelectionResult | { readonly kind: "unsupported" };
+
 const clamp = (parameter: number): number => Math.max(0, Math.min(1, parameter));
 const isClosed = (curve: Curve2D): boolean => curve.type === "circle" || (curve.type === "arc" && curve.fullTurn === true);
 
@@ -55,6 +59,32 @@ function cyclicDistance(first: number, second: number): number {
   const distance = Math.abs(first - second);
   return Math.min(distance, 1 - distance);
 }
+
+function sameCurveSource(first: SourcedCurve2D, second: SourcedCurve2D): boolean {
+  return first.source.kind === second.source.kind && first.source.elementId === second.source.elementId && first.sourceIndex === second.sourceIndex;
+}
+
+function isTransversalIntersection(first: SourcedCurve2D, second: SourcedCurve2D, firstParameter: number, secondParameter: number): boolean {
+  const firstTangent = tangentAt(first.curve, firstParameter); const secondTangent = tangentAt(second.curve, secondParameter);
+  const scale = Math.hypot(firstTangent.x, firstTangent.y) * Math.hypot(secondTangent.x, secondTangent.y);
+  return scale > 0 && Math.abs(firstTangent.x * secondTangent.y - firstTangent.y * secondTangent.x) > Math.max(Number.EPSILON * 128, PARAMETER_EPSILON * 4) * scale;
+}
+
+/** Selects the removable interval from exact intersections with supported curves. */
+export function selectRemovableCurveIntervalFromIntersections(target: SourcedCurve2D, candidates: readonly SourcedCurve2D[], cursor: PointMm): SourcedCurveIntervalSelectionResult {
+  const cuts: number[] = [];
+  for (const candidate of candidates) {
+    if (sameCurveSource(target, candidate)) continue;
+    const intersection = intersectCurves(target.curve, candidate.curve);
+    if (intersection.kind === "overlap" || intersection.kind === "unsupported") return { kind: "unsupported" };
+    if (intersection.kind !== "points") continue;
+    cuts.push(...intersection.points.filter(({ firstParameter, secondParameter }) => isTransversalIntersection(target, candidate, firstParameter, secondParameter)).map(({ firstParameter }) => firstParameter));
+  }
+  return selectRemovableCurveInterval(target.curve, cuts, cursor);
+}
+
+/** Short alias for callers that already have sourced curves. */
+export const selectSourcedCurveInterval = selectRemovableCurveIntervalFromIntersections;
 
 /** Selects the parameter interval containing the closest point to `cursor`.
  * Picking tolerance remains a caller concern; this function only uses parameter tolerance. */
