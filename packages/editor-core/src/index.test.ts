@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createDocument, elementId, layerId, type DimensionElement, type Element, type EllipseElement, type CircleElement, type LineElement, type GlyphElement, type PathElement, type PointMm, type RectangleElement, type SketchElement, type SplineElement, type TextElement } from "@nodra/domain";
+import { createDocument, elementId, layerId, type ArcElement, type DimensionElement, type Element, type EllipseElement, type CircleElement, type LineElement, type GlyphElement, type PathElement, type PointMm, type RectangleElement, type SketchElement, type SplineElement, type TextElement } from "@nodra/domain";
 import { addDocumentConstraint, deleteDocumentConstraint, addSketchConstraint, addSketchSegmentRelation, addToSelection, appendSketchEdge, appendSplineNode, beginGesture, cancelGesture, clearSelection, closePath, closeSplineElement, commitGesture, createEditor, createElement, createPathCubicNode, createSketchLine, cutContourSegment, cutLineAtPoint, cutPathSegment, cutSegment, cutSketchEdge, splitPathLineAt, deleteContourNodes, deleteElement, deleteElementNodes, deletePathNodes, deleteSketchConstraint, dispatch, duplicateElements, flipElements, insertContourNode, invalidDimensionIdsForShapeOperation, moveElement, moveElements, movePathNode, movePathHandle, openPath, previewGesture, previewGestureFromBase, redo, reversePath, removeFromSelection, reorderLayer, resizeElement, resizeElementToDimensions, resizeElements, resizeElementsToDimensions, rotateElementsAroundCenter, select, selectForPointerDown, setDimensionDriving, updateCircleConstraint, deleteCircleConstraint, solveCircle, setLayerVisibility, setPathJoin, shapeOperation, splitPathSegment, toggleSelection, topologyEditForPathSegmentReplacement, topologyReferenceKey, undo, updateContourNode, updateDimensionValue, updateElement, updateElementNode, updateElementStyles, updateSketchConstraint, updateDocumentConstraint, updateSplineHandle, updateSplineNode } from "./index.js";
 import { boundsOfElements, realGeometryNodes } from "@nodra/geometry";
 import type { Direction } from "@nodra/geometry";
@@ -12,6 +12,7 @@ const path: PathElement = { type: "path", id: elementId("path"), layerId: layerI
 const spline: SplineElement = { type: "spline", id: elementId("spline"), layerId: layerId("default"), nodes: [{ id: "a", anchor: { x: 0, y: 0 }, continuity: "smooth" }, { id: "b", anchor: { x: 10, y: 0 }, continuity: "smooth" }, { id: "c", anchor: { x: 10, y: 10 }, continuity: "smooth" }], closed: false, style: rectangle.style };
 const text: TextElement = { type: "text", id: elementId("text"), layerId: layerId("default"), position: { x: 12, y: 18 }, size: { width: 32, height: 14 }, text: "Keep formatting", fontFamily: "Times New Roman", fontSize: 18, fontWeight: "bold", fontStyle: "italic", textAlign: "left", lineHeight: 1.2, rotation: 0, style: { stroke: "#123456", fill: "#654321", strokeWidth: 0.5 } };
 const dimension: DimensionElement = { type: "dimension", id: elementId("dimension"), layerId: layerId("default"), kind: "horizontal", references: [{ kind: "node", elementId: rectangle.id, nodeIndex: 0 }, { kind: "node", elementId: rectangle.id, nodeIndex: 1 }], offset: { x: 0, y: -10 }, precision: 2, units: "mm", rotation: 0, style: rectangle.style };
+const arc: ArcElement = { type: "arc", id: elementId("arc"), layerId: layerId("default"), center: { x: 10, y: 20 }, radius: 5, startAngle: 0, endAngle: Math.PI / 2, direction: "clockwise", style: rectangle.style };
 const glyph: GlyphElement = { type: "glyph", id: elementId("glyph"), layerId: layerId("default"), position: { x: 0, y: 0 }, size: { width: 20, height: 20 }, glyph: "O", fillRule: "evenodd", rotation: 0, style: rectangle.style, contours: [{ nodes: [{ id: "ga", anchor: { x: 0, y: 0 }, join: "smooth" }, { id: "gb", anchor: { x: 10, y: 0 }, join: "smooth" }, { id: "gc", anchor: { x: 10, y: 10 }, join: "smooth" }, { id: "gd", anchor: { x: 0, y: 10 }, join: "smooth" }], segments: [{ id: "fixture-segment-2", type: "cubicBezier", startNodeId: "ga", endNodeId: "gb", control1: { x: 3, y: -2 }, control2: { x: 7, y: -2 } }, { id: "fixture-segment-3", type: "cubicBezier", startNodeId: "gb", endNodeId: "gc", control1: { x: 12, y: 3 }, control2: { x: 12, y: 7 } }, { id: "fixture-segment-4", type: "cubicBezier", startNodeId: "gc", endNodeId: "gd", control1: { x: 7, y: 12 }, control2: { x: 3, y: 12 } }, { id: "fixture-segment-5", type: "cubicBezier", startNodeId: "gd", endNodeId: "ga", control1: { x: -2, y: 7 }, control2: { x: -2, y: 3 } }] }] };
 
 describe("editor core", () => {
@@ -958,6 +959,32 @@ it("converts a zero-radius rectangle to an open path when cutting one edge", () 
     expect(previewElement?.type === "spline" ? previewElement.nodes[0] : undefined).toMatchObject({ outHandle: { dx: 4, dy: 3 } });
     expect(commitGesture(preview).undo).toHaveLength(initial.undo.length + 1);
     expect(cancelGesture(preview)).toMatchObject({ document: initial.document, gesture: undefined });
+  });
+
+  it("moves an arc by translating only its center", () => {
+    const initial = createEditor({ ...document, elements: [arc] });
+    const moved = dispatch(initial, moveElement(arc.id, { x: 3, y: -4 }));
+    expect((moved.document.elements[0] as ArcElement).center).toEqual({ x: 13, y: 16 });
+    expect((moved.document.elements[0] as ArcElement).radius).toBe(5);
+    expect(undo(moved).document).toEqual(initial.document);
+    expect((redo(undo(moved)).document.elements[0] as ArcElement).center).toEqual({ x: 13, y: 16 });
+  });
+
+  it("moves and duplicates an arc group without changing arc geometry", () => {
+    const second = { ...arc, id: elementId("arc-second"), center: { x: 30, y: 20 } };
+    const initial = createEditor({ ...document, elements: [arc, second] });
+    const moved = dispatch(initial, moveElements([arc.id, second.id], { x: -2, y: 6 }));
+    expect((moved.document.elements[0] as ArcElement).center).toEqual({ x: 8, y: 26 });
+    expect((moved.document.elements[1] as ArcElement).center).toEqual({ x: 28, y: 26 });
+    const duplicated = dispatch(moved, duplicateElements([arc.id, second.id], "east", 0, 1));
+    expect(duplicated.document.elements).toHaveLength(4);
+    expect((duplicated.document.elements[2] as ArcElement).center).toEqual({ x: 33, y: 26 });
+    expect((duplicated.document.elements[3] as ArcElement).center).toEqual({ x: 53, y: 26 });
+    expect(undo(duplicated).document).toEqual(moved.document);
+    expect(redo(undo(duplicated)).document.elements).toHaveLength(4);
+    const flipped = dispatch(initial, flipElements([arc.id], "horizontal"));
+    expect(flipped.document.elements[0]).toMatchObject({ type: "arc", center: { x: 15, y: 20 }, startAngle: Math.PI, endAngle: Math.PI / 2, direction: "counterclockwise" });
+    expect(dispatch(initial, shapeOperation([arc.id], "outline"))).toBe(initial);
   });
 
   it("moves a spline with moveElement while preserving relative handles", () => {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { angularDimensionGeometry, bezierHandlePoint, boundsOf, boundsOfElements, boundsOutsidePage, connectableNode, connectableNodeAddress, closedElementToPolygon, cubicBezierBounds, cubicBezierLineIntersections, cuttableSegments, cubicBezierDerivative, degreesToRadians, dimensionGeometry, dimensionKindForNodes, dimensionKindForPlacement, dimensionOffsetForAlignedPlacement, dimensionOffsetForPlacement, editableGeometryNodes, elementCenter, elementSegmentAt, elementToContour, evaluateCubicBezier, ELLIPSE_APPROXIMATION_SEGMENTS, groupCenter, groupHandlePoints, hitTest, mirrorHandleOffset, mmToScreen, pointMidpoint, radiansToDegrees, realGeometryNodes, resizeGroup, resizeHandle, rotatedLineEndpoints, rotateElements, rotationFromDrag, solveSketchConstraints, solveCircleConstraints, rotationHandlePoints, screenToMm, shapeResultContours, sketchClosedContours, sketchEdgeAtAddress, sketchEdgeIndexAtAddress, splitCubicBezier, splitCubicBezierAtParameters, splitCuttableSegments, validateSize, visibleBezierHandleGuides } from "./index.js";
-import { elementId, layerId } from "@nodra/domain";
+import { elementId, layerId, type ArcElement } from "@nodra/domain";
 
 const style = { stroke: "#000", strokeWidth: 0.2 };
 const rectangle = { type: "rectangle" as const, id: elementId("r"), layerId: layerId("l"), position: { x: 10, y: 20 }, size: { width: 20, height: 10 }, cornerRadius: 0, rotation: 0, style };
@@ -130,6 +130,34 @@ describe("canonical millimetre geometry", () => {
     if (geometry?.kind !== "radius") throw new Error("Expected radius geometry");
     expect(geometry.leaderStart).toEqual({ x: 20, y: 20 });
     expect(geometry.leaderEnd).toEqual({ x: 28, y: 12 });
+  });
+
+  it("uses exact bounds, stable nodes, stroke hits, and radial dimensions for native arcs", () => {
+    const arc: ArcElement = { type: "arc", id: elementId("native-arc"), layerId: layerId("l"), center: { x: 20, y: 20 }, radius: 10, startAngle: 0, endAngle: Math.PI / 2, direction: "clockwise", style };
+    expect(realGeometryNodes(arc)).toEqual([
+      { kind: "center", nodeId: "center", point: { x: 20, y: 20 } },
+      { kind: "endpoint", nodeId: "start", point: { x: 30, y: 20 } },
+      { kind: "endpoint", nodeId: "end", point: { x: 20, y: 30 } },
+    ]);
+    expect(connectableNodeAddress(arc, 0)).toEqual({ kind: "named", name: "center" });
+    expect(connectableNodeAddress(arc, 1)).toEqual({ kind: "named", name: "start" });
+    expect(connectableNodeAddress(arc, 2)).toEqual({ kind: "named", name: "end" });
+    expect(boundsOf(arc)).toEqual({ x: 20, y: 20, width: 10, height: 10 });
+    expect(hitTest(arc, { x: 20 + Math.SQRT1_2 * 10, y: 20 + Math.SQRT1_2 * 10 }, 1e-9)).toBe(true);
+    expect(hitTest(arc, { x: 10, y: 20 }, 0.1)).toBe(false);
+    expect(() => hitTest(arc, { x: 30, y: 20 }, -1)).toThrow("must not be negative");
+    const dimension = { type: "dimension" as const, id: elementId("arc-radius"), layerId: layerId("l"), kind: "radius" as const, references: [{ kind: "node" as const, elementId: arc.id, nodeIndex: 0, nodeId: "center" }, { kind: "node" as const, elementId: arc.id, nodeIndex: 2, nodeId: "end" }] as const, offset: { x: 5, y: 5 }, precision: 2, units: "mm" as const, rotation: 0 as const, style };
+    expect(dimensionGeometry(dimension, [arc])).toMatchObject({ kind: "radius", value: 10, lineStart: { x: 20, y: 20 }, lineEnd: { x: 20, y: 30 } });
+  });
+
+  it("honors counterclockwise and seam-crossing arc sweeps", () => {
+    const arc: ArcElement = { type: "arc", id: elementId("counterclockwise-arc"), layerId: layerId("l"), center: { x: 0, y: 0 }, radius: 10, startAngle: Math.PI / 2, endAngle: 0, direction: "counterclockwise", style };
+    expect(boundsOf(arc)).toEqual({ x: 0, y: 0, width: 10, height: 10 });
+    expect(hitTest(arc, { x: Math.SQRT1_2 * 10, y: Math.SQRT1_2 * 10 }, 1e-9)).toBe(true);
+    expect(hitTest(arc, { x: -10, y: 0 }, 0.1)).toBe(false);
+    const seam = { ...arc, id: elementId("seam-arc"), startAngle: 7 * Math.PI / 4, endAngle: Math.PI / 4, direction: "clockwise" as const };
+    expect(boundsOf(seam).x).toBeCloseTo(Math.SQRT1_2 * 10);
+    expect(boundsOf(seam).width).toBeCloseTo(10 - Math.SQRT1_2 * 10);
   });
 
   it("resolves associative node references by stable node id after node reordering", () => {

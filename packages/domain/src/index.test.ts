@@ -22,6 +22,10 @@ describe("domain contracts", () => {
     const line = { type: "line" as const, id: elementId("line-rotation"), layerId: layerId("design"), start: { x: 0, y: 0 }, end: { x: 10, y: 4 }, rotation: 0, style: { stroke: "#000", strokeWidth: 0.2 } };
     expect(hasRotation(line)).toBe(true);
   });
+  it("accepts canonical arc elements with stable center/start/end nodes", () => {
+    const arc = { type: "arc" as const, id: elementId("arc-1"), layerId: layerId("design"), center: { x: 10, y: 10 }, radius: 5, startAngle: 0, endAngle: Math.PI, direction: "counterclockwise" as const, style: { stroke: "#000", strokeWidth: 0.2 } };
+    expect(withElements(createDocument("doc-1", [{ id: layerId("design"), name: "Design", visible: true, order: 0 }]), [arc]).elements).toEqual([arc]);
+  });
   it("accepts spline elements as native document elements", () => {
     const layer = { id: layerId("design"), name: "Design", visible: true, order: 0 } as const;
     const spline = { type: "spline" as const, id: elementId("spline-1"), layerId: layer.id, nodes: [{ id: "a", anchor: { x: 0, y: 0 }, continuity: "smooth" as const }, { id: "b", anchor: { x: 10, y: 0 }, continuity: "smooth" as const }], closed: false, style: { stroke: "#000", strokeWidth: 0.2 } };

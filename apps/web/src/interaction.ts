@@ -430,7 +430,7 @@ export function pickDimensionTarget(document: DocumentSnapshot, point: PointMm, 
   const visible = new Set(document.layers.filter((layer) => layer.visible).map((layer) => layer.id));
   const priorityNode = pickNode(document, point, zoom, tolerancePx);
   const priorityElement = priorityNode ? document.elements.find((element) => element.id === priorityNode.elementId) : undefined;
-  if (priorityNode?.node.kind === "cardinal" && priorityElement?.type === "circle") {
+  if (priorityNode && priorityElement && (priorityNode.node.kind === "cardinal" && priorityElement.type === "circle" || priorityNode.node.kind === "endpoint" && priorityElement.type === "arc")) {
     const nodes = realGeometryNodes(priorityElement);
     const centerIndex = nodes.findIndex((candidate) => candidate.kind === "center");
     const center = nodes[centerIndex];
@@ -450,7 +450,7 @@ export function pickDimensionTarget(document: DocumentSnapshot, point: PointMm, 
   if (bestLine) return { kind: "line", hit: bestLine };
   const node = pickNode(document, point, zoom, tolerancePx);
   const nodeElement = node ? document.elements.find((element) => element.id === node.elementId) : undefined;
-  if (node?.node.kind === "cardinal" && nodeElement?.type === "circle") {
+  if (node && nodeElement && (node.node.kind === "cardinal" && nodeElement.type === "circle" || node.node.kind === "endpoint" && nodeElement.type === "arc")) {
     const nodes = realGeometryNodes(nodeElement);
     const centerIndex = nodes.findIndex((candidate) => candidate.kind === "center");
     const center = nodes[centerIndex];
@@ -463,15 +463,16 @@ export function pickDimensionTarget(document: DocumentSnapshot, point: PointMm, 
   let bestCircleLayerOrder = Number.NEGATIVE_INFINITY;
   let bestCircleElementIndex = -1;
   for (const [elementIndex, element] of document.elements.entries()) {
-    if (element.type !== "circle" || !visible.has(element.layerId)) continue;
-    const center = realGeometryNodes(element).find((candidate) => candidate.kind === "center");
-    const cardinalNodes = realGeometryNodes(element).flatMap((candidate, index) => candidate.kind === "cardinal" ? [{ candidate, index }] : []);
-    if (!center || !cardinalNodes.length) continue;
-    const radius = element.radius;
-    const centerDistance = Math.hypot(point.x - center.point.x, point.y - center.point.y);
-    const distance = Math.abs(centerDistance - radius);
+    if ((element.type !== "circle" && element.type !== "arc") || !visible.has(element.layerId)) continue;
+    const nodes = realGeometryNodes(element);
+    const center = nodes.find((candidate) => candidate.kind === "center");
+    const rimNodes = nodes.flatMap((candidate, index) => candidate.kind === "cardinal" || candidate.kind === "endpoint" ? [{ candidate, index }] : []);
+    if (!center || !rimNodes.length) continue;
+    const distance = element.type === "circle"
+      ? Math.abs(Math.hypot(point.x - center.point.x, point.y - center.point.y) - element.radius)
+      : (() => { const curve = elementToCurves(element)[0]?.curve; if (!curve) return Number.POSITIVE_INFINITY; const nearest = pointAt(curve, closestParameter(curve, point)); return Math.hypot(point.x - nearest.x, point.y - nearest.y); })();
     if (distance * zoom > tolerancePx) continue;
-    const rim = cardinalNodes.reduce((closest, candidate) => {
+    const rim = rimNodes.reduce((closest, candidate) => {
       const candidateDistance = Math.hypot(candidate.candidate.point.x - point.x, candidate.candidate.point.y - point.y);
       return !closest || candidateDistance < closest.distance || candidateDistance === closest.distance && candidate.index < closest.index ? { ...candidate, distance: candidateDistance } : closest;
     }, undefined as ({ readonly candidate: RealGeometryNode; readonly index: number; readonly distance: number } | undefined));

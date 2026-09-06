@@ -4,6 +4,7 @@ import {
   type ElementId,
   type DimensionElement,
   type CircleConstraint,
+  type ArcElement,
   type DocumentConstraint,
       type SketchConstraint,
   type Layer,
@@ -69,6 +70,13 @@ const replaceTopology = (document: DocumentSnapshot, edit: TopologyEditResult): 
 };
 const removeConnectionsFor = (document: DocumentSnapshot, ids: ReadonlySet<ElementId>): DocumentSnapshot => ({ ...document, connections: (document.connections ?? []).filter((connection) => !ids.has(connection.first.elementId) && !ids.has(connection.second.elementId)) });
 const elementIndex = (document: DocumentSnapshot, id: ElementId): number => document.elements.findIndex((element) => element.id === id);
+
+/** Arc support is intentionally limited to translating its center.  Keep this
+ * structural guard local so editor-core remains compatible with documents
+ * produced by domain versions that include ArcElement. */
+const isArcElement = (element: Element): element is ArcElement => element.type === "arc";
+const translateArc = (element: ArcElement, delta: PointMm, id = element.id): ArcElement => ({ ...element, id, center: { x: element.center.x + delta.x, y: element.center.y + delta.y } });
+const normalizeArcAngle = (angle: number): number => ((angle % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2);
 
 export const createElement = (element: Element, connections: readonly ExplicitConnection[] = []): EditorCommand => ({
   name: `create:${element.type}`,
@@ -461,6 +469,7 @@ export const moveElement = (id: ElementId, delta: PointMm): EditorCommand => ({
     if (element.type === "spline") return replaceElements(document, document.elements.map((current) => current.id === id && current.type === "spline" ? { ...current, nodes: current.nodes.map((node) => ({ ...node, anchor: { x: node.anchor.x + delta.x, y: node.anchor.y + delta.y } })) } : current));
     if (element.type === "sketch") return replaceElements(document, document.elements.map((current) => current.id === id && current.type === "sketch" ? { ...current, nodes: current.nodes.map((node) => ({ ...node, point: { x: node.point.x + delta.x, y: node.point.y + delta.y } })) } : current));
     if (element.type === "circle") return replaceElements(document, document.elements.map((current) => current.id === id && current.type === "circle" ? { ...current, center: { x: current.center.x + delta.x, y: current.center.y + delta.y } } : current));
+    if (isArcElement(element)) return replaceElements(document, document.elements.map((current) => current.id === id && isArcElement(current) ? translateArc(current, delta) : current));
     return replaceElements(document, document.elements.map((current) => current.id === id && (current.type === "rectangle" || current.type === "ellipse") ? { ...current, position: { x: current.position.x + delta.x, y: current.position.y + delta.y } } : current));
   },
 });
@@ -483,6 +492,7 @@ export const moveElements = (ids: readonly ElementId[], delta: PointMm): EditorC
       if (element.type === "spline") return { ...element, nodes: element.nodes.map((node) => ({ ...node, anchor: { x: node.anchor.x + delta.x, y: node.anchor.y + delta.y } })) };
       if (element.type === "sketch") return { ...element, nodes: element.nodes.map((node) => ({ ...node, point: { x: node.point.x + delta.x, y: node.point.y + delta.y } })) };
       if (element.type === "circle") return { ...element, center: { x: element.center.x + delta.x, y: element.center.y + delta.y } };
+      if (isArcElement(element)) return translateArc(element, delta);
       if (element.type === "rectangle" || element.type === "ellipse") return { ...element, position: { x: element.position.x + delta.x, y: element.position.y + delta.y } };
       return element;
     }));
@@ -559,7 +569,7 @@ export const rotateElement = (id: ElementId, rotation: number): EditorCommand =>
   const current = document.elements.find((element) => element.id === id);
   if (!current) return { success: false, error: `Element not found: ${id}` };
    if (current.type === "glyph") return replaceElements(document, document.elements.map((element) => element.id === id && element.type === "glyph" ? rotateElements([element], elementCenter(element), rotation - element.rotation)[0]! : element));
-   if (current.type === "dimension" || current.type === "path" || current.type === "spline") return { success: false, error: "Element rotation is not supported" };
+   if (current.type === "arc" || current.type === "dimension" || current.type === "path" || current.type === "spline") return { success: false, error: "Element rotation is not supported" };
    if (current.type !== "contour") return updateElement(id, { rotation }).apply(document);
   const center = elementCenter(current);
   return replaceElements(document, document.elements.map((element) => element.id === id && element.type === "contour" ? contourWithPoints(element, element.contours.map((contour) => contour.points.map((point) => transformPoint({ x: point.x - center.x, y: point.y - center.y }, center, rotation - current.rotation)))) : element));
@@ -567,7 +577,7 @@ export const rotateElement = (id: ElementId, rotation: number): EditorCommand =>
 
 export type ShapeOperation = "weld" | "subtract" | "outline";
 const isClosedShape = (element: Element): boolean => {
-  if (element.type === "line" || element.type === "dimension" || element.type === "text") return false;
+  if (element.type === "line" || element.type === "arc" || element.type === "dimension" || element.type === "text") return false;
   if (element.type === "path" || element.type === "spline") return element.closed;
   return true;
 };
@@ -2225,6 +2235,7 @@ export const deleteContourNodes = (id: ElementId, addresses: readonly ContourNod
 const translateElement = (element: Element, delta: PointMm, id: ElementId): Element => {
   if (element.type === "dimension") return { ...element, id, offset: { x: element.offset.x + delta.x, y: element.offset.y + delta.y } };
   if (element.type === "circle") return { ...element, id, center: { x: element.center.x + delta.x, y: element.center.y + delta.y } };
+  if (isArcElement(element)) return translateArc(element, delta, id);
   if (element.type === "line") return { ...element, id, start: { x: element.start.x + delta.x, y: element.start.y + delta.y }, end: { x: element.end.x + delta.x, y: element.end.y + delta.y } };
   if (element.type === "contour") return { ...contourWithPoints(element, element.contours.map((contour) => contour.points.map((point) => ({ x: point.x + delta.x, y: point.y + delta.y })))), id, rotation: element.rotation };
   if (element.type === "path") return { ...translatePath(element, delta), id };
@@ -2278,6 +2289,10 @@ export const flipElements = (ids: readonly ElementId[], axis: FlipAxis): EditorC
       }
       if (element.type === "spline") return { ...element, nodes: element.nodes.map((node) => ({ ...node, anchor: horizontal ? { x: center.x * 2 - node.anchor.x, y: node.anchor.y } : { x: node.anchor.x, y: center.y * 2 - node.anchor.y }, ...(node.inHandle ? { inHandle: horizontal ? { dx: -node.inHandle.dx, dy: node.inHandle.dy } : { dx: node.inHandle.dx, dy: -node.inHandle.dy } } : {}), ...(node.outHandle ? { outHandle: horizontal ? { dx: -node.outHandle.dx, dy: node.outHandle.dy } : { dx: node.outHandle.dx, dy: -node.outHandle.dy } } : {}) })) };
       if (element.type === "sketch") return { ...element, nodes: element.nodes.map((node) => ({ ...node, point: horizontal ? { x: center.x * 2 - node.point.x, y: node.point.y } : { x: node.point.x, y: center.y * 2 - node.point.y } })) };
+      if (element.type === "arc") {
+        const reflectAngle = (angle: number): number => normalizeArcAngle(horizontal ? Math.PI - angle : -angle);
+        return { ...element, center: horizontal ? { x: center.x * 2 - element.center.x, y: element.center.y } : { x: element.center.x, y: center.y * 2 - element.center.y }, startAngle: reflectAngle(element.startAngle), endAngle: reflectAngle(element.endAngle), direction: element.direction === "clockwise" ? "counterclockwise" : "clockwise" };
+      }
       if (element.type === "text") return { ...element, position: horizontal ? { x: center.x * 2 - element.position.x - element.size.width, y: element.position.y } : { x: element.position.x, y: center.y * 2 - element.position.y - element.size.height }, rotation: -element.rotation };
       if (element.type === "circle") return { ...element, center: horizontal ? { x: center.x * 2 - element.center.x, y: element.center.y } : { x: element.center.x, y: center.y * 2 - element.center.y } };
       const moved = element.type === "line"

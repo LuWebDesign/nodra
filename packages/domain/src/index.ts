@@ -1,4 +1,4 @@
-export const CURRENT_SCHEMA_VERSION = 8 as const;
+export const CURRENT_SCHEMA_VERSION = 9 as const;
 
 export type SchemaVersion = typeof CURRENT_SCHEMA_VERSION;
 export type DocumentId = string & { readonly __brand: "DocumentId" };
@@ -62,6 +62,19 @@ export interface CircleElement {
   readonly style: VisualStyle;
   readonly operation?: OperationMetadata;
   readonly circleConstraints?: readonly CircleConstraint[];
+}
+export type ArcDirection = "clockwise" | "counterclockwise";
+export interface ArcElement {
+  readonly type: "arc";
+  readonly id: ElementId;
+  readonly layerId: LayerId;
+  readonly center: PointMm;
+  readonly radius: number;
+  readonly startAngle: number;
+  readonly endAngle: number;
+  readonly direction: ArcDirection;
+  readonly style: VisualStyle;
+  readonly operation?: OperationMetadata;
 }
 export interface EllipseElement {
   readonly type: "ellipse";
@@ -181,9 +194,9 @@ export interface TextElement { readonly type: "text"; readonly id: ElementId; re
 export interface GlyphContour { readonly nodes: readonly PathNode[]; readonly segments: readonly PathSegment[] }
 /** Editable outline for one laid-out font glyph; multiple contours preserve holes. */
 export interface GlyphElement { readonly type: "glyph"; readonly id: ElementId; readonly layerId: LayerId; readonly position: PointMm; readonly size: SizeMm; readonly glyph: string; readonly contours: readonly GlyphContour[]; readonly fillRule: "evenodd"; readonly rotation: number; readonly flipX?: boolean; readonly flipY?: boolean; readonly style: VisualStyle; readonly operation?: OperationMetadata }
-export type Element = RectangleElement | CircleElement | EllipseElement | LineElement | SketchElement | DimensionElement | ContourElement | PathElement | SplineElement | TextElement | GlyphElement;
+export type Element = RectangleElement | CircleElement | ArcElement | EllipseElement | LineElement | SketchElement | DimensionElement | ContourElement | PathElement | SplineElement | TextElement | GlyphElement;
 export type ConnectableNodeAddress =
-  | { readonly kind: "named"; readonly name: "nw" | "n" | "ne" | "e" | "se" | "s" | "sw" | "w" | "center" }
+  | { readonly kind: "named"; readonly name: "nw" | "n" | "ne" | "e" | "se" | "s" | "sw" | "w" | "center" | "start" | "end" }
   | { readonly kind: "line"; readonly name: "start" | "end" | "center" }
   | { readonly kind: "path" | "spline" | "sketch"; readonly nodeId: string; readonly handle?: "in" | "out" };
 export interface ConnectableNodeReference { readonly elementId: ElementId; readonly node: ConnectableNodeAddress }

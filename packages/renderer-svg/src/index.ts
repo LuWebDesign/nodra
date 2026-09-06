@@ -43,12 +43,25 @@ const DEFAULT_FILL_OPACITY = 0.22;
 
 function visualAttributes(element: Element): string {
   if (element.type === "dimension") return `stroke="${escapeAttribute(element.style.stroke)}" stroke-width="${number(element.style.strokeWidth)}" fill="none"`;
-  const closed = element.type === "path" || element.type === "spline" ? element.closed : element.type !== "line" && element.type !== "sketch";
+  const closed = element.type === "path" || element.type === "spline" ? element.closed : element.type !== "arc" && element.type !== "line" && element.type !== "sketch";
   const fill = closed ? escapeAttribute(element.style.fill ?? element.style.stroke) : "none";
   return `stroke="${escapeAttribute(element.style.stroke)}" stroke-width="${number(element.style.strokeWidth)}" fill="${fill}"${closed ? ` fill-opacity="${DEFAULT_FILL_OPACITY}"` : ""}`;
 }
 
+function renderArc(element: Extract<Element, { type: "arc" }>, viewport: Viewport): string {
+  const screen = (point: { x: number; y: number }) => mmToScreen(point, viewport);
+  const directedSweep = element.direction === "clockwise"
+    ? (element.endAngle - element.startAngle + 2 * Math.PI) % (2 * Math.PI)
+    : (element.startAngle - element.endAngle + 2 * Math.PI) % (2 * Math.PI);
+  const start = screen({ x: element.center.x + element.radius * Math.cos(element.startAngle), y: element.center.y + element.radius * Math.sin(element.startAngle) });
+  const end = screen({ x: element.center.x + element.radius * Math.cos(element.endAngle), y: element.center.y + element.radius * Math.sin(element.endAngle) });
+  const radius = element.radius * viewport.zoom;
+  const d = `M${number(start.x)} ${number(start.y)} A ${number(radius)} ${number(radius)} 0 ${directedSweep > Math.PI ? 1 : 0} ${element.direction === "clockwise" ? 1 : 0} ${number(end.x)} ${number(end.y)}`;
+  return `<path data-element-id="${escapeAttribute(element.id)}" d="${d}" ${visualAttributes(element)} />`;
+}
+
 function renderElement(element: Element, viewport: Viewport, document: DocumentSnapshot, sketchConstraintStates: ReadonlyMap<string, ConstraintState>, mode: RenderMode): string {
+  if (element.type === "arc") return renderArc(element, viewport);
   const screen = (point: { x: number; y: number }) => mmToScreen(point, viewport);
   if (element.type === "dimension") {
     const geometry = dimensionGeometry(element, []);
@@ -191,7 +204,7 @@ export function renderSvg(document: unknown, viewport: unknown, options: unknown
   const checked = validateDocument(document);
   if (!checked.success) {
     const candidate = typeof document === "object" && document !== null ? document as { schemaVersion?: unknown; elements?: unknown } : undefined;
-         const unsupported = !SUPPORTED_SCHEMA_VERSIONS.has(candidate?.schemaVersion as number) || (Array.isArray(candidate?.elements) && candidate.elements.some((element) => typeof element === "object" && element !== null && !["rectangle", "circle", "ellipse", "line", "sketch", "dimension", "contour", "path", "spline", "text", "glyph"].includes((element as { type?: unknown }).type as string)));
+         const unsupported = !SUPPORTED_SCHEMA_VERSIONS.has(candidate?.schemaVersion as number) || (Array.isArray(candidate?.elements) && candidate.elements.some((element) => typeof element === "object" && element !== null && !["rectangle", "circle", "ellipse", "line", "sketch", "dimension", "contour", "path", "spline", "text", "glyph", "arc"].includes((element as { type?: unknown }).type as string)));
     return { success: false, reason: unsupported ? "unsupported" : "invalid", error: checked.error.slice(0, 512), issues: checked.issues.slice(0, MAX_ISSUES).map((issue) => `${issue.path.join(".") || "document"}: ${issue.message}`) };
   }
   const checkedViewport = viewportResult(viewport);

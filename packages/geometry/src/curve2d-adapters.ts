@@ -1,8 +1,9 @@
-import type { CircleElement, Element, ElementId, EllipseElement, LineElement, PathElement, PointMm, SketchElement, SplineElement } from "@nodra/domain";
-import type { CircleCurve2D, CubicBezierCurve2D, Curve2D, LineCurve2D } from "./curve2d.js";
+import type { ArcElement, CircleElement, Element, ElementId, EllipseElement, LineElement, PathElement, PointMm, SketchElement, SplineElement } from "@nodra/domain";
+import type { ArcCurve2D, CircleCurve2D, CubicBezierCurve2D, Curve2D, LineCurve2D } from "./curve2d.js";
 
 export type Curve2DSource =
   | { readonly kind: "line-element"; readonly elementId: ElementId }
+  | { readonly kind: "arc-element"; readonly elementId: ElementId }
   | { readonly kind: "sketch-edge"; readonly elementId: ElementId; readonly edgeId: string; readonly startNodeId: string; readonly endNodeId: string }
   | { readonly kind: "path-segment"; readonly elementId: ElementId; readonly segmentId: string; readonly startNodeId: string; readonly endNodeId: string }
   | { readonly kind: "spline-span"; readonly elementId: ElementId; readonly startNodeId: string; readonly endNodeId: string }
@@ -114,16 +115,26 @@ export function circleElementToCurve(element: CircleElement): SourcedCurve2D<Cir
   return { curve: { type: "circle", center: checkedPoint(element.center), radius: element.radius }, source: { kind: "circle-element", elementId: element.id }, sourceIndex: 0 };
 }
 
+/** Adapts a canonical partial ArcElement without flattening. */
+export function arcElementToCurve(element: ArcElement): SourcedCurve2D<ArcCurve2D> {
+  const values = [element.center.x, element.center.y, element.radius, element.startAngle, element.endAngle];
+  if (!values.every(Number.isFinite) || element.radius <= 0) throw new Error("Arc geometry must be finite and positive");
+  if (element.startAngle < 0 || element.startAngle >= Math.PI * 2 || element.endAngle < 0 || element.endAngle >= Math.PI * 2 || element.startAngle === element.endAngle) throw new Error("Arc angles must define a canonical partial sweep");
+  if (element.direction !== "clockwise" && element.direction !== "counterclockwise") throw new Error("Arc direction must be clockwise or counterclockwise");
+  return { curve: { type: "arc", center: checkedPoint(element.center), radius: element.radius, startAngle: element.startAngle, endAngle: element.endAngle, direction: element.direction }, source: { kind: "arc-element", elementId: element.id }, sourceIndex: 0 };
+}
+
 export function ellipseElementToCurve(element: EllipseElement): SourcedCurve2D<CircleCurve2D> | undefined {
   const values = [element.position.x, element.position.y, element.size.width, element.size.height, element.rotation];
   if (!values.every(Number.isFinite) || element.size.width <= 0 || element.size.height <= 0) throw new Error("Ellipse geometry must be finite and positive");
-  // EllipseElement is the legacy oval primitive in schema 8. Equal dimensions
+  // EllipseElement is the legacy oval primitive in schema 9. Equal dimensions
   // are migrated to CircleElement at the schema boundary, not inferred here.
   return undefined;
 }
 
 /** Returns supported source curves in persistent source order; unsupported elements return none. */
 export function elementToCurves(element: Element): readonly SourcedCurve2D[] {
+  if (element.type === "arc") return [arcElementToCurve(element)];
   if (element.type === "line") return [lineElementToCurve(element)];
   if (element.type === "circle") return [circleElementToCurve(element)];
   if (element.type === "ellipse") { const sourced = ellipseElementToCurve(element); return sourced ? [sourced] : []; }
