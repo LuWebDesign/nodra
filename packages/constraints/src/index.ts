@@ -1,12 +1,4 @@
-import type {
-  CircleConstraintKind,
-  DocumentSnapshot,
-  Element,
-  ElementId,
-  PointMm,
-  SketchConstraintKind,
-  SketchConstraint,
-} from "@nodra/domain";
+import { isCircleElement, type CircleConstraintKind, type DocumentSnapshot, type Element, type ElementId, type PointMm, type SketchConstraintKind, type SketchConstraint } from "@nodra/domain";
 import { solveCircleConstraints, solveSketchConstraints } from "@nodra/geometry";
 
 export type ConstraintState = "underdefined" | "fully-defined" | "overdefined" | "conflict" | "invalid";
@@ -219,9 +211,9 @@ const sketchAdapter: ParametricAdapter = {
 
 const circleAdapter: ParametricAdapter = {
   capabilities: { entityKind: "circle", constraintKinds: circleConstraintKinds },
-  supports: (element) => element.type === "ellipse" && element.size.width === element.size.height,
+  supports: isCircleElement,
   state: (element) => {
-    if (element.type !== "ellipse" || element.size.width !== element.size.height) return { state: "invalid", conflicts: ["adapter-type-mismatch"] };
+    if (!isCircleElement(element)) return { state: "invalid", conflicts: ["adapter-type-mismatch"] };
     const solved = solveCircleConstraints(element);
     return { state: solved.status === "defined" ? "fully-defined" : solved.status, conflicts: solved.conflicts };
   },

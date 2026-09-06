@@ -192,7 +192,7 @@ describe("drawing tool routing", () => {
     expect(canActivateRotation("rectangle", [selected], selected)).toBe(false);
   });
   it("recognizes drawing tools without consulting object hit testing", () => {
-    expect(["rectangle", "ellipse", "line"].every(isDrawingTool)).toBe(true);
+    expect(["rectangle", "circle", "line"].every(isDrawingTool)).toBe(true);
     expect(isDrawingTool("select")).toBe(false);
     expect(isDrawingTool("dimension")).toBe(false);
     expect(isDrawingTool("pan")).toBe(false);
@@ -200,7 +200,7 @@ describe("drawing tool routing", () => {
 
   it("selects an existing object on click but keeps drawing available for a drag", () => {
     expect(pointerDownIntent("rectangle", elementId("existing"))).toBe("select");
-    expect(pointerDownIntent("ellipse", elementId("existing"))).toBe("select");
+    expect(pointerDownIntent("circle", elementId("existing"))).toBe("select");
     expect(pointerDownIntent("line", elementId("existing"))).toBe("select");
     expect(pointerDownIntent("rectangle", undefined)).toBe("draw");
   });
@@ -377,7 +377,7 @@ describe("drag geometry", () => {
     const rectangle = { type: "rectangle" as const, id: elementId("active-rectangle"), layerId: layer.id, position: { x: 10, y: 10 }, size: { width: 20, height: 10 }, cornerRadius: 0, rotation: 0, style: { stroke: "#000", strokeWidth: 1 } };
     const checked = { ...document, elements: [rectangle] };
 
-    for (const activeTool of ["rectangle", "ellipse", "line"] as const) {
+    for (const activeTool of ["rectangle", "circle", "line"] as const) {
       expect(pickElement(checked, { x: 15, y: 15 }, 3), activeTool).toBe(rectangle.id);
     }
   });
@@ -420,14 +420,14 @@ describe("drag geometry", () => {
   it("uses visible layer and document order to break coincident node ties", () => {
     const lower = { id: layerId("coincident-lower"), name: "Lower", visible: true, order: 0 };
     const higher = { id: layerId("coincident-higher"), name: "Higher", visible: true, order: 1 };
-    const first = { type: "ellipse" as const, id: elementId("coincident-first"), layerId: lower.id, position: { x: 0, y: 0 }, size: { width: 20, height: 20 }, rotation: 0, style: { stroke: "#000", strokeWidth: 1 } };
+    const first = { type: "circle" as const, id: elementId("coincident-first"), layerId: lower.id, center: { x: 10, y: 10 }, radius: 10, style: { stroke: "#000", strokeWidth: 1 } };
     const second = { ...first, id: elementId("coincident-second"), layerId: higher.id };
     expect(pickNode({ ...createDocument("coincident-nodes", [lower, higher]), elements: [first, second] }, { x: 10, y: 0 }, 1)?.elementId).toBe(second.id);
   });
 
   it("starts a circular dimension from an arbitrary visible circle contour", () => {
     const layer = { id: layerId("circle-contour-dimension"), name: "Circles", visible: true, order: 0 };
-    const circle = { type: "ellipse" as const, id: elementId("circle-contour-target"), layerId: layer.id, position: { x: 10, y: 10 }, size: { width: 20, height: 20 }, rotation: 0, style: { stroke: "#000", strokeWidth: 1 } };
+    const circle = { type: "circle" as const, id: elementId("circle-contour-target"), layerId: layer.id, center: { x: 20, y: 20 }, radius: 10, style: { stroke: "#000", strokeWidth: 1 } };
     const center = { x: 20, y: 20 };
     const point = { x: center.x + Math.SQRT1_2 * 10, y: center.y + Math.SQRT1_2 * 10 };
     const target = pickDimensionTarget({ ...createDocument("circle-contour-dimension", [layer]), elements: [circle] }, point, 1, 0.01);
@@ -471,7 +471,7 @@ describe("drag geometry", () => {
   it("previews circular intervals as exact arcs rather than hover polylines", () => {
     const layer = { id: layerId("cut-circle-preview"), name: "Preview", visible: true, order: 0 };
     const document = createDocument("cut-circle-preview", [layer]); const style = { stroke: "#000", strokeWidth: 1 };
-    const target = { type: "ellipse" as const, id: elementId("cut-circle-target"), layerId: layer.id, position: { x: 0, y: 0 }, size: { width: 10, height: 10 }, rotation: 0, style };
+    const target = { type: "circle" as const, id: elementId("cut-circle-target"), layerId: layer.id, center: { x: 5, y: 5 }, radius: 5, style };
     const cutter = { type: "line" as const, id: elementId("cut-circle-line"), layerId: layer.id, start: { x: -5, y: 5 }, end: { x: 15, y: 5 }, rotation: 0, style };
     const preview = pickCutIntervalPreview({ ...document, elements: [target, cutter] }, { x: 5, y: 0 }, 10);
     expect(preview?.hit.elementId).toBe(target.id);
@@ -495,7 +495,7 @@ describe("drag geometry", () => {
     const hidden = { id: layerId("cut-filter-hidden"), name: "Hidden", visible: false, order: 1 };
     const document = createDocument("cut-filter-preview", [visible, hidden]); const style = { stroke: "#000", strokeWidth: 1 };
     const target = { type: "line" as const, id: elementId("cut-filter-target"), layerId: visible.id, start: { x: 0, y: 5 }, end: { x: 10, y: 5 }, rotation: 0, style };
-    const tangent = { type: "ellipse" as const, id: elementId("cut-filter-tangent"), layerId: visible.id, position: { x: 0, y: -5 }, size: { width: 10, height: 10 }, rotation: 0, style };
+    const tangent = { type: "circle" as const, id: elementId("cut-filter-tangent"), layerId: visible.id, center: { x: 5, y: 0 }, radius: 5, style };
     const crossing = { ...target, id: elementId("cut-filter-crossing"), start: { x: 8, y: 0 }, end: { x: 8, y: 10 } };
     const hiddenCrossing = { ...crossing, id: elementId("cut-filter-hidden-crossing"), layerId: hidden.id, start: { x: 3, y: 0 }, end: { x: 3, y: 10 } };
     const preview = pickCutIntervalPreview({ ...document, elements: [target, tangent, crossing, hiddenCrossing] }, { x: 6, y: 5 }, 10);
@@ -513,10 +513,10 @@ describe("drag geometry", () => {
     expect(pickCuttableSegment({ ...document, elements: [contour] }, { x: 5, y: 0.5 }, 1)).toMatchObject({ elementId: contour.id, ringIndex: 0, segmentIndex: 0 });
   });
 
-  it("returns full ellipse quadrant points for cut hover feedback", () => {
-    const layer = { id: layerId("cut-ellipse-hover"), name: "Cut ellipse hover", visible: true, order: 0 };
-    const document = createDocument("cut-ellipse-hover", [layer]);
-    const circle = { type: "ellipse" as const, id: elementId("cut-hover-circle"), layerId: layer.id, position: { x: -5, y: -5 }, size: { width: 10, height: 10 }, rotation: 0, style: { stroke: "#000", strokeWidth: 1 } };
+  it("returns full circle quadrant points for cut hover feedback", () => {
+    const layer = { id: layerId("cut-circle-hover"), name: "Cut circle hover", visible: true, order: 0 };
+    const document = createDocument("cut-circle-hover", [layer]);
+    const circle = { type: "circle" as const, id: elementId("cut-hover-circle"), layerId: layer.id, center: { x: 0, y: 0 }, radius: 5, style: { stroke: "#000", strokeWidth: 1 } };
     const hit = pickCuttableSegment({ ...document, elements: [circle] }, { x: 3.5, y: 3.5 }, 1);
     expect(hit).toMatchObject({ elementId: circle.id, segmentIndex: 0 });
     expect(hit?.points?.length).toBeGreaterThan(2);

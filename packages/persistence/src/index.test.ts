@@ -72,11 +72,12 @@ describe("DexieProjectRepository", () => {
     const base = document();
     await db.saveProject(metadata, base);
     const legacyPath = { type: "path", id: "legacy-path", layerId: "layer-1", nodes: [{ id: "a", anchor: { x: 0, y: 0 }, join: "corner" }, { id: "b", anchor: { x: 10, y: 0 }, join: "corner" }], segments: [{ type: "line", startNodeId: "a", endNodeId: "b" }], closed: false, style: { stroke: "#000", strokeWidth: 1 } };
+    const legacyCircle = { type: "ellipse", id: "legacy-circle", layerId: "layer-1", position: { x: 10, y: 20 }, size: { width: 20, height: 20 }, rotation: 0, style: { stroke: "#000", strokeWidth: 1 } };
     const rawDb = (db as unknown as { db: { revisions: { put: (value: unknown) => Promise<void> } } }).db;
-    await rawDb.revisions.put({ key: `${metadata.id}:2`, recordVersion: 1, projectId: metadata.id, revision: 2, savedAt: 2, document: { ...base, schemaVersion: 6, revision: 2, elements: [legacyPath] } });
+    await rawDb.revisions.put({ key: `${metadata.id}:2`, recordVersion: 1, projectId: metadata.id, revision: 2, savedAt: 2, document: { ...base, schemaVersion: 6, revision: 2, elements: [legacyPath, legacyCircle] } });
 
     const recovered = await db.getProject(metadata.id);
-    expect(recovered.ok && recovered.revision.document).toMatchObject({ schemaVersion: CURRENT_SCHEMA_VERSION, elements: [{ type: "path", segments: [{ id: "legacy-path:segment:0" }] }] });
+    expect(recovered.ok && recovered.revision.document).toMatchObject({ schemaVersion: CURRENT_SCHEMA_VERSION, elements: [{ type: "path", segments: [{ id: "legacy-path:segment:0" }] }, { type: "circle", center: { x: 20, y: 30 }, radius: 10 }] });
   });
 
   it("deletes project metadata and all revisions", async () => {

@@ -2,7 +2,7 @@ import polygonClipping, { type MultiPolygon } from "polygon-clipping";
 import { hasBounds } from "@nodra/domain";
 import { lineElementToCurve } from "./curve2d-adapters.js";
 import { intersectCurves } from "./intersection-engine.js";
-    import type { ConnectableNodeAddress, ContourElement, DimensionElement, Element, ElementId, EllipseElement, GlyphElement, HandleOffset, LineElement, PathCubicSegment, PathElement, PointMm, RectangleElement, SizeMm, SketchConstraint, SketchElement, SketchPointReference, SplineElement, SplineNode } from "@nodra/domain";
+    import type { CircleElement, ConnectableNodeAddress, ContourElement, DimensionElement, Element, ElementId, EllipseElement, GlyphElement, HandleOffset, LineElement, PathCubicSegment, PathElement, PointMm, RectangleElement, SizeMm, SketchConstraint, SketchElement, SketchPointReference, SplineElement, SplineNode } from "@nodra/domain";
 
 export interface Bounds { readonly x: number; readonly y: number; readonly width: number; readonly height: number }
 export interface Viewport { readonly zoom: number; readonly panMm: PointMm }
@@ -35,6 +35,11 @@ export function cuttableSegments(element: Element): readonly CuttableSegment[] {
           });
         });
       }
+  if (element.type === "circle") {
+    const points = Array.from({ length: ELLIPSE_APPROXIMATION_SEGMENTS }, (_, index) => { const angle = index * Math.PI * 2 / ELLIPSE_APPROXIMATION_SEGMENTS; return { x: element.center.x + element.radius * Math.cos(angle), y: element.center.y + element.radius * Math.sin(angle) }; });
+    const quadrantSize = ELLIPSE_APPROXIMATION_SEGMENTS / 4;
+    return points.map((start, index) => ({ elementId: element.id, segmentIndex: Math.floor(index / quadrantSize), start, end: points[(index + 1) % points.length]! }));
+  }
   if (element.type === "ellipse") {
     const points = primitivePolygon(element).slice(0, -1).map(([x, y]) => ({ x, y }));
     const quadrantSize = ELLIPSE_APPROXIMATION_SEGMENTS / 4;
@@ -288,12 +293,12 @@ export function solveSketchConstraints(sketch: SketchElement): SketchConstraintS
 }
 
 export type CircleConstraintStatus = "underdefined" | "defined" | "conflict";
-export interface CircleConstraintSolveResult { readonly circle: EllipseElement; readonly status: CircleConstraintStatus; readonly conflicts: readonly string[] }
+export interface CircleConstraintSolveResult { readonly circle: CircleElement; readonly status: CircleConstraintStatus; readonly conflicts: readonly string[] }
 
-/** Solves the independent cx, cy, and r degrees of freedom of a circular ellipse. */
-export function solveCircleConstraints(circle: EllipseElement): CircleConstraintSolveResult {
+/** Solves the independent cx, cy, and radius degrees of freedom of a native circle. */
+export function solveCircleConstraints(circle: CircleElement): CircleConstraintSolveResult {
   const constraints = [...(circle.circleConstraints ?? [])].sort((a, b) => a.id.localeCompare(b.id));
-  const center = elementCenter(circle); const values = { x: center.x, y: center.y, radius: circle.size.width / 2 };
+  const values = { x: circle.center.x, y: circle.center.y, radius: circle.radius };
   const conflicts: string[] = []; const seen = new Map<string, string>();
   for (const constraint of constraints) {
     const axis = constraint.kind === "center-horizontal" ? "x" : constraint.kind === "center-vertical" ? "y" : "radius";
@@ -303,7 +308,7 @@ export function solveCircleConstraints(circle: EllipseElement): CircleConstraint
     if (previous) { conflicts.push(constraint.id); continue; }
     seen.set(axis, constraint.id); values[axis] = value;
   }
-  const radius = values.radius; const solved: EllipseElement = { ...circle, position: { x: values.x - radius, y: values.y - radius }, size: { width: radius * 2, height: radius * 2 } };
+  const radius = values.radius; const solved: CircleElement = { ...circle, center: { x: values.x, y: values.y }, radius };
   return { circle: solved, status: conflicts.length ? "conflict" : seen.size === 3 ? "defined" : "underdefined", conflicts };
 }
 
@@ -402,8 +407,8 @@ export function dimensionGeometry(element: DimensionElement, elements: readonly 
   const end = (endReference.nodeId ? endNodes.find((node) => node.nodeId === endReference.nodeId) : endNodes[endReference.nodeIndex])?.point;
   if (!start || !end) return undefined;
   const midpoint = pointMidpoint(start, end);
-  if ((element.kind === "radius" || element.kind === "diameter") && startElement.type === "ellipse" && endElement.id === startElement.id) {
-    const centerNode = startElement.type === "ellipse" ? realGeometryNodes(startElement).find((node) => node.kind === "center") : undefined;
+  if ((element.kind === "radius" || element.kind === "diameter") && startElement.type === "circle" && endElement.id === startElement.id) {
+    const centerNode = realGeometryNodes(startElement).find((node) => node.kind === "center");
     const center = centerNode?.point;
     const rim = Math.hypot(start.x - (center?.x ?? start.x), start.y - (center?.y ?? start.y)) > Math.hypot(end.x - (center?.x ?? end.x), end.y - (center?.y ?? end.y)) ? start : end;
     if (!center || Math.hypot(rim.x - center.x, rim.y - center.y) === 0) return undefined;
@@ -631,6 +636,7 @@ export function elementCenter(element: Element): PointMm {
     : element.type === "spline" ? groupCenter(splineBounds(element))
     : element.type === "sketch" ? groupCenter(boundsOf(element))
     : element.type === "glyph" ? groupCenter(glyphBounds(element))
+    : element.type === "circle" ? element.center
     : hasBounds(element) ? { x: element.position.x + element.size.width * (element.type === "text" ? element.scaleX ?? 1 : 1) / 2, y: element.position.y + element.size.height * (element.type === "text" ? element.scaleY ?? 1 : 1) / 2 } : { x: 0, y: 0 };
 }
 
@@ -713,6 +719,7 @@ const pointInRing = (point: PointMm, ring: readonly [number, number][]): boolean
   return inside;
 };
 
+function primitiveCirclePolygon(element: CircleElement): [number, number][] { return Array.from({ length: ELLIPSE_APPROXIMATION_SEGMENTS + 1 }, (_, index) => { const angle = index * TAU / ELLIPSE_APPROXIMATION_SEGMENTS; return [element.center.x + element.radius * Math.cos(angle), element.center.y + element.radius * Math.sin(angle)]; }); }
 function primitivePolygon(element: RectangleElement | EllipseElement): [number, number][] {
   const center = elementCenter(element);
   const flipX = element.flipX ? -1 : 1; const flipY = element.flipY ? -1 : 1;
@@ -747,6 +754,7 @@ export function closedElementToPolygon(element: Element): MultiPolygon {
   if (element.type === "line" || element.type === "dimension" || element.type === "text") throw new Error("Shape operations require closed objects");
   if (element.type === "sketch") { const contours = sketchClosedContours(element); if (!contours.length) throw new Error("Shape operations require closed objects"); return [contours.map((contour) => contour.map((point) => [point.x, point.y] as [number, number]))]; }
   if (element.type === "path") { if (!element.closed) throw new Error("Shape operations require closed objects"); return [[flattenPath(element, 0.01).map((point) => [point.x, point.y] as [number, number])]]; }
+  if (element.type === "circle") return [[primitiveCirclePolygon(element)]];
   if (element.type === "spline") { if (!element.closed) throw new Error("Shape operations require closed objects"); return [[splinePoints(element, 0.01).map((point) => [point.x, point.y] as [number, number])]]; }
   if (element.type === "glyph") return [element.contours.map((contour) => flattenPath(glyphPath(element, contour), 0.01).map((point) => [point.x, point.y] as [number, number]))];
   if (element.type === "contour") return [element.contours.map((contour) => contour.points.map((point) => [point.x, point.y] as [number, number]))];
@@ -801,6 +809,7 @@ export function rotationHandlePoints(element: Element, offsetMm: number): readon
     const bounds = glyphBounds(element);
     return rotationHandlePoints({ type: "rectangle", id: element.id, layerId: element.layerId, position: { x: bounds.x, y: bounds.y }, size: { width: Math.max(bounds.width, 1), height: Math.max(bounds.height, 1) }, cornerRadius: 0, rotation: 0, style: element.style }, offsetMm);
   }
+  if (element.type === "circle") return [];
   return rotatedCorners(element).map((corner) => {
     const distance = Math.hypot(corner.x - center.x, corner.y - center.y);
     if (distance === 0) return corner;
@@ -859,6 +868,10 @@ export function realGeometryNodes(element: Element): readonly RealGeometryNode[]
   if (element.type === "sketch") return element.nodes.map((node) => ({ kind: "anchor" as const, nodeId: node.id, point: node.point }));
   if (element.type === "glyph") return glyphGeometryNodes(element);
   if (element.type === "spline") return element.nodes.flatMap((node) => [{ kind: "anchor" as const, nodeId: node.id, point: node.anchor }, ...(node.inHandle ? [{ kind: "control" as const, nodeId: node.id, point: resolveHandle(node.anchor, node.inHandle), handle: "control2" as const }] : []), ...(node.outHandle ? [{ kind: "control" as const, nodeId: node.id, point: resolveHandle(node.anchor, node.outHandle), handle: "control1" as const }] : [])]);
+  if (element.type === "circle") {
+    const { center, radius } = element;
+    return [{ kind: "center", nodeId: "center", point: center }, { kind: "cardinal", nodeId: "n", point: { x: center.x, y: center.y - radius } }, { kind: "cardinal", nodeId: "e", point: { x: center.x + radius, y: center.y } }, { kind: "cardinal", nodeId: "s", point: { x: center.x, y: center.y + radius } }, { kind: "cardinal", nodeId: "w", point: { x: center.x - radius, y: center.y } }];
+  }
   if (!hasBounds(element)) return [];
       const half = { x: element.size.width / 2, y: element.size.height / 2 };
   const center = { x: element.position.x + half.x, y: element.position.y + half.y };
@@ -874,7 +887,8 @@ export function realGeometryNodes(element: Element): readonly RealGeometryNode[]
   ];
 }
 
-export function rotatedResizeHandles(element: RectangleElement | EllipseElement): readonly [PointMm, PointMm, PointMm, PointMm, PointMm, PointMm, PointMm, PointMm] {
+export function rotatedResizeHandles(element: RectangleElement | EllipseElement | CircleElement): readonly [PointMm, PointMm, PointMm, PointMm, PointMm, PointMm, PointMm, PointMm] {
+  if (element.type === "circle") return rotatedResizeHandles({ type: "ellipse", id: element.id, layerId: element.layerId, position: { x: element.center.x - element.radius, y: element.center.y - element.radius }, size: { width: element.radius * 2, height: element.radius * 2 }, rotation: 0, style: element.style });
   const half = { x: element.size.width / 2, y: element.size.height / 2 };
   const center = { x: element.position.x + half.x, y: element.position.y + half.y };
   return [
@@ -891,11 +905,27 @@ export function rotatedResizeHandles(element: RectangleElement | EllipseElement)
 
 const corners = rotatedCorners;
 
-export function resizeCorner(element: RectangleElement | EllipseElement, corner: ResizeCorner, pointer: PointMm, minimumSize = 1): ResizeGeometry {
+export function resizeCorner(element: RectangleElement | EllipseElement | CircleElement, corner: ResizeCorner, pointer: PointMm, minimumSize = 1): ResizeGeometry {
   return resizeHandle(element, corner, pointer, minimumSize);
 }
 
-export function resizeHandle(element: RectangleElement | EllipseElement, handle: ResizeHandle, pointer: PointMm, minimumSize = 1): ResizeGeometry {
+export function resizeHandle(element: RectangleElement | EllipseElement | CircleElement, handle: ResizeHandle, pointer: PointMm, minimumSize = 1): ResizeGeometry {
+  if (element.type === "circle") {
+    assertPositive(minimumSize, "minimumSize"); assertFinite(pointer.x, "pointer.x"); assertFinite(pointer.y, "pointer.y");
+    const { center, radius } = element;
+    if (handle === "e" || handle === "w") {
+      const anchorX = center.x + (handle === "e" ? -radius : radius); const diameter = Math.max(minimumSize, Math.abs(pointer.x - anchorX));
+      return { position: { x: pointer.x >= anchorX ? anchorX : anchorX - diameter, y: center.y - diameter / 2 }, size: { width: diameter, height: diameter } };
+    }
+    if (handle === "n" || handle === "s") {
+      const anchorY = center.y + (handle === "s" ? -radius : radius); const diameter = Math.max(minimumSize, Math.abs(pointer.y - anchorY));
+      return { position: { x: center.x - diameter / 2, y: pointer.y >= anchorY ? anchorY : anchorY - diameter }, size: { width: diameter, height: diameter } };
+    }
+    const east = handle === "ne" || handle === "se"; const south = handle === "se" || handle === "sw";
+    const anchor = { x: center.x + (east ? -radius : radius), y: center.y + (south ? -radius : radius) };
+    const diameter = Math.max(minimumSize, Math.abs(pointer.x - anchor.x), Math.abs(pointer.y - anchor.y));
+    return { position: { x: pointer.x >= anchor.x ? anchor.x : anchor.x - diameter, y: pointer.y >= anchor.y ? anchor.y : anchor.y - diameter }, size: { width: diameter, height: diameter } };
+  }
   assertPositive(minimumSize, "minimumSize");
   assertFinite(pointer.x, "pointer.x"); assertFinite(pointer.y, "pointer.y");
   const half = { x: element.size.width / 2, y: element.size.height / 2 };
@@ -945,6 +975,7 @@ export function boundsOf(element: Element): Bounds {
   if (element.type === "sketch") { const points = element.nodes.map((node) => node.point); const xs = points.map((point) => point.x); const ys = points.map((point) => point.y); return { x: Math.min(...xs), y: Math.min(...ys), width: Math.max(...xs) - Math.min(...xs), height: Math.max(...ys) - Math.min(...ys) }; }
   if (element.type === "spline") return splineBounds(element);
   if (element.type === "glyph") return glyphBounds(element);
+  if (element.type === "circle") return { x: element.center.x - element.radius, y: element.center.y - element.radius, width: element.radius * 2, height: element.radius * 2 };
   if (element.type === "text") return { x: element.position.x, y: element.position.y, width: element.size.width * (element.scaleX ?? 1), height: element.size.height * (element.scaleY ?? 1) };
   const points = corners(element); const xs = points.map((point) => point.x); const ys = points.map((point) => point.y);
   return { x: Math.min(...xs), y: Math.min(...ys), width: Math.max(...xs) - Math.min(...xs), height: Math.max(...ys) - Math.min(...ys) };
@@ -993,7 +1024,9 @@ export function resizeGroup(elements: readonly Element[], handle: ResizeHandle, 
        ? { ...e, nodes: e.nodes.map((node) => ({ ...node, anchor: { x: x + (node.anchor.x - bounds.x) * sx, y: y + (node.anchor.y - bounds.y) * sy }, ...(node.inHandle ? { inHandle: { dx: node.inHandle.dx * sx, dy: node.inHandle.dy * sy } } : {}), ...(node.outHandle ? { outHandle: { dx: node.outHandle.dx * sx, dy: node.outHandle.dy * sy } } : {}) })) }
       : e.type === "text"
         ? { ...e, position: { x: handle.includes("w") ? x : e.position.x, y: handle.includes("n") ? y : e.position.y }, scaleX: (e.scaleX ?? 1) * Math.abs(sx), scaleY: (e.scaleY ?? 1) * Math.abs(sy) }
-     : { ...e, position: { x: x + (elementCenter(e).x - bounds.x) * sx - e.size.width * sx / 2, y: y + (elementCenter(e).y - bounds.y) * sy - e.size.height * sy / 2 }, size: { width: e.size.width * sx, height: e.size.height * sy } });
+     : e.type === "circle"
+       ? { ...e, center: { x: x + (e.center.x - bounds.x) * sx, y: y + (e.center.y - bounds.y) * sy }, radius: e.radius * Math.max(Math.abs(sx), Math.abs(sy)) }
+       : { ...e, position: { x: x + (elementCenter(e).x - bounds.x) * sx - e.size.width * sx / 2, y: y + (elementCenter(e).y - bounds.y) * sy - e.size.height * sy / 2 }, size: { width: e.size.width * sx, height: e.size.height * sy } });
 }
 export function rotateElements(elements: readonly Element[], center: PointMm, delta: number): readonly Element[] {
   const rotatePoint = (point: PointMm): PointMm => transformPoint({ x: point.x - center.x, y: point.y - center.y }, center, delta);
@@ -1018,6 +1051,8 @@ export function rotateElements(elements: readonly Element[], center: PointMm, de
           ? { ...element, position: { x: rotatePoint(elementCenter(element)).x - element.size.width / 2, y: rotatePoint(elementCenter(element)).y - element.size.height / 2 }, contours: element.contours.map((contour) => ({ ...contour, nodes: contour.nodes.map((node) => ({ ...node, anchor: rotatePoint(node.anchor) })), segments: contour.segments.map((segment) => segment.type === "cubicBezier" ? { ...segment, control1: rotatePoint(segment.control1), control2: rotatePoint(segment.control2) } : segment) })) }
         : element.type === "spline"
           ? { ...element, nodes: element.nodes.map(rotateSplineNode) }
+          : element.type === "circle"
+            ? { ...element, center: rotatePoint(element.center) }
           : (() => {
             const c = rotatePoint(elementCenter(element));
             return { ...element, position: { x: c.x - element.size.width / 2, y: c.y - element.size.height / 2 }, rotation: normalizeAngle(element.rotation + delta) };
@@ -1050,6 +1085,7 @@ export function hitTest(element: Element, point: PointMm, toleranceMm = 0): bool
        if (onStroke || !element.closed) return onStroke;
         return pointInRing(point, points.map((value) => [value.x, value.y] as [number, number]));
       }
+  if (element.type === "circle") return Math.hypot(point.x - element.center.x, point.y - element.center.y) <= element.radius + toleranceMm;
   const width = element.type === "text" ? element.size.width * Math.abs(element.scaleX ?? 1) : element.size.width;
   const height = element.type === "text" ? element.size.height * Math.abs(element.scaleY ?? 1) : element.size.height;
   const center = { x: element.position.x + width / 2, y: element.position.y + height / 2 };

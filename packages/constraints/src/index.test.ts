@@ -23,8 +23,8 @@ const documentWith = (elements: readonly Element[]) => withElements(createDocume
 describe("parametric constraint boundary", () => {
   it("advertises only the capabilities implemented by each adapter", () => {
     const lineSketch = sketch();
-    const circle = { type: "ellipse" as const, id: elementId("circle"), layerId: layer.id, position: { x: 0, y: 0 }, size: { width: 20, height: 20 }, rotation: 0, style };
-    const ellipse = { ...circle, id: elementId("ellipse"), size: { width: 30, height: 20 } };
+    const circle = { type: "circle" as const, id: elementId("circle"), layerId: layer.id, center: { x: 10, y: 10 }, radius: 10, style };
+    const ellipse = { type: "ellipse" as const, id: elementId("ellipse"), layerId: layer.id, position: { x: 0, y: 0 }, size: { width: 30, height: 20 }, rotation: 0, style };
 
     expect(parametricCapabilitiesForElement(lineSketch)).toMatchObject({ entityKind: "sketch", constraintKinds: expect.arrayContaining(["coincident", "parallel", "distance"]) });
     expect(parametricCapabilitiesForElement(circle)).toEqual({ entityKind: "circle", constraintKinds: ["center-horizontal", "center-vertical", "radius", "diameter"] });
@@ -38,12 +38,11 @@ describe("parametric constraint boundary", () => {
       { id: "length", kind: "distance-horizontal", references: [{ elementId: elementId("sketch"), nodeId: "a" }, { elementId: elementId("sketch"), nodeId: "b" }], value: 20 },
     ]);
     const circle = {
-      type: "ellipse" as const,
+      type: "circle" as const,
       id: elementId("circle"),
       layerId: layer.id,
-      position: { x: 0, y: 0 },
-      size: { width: 20, height: 20 },
-      rotation: 0,
+      center: { x: 10, y: 10 },
+      radius: 10,
       style,
       circleConstraints: [
         { id: "center-x", kind: "center-horizontal" as const, value: 20 },

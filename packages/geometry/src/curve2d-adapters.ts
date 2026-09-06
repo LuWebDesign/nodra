@@ -1,4 +1,4 @@
-import type { Element, ElementId, EllipseElement, LineElement, PathElement, PointMm, SketchElement, SplineElement } from "@nodra/domain";
+import type { CircleElement, Element, ElementId, EllipseElement, LineElement, PathElement, PointMm, SketchElement, SplineElement } from "@nodra/domain";
 import type { CircleCurve2D, CubicBezierCurve2D, Curve2D, LineCurve2D } from "./curve2d.js";
 
 export type Curve2DSource =
@@ -6,7 +6,8 @@ export type Curve2DSource =
   | { readonly kind: "sketch-edge"; readonly elementId: ElementId; readonly edgeId: string; readonly startNodeId: string; readonly endNodeId: string }
   | { readonly kind: "path-segment"; readonly elementId: ElementId; readonly segmentId: string; readonly startNodeId: string; readonly endNodeId: string }
   | { readonly kind: "spline-span"; readonly elementId: ElementId; readonly startNodeId: string; readonly endNodeId: string }
-  | { readonly kind: "ellipse-element"; readonly elementId: ElementId };
+  | { readonly kind: "ellipse-element"; readonly elementId: ElementId }
+  | { readonly kind: "circle-element"; readonly elementId: ElementId };
 
 export interface SourcedCurve2D<TCurve extends Curve2D = Curve2D> {
   readonly curve: TCurve;
@@ -108,18 +109,23 @@ export function splineSpanToCurve(spline: SplineElement, spanIndex: number): Sou
  * A circle has no persisted seam, so rotation/flips are intentionally canonicalized
  * to Curve2D's +X seam and clockwise traversal without changing its locus.
  */
+export function circleElementToCurve(element: CircleElement): SourcedCurve2D<CircleCurve2D> {
+  if (![element.center.x, element.center.y, element.radius].every(Number.isFinite) || element.radius <= 0) throw new Error("Circle geometry must be finite and positive");
+  return { curve: { type: "circle", center: checkedPoint(element.center), radius: element.radius }, source: { kind: "circle-element", elementId: element.id }, sourceIndex: 0 };
+}
+
 export function ellipseElementToCurve(element: EllipseElement): SourcedCurve2D<CircleCurve2D> | undefined {
   const values = [element.position.x, element.position.y, element.size.width, element.size.height, element.rotation];
   if (!values.every(Number.isFinite) || element.size.width <= 0 || element.size.height <= 0) throw new Error("Ellipse geometry must be finite and positive");
-  if (element.size.width !== element.size.height) return undefined;
-  const radius = element.size.width / 2;
-  const center = checkedPoint({ x: element.position.x + radius, y: element.position.y + radius });
-  return { curve: { type: "circle", center, radius }, source: { kind: "ellipse-element", elementId: element.id }, sourceIndex: 0 };
+  // EllipseElement is the legacy oval primitive in schema 8. Equal dimensions
+  // are migrated to CircleElement at the schema boundary, not inferred here.
+  return undefined;
 }
 
 /** Returns supported source curves in persistent source order; unsupported elements return none. */
 export function elementToCurves(element: Element): readonly SourcedCurve2D[] {
   if (element.type === "line") return [lineElementToCurve(element)];
+  if (element.type === "circle") return [circleElementToCurve(element)];
   if (element.type === "ellipse") { const sourced = ellipseElementToCurve(element); return sourced ? [sourced] : []; }
   if (element.type === "sketch") return element.edges.map((edge) => sketchEdgeToCurve(element, edge.id));
   if (element.type === "path") return element.segments.map((segment) => pathSegmentToCurve(element, segment.id));

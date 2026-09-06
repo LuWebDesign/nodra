@@ -7,6 +7,7 @@ const style = { stroke: "#111", strokeWidth: 0.2 } as const;
 const document = (): DocumentSnapshot => withElements(createDocument("doc-1", [layer]), [
   { type: "rectangle", id: elementId("rect"), layerId: layer.id, position: { x: 10, y: 20 }, size: { width: 30, height: 10 }, cornerRadius: 0, rotation: 0, style },
   { type: "ellipse", id: elementId("ellipse"), layerId: layer.id, position: { x: 50, y: 20 }, size: { width: 20, height: 10 }, rotation: 0, style },
+  { type: "circle", id: elementId("circle"), layerId: layer.id, center: { x: 85, y: 25 }, radius: 5, style },
   { type: "line", id: elementId("line"), layerId: layer.id, start: { x: 0, y: 0 }, end: { x: 10, y: 5 }, rotation: 0, style },
 ]);
 
@@ -20,8 +21,9 @@ describe("SVG renderer boundary", () => {
           expect(result.svg).toContain('fill-opacity="0.22"');
           expect(result.svg).toContain('data-element-id="line"');
       expect(result.svg).toContain('cx="110" cy="30" rx="20" ry="10"');
+      expect(result.svg).toContain('<circle data-element-id="circle" cx="160" cy="30" r="10"');
       expect(result.svg).toContain('x1="-10" y1="-20" x2="10" y2="-10"');
-      expect(result.renderedElementIds).toEqual(["rect", "ellipse", "line"]);
+      expect(result.renderedElementIds).toEqual(["rect", "ellipse", "circle", "line"]);
     }
   });
   it("renders sketch definition state through the shared constraint boundary", () => {
@@ -59,10 +61,10 @@ describe("SVG renderer boundary", () => {
       expect(result.svg).toContain('data-element-id="global-state-second" stroke="#ef4444"');
     }
   });
-  it("renders radius dimensions with an R prefix", () => {
-    const ellipse = { type: "ellipse" as const, id: elementId("circle"), layerId: layer.id, position: { x: 10, y: 10 }, size: { width: 20, height: 20 }, rotation: 0, style };
-    const radius = { type: "dimension" as const, id: elementId("radius"), layerId: layer.id, kind: "radius" as const, references: [{ kind: "node" as const, elementId: ellipse.id, nodeIndex: 0, nodeId: "center" }, { kind: "node" as const, elementId: ellipse.id, nodeIndex: 2, nodeId: "e" }] as const, offset: { x: 8, y: 0 }, precision: 2, units: "mm" as const, rotation: 0 as const, style };
-    const result = renderSvg(withElements(createDocument("radius", [layer]), [ellipse, radius]), { zoom: 1, panMm: { x: 0, y: 0 } });
+  it("renders radius dimensions for canonical circles with an R prefix", () => {
+    const circle = { type: "circle" as const, id: elementId("circle"), layerId: layer.id, center: { x: 20, y: 20 }, radius: 10, style };
+    const radius = { type: "dimension" as const, id: elementId("radius"), layerId: layer.id, kind: "radius" as const, references: [{ kind: "node" as const, elementId: circle.id, nodeIndex: 0, nodeId: "center" }, { kind: "node" as const, elementId: circle.id, nodeIndex: 2, nodeId: "e" }] as const, offset: { x: 8, y: 0 }, precision: 2, units: "mm" as const, rotation: 0 as const, style };
+    const result = renderSvg(withElements(createDocument("radius", [layer]), [circle, radius]), { zoom: 1, panMm: { x: 0, y: 0 } });
     expect(result.success).toBe(true);
     if (result.success) expect(result.svg).toContain("R10.00 mm");
   });

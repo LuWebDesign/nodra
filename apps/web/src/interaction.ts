@@ -67,7 +67,7 @@ export function pathGuides(path: PathElement): readonly PathGuide[] {
   });
 }
 
-export type DrawingTool = "rectangle" | "ellipse" | "line";
+export type DrawingTool = "rectangle" | "circle" | "line";
 
 export type PointerDownIntent = "draw" | "select";
 export type TransformMode = "resize" | "rotate";
@@ -81,7 +81,7 @@ export function pointerDownIntent(tool: string, hit: ElementId | undefined): Poi
 }
 
 export function isDrawingTool(tool: string): tool is DrawingTool {
-  return tool === "rectangle" || tool === "ellipse" || tool === "line";
+  return tool === "rectangle" || tool === "circle" || tool === "line";
 }
 
 export function pickPathNode(document: DocumentSnapshot, point: PointMm, zoom: number, tolerancePx = 8): PathNodeHit | undefined {
@@ -110,7 +110,7 @@ export function pickPathNode(document: DocumentSnapshot, point: PointMm, zoom: n
         const distance = Math.hypot(point.x - (segment.start.x + t * dx), point.y - (segment.start.y + t * dy));
         if (distance * zoom <= tolerancePx && (!best || distance < best.distance)) {
           const element = document.elements.find((candidate) => candidate.id === segment.elementId);
-          const arcPieces = element?.type === "ellipse" ? splitSegments.filter((candidate) => candidate.elementId === segment.elementId && candidate.segmentIndex === segment.segmentIndex) : undefined;
+          const arcPieces = element?.type === "ellipse" || element?.type === "circle" ? splitSegments.filter((candidate) => candidate.elementId === segment.elementId && candidate.segmentIndex === segment.segmentIndex) : undefined;
           const points = arcPieces ? [arcPieces[0]!.start, ...arcPieces.map((piece) => piece.end)] : undefined;
           best = { elementId: segment.elementId, segmentIndex: segment.segmentIndex, ...(segment.ringIndex === undefined ? {} : { ringIndex: segment.ringIndex }), distance, start: points?.[0] ?? segment.start, end: points?.at(-1) ?? segment.end, ...(points ? { points } : {}) };
         }
@@ -153,7 +153,7 @@ export function pickCutIntervalPreview(document: DocumentSnapshot, point: PointM
   const targetElement = document.elements.find((element) => element.id === hit.elementId);
   if (!targetElement) return { hit, fragments: [] };
   const targetCurves = elementToCurves(targetElement);
-  const target = targetElement.type === "ellipse" ? targetCurves[0] : targetCurves.find((candidate) => candidate.sourceIndex === hit.segmentIndex);
+  const target = targetElement.type === "ellipse" || targetElement.type === "circle" ? targetCurves[0] : targetCurves.find((candidate) => candidate.sourceIndex === hit.segmentIndex);
   if (!target) return { hit, fragments: [] };
   const visibleLayers = new Set(document.layers.filter((layer) => layer.visible).map((layer) => layer.id));
   const cuts: number[] = [];
@@ -401,7 +401,7 @@ export function hasNonCollinearPoints(points: readonly PointMm[], epsilon = 1e-9
   return false;
 }
 
-export type NodeFeedbackTool = "select" | "forma" | "pen" | "spline" | "rectangle" | "ellipse" | "line" | "cut" | "dimension" | "radius";
+export type NodeFeedbackTool = "select" | "forma" | "pen" | "spline" | "rectangle" | "circle" | "line" | "cut" | "dimension" | "radius";
 export type HoverNode = NodeHit | FormaNodeHit;
 
 /** Snaps a Forma node drag to another visible real node within screen tolerance. */
@@ -430,7 +430,7 @@ export function pickDimensionTarget(document: DocumentSnapshot, point: PointMm, 
   const visible = new Set(document.layers.filter((layer) => layer.visible).map((layer) => layer.id));
   const priorityNode = pickNode(document, point, zoom, tolerancePx);
   const priorityElement = priorityNode ? document.elements.find((element) => element.id === priorityNode.elementId) : undefined;
-  if (priorityNode?.node.kind === "cardinal" && priorityElement?.type === "ellipse" && priorityElement.size.width === priorityElement.size.height) {
+  if (priorityNode?.node.kind === "cardinal" && priorityElement?.type === "circle") {
     const nodes = realGeometryNodes(priorityElement);
     const centerIndex = nodes.findIndex((candidate) => candidate.kind === "center");
     const center = nodes[centerIndex];
@@ -450,7 +450,7 @@ export function pickDimensionTarget(document: DocumentSnapshot, point: PointMm, 
   if (bestLine) return { kind: "line", hit: bestLine };
   const node = pickNode(document, point, zoom, tolerancePx);
   const nodeElement = node ? document.elements.find((element) => element.id === node.elementId) : undefined;
-  if (node?.node.kind === "cardinal" && nodeElement?.type === "ellipse" && nodeElement.size.width === nodeElement.size.height) {
+  if (node?.node.kind === "cardinal" && nodeElement?.type === "circle") {
     const nodes = realGeometryNodes(nodeElement);
     const centerIndex = nodes.findIndex((candidate) => candidate.kind === "center");
     const center = nodes[centerIndex];
@@ -463,11 +463,11 @@ export function pickDimensionTarget(document: DocumentSnapshot, point: PointMm, 
   let bestCircleLayerOrder = Number.NEGATIVE_INFINITY;
   let bestCircleElementIndex = -1;
   for (const [elementIndex, element] of document.elements.entries()) {
-    if (element.type !== "ellipse" || element.size.width !== element.size.height || !visible.has(element.layerId)) continue;
+    if (element.type !== "circle" || !visible.has(element.layerId)) continue;
     const center = realGeometryNodes(element).find((candidate) => candidate.kind === "center");
     const cardinalNodes = realGeometryNodes(element).flatMap((candidate, index) => candidate.kind === "cardinal" ? [{ candidate, index }] : []);
     if (!center || !cardinalNodes.length) continue;
-    const radius = element.size.width / 2;
+    const radius = element.radius;
     const centerDistance = Math.hypot(point.x - center.point.x, point.y - center.point.y);
     const distance = Math.abs(centerDistance - radius);
     if (distance * zoom > tolerancePx) continue;
