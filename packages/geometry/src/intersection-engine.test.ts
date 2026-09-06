@@ -98,6 +98,19 @@ describe("IntersectionEngine Line × Cubic", () => {
     expectSymmetric(sCurve, horizontal);
   });
 
+  it("refines roots enough to certify ordinary-scale intersections with the default parameter tolerance", () => {
+    const curve: CubicBezierCurve2D = {
+      type: "cubicBezier",
+      p0: { x: 105.33333333333333, y: 158.66666666666666 },
+      p1: { x: 158.66666666666666, y: 158.66666666666666 },
+      p2: { x: 265.3333333333333, y: 91.99999999999997 },
+      p3: { x: 265.3333333333333, y: 158.66666666666666 },
+    };
+    const transversal = line({ x: 185.33333333333334, y: 78.66666666666667 }, { x: 185.33333333333334, y: 212 });
+    expectPointParameters(intersectCurves(curve, transversal), [[0.4030317167625981, 0.45454757514406846]]);
+    expectSymmetric(curve, transversal);
+  });
+
   it("classifies a double root as tangent and deduplicates a triple crossing", () => {
     const tangent = intersectCurves(cubic([0.25, -1 / 12, -1 / 12, 0.25]), horizontal);
     expectPointParameters(tangent, [[0.5, 0.5]]);

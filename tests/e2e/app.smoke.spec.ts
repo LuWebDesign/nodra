@@ -340,6 +340,10 @@ test("cuts a Pen cubic through a Line sketch and supports undo and redo", async 
     return { x: screen.x, y: screen.y };
   });
   await page.getByRole("button", { name: "Cortar segmentos" }).click();
+  await page.mouse.move(clickedSide.x, clickedSide.y);
+  const exactPreview = page.locator('.cut-segment-hover-overlay path[d*=" C "]');
+  await expect(exactPreview).toBeVisible();
+  await expect(exactPreview).toHaveCSS("fill", "none");
   await page.mouse.click(clickedSide.x, clickedSide.y);
 
   const cutCurve = page.locator(`.page-svg svg path[data-element-id="${curveId}"]`);
