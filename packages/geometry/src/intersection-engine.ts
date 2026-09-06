@@ -252,7 +252,7 @@ function intersectCubicLine(cubic: CubicBezierCurve2D, line: LineCurve2D, geomet
   const distanceScale = Math.max(...distances.map(Math.abs));
   const polynomial = bezierPower(distances.map((distance) => distance / distanceScale) as [number, number, number, number]);
   const valueEpsilon = ROOT_VALUE_EPSILON;
-  const roots = rootsInUnit(polynomial, parameterEpsilon, valueEpsilon);
+  const roots = rootsInUnit(polynomial, parameterEpsilon, valueEpsilon, true);
   const lineParameterTolerance = Math.max(parameterEpsilon, spatialTolerance / frame.length);
   const points = roots.flatMap((firstParameter): IntersectionPoint[] => {
     const point = cubicPoint(cubic, firstParameter);
@@ -263,7 +263,7 @@ function intersectCubicLine(cubic: CubicBezierCurve2D, line: LineCurve2D, geomet
     const contact = endpointContact(firstParameter, lineT, parameterEpsilon)
       ? "endpoint"
       : tangentContact(polynomial, firstParameter, parameterEpsilon, valueEpsilon) ? "tangent" : "crossing";
-    return [{ point, firstParameter, secondParameter: lineT, contact }];
+    return [{ point: checkedPoint(closest), firstParameter, secondParameter: lineT, contact }];
   });
   const deduplicated = points.sort((first, second) => first.firstParameter - second.firstParameter).filter((point, index, all) => index === 0 || point.firstParameter - all[index - 1]!.firstParameter > parameterEpsilon);
   return deduplicated.length ? { kind: "points", points: deduplicated } : none();

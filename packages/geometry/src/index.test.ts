@@ -193,7 +193,8 @@ describe("canonical millimetre geometry", () => {
     expect(intersections).toHaveLength(1);
     expect(intersections[0]?.curveT).toBeCloseTo(0.5, 9);
     expect(intersections[0]?.lineT).toBeCloseTo(0.5, 9);
-    expect(intersections[0]?.point).toMatchObject({ x: 5, y: expect.closeTo(0, 9) });
+    expect(intersections[0]?.point.x).toBeCloseTo(5, 9);
+    expect(intersections[0]?.point.y).toBeCloseTo(0, 9);
     expect(cubicBezierLineIntersections(curve, { x: 0, y: 0 }, { x: 4.999999, y: 0 })).toEqual([]);
     expect(cubicBezierLineIntersections(curve, { x: 0, y: 0 }, { x: 5.000001, y: 0 })).toHaveLength(1);
   });
