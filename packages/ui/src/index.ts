@@ -1,4 +1,4 @@
-export type Tool = "select" | "rectangle" | "circle" | "line";
+export type Tool = "select" | "rectangle" | "circle" | "line" | "arc";
 export interface ToolbarProps { readonly activeTool: Tool; readonly disabled?: boolean; readonly onToolChange: (tool: Tool) => void }
 export interface PropertiesProps { readonly title: string; readonly fields: readonly PropertyField[] }
 export interface PropertyField { readonly label: string; readonly value: string; readonly editable?: boolean }
@@ -10,7 +10,7 @@ export interface PreparePlaceholderProps { readonly label?: string }
 export interface UiNode { readonly kind: string; readonly props: Record<string, unknown> }
 
 export function toolbar(props: ToolbarProps): UiNode {
-  return { kind: "toolbar", props: { activeTool: props.activeTool, disabled: props.disabled ?? false, tools: ["select", "rectangle", "circle", "line"], onToolChange: props.onToolChange } };
+  return { kind: "toolbar", props: { activeTool: props.activeTool, disabled: props.disabled ?? false, tools: ["select", "rectangle", "circle", "line", "arc"], onToolChange: props.onToolChange } };
 }
 export function properties(props: PropertiesProps): UiNode { return { kind: "properties", props: { title: props.title, fields: props.fields } }; }
 export function layers(props: LayersProps): UiNode { return { kind: "layers", props: { layers: props.layers, onVisibilityChange: props.onVisibilityChange } }; }

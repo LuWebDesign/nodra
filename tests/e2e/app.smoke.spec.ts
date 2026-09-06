@@ -1291,3 +1291,42 @@ test("refuses Prepare without hardware execution", async ({ page }) => {
   await expect(page.getByText("No hay hardware conectado, controlado ni listo.")).toBeVisible();
   await expect(page.getByRole("button", { name: "Volver a Diseño" })).toBeVisible();
 });
+
+test("crea un arco por tres puntos y solo persiste al confirmar", async ({ page }) => {
+  await page.goto("/");
+  const bounds = await page.locator(".page").boundingBox();
+  expect(bounds).not.toBeNull();
+  await page.getByRole("button", { name: "Arco" }).click();
+  const start = { x: bounds!.x + 140, y: bounds!.y + 220 };
+  const end = { x: start.x + 140, y: start.y };
+  const through = { x: start.x + 70, y: start.y - 70 };
+  await page.mouse.click(start.x, start.y);
+  await page.mouse.click(end.x, end.y);
+  await page.mouse.move(through.x, through.y);
+  await expect(page.locator(".creation-pending-overlay path")).toBeVisible();
+  await expect(page.locator('.page-svg svg [data-element-id]')).toHaveCount(0);
+  await page.keyboard.press("Escape");
+  await expect(page.locator(".creation-pending-overlay")).toHaveCount(0);
+  await expect(page.locator('.page-svg svg [data-element-id]')).toHaveCount(0);
+
+  await page.mouse.click(start.x, start.y);
+  await page.mouse.click(end.x, end.y);
+  await page.mouse.move(through.x, through.y);
+  await page.mouse.click(through.x, through.y);
+  const arc = page.locator('.page-svg svg path[data-element-id]');
+  await expect(arc).toHaveCount(1);
+  await expect(arc).toHaveAttribute("d", / A /);
+  await expect(page.getByRole("group", { name: "Operaciones de forma" })).toBeVisible();
+  await page.getByRole("button", { name: "Deshacer" }).click();
+  await expect(arc).toHaveCount(0);
+  await page.getByRole("button", { name: "Rehacer" }).click();
+  await expect(arc).toHaveCount(1);
+
+  await page.getByRole("button", { name: "Arco" }).click();
+  await page.mouse.click(start.x, start.y);
+  await page.mouse.click(end.x, end.y);
+  await page.mouse.click(start.x + 70, start.y);
+  await expect(page.locator('.page-svg svg path[data-element-id]')).toHaveCount(1);
+  await page.getByRole("button", { name: "Seleccion" }).click();
+  await expect(page.locator(".creation-pending-overlay")).toHaveCount(0);
+});
