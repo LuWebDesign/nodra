@@ -30,7 +30,7 @@ import {
   isCircleElement,
 } from "@nodra/domain";
 import { validateDocument } from "@nodra/validation";
-import { boundsOfElements, connectableNodeAddress, contourWithPoints, directionVector, elementCenter, elementToContour, dimensionGeometry, elementToCurves, glyphGeometryNodes, groupCenter, intersectCurves, lineElementToCurve, mirrorHandleOffset, partitionCurveByInterval, realGeometryNodes, resizeGroup, rotateElements, selectRemovableCurveInterval, shapeResultContours, tangentAt, transformPoint, splitCuttableSegments, classifyCutGraph, cuttableSegments, lineSegmentIntersection, rotatedLineEndpoints, sketchEdgeAtAddress, sketchEdgeIndexAtAddress, solveSketchConstraints, solveCircleConstraints, cubicBezierLineIntersections, splitCubicBezierAtParameters, flattenCubicBezier, type CubicBezier, type Direction, type LineCurve2D, type SourcedCurve2D } from "@nodra/geometry";
+import { boundsOfElements, connectableNodeAddress, contourWithPoints, directionVector, elementCenter, elementToContour, dimensionGeometry, elementToCurves, glyphGeometryNodes, groupCenter, intersectCurves, lineElementToCurve, circleElementToCurve, mirrorHandleOffset, partitionCurveByInterval, selectRemovableCurveInterval, selectSourcedCurveInterval, realGeometryNodes, resizeGroup, rotateElements, shapeResultContours, tangentAt, transformPoint, splitCuttableSegments, classifyCutGraph, cuttableSegments, lineSegmentIntersection, rotatedLineEndpoints, sketchEdgeAtAddress, sketchEdgeIndexAtAddress, solveSketchConstraints, solveCircleConstraints, cubicBezierLineIntersections, splitCubicBezierAtParameters, flattenCubicBezier, GEOMETRY_EPSILON, type CubicBezier, type Direction, type LineCurve2D, type SourcedCurve2D } from "@nodra/geometry";
 import { insertSplineNode, moveSplineHandle as moveSplineHandleData, moveSplineNode as moveSplineNodeData } from "./spline.js";
 import { topologyReferenceKey, type ReferenceResolution, type TopologyEditResult, type TopologyReference } from "./topology.js";
 
@@ -1339,16 +1339,100 @@ export const cutContourSegment = (contourId: ElementId, ringIndex: number, segme
 });
 
 /** Unified Cut dispatch used by interaction clients. */
+const cutCircleExact = (document: DocumentSnapshot, circle: Extract<Element, { type: "circle" }>, cursor: PointMm): CommandResult => {
+  if (![cursor.x, cursor.y].every(Number.isFinite)) return { success: false, error: "Circle cut point is invalid" };
+  const target = circleElementToCurve(circle);
+  const visibleLayers = new Set(document.layers.filter((layer) => layer.visible).map((layer) => layer.id));
+  let unsupported = false;
+  const candidates = document.elements.filter((element) => visibleLayers.has(element.layerId) && element.id !== circle.id).flatMap((element) => {
+    const adapted = elementToCurves(element);
+    if (adapted.length > 0) return adapted;
+    // Unsupported adapters are only a veto when their persisted cuttable
+    // approximation actually touches the exact circle locus.
+    const touches = cuttableSegments(element).some((segment) => {
+      const result = intersectCurves(target.curve, { type: "line", start: segment.start, end: segment.end });
+      return result.kind === "overlap" || result.kind === "points" && result.points.some((point) => point.contact !== "tangent");
+    });
+    if (touches) unsupported = true;
+    return [];
+  });
+  if (unsupported) return { success: false, error: "Circle cut has unsupported or overlapping geometry" };
+  const selection = selectSourcedCurveInterval(target, candidates, cursor);
+  if (selection.kind !== "selected") return { success: false, error: selection.kind === "rejected" && selection.reason === "cursor-on-cut" ? "Cut cursor lies on an intersection" : "Circle cut requires two distinct intersections" };
+  const partition = partitionCurveByInterval(target.curve, selection.interval);
+  if (partition.selected.length === 0 || partition.remainder.length === 0) return { success: false, error: "Circle cut did not produce one arc" };
+  const startAngle = normalizeArcAngle(Math.PI * 2 * selection.interval.end);
+  const endAngle = normalizeArcAngle(Math.PI * 2 * selection.interval.start);
+  if (startAngle === endAngle) return { success: false, error: "Circle cut did not produce a partial arc" };
+  const arc: ArcElement = {
+    type: "arc", id: circle.id, layerId: circle.layerId, center: circle.center, radius: circle.radius,
+    startAngle, endAngle, direction: "clockwise", style: circle.style,
+    ...(circle.operation ? { operation: circle.operation } : {}),
+  };
+  const endpointTolerance = GEOMETRY_EPSILON;
+  const close = (a: PointMm, b: PointMm) => Math.hypot(a.x - b.x, a.y - b.y) <= endpointTolerance;
+  const arcNodes = [{ name: "center", point: arc.center },
+    { name: "start", point: { x: arc.center.x + arc.radius * Math.cos(arc.startAngle), y: arc.center.y + arc.radius * Math.sin(arc.startAngle) } },
+    { name: "end", point: { x: arc.center.x + arc.radius * Math.cos(arc.endAngle), y: arc.center.y + arc.radius * Math.sin(arc.endAngle) } }] as const;
+  const oldNodes = new Map(realGeometryNodes(circle).flatMap((node, index) => { const address = connectableNodeAddress(circle, index); return address && "name" in address ? [[address.name, node.point] as const] : []; }));
+  const arcAddress = (name: "center" | "start" | "end"): ExplicitConnection["first"]["node"] => ({ kind: "named", name });
+  const remapAddress = (reference: ExplicitConnection["first"]): ExplicitConnection["first"] | undefined => {
+    if (reference.elementId !== circle.id || reference.node.kind !== "named") return reference;
+    const oldPoint = oldNodes.get(reference.node.name);
+    if (!oldPoint) return undefined;
+    if (reference.node.name === "center") return { ...reference, node: arcAddress("center") };
+    const endpoint = arcNodes.find((candidate) => candidate.name !== "center" && close(candidate.point, oldPoint));
+    return endpoint ? { ...reference, node: arcAddress(endpoint.name) } : undefined;
+  };
+  const connections = (document.connections ?? []).flatMap((connection) => {
+    const first = remapAddress(connection.first); const second = remapAddress(connection.second);
+    if (!first || !second || first.elementId === second.elementId && JSON.stringify(first.node) === JSON.stringify(second.node)) return [];
+    return [{ ...connection, first, second }];
+  });
+  const arcReference = (name: "center" | "start" | "end"): DimensionElement["references"][number] => ({ kind: "node", elementId: arc.id, nodeIndex: name === "center" ? 0 : name === "start" ? 1 : 2, nodeId: name });
+  const remapDimension = (dimension: DimensionElement): DimensionElement | undefined => {
+    const refs = dimension.references.map((reference) => {
+      if (reference.elementId !== circle.id) return reference;
+      if (!("nodeIndex" in reference)) return undefined;
+      const oldNode = reference.nodeId ? realGeometryNodes(circle).find((node) => node.nodeId === reference.nodeId) : realGeometryNodes(circle)[reference.nodeIndex];
+      if (!oldNode) return undefined;
+      if (oldNode.nodeId === "center") return arcReference("center");
+      const radial = dimension.kind === "radius" || dimension.kind === "diameter";
+      const endpoints = arcNodes.filter((candidate) => candidate.name !== "center");
+      const endpoint = radial
+        ? endpoints.reduce((best, candidate) => !best || Math.hypot(candidate.point.x - oldNode.point.x, candidate.point.y - oldNode.point.y) < Math.hypot(best.point.x - oldNode.point.x, best.point.y - oldNode.point.y) ? candidate : best, undefined as (typeof endpoints)[number] | undefined)
+        : endpoints.find((candidate) => close(candidate.point, oldNode.point));
+      return endpoint ? arcReference(endpoint.name) : undefined;
+    });
+    if (!refs[0] || !refs[1]) return undefined;
+    const radial = dimension.kind === "radius" || dimension.kind === "diameter";
+    if (!radial) return { ...dimension, references: [refs[0], refs[1]] };
+    const annotation = { ...dimension };
+    delete annotation.driving;
+    delete annotation.constraintId;
+    return { ...annotation, references: [refs[0], refs[1]] };
+  };
+  const elements = document.elements.map((element) => element.id === circle.id ? arc : element).flatMap<Element>((element) => {
+    if (element.type !== "dimension") return [element];
+    const referencesCircle = element.references.some((reference) => reference.elementId === circle.id);
+    if (!referencesCircle) return [element];
+    const remapped = remapDimension(element);
+    return remapped ? [remapped] : [];
+  });
+  return replaceElements({ ...document, connections }, elements);
+};
+
 export const cutSegment = (elementId: ElementId, segmentIndex: number, point?: PointMm, ringIndex = 0): EditorCommand => ({
   name: `cut:${elementId}:${ringIndex}:${segmentIndex}`,
   apply: (document) => {
     const element = document.elements.find((candidate) => candidate.id === elementId);
     if (!element) return { success: false, error: "Cut target not found" };
+    if (element.type === "circle") return point ? cutCircleExact(document, element, point) : { success: false, error: "A circle cut requires a click point" };
     if (element.type === "sketch") return cutSketchEdgeDestructive(elementId, segmentIndex, point).apply(document);
     if (element.type === "contour") return cutContourSegment(elementId, ringIndex, segmentIndex, point).apply(document);
     if (element.type === "line") return cutLineAtPoint(elementId, point ?? element.start).apply(document);
     if (element.type === "path" && element.segments[segmentIndex]?.type === "cubicBezier") return point ? cutOpenSingleCubicPath(document, element, point) : { success: false, error: "A cubic cut requires a click point" };
-    if (element.type === "rectangle" || element.type === "ellipse" || element.type === "circle" || element.type === "path") return cutPathSegment(elementId, segmentIndex, point).apply(document);
+    if (element.type === "rectangle" || element.type === "ellipse" || element.type === "path") return cutPathSegment(elementId, segmentIndex, point).apply(document);
     return { success: false, error: "Element segment is not cuttable" };
   },
 });

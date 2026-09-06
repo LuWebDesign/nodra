@@ -1,5 +1,5 @@
 import type { DocumentSnapshot, Element, ElementId, LineElement, PathElement, PathSegment, PointMm } from "@nodra/domain";
-import { boundsOf, boundsOfElements, closestParameter, connectableNodeAddress, contourSegmentAt, contourVertexNodes, dimensionGeometry, elementCenter, elementSegmentAt, hitTest, pathGeometryNodes, pointAt, cuttableSegments, splitCuttableSegments, pathSegmentAt, realGeometryNodes, elementToCurves, intersectCurves, PARAMETER_EPSILON, partitionCurveByInterval, selectRemovableCurveInterval, tangentAt, type Bounds, type ContourSegmentHit, type ContourVertexNode, type CurveFragment, type PathGeometryNode, type RealGeometryNode, type PathSegmentHit, type SourcedCurve2D } from "@nodra/geometry";
+import { boundsOf, boundsOfElements, closestParameter, connectableNodeAddress, contourSegmentAt, contourVertexNodes, dimensionGeometry, elementCenter, elementSegmentAt, hitTest, pathGeometryNodes, pointAt, cuttableSegments, splitCuttableSegments, pathSegmentAt, realGeometryNodes, elementToCurves, intersectCurves, partitionCurveByInterval, selectSourcedCurveInterval, type Bounds, type ContourSegmentHit, type ContourVertexNode, type CurveFragment, type PathGeometryNode, type RealGeometryNode, type PathSegmentHit } from "@nodra/geometry";
 
 export interface DragGeometry { readonly position: PointMm; readonly size: { readonly width: number; readonly height: number } }
 export interface CircleGeometry { readonly position: PointMm; readonly size: { readonly width: number; readonly height: number }; readonly radius: number }
@@ -123,16 +123,6 @@ export interface CutIntervalPreview {
   readonly fragments: readonly CurveFragment[];
 }
 
-function sameCurveSource(first: SourcedCurve2D, second: SourcedCurve2D): boolean {
-  return first.source.kind === second.source.kind && first.source.elementId === second.source.elementId && first.sourceIndex === second.sourceIndex;
-}
-
-function isTransversalIntersection(first: SourcedCurve2D, second: SourcedCurve2D, firstParameter: number, secondParameter: number): boolean {
-  const firstTangent = tangentAt(first.curve, firstParameter); const secondTangent = tangentAt(second.curve, secondParameter);
-  const scale = Math.hypot(firstTangent.x, firstTangent.y) * Math.hypot(secondTangent.x, secondTangent.y);
-  return scale > 0 && Math.abs(firstTangent.x * secondTangent.y - firstTangent.y * secondTangent.x) > Math.max(Number.EPSILON * 128, PARAMETER_EPSILON * 4) * scale;
-}
-
 /** Keeps legacy picking but derives an exact, immutable interval preview when adapters support the target. */
 export function pickCutIntervalPreview(document: DocumentSnapshot, point: PointMm, zoom: number, tolerancePx = 8): CutIntervalPreview | undefined {
   let hit = pickCuttableSegment(document, point, zoom, tolerancePx);
@@ -155,29 +145,19 @@ export function pickCutIntervalPreview(document: DocumentSnapshot, point: PointM
   const targetCurves = elementToCurves(targetElement);
   const target = targetElement.type === "ellipse" || targetElement.type === "circle" ? targetCurves[0] : targetCurves.find((candidate) => candidate.sourceIndex === hit.segmentIndex);
   if (!target) return { hit, fragments: [] };
-  const visibleLayers = new Set(document.layers.filter((layer) => layer.visible).map((layer) => layer.id));
-  const cuts: number[] = [];
+  const visibleLayers = new Set(document.layers.filter((element) => element.visible).map((element) => element.id));
+  // Legacy elements without an exact adapter remain a conservative veto, but
+  // never contribute approximate boundaries to the exact interval helper.
   for (const element of document.elements) {
-    if (!visibleLayers.has(element.layerId)) continue;
-    const candidates = elementToCurves(element);
-    if (candidates.length === 0) {
-      // Legacy segments are only a conservative veto here; they never become exact preview boundaries.
-      const unsupportedIntersection = cuttableSegments(element).some((segment) => {
-        const result = intersectCurves(target.curve, { type: "line", start: segment.start, end: segment.end });
-        return result.kind === "points" || result.kind === "overlap";
-      });
-      if (unsupportedIntersection) return { hit, fragments: [] };
-      continue;
-    }
-    for (const candidate of candidates) {
-      if (sameCurveSource(target, candidate)) continue;
-      const intersection = intersectCurves(target.curve, candidate.curve);
-      if (intersection.kind === "overlap" || intersection.kind === "unsupported") return { hit, fragments: [] };
-      if (intersection.kind !== "points") continue;
-      cuts.push(...intersection.points.filter(({ firstParameter, secondParameter }) => isTransversalIntersection(target, candidate, firstParameter, secondParameter)).map(({ firstParameter }) => firstParameter));
-    }
+    if (!visibleLayers.has(element.layerId) || elementToCurves(element).length > 0) continue;
+    const unsupportedIntersection = cuttableSegments(element).some((segment) => {
+      const result = intersectCurves(target.curve, { type: "line", start: segment.start, end: segment.end });
+      return result.kind === "overlap" || result.kind === "points" && result.points.some((point) => point.contact !== "tangent");
+    });
+    if (unsupportedIntersection) return { hit, fragments: [] };
   }
-  const selection = selectRemovableCurveInterval(target.curve, cuts, point);
+  const candidates = document.elements.filter((element) => visibleLayers.has(element.layerId)).flatMap((element) => elementToCurves(element));
+  const selection = selectSourcedCurveInterval(target, candidates, point);
   if (selection.kind !== "selected") return { hit, fragments: [] };
   return { hit, fragments: partitionCurveByInterval(target.curve, selection.interval).selected };
 }
@@ -387,7 +367,7 @@ export function nodeAlignmentGuides(document: DocumentSnapshot, source: PointMm,
   for (const element of document.elements) if (visible.has(element.layerId)) for (const [index, node] of realGeometryNodes(element).entries()) {
     if (node.point.x === source.x && node.point.y === source.y) continue;
     const candidates = [{ distance: Math.abs(pointer.x - node.point.x) * zoom, target: { x: node.point.x, y: source.y }, order: element.id + ":" + index + ":vertical" }, { distance: Math.abs(pointer.y - node.point.y) * zoom, target: { x: source.x, y: node.point.y }, order: element.id + ":" + index + ":horizontal" }];
-    candidates.forEach((candidate, axis) => { if (candidate.distance <= tolerancePx && (!best[axis] || candidate.distance < best[axis]!.distance || candidate.distance === best[axis]!.distance && candidate.order < best[axis]!.order)) best[axis] = { distance: candidate.distance, order: candidate.order, guide: { source, target: candidate.target, kind: "node" } }; });
+    candidates.forEach((candidate, axis) => { if ((candidate.target.x !== source.x || candidate.target.y !== source.y) && candidate.distance <= tolerancePx && (!best[axis] || candidate.distance < best[axis]!.distance || candidate.distance === best[axis]!.distance && candidate.order < best[axis]!.order)) best[axis] = { distance: candidate.distance, order: candidate.order, guide: { source, target: candidate.target, kind: "node" } }; });
   }
   return best.flatMap((candidate) => candidate ? [candidate.guide] : []);
 }
