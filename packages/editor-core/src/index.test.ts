@@ -1166,6 +1166,10 @@ it("converts a zero-radius rectangle to an open path when cutting one edge", () 
     const destination = { elementId: target.id, node: { kind: "sketch" as const, nodeId: target.nodes[0]!.id } };
     const positioned = dispatch(initial, addPositionalConnection(source, destination));
     expect((positioned.document.elements[0] as ArcElement).center).toEqual(target.nodes[0]!.point);
+    const endpointSource = { elementId: arc.id, node: { kind: "named" as const, name: "start" as const } };
+    const endpointPositioned = dispatch(initial, addPositionalConnection(endpointSource, destination));
+    expect((endpointPositioned.document.elements[0] as ArcElement).center).toEqual({ x: target.nodes[0]!.point.x + arc.center.x - (arc.center.x + arc.radius * Math.cos(arc.startAngle)), y: target.nodes[0]!.point.y + arc.center.y - (arc.center.y + arc.radius * Math.sin(arc.startAngle)) });
+    expect(endpointPositioned.document.connections).toHaveLength(1);
     expect(positioned.document.connections).toHaveLength(1);
     expect(positioned.undo).toHaveLength(1);
     expect(undo(positioned).document).toEqual(initial.document);
