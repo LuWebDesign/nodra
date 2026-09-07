@@ -76,6 +76,11 @@ const elementIndex = (document: DocumentSnapshot, id: ElementId): number => docu
 const isArcElement = (element: Element): element is ArcElement => element.type === "arc";
 const translateArc = (element: ArcElement, delta: PointMm, id = element.id): ArcElement => ({ ...element, id, center: { x: element.center.x + delta.x, y: element.center.y + delta.y } });
 const normalizeArcAngle = (angle: number): number => ((angle % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2);
+const namedNodePoint = (document: DocumentSnapshot, reference: ExplicitConnection["first"]): PointMm | undefined => {
+  const element = document.elements.find((candidate) => candidate.id === reference.elementId);
+  if (!element) return undefined;
+  return realGeometryNodes(element).find((_, index) => JSON.stringify(connectableNodeAddress(element, index)) === JSON.stringify(reference.node))?.point;
+};
 const ARC_EDIT_ANGLE_EPSILON = 1e-10;
 const arcAngleDistance = (first: number, second: number): number => Math.abs(Math.atan2(Math.sin(first - second), Math.cos(first - second)));
 
@@ -1971,7 +1976,21 @@ export const updateDimensionValue = (dimensionId: ElementId, value: number): Edi
       if (first.elementId !== target.id || second.elementId !== target.id || !nodeIds.includes("center") || !nodeIds.some((nodeId) => nodeId === "start" || nodeId === "end")) return { success: false, error: "Arc radial dimensions require center and endpoint references" };
       const radius = dimension.kind === "diameter" ? value / 2 : value;
       if (radius === target.radius) return { success: true, document };
-      return replaceElements(document, document.elements.map((element) => element.id === target.id && element.type === "arc" ? { ...element, radius } : element));
+      const endpointConnection = (document.connections ?? []).find((connection) => {
+        const source = connection.first.elementId === target.id ? connection.first : connection.second.elementId === target.id ? connection.second : undefined;
+        return source?.node.kind === "named" && (source.node.name === "start" || source.node.name === "end");
+      });
+      let center = target.center;
+      if (endpointConnection) {
+        const source = endpointConnection.first.elementId === target.id ? endpointConnection.first : endpointConnection.second;
+        const other = endpointConnection.first.elementId === target.id ? endpointConnection.second : endpointConnection.first;
+        const endpoint = namedNodePoint(document, source); const fixed = namedNodePoint(document, other);
+        if (!endpoint || !fixed) return { success: false, error: "Arc endpoint positional connection is invalid" };
+        const length = Math.hypot(endpoint.x - target.center.x, endpoint.y - target.center.y);
+        if (length <= 1e-9) return { success: false, error: "Arc endpoint positional connection has zero length" };
+        center = { x: fixed.x - (endpoint.x - target.center.x) / length * radius, y: fixed.y - (endpoint.y - target.center.y) / length * radius };
+      }
+      return replaceElements(document, document.elements.map((element) => element.id === target.id && element.type === "arc" ? { ...element, center, radius } : element));
     }
     if ((dimension.kind === "radius" || dimension.kind === "diameter") && dimension.driving !== true) return { success: false, error: "Only driving circular dimensions can change a circle" };
         if (dimension.kind === "radius" || dimension.kind === "diameter") {
@@ -1981,7 +2000,21 @@ export const updateDimensionValue = (dimensionId: ElementId, value: number): Edi
         const drivingConstraint = target.circleConstraints?.find((constraint) => constraint.id === dimension.constraintId);
         if (!drivingConstraint || drivingConstraint.kind !== dimension.kind || drivingConstraint.driving !== true) return { success: false, error: "Driving circular dimension constraint is missing or mismatched" };
         const radius = dimension.kind === "diameter" ? value / 2 : value;
-        const updated = { ...target, radius, circleConstraints: target.circleConstraints!.map((constraint) => constraint.id === dimension.constraintId ? { ...constraint, value } : constraint) };
+        const endpointConnection = (document.connections ?? []).find((connection) => {
+          const source = connection.first.elementId === target.id ? connection.first : connection.second.elementId === target.id ? connection.second : undefined;
+          return source?.node.kind === "named" && ["n", "e", "s", "w"].includes(source.node.name);
+        });
+        let center = target.center;
+        if (endpointConnection) {
+          const source = endpointConnection.first.elementId === target.id ? endpointConnection.first : endpointConnection.second;
+          const other = endpointConnection.first.elementId === target.id ? endpointConnection.second : endpointConnection.first;
+          const endpoint = namedNodePoint(document, source); const fixed = namedNodePoint(document, other);
+          if (!endpoint || !fixed) return { success: false, error: "Circle endpoint positional connection is invalid" };
+          const length = Math.hypot(endpoint.x - target.center.x, endpoint.y - target.center.y);
+          if (length <= 1e-9) return { success: false, error: "Circle endpoint positional connection has zero length" };
+          center = { x: fixed.x - (endpoint.x - target.center.x) / length * radius, y: fixed.y - (endpoint.y - target.center.y) / length * radius };
+        }
+        const updated = { ...target, center, radius, circleConstraints: target.circleConstraints!.map((constraint) => constraint.id === dimension.constraintId ? { ...constraint, value } : constraint) };
         return replaceElements(document, document.elements.map((element) => element.id === target.id ? updated : element));
       }
       return { success: false, error: "Circular driving dimensions require a circle" };
