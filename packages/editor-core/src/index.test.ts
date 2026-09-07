@@ -1371,6 +1371,19 @@ it("converts a zero-radius rectangle to an open path when cutting one edge", () 
     expect(dispatch(malformedInitial, updateDimensionValue(malformed.id, 15))).toBe(malformedInitial);
   });
 
+  it("keeps a coincident arc endpoint fixed while changing its radius", () => {
+    const target: ArcElement = { ...arc, id: elementId("endpoint-dimension-arc"), center: { x: 20, y: 20 }, radius: 10 };
+    const fixed = { ...rectangle, id: elementId("endpoint-dimension-node"), position: { x: 30, y: 20 }, size: { width: 4, height: 4 } };
+    const connection = { id: "arc-endpoint-fixed", first: { elementId: target.id, node: { kind: "named" as const, name: "start" as const } }, second: { elementId: fixed.id, node: { kind: "named" as const, name: "nw" as const } } };
+    const radius: DimensionElement = { type: "dimension", id: elementId("endpoint-dimension"), layerId: target.layerId, kind: "radius", references: [{ kind: "node", elementId: target.id, nodeIndex: 0, nodeId: "center" }, { kind: "node", elementId: target.id, nodeIndex: 1, nodeId: "start" }], offset: { x: 8, y: 0 }, precision: 2, units: "mm", rotation: 0, style: rectangle.style };
+    const initial = createEditor({ ...document, elements: [target, fixed, radius], connections: [connection] });
+    const resized = dispatch(initial, updateDimensionValue(radius.id, 15));
+    const next = resized.document.elements[0] as ArcElement;
+    expect(next.radius).toBe(15);
+    expect(next.center.x + next.radius * Math.cos(next.startAngle)).toBeCloseTo(30);
+    expect(next.center.y + next.radius * Math.sin(next.startAngle)).toBeCloseTo(20);
+  });
+
   it("rejects a driving circle dimension whose persisted constraint is missing", () => {
     const circle: CircleElement = { type: "circle", id: elementId("missing-driving-circle"), layerId: rectangle.layerId, center: { x: 20, y: 20 }, radius: 10, style: rectangle.style };
     const radius: DimensionElement = { type: "dimension", id: elementId("missing-driving-radius"), layerId: rectangle.layerId, kind: "radius", driving: true, constraintId: "missing", references: [{ kind: "node", elementId: circle.id, nodeIndex: 0, nodeId: "center" }, { kind: "node", elementId: circle.id, nodeIndex: 2, nodeId: "e" }], offset: { x: 8, y: 0 }, precision: 2, units: "mm", rotation: 0, style: rectangle.style };
