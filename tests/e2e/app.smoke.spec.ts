@@ -1454,6 +1454,7 @@ test("edita una cota radial de arco sin exigir un solver de círculo", async ({ 
   await page.mouse.move(through.x, through.y);
   await page.mouse.click(through.x, through.y);
   const arc = page.locator('.page-svg svg path[data-element-id]').first();
+  await expect(arc).toBeVisible();
   const before = await arc.boundingBox();
   expect(before).not.toBeNull();
 
@@ -1541,4 +1542,83 @@ test("añade relaciones a un croquis cerrado que ya tiene una cota", async ({ pa
   await parallel.click();
   await page.getByRole("button", { name: "Confirmar relación" }).click();
   await expect(page.getByRole("list", { name: "Relaciones aplicadas" })).toContainText("Paralela");
+});
+
+
+test("alinea el centro de un círculo con un nodo de croquis y conserva la coincidencia", async ({ page }) => {
+  await page.goto("/");
+  const bounds = await visibleBoundingBox(page.locator(".page"));
+  const circleCenter = { x: bounds.x + 170, y: bounds.y + 180 };
+  const circleRadius = 45;
+  await page.getByRole("button", { name: "Círculo" }).click();
+  await page.mouse.click(circleCenter.x, circleCenter.y);
+  await page.mouse.move(circleCenter.x + circleRadius, circleCenter.y);
+  await page.mouse.click(circleCenter.x + circleRadius, circleCenter.y);
+  const circle = page.locator('.page-svg svg circle[data-element-id]').first();
+  await expect(circle).toHaveCount(1);
+  const circleId = await circle.getAttribute("data-element-id");
+  expect(circleId).not.toBeNull();
+
+  const lineStart = { x: bounds.x + 360, y: bounds.y + 180 };
+  const lineEnd = { x: lineStart.x + 110, y: lineStart.y };
+  await drawLine(page, lineStart, lineEnd);
+  const sketch = page.locator('.page-svg svg g[data-element-id]').filter({ has: page.locator("line") }).first();
+  await expect(sketch).toHaveCount(1);
+  const sketchId = await sketch.getAttribute("data-element-id");
+  expect(sketchId).not.toBeNull();
+
+  await page.getByRole("button", { name: "Seleccion" }).click();
+  await page.mouse.click(circleCenter.x, circleCenter.y);
+  await page.keyboard.down("Shift");
+  try {
+    await page.mouse.click((lineStart.x + lineEnd.x) / 2, lineStart.y);
+  } finally {
+    await page.keyboard.up("Shift");
+  }
+  await page.getByRole("button", { name: "Forma" }).click();
+  await page.mouse.click((lineStart.x + lineEnd.x) / 2, lineStart.y);
+  await page.keyboard.down("Shift");
+  try {
+    await page.mouse.click(circleCenter.x + circleRadius, circleCenter.y);
+  } finally {
+    await page.keyboard.up("Shift");
+  }
+
+  const circleCenterNode = page.locator(`[data-contour-node="${circleId}:p:0"]`);
+  const targetNode = page.locator(`[data-contour-node="${sketchId}:p:0"]`);
+  await expect(circleCenterNode).toBeVisible();
+  await expect(targetNode).toBeVisible();
+  await circleCenterNode.click();
+  await targetNode.click({ modifiers: ["Shift"] });
+  const positionalControls = page.locator('[aria-label="Coincidencias posicionales"]');
+  await expect(positionalControls).toBeVisible();
+  await positionalControls.getByRole("button", { name: "Coincidente", exact: true }).click();
+  await positionalControls.getByRole("button", { name: "Confirmar relación" }).click();
+
+  const relationList = page.getByRole("list", { name: "Coincidencias posicionales aplicadas" });
+  await expect(relationList).toContainText("Coincidente");
+  const assertAligned = async () => {
+    const source = await circleCenterNode.boundingBox();
+    const target = await targetNode.boundingBox();
+    if (!source || !target) return Number.POSITIVE_INFINITY;
+    return Math.hypot((source.x + source.width / 2) - (target.x + target.width / 2), (source.y + source.height / 2) - (target.y + target.height / 2));
+  };
+  await expect.poll(assertAligned).toBeLessThan(1);
+
+  await page.getByRole("button", { name: "Deshacer" }).click();
+  await expect(relationList).toHaveCount(0);
+  await page.getByRole("button", { name: "Rehacer" }).click();
+  await expect(relationList).toContainText("Coincidente");
+  await expect.poll(assertAligned).toBeLessThan(1);
+
+  const beforeMove = await targetNode.boundingBox();
+  expect(beforeMove).not.toBeNull();
+  await page.mouse.move(beforeMove!.x + beforeMove!.width / 2, beforeMove!.y + beforeMove!.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(beforeMove!.x + beforeMove!.width / 2 + 25, beforeMove!.y + beforeMove!.height / 2 + 15);
+  await page.mouse.up();
+  await expect.poll(assertAligned).toBeLessThan(1);
+
+  await relationList.getByRole("button", { name: "Eliminar", exact: true }).click();
+  await expect(relationList).toHaveCount(0);
 });

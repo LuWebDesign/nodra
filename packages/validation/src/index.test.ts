@@ -3,6 +3,18 @@ import { CURRENT_SCHEMA_VERSION, createDocument, elementId, layerId } from "@nod
 import { migrateDocument, migrateProject, parseDocument, serializeDocument, validateDesign, validateDocument, validateProject } from "./index.js";
 
 describe("native document validation", () => {
+  it("validates positional coincidence addresses and geometry without changing legacy connections", () => {
+    const base = createDocument("coincidence", [{ id: layerId("layer-1"), name: "Design", visible: true, order: 0 }]);
+    const style = { stroke: "#000", strokeWidth: 1 };
+    const first = { type: "line" as const, id: elementId("first"), layerId: layerId("layer-1"), start: { x: 0, y: 0 }, end: { x: 10, y: 0 }, rotation: 0, flipX: false, flipY: false, style };
+    const second = { ...first, id: elementId("second"), start: { x: 10, y: 0 }, end: { x: 20, y: 0 } };
+    const positional = { id: "coincident", first: { elementId: first.id, node: { kind: "line" as const, name: "end" as const } }, second: { elementId: second.id, node: { kind: "line" as const, name: "start" as const } } };
+    expect(validateDocument({ ...base, elements: [first, second], positionalCoincidences: [positional] }).success).toBe(true);
+    expect(validateDocument({ ...base, elements: [first, { ...second, start: { x: 11, y: 0 } }], positionalCoincidences: [positional] }).success).toBe(false);
+    expect(validateDocument({ ...base, elements: [first, second], positionalCoincidences: [{ ...positional, first: { ...positional.first, node: { kind: "line", name: "start", handle: "in" } } }] }).success).toBe(false);
+    const spline = { type: "spline" as const, id: elementId("spline"), layerId: layerId("layer-1"), nodes: [{ id: "a", anchor: { x: 10, y: 0 }, continuity: "corner" as const }, { id: "b", anchor: { x: 20, y: 0 }, continuity: "corner" as const }], closed: false, style };
+    expect(validateDocument({ ...base, elements: [first, spline], positionalCoincidences: [positional] }).success).toBe(false);
+  });
   it("migrates schema 7 circular ellipses to canonical circles while retaining legacy ellipses", () => {
     const base = createDocument("migration", [{ id: layerId("layer-1"), name: "Design", visible: true, order: 0 }]);
     const circle = { type: "ellipse", id: "circle", layerId: "layer-1", position: { x: 10, y: 20 }, size: { width: 20, height: 20 }, rotation: 0, style: { stroke: "#000", strokeWidth: 1 }, operation: { operation: "cut", order: 1 }, circleConstraints: [{ id: "radius-10", kind: "radius", value: 10, driving: true }] };
