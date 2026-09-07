@@ -192,7 +192,7 @@ describe("drawing tool routing", () => {
     expect(canActivateRotation("rectangle", [selected], selected)).toBe(false);
   });
   it("recognizes drawing tools without consulting object hit testing", () => {
-    expect(["rectangle", "circle", "line"].every(isDrawingTool)).toBe(true);
+    expect(["rectangle", "circle", "line", "arc"].every(isDrawingTool)).toBe(true);
     expect(isDrawingTool("select")).toBe(false);
     expect(isDrawingTool("dimension")).toBe(false);
     expect(isDrawingTool("pan")).toBe(false);
@@ -202,6 +202,8 @@ describe("drawing tool routing", () => {
     expect(pointerDownIntent("rectangle", elementId("existing"))).toBe("select");
     expect(pointerDownIntent("circle", elementId("existing"))).toBe("select");
     expect(pointerDownIntent("line", elementId("existing"))).toBe("select");
+    expect(pointerDownIntent("arc", elementId("existing"))).toBe("select");
+    expect(pointerDownIntent("arc", undefined)).toBe("draw");
     expect(pointerDownIntent("rectangle", undefined)).toBe("draw");
   });
 

@@ -1038,6 +1038,19 @@ it("converts a zero-radius rectangle to an open path when cutting one edge", () 
     expect(cancelGesture(preview)).toMatchObject({ document: initial.document, gesture: undefined });
   });
 
+  it("creates a canonical arc with stable endpoint connections in one history entry", () => {
+    const connection = { id: "created-arc-start", first: { elementId: arc.id, node: { kind: "named" as const, name: "start" as const } }, second: { elementId: rectangle.id, node: { kind: "named" as const, name: "center" as const } } };
+    const initial = createEditor({ ...document, elements: [rectangle] });
+    const created = dispatch(initial, createElement(arc, [connection]));
+    expect(created.document.elements).toMatchObject([{ id: rectangle.id, type: "rectangle" }, arc]);
+    expect(created.document.connections).toEqual([connection]);
+    expect(created.undo).toHaveLength(1);
+    expect(undo(created).document).toEqual(initial.document);
+    expect(redo(undo(created)).document).toEqual(created.document);
+    const invalid = { ...arc, id: elementId("invalid-created-arc"), endAngle: arc.startAngle };
+    expect(dispatch(initial, createElement(invalid))).toBe(initial);
+  });
+
   it("moves an arc by translating only its center", () => {
     const initial = createEditor({ ...document, elements: [arc] });
     const moved = dispatch(initial, moveElement(arc.id, { x: 3, y: -4 }));

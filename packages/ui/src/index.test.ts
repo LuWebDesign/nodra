@@ -5,7 +5,9 @@ describe("UI primitives", () => {
   it("returns stateless toolbar and layer contracts", () => {
     const onToolChange = vi.fn();
     const onVisibilityChange = vi.fn();
-    expect(toolbar({ activeTool: "select", onToolChange }).kind).toBe("toolbar");
+    const toolbarNode = toolbar({ activeTool: "select", onToolChange });
+    expect(toolbarNode.kind).toBe("toolbar");
+    expect(toolbarNode.props.tools).toContain("arc");
     expect(layers({ layers: [{ id: "l1", name: "Default", visible: true }], onVisibilityChange }).props.layers).toHaveLength(1);
     expect(onToolChange).not.toHaveBeenCalled();
     expect(onVisibilityChange).not.toHaveBeenCalled();

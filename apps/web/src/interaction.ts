@@ -67,7 +67,7 @@ export function pathGuides(path: PathElement): readonly PathGuide[] {
   });
 }
 
-export type DrawingTool = "rectangle" | "circle" | "line";
+export type DrawingTool = "rectangle" | "circle" | "line" | "arc";
 
 export type PointerDownIntent = "draw" | "select";
 export type TransformMode = "resize" | "rotate";
@@ -81,7 +81,7 @@ export function pointerDownIntent(tool: string, hit: ElementId | undefined): Poi
 }
 
 export function isDrawingTool(tool: string): tool is DrawingTool {
-  return tool === "rectangle" || tool === "circle" || tool === "line";
+  return tool === "rectangle" || tool === "circle" || tool === "line" || tool === "arc";
 }
 
 export function pickPathNode(document: DocumentSnapshot, point: PointMm, zoom: number, tolerancePx = 8): PathNodeHit | undefined {
@@ -381,7 +381,7 @@ export function hasNonCollinearPoints(points: readonly PointMm[], epsilon = 1e-9
   return false;
 }
 
-export type NodeFeedbackTool = "select" | "forma" | "pen" | "spline" | "rectangle" | "circle" | "line" | "cut" | "dimension" | "radius";
+export type NodeFeedbackTool = "select" | "forma" | "pen" | "spline" | "rectangle" | "circle" | "line" | "arc" | "cut" | "dimension" | "radius";
 export type HoverNode = NodeHit | FormaNodeHit;
 
 /** Snaps a Forma node drag to another visible real node within screen tolerance. */
