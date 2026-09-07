@@ -86,6 +86,27 @@ export const createElement = (element: Element, connections: readonly ExplicitCo
      : replaceElements({ ...document, connections: [...(document.connections ?? []), ...connections] }, [...document.elements, { ...element }]),
 });
 
+/** Creates a persistent positional coincidence, moving a native circle/arc center onto the target node atomically. */
+export const addPositionalConnection = (source: ExplicitConnection["first"], target: ExplicitConnection["second"]): EditorCommand => ({
+  name: `position-connection:${source.elementId}:${target.elementId}`,
+  apply: (document) => {
+    if (source.elementId === target.elementId && JSON.stringify(source.node) === JSON.stringify(target.node)) return { success: false, error: "A positional connection requires two different nodes" };
+    const sourceElement = document.elements.find((element) => element.id === source.elementId);
+    const targetElement = document.elements.find((element) => element.id === target.elementId);
+    if (!sourceElement || !targetElement) return { success: false, error: "Positional connection element not found" };
+    const sourceIndex = realGeometryNodes(sourceElement).findIndex((_, index) => JSON.stringify(connectableNodeAddress(sourceElement, index)) === JSON.stringify(source.node));
+    const targetIndex = realGeometryNodes(targetElement).findIndex((_, index) => JSON.stringify(connectableNodeAddress(targetElement, index)) === JSON.stringify(target.node));
+    const targetPoint = targetIndex >= 0 ? realGeometryNodes(targetElement)[targetIndex]?.point : undefined;
+    if (sourceIndex < 0 || targetIndex < 0 || !targetPoint) return { success: false, error: "Positional connection node not found" };
+    if ((sourceElement.type !== "circle" && sourceElement.type !== "arc") || source.node.kind !== "named" || source.node.name !== "center") return { success: false, error: "Only a circle or arc center can be positioned by this relation" };
+    const duplicate = (document.connections ?? []).some((connection) => JSON.stringify(connection.first) === JSON.stringify(source) && JSON.stringify(connection.second) === JSON.stringify(target));
+    if (duplicate) return { success: false, error: "Positional connection already exists" };
+    const element = { ...sourceElement, center: targetPoint };
+    const connection: ExplicitConnection = { id: `connection-${crypto.randomUUID()}`, first: source, second: target };
+    return replaceElements({ ...document, connections: [...(document.connections ?? []), connection] }, document.elements.map((candidate) => candidate.id === source.elementId ? element : candidate));
+  },
+});
+
 const sketchNodeId = (): string => `sketch-node-${crypto.randomUUID()}`;
 const sketchEdgeId = (): string => `sketch-edge-${crypto.randomUUID()}`;
 const pathSegmentId = (): string => `path-segment-${crypto.randomUUID()}`;
