@@ -1,8 +1,8 @@
 import type { PointMm } from "@nodra/domain";
-import { closestParameter, pointAt, splitCurveAtParameters, tangentAt, type Curve2D, type CurveFragment } from "./curve2d.js";
+import { closestParameter, curveBounds, pointAt, splitCurveAtParameters, tangentAt, type Curve2D, type CurveFragment } from "./curve2d.js";
 import type { SourcedCurve2D } from "./curve2d-adapters.js";
 import { intersectCurves } from "./intersection-engine.js";
-import { PARAMETER_EPSILON } from "./tolerances.js";
+import { GEOMETRY_EPSILON, PARAMETER_EPSILON } from "./tolerances.js";
 
 export interface CurveParameterInterval {
   readonly start: number;
@@ -12,6 +12,8 @@ export interface CurveParameterInterval {
 
 export interface CurveIntervalSelectionOptions {
   readonly parameterEpsilon?: number;
+  /** Model-space tolerance used when proving unsupported bounds disjoint. */
+  readonly boundsEpsilon?: number;
 }
 
 export interface CurveIntervalPartition {
@@ -40,6 +42,17 @@ function toleranceOrDefault(options?: CurveIntervalSelectionOptions): number {
   const tolerance = options?.parameterEpsilon ?? PARAMETER_EPSILON;
   if (!Number.isFinite(tolerance) || tolerance < 0 || tolerance >= 0.5) throw new Error("parameterEpsilon must be finite and within [0, 0.5)");
   return tolerance;
+}
+
+function boundsToleranceOrDefault(options?: CurveIntervalSelectionOptions): number {
+  const tolerance = options?.boundsEpsilon ?? GEOMETRY_EPSILON;
+  if (!Number.isFinite(tolerance) || tolerance < 0) throw new Error("boundsEpsilon must be finite and non-negative");
+  return tolerance;
+}
+
+function boundsAreDisjoint(first: Curve2D, second: Curve2D, tolerance: number): boolean {
+  const a = curveBounds(first); const b = curveBounds(second);
+  return a.x + a.width < b.x - tolerance || b.x + b.width < a.x - tolerance || a.y + a.height < b.y - tolerance || b.y + b.height < a.y - tolerance;
 }
 
 function validateCuts(parameters: readonly number[]): void {
@@ -71,16 +84,22 @@ function isTransversalIntersection(first: SourcedCurve2D, second: SourcedCurve2D
 }
 
 /** Selects the removable interval from exact intersections with supported curves. */
-export function selectRemovableCurveIntervalFromIntersections(target: SourcedCurve2D, candidates: readonly SourcedCurve2D[], cursor: PointMm): SourcedCurveIntervalSelectionResult {
-  const cuts: number[] = [];
+export function selectRemovableCurveIntervalFromIntersections(target: SourcedCurve2D, candidates: readonly SourcedCurve2D[], cursor: PointMm, options?: CurveIntervalSelectionOptions): SourcedCurveIntervalSelectionResult {
+  const cuts: number[] = []; const boundsTolerance = boundsToleranceOrDefault(options);
   for (const candidate of candidates) {
     if (sameCurveSource(target, candidate)) continue;
     const intersection = intersectCurves(target.curve, candidate.curve);
-    if (intersection.kind === "overlap" || intersection.kind === "unsupported") return { kind: "unsupported" };
+    if (intersection.kind === "overlap") return { kind: "unsupported" };
+    // Unsupported pairs are only a veto when their exact bounds could meet.
+    // A disjoint proof must never turn an unrelated legacy element into a cut veto.
+    if (intersection.kind === "unsupported") {
+      if (!boundsAreDisjoint(target.curve, candidate.curve, boundsTolerance)) return { kind: "unsupported" };
+      continue;
+    }
     if (intersection.kind !== "points") continue;
     cuts.push(...intersection.points.filter(({ firstParameter, secondParameter }) => isTransversalIntersection(target, candidate, firstParameter, secondParameter)).map(({ firstParameter }) => firstParameter));
   }
-  return selectRemovableCurveInterval(target.curve, cuts, cursor);
+  return selectRemovableCurveInterval(target.curve, cuts, cursor, options);
 }
 
 /** Short alias for callers that already have sourced curves. */

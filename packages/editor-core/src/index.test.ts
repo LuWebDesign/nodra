@@ -93,6 +93,84 @@ describe("editor core", () => {
     expect(dispatch(boundaryState, cutSegment(circle.id, 0, { x: 15, y: 10 }))).toBe(boundaryState);
   });
 
+  it("removes an isolated native arc exactly as one undoable open-curve cut", () => {
+    const target: ArcElement = { ...arc, id: elementId("isolated-arc"), center: { x: 0, y: 0 }, radius: 10, startAngle: Math.PI, endAngle: 0, direction: "clockwise" };
+    const initial = createEditor({ ...document, elements: [target] });
+    const cut = dispatch(initial, cutSegment(target.id, 0, { x: 0, y: -10 }));
+    expect(cut.document.elements).toEqual([]);
+    expect(cut.undo).toHaveLength(1);
+    expect(undo(cut).document).toEqual(initial.document);
+    expect(redo(undo(cut)).document).toEqual(cut.document);
+    const tangent: LineElement = { type: "line", id: elementId("isolated-arc-tangent"), layerId: target.layerId, start: { x: -20, y: -10 }, end: { x: 20, y: -10 }, rotation: 0, style: rectangle.style };
+    const tangentCut = dispatch(createEditor({ ...document, elements: [target, tangent] }), cutSegment(target.id, 0, { x: 5, y: -Math.sqrt(75) }));
+    expect(tangentCut.document.elements).toMatchObject([tangent]);
+  });
+
+  it("trims native arcs into one or two exact ordered survivors with deterministic IDs", () => {
+    const target: ArcElement = { ...arc, id: elementId("split-arc"), center: { x: 0, y: 0 }, radius: 10, startAngle: Math.PI, endAngle: 0, direction: "clockwise", operation: { operation: "cut", order: 3 } };
+    const left: LineElement = { type: "line", id: elementId("arc-left-cutter"), layerId: target.layerId, start: { x: -5, y: -20 }, end: { x: -5, y: 5 }, rotation: 0, style: rectangle.style };
+    const right: LineElement = { ...left, id: elementId("arc-right-cutter"), start: { x: 5, y: -20 }, end: { x: 5, y: 5 } };
+    const one = dispatch(createEditor({ ...document, elements: [target, left] }), cutSegment(target.id, 0, { x: -9, y: -4 }));
+    expect(one.document.elements[0]).toMatchObject({ type: "arc", id: target.id, center: target.center, radius: target.radius, direction: target.direction, endAngle: 0, style: target.style, operation: target.operation });
+    expect(one.document.elements).toHaveLength(2);
+
+    const split = dispatch(createEditor({ ...document, elements: [target, left, right] }), cutSegment(target.id, 0, { x: 0, y: -10 }));
+    const pieces = split.document.elements.filter((element): element is ArcElement => element.type === "arc");
+    expect(pieces).toHaveLength(2);
+    expect(pieces.map((piece) => piece.id)).toEqual([target.id, elementId(`${target.id}:trim:1`)]);
+    expect(pieces[0]).toMatchObject({ center: target.center, radius: 10, startAngle: Math.PI, direction: "clockwise", style: target.style, operation: target.operation });
+    expect(pieces[1]).toMatchObject({ center: target.center, radius: 10, endAngle: 0, direction: "clockwise", style: target.style, operation: target.operation });
+    expect(split.document.elements.filter((element) => element.type === "line")).toMatchObject([left, right]);
+
+    const collision = { ...rectangle, id: elementId(`${target.id}:trim:1`), position: { x: 30, y: 30 } };
+    const collisionResult = dispatch(createEditor({ ...document, elements: [target, left, right, collision] }), cutSegment(target.id, 0, { x: 0, y: -10 }));
+    expect(collisionResult.document.elements.some((element) => element.id === elementId(`${target.id}:trim:2`) && element.type === "arc")).toBe(true);
+
+    const counterclockwise: ArcElement = { ...target, id: elementId("seam-ccw-arc"), startAngle: Math.PI / 2, endAngle: Math.PI * 1.5, direction: "counterclockwise" };
+    const seamCut = dispatch(createEditor({ ...document, elements: [counterclockwise, right] }), cutSegment(counterclockwise.id, 0, { x: 9, y: -4 }));
+    expect(seamCut.document.elements[0]).toMatchObject({ type: "arc", id: counterclockwise.id, direction: "counterclockwise", endAngle: Math.PI * 1.5 });
+  });
+
+  it("remaps native arc endpoint dependencies across two surviving pieces", () => {
+    const target: ArcElement = { ...arc, id: elementId("dependent-arc"), center: { x: 0, y: 0 }, radius: 10, startAngle: Math.PI, endAngle: 0, direction: "clockwise" };
+    const left: LineElement = { type: "line", id: elementId("dependent-left"), layerId: target.layerId, start: { x: -5, y: -20 }, end: { x: -5, y: 5 }, rotation: 0, style: rectangle.style };
+    const right: LineElement = { ...left, id: elementId("dependent-right"), start: { x: 5, y: -20 }, end: { x: 5, y: 5 } };
+    const anchor = { ...rectangle, id: elementId("arc-dependency-anchor"), position: { x: 30, y: 30 } };
+    const radial: DimensionElement = { type: "dimension", id: elementId("arc-radius"), layerId: target.layerId, kind: "radius", references: [{ kind: "node", elementId: target.id, nodeIndex: 0, nodeId: "center" }, { kind: "node", elementId: target.id, nodeIndex: 2, nodeId: "end" }], offset: { x: 0, y: -8 }, precision: 2, units: "mm", rotation: 0, style: rectangle.style };
+    const connections = [
+      { id: "arc-center", first: { elementId: target.id, node: { kind: "named" as const, name: "center" as const } }, second: { elementId: anchor.id, node: { kind: "named" as const, name: "center" as const } } },
+      { id: "arc-start", first: { elementId: target.id, node: { kind: "named" as const, name: "start" as const } }, second: { elementId: anchor.id, node: { kind: "named" as const, name: "w" as const } } },
+      { id: "arc-end", first: { elementId: target.id, node: { kind: "named" as const, name: "end" as const } }, second: { elementId: anchor.id, node: { kind: "named" as const, name: "e" as const } } },
+    ];
+    const result = dispatch(createEditor({ ...document, elements: [target, left, right, anchor, radial], connections }), cutSegment(target.id, 0, { x: 0, y: -10 }));
+    const secondId = elementId(`${target.id}:trim:1`);
+    expect(result.document.connections).toMatchObject([
+      { id: "arc-center", first: { elementId: target.id, node: { name: "center" } } },
+      { id: "arc-start", first: { elementId: target.id, node: { name: "start" } } },
+      { id: "arc-end", first: { elementId: secondId, node: { name: "end" } } },
+    ]);
+    expect(result.document.elements.find((element) => element.id === radial.id)).toMatchObject({ type: "dimension", references: [{ elementId: secondId, nodeId: "center" }, { elementId: secondId, nodeId: "end" }] });
+  });
+
+  it("rejects unsupported, overlapping, and cursor-on-cut native arc trims atomically", () => {
+    const target: ArcElement = { ...arc, id: elementId("noop-arc"), center: { x: 0, y: 0 }, radius: 10, startAngle: Math.PI, endAngle: 0, direction: "clockwise" };
+    const secant: LineElement = { type: "line", id: elementId("noop-arc-secant"), layerId: target.layerId, start: { x: 0, y: -20 }, end: { x: 0, y: 5 }, rotation: 0, style: rectangle.style };
+    const boundary = createEditor({ ...document, elements: [target, secant] });
+    expect(dispatch(boundary, cutSegment(target.id, 0, { x: 0, y: -10 }))).toBe(boundary);
+    const overlap = { ...target, id: elementId("overlapping-arc") };
+    const overlapping = createEditor({ ...document, elements: [target, overlap] });
+    expect(dispatch(overlapping, cutSegment(target.id, 0, { x: 0, y: -10 }))).toBe(overlapping);
+    const unsupported = { ...path, id: elementId("unsupported-arc-cubic"), nodes: path.nodes.map((node) => ({ ...node, anchor: { x: node.anchor.x - 5, y: node.anchor.y - 10 } })) };
+    const unsupportedState = createEditor({ ...document, elements: [target, unsupported] });
+    expect(dispatch(unsupportedState, cutSegment(target.id, 0, { x: 0, y: -10 }))).toBe(unsupportedState);
+    const overlappingBounds: EllipseElement = { ...ellipse, id: elementId("unsupported-overlapping-bounds"), position: { x: -1, y: -1 }, size: { width: 2, height: 1 } };
+    const boundsState = createEditor({ ...document, elements: [target, overlappingBounds] });
+    expect(dispatch(boundsState, cutSegment(target.id, 0, { x: 0, y: -10 }))).toBe(boundsState);
+    const disjoint: EllipseElement = { ...overlappingBounds, id: elementId("unsupported-disjoint"), position: { x: 30, y: 30 } };
+    const disjointResult = dispatch(createEditor({ ...document, elements: [target, disjoint] }), cutSegment(target.id, 0, { x: 0, y: -10 }));
+    expect(disjointResult.document.elements).toMatchObject([disjoint]);
+  });
+
   it("keys stable topology references without conflating edge and segment identities", () => {
     expect(topologyReferenceKey({ kind: "sketch-edge", elementId: elementId("shape"), edgeId: "shared" })).toBe("shape:edge:shared");
     expect(topologyReferenceKey({ kind: "path-segment", elementId: elementId("shape"), segmentId: "shared" })).toBe("shape:segment:shared");

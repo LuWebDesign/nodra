@@ -1330,3 +1330,49 @@ test("crea un arco por tres puntos y solo persiste al confirmar", async ({ page 
   await page.getByRole("button", { name: "Seleccion" }).click();
   await expect(page.locator(".creation-pending-overlay")).toHaveCount(0);
 });
+
+test("recorta un arco nativo en dos arcos exactos y conserva los cortadores", async ({ page }) => {
+  await page.goto("/");
+  const pageBounds = await page.locator(".page").boundingBox();
+  expect(pageBounds).not.toBeNull();
+  const center = { x: pageBounds!.x + 260, y: pageBounds!.y + 240 };
+  const start = { x: center.x - 60, y: center.y };
+  const end = { x: center.x + 60, y: center.y };
+  const through = { x: center.x, y: center.y - 60 };
+
+  await page.getByRole("button", { name: "Arco" }).click();
+  await page.mouse.click(start.x, start.y);
+  await page.mouse.click(end.x, end.y);
+  await page.mouse.move(through.x, through.y);
+  await page.mouse.click(through.x, through.y);
+  const original = page.locator('.page-svg svg path[data-element-id]').first();
+  await expect(original).toHaveCount(1);
+  const arcId = await original.getAttribute("data-element-id");
+  expect(arcId).not.toBeNull();
+
+  for (const x of [center.x - 20, center.x + 20]) {
+    await page.getByRole("button", { name: "Línea" }).click();
+    await page.mouse.click(x, center.y - 90);
+    await page.mouse.move(x, center.y + 20);
+    await page.mouse.click(x, center.y + 20);
+    await page.getByRole("button", { name: "Seleccion" }).click();
+  }
+  const cutters = page.locator('.page-svg svg g[data-element-id]');
+  await expect(cutters).toHaveCount(2);
+
+  await page.getByRole("button", { name: "Cortar segmentos" }).click();
+  await page.mouse.move(through.x, through.y);
+  await expect(page.locator('.cut-segment-hover-overlay path[d*=" A "]')).toBeVisible();
+  await expect(page.locator(`.page-svg svg path[data-element-id^="${arcId}"]`)).toHaveCount(1);
+  await page.mouse.click(through.x, through.y);
+  const survivors = page.locator(`.page-svg svg path[data-element-id^="${arcId}"]`);
+  await expect(survivors).toHaveCount(2);
+  await expect(cutters).toHaveCount(2);
+
+  await page.getByRole("button", { name: "Deshacer" }).click();
+  await expect(survivors).toHaveCount(1);
+  await expect(cutters).toHaveCount(2);
+  await page.getByRole("button", { name: "Rehacer" }).click();
+  await expect(survivors).toHaveCount(2);
+  await expect(cutters).toHaveCount(2);
+});
