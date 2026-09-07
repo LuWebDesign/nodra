@@ -452,6 +452,8 @@ describe("drag geometry", () => {
     expect(pickElement(document, { x: 10, y: 20 }, 1)).toBeUndefined();
     expect(pickNode(document, { x: 30, y: 20 }, 1)).toMatchObject({ elementId: arc.id, nodeIndex: 1, node: { nodeId: "start" } });
     expect(pickNode(document, { x: 20, y: 30 }, 1)).toMatchObject({ elementId: arc.id, nodeIndex: 2, node: { nodeId: "end" } });
+    expect(pickFormaNode(document, { x: 30, y: 20 }, 1)).toMatchObject({ elementId: arc.id, nodeIndex: 1 });
+    expect(pickFormaElement(document, { x: 20 + Math.SQRT1_2 * 10, y: 20 + Math.SQRT1_2 * 10 }, 1)).toBe(arc.id);
     expect(pickDimensionTarget(document, { x: 20 + Math.SQRT1_2 * 10, y: 20 + Math.SQRT1_2 * 10 }, 1, 1)).toMatchObject({ kind: "circle", hit: { elementId: arc.id, center: { node: { nodeId: "center" } }, rim: { node: { nodeId: "start" } } } });
     expect(pickDimensionTarget(document, { x: 20, y: 30 }, 1, 1)).toMatchObject({ kind: "circle", hit: { rim: { node: { nodeId: "end" } } } });
     expect(marqueeSelection(document, { x: 19, y: 19 }, { x: 31, y: 31 })).toEqual([arc.id]);

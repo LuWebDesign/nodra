@@ -71,12 +71,13 @@ const replaceTopology = (document: DocumentSnapshot, edit: TopologyEditResult): 
 const removeConnectionsFor = (document: DocumentSnapshot, ids: ReadonlySet<ElementId>): DocumentSnapshot => ({ ...document, connections: (document.connections ?? []).filter((connection) => !ids.has(connection.first.elementId) && !ids.has(connection.second.elementId)) });
 const elementIndex = (document: DocumentSnapshot, id: ElementId): number => document.elements.findIndex((element) => element.id === id);
 
-/** Arc support is intentionally limited to translating its center.  Keep this
- * structural guard local so editor-core remains compatible with documents
- * produced by domain versions that include ArcElement. */
+/** Keeps native Arc handling explicit where generic property-element transforms
+ * would otherwise assume position/size geometry. */
 const isArcElement = (element: Element): element is ArcElement => element.type === "arc";
 const translateArc = (element: ArcElement, delta: PointMm, id = element.id): ArcElement => ({ ...element, id, center: { x: element.center.x + delta.x, y: element.center.y + delta.y } });
 const normalizeArcAngle = (angle: number): number => ((angle % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2);
+const ARC_EDIT_ANGLE_EPSILON = 1e-10;
+const arcAngleDistance = (first: number, second: number): number => Math.abs(Math.atan2(Math.sin(first - second), Math.cos(first - second)));
 
 export const createElement = (element: Element, connections: readonly ExplicitConnection[] = []): EditorCommand => ({
   name: `create:${element.type}`,
@@ -540,8 +541,13 @@ const connectedSide = (document: DocumentSnapshot, id: ElementId, axis: "x" | "y
 export const resizeElementToDimensions = (id: ElementId, field: "width" | "height" | "radius", value: number, aspectLock = false): EditorCommand => ({
   name: `resize-property:${id}:${field}`,
   apply: (document) => {
-    const element = document.elements.find((candidate): candidate is Extract<Element, { type: "rectangle" | "ellipse" | "circle" }> => candidate.id === id && (candidate.type === "rectangle" || candidate.type === "ellipse" || candidate.type === "circle"));
+    const element = document.elements.find((candidate): candidate is Extract<Element, { type: "rectangle" | "ellipse" | "circle" | "arc" }> => candidate.id === id && (candidate.type === "rectangle" || candidate.type === "ellipse" || candidate.type === "circle" || candidate.type === "arc"));
     if (!element || !Number.isFinite(value) || value <= 0) return { success: false, error: "Dimensions must be positive" };
+    if (element.type === "arc") {
+      if (field !== "radius") return { success: false, error: "Arc inspector only supports radius" };
+      if (value === element.radius) return { success: true, document };
+      return replaceElements(document, document.elements.map((candidate) => candidate.id === id && candidate.type === "arc" ? { ...candidate, radius: value } : candidate));
+    }
     if (element.type === "circle") {
       const radius = field === "radius" ? value : value / 2;
       const horizontal = connectedSide(document, id, "x"); const vertical = connectedSide(document, id, "y");
@@ -2316,6 +2322,16 @@ export const updateElementNode = (id: ElementId, nodeIndex: number, point: Point
     if (current.type === "circle" && node.kind === "cardinal") {
       const radius = Math.hypot(point.x - current.center.x, point.y - current.center.y);
       return radius > 0 && Number.isFinite(radius) ? updateElement(id, { radius }).apply(document) : { success: false, error: "Circle radius must be positive" };
+    }
+    if (current.type === "arc" && node.kind === "endpoint") {
+      if (Math.hypot(point.x - current.center.x, point.y - current.center.y) <= GEOMETRY_EPSILON) return { success: false, error: "Arc endpoint direction is undefined at its center" };
+      const angle = normalizeArcAngle(Math.atan2(point.y - current.center.y, point.x - current.center.x));
+      const currentAngle = node.nodeId === "start" ? current.startAngle : current.endAngle;
+      const opposite = node.nodeId === "start" ? current.endAngle : current.startAngle;
+      if (arcAngleDistance(angle, currentAngle) <= ARC_EDIT_ANGLE_EPSILON) return { success: true, document };
+      if (arcAngleDistance(angle, opposite) <= ARC_EDIT_ANGLE_EPSILON) return { success: false, error: "Arc endpoints must remain distinct" };
+      const patch = node.nodeId === "start" ? { startAngle: angle } : node.nodeId === "end" ? { endAngle: angle } : undefined;
+      return patch ? replaceElements(document, document.elements.map((element) => element.id === id && element.type === "arc" ? { ...element, ...patch } : element)) : { success: false, error: "Arc endpoint not found" };
     }
     if (node.kind === "center" || ((current.type === "rectangle" || current.type === "ellipse" || current.type === "circle") && node.kind === "corner")) {
       return moveElement(id, { x: point.x - node.point.x, y: point.y - node.point.y }).apply(document);
