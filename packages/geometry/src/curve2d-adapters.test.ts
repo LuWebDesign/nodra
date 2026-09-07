@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { elementId, layerId, type ArcElement, type CircleElement, type EllipseElement, type PathElement, type SketchElement, type SplineElement } from "@nodra/domain";
-import { arcElementToCurve, circleElementToCurve, elementToContour, elementToCurves, ellipseElementToCurve, lineElementToCurve, pathSegmentToCurve, rotatedLineEndpoints, sketchEdgeToCurve, splineSpanToCurve } from "./index.js";
+import { elementId, layerId, type ArcElement, type CircleElement, type EllipseElement, type PathElement, type RectangleElement, type SketchElement, type SplineElement } from "@nodra/domain";
+import { arcElementToCurve, circleElementToCurve, elementToContour, elementToCurves, ellipseElementToCurve, lineElementToCurve, pathSegmentToCurve, rectangleElementToCurves, rotatedLineEndpoints, sketchEdgeToCurve, splineSpanToCurve } from "./index.js";
 
 const style = { stroke: "#000", strokeWidth: 1 };
 const layer = layerId("layer");
@@ -130,12 +130,32 @@ describe("Curve2D source adapters", () => {
     expect(() => ellipseElementToCurve({ ...ellipse, size: { width: Number.NaN, height: 5 } })).toThrow("finite and positive");
   });
 
+  it("adapts sharp RectangleElements as four exact stable line edges", () => {
+    const rectangle: RectangleElement = { type: "rectangle", id: elementId("rectangle"), layerId: layer, position: { x: 0, y: 0 }, size: { width: 6, height: 4 }, cornerRadius: 0, rotation: 0, style };
+    expect(rectangleElementToCurves(rectangle)).toEqual([
+      { curve: { type: "line", start: { x: 0, y: 0 }, end: { x: 6, y: 0 } }, source: { kind: "rectangle-edge", elementId: rectangle.id, edge: "top" }, sourceIndex: 0 },
+      { curve: { type: "line", start: { x: 6, y: 0 }, end: { x: 6, y: 4 } }, source: { kind: "rectangle-edge", elementId: rectangle.id, edge: "right" }, sourceIndex: 1 },
+      { curve: { type: "line", start: { x: 6, y: 4 }, end: { x: 0, y: 4 } }, source: { kind: "rectangle-edge", elementId: rectangle.id, edge: "bottom" }, sourceIndex: 2 },
+      { curve: { type: "line", start: { x: 0, y: 4 }, end: { x: 0, y: 0 } }, source: { kind: "rectangle-edge", elementId: rectangle.id, edge: "left" }, sourceIndex: 3 },
+    ]);
+    expect(elementToCurves(rectangle)).toEqual(rectangleElementToCurves(rectangle));
+    expect(rectangleElementToCurves({ ...rectangle, flipX: true, flipY: true })).toEqual(rectangleElementToCurves(rectangle));
+    expect(elementToCurves({ ...rectangle, cornerRadius: 1 })).toEqual([]);
+    expect(elementToCurves({ ...rectangle, cornerRadii: { topLeft: 0, topRight: 0, bottomRight: 1, bottomLeft: 0 } })).toEqual([]);
+    const rotated = rectangleElementToCurves({ ...rectangle, rotation: Math.PI / 2 });
+    expect(rotated[0]?.curve.type).toBe("line");
+    if (rotated[0]?.curve.type !== "line") throw new Error("Expected a line edge");
+    expect(rotated[0].curve.start.x).toBeCloseTo(5); expect(rotated[0].curve.start.y).toBeCloseTo(-1);
+    expect(rotated[0].curve.end.x).toBeCloseTo(5); expect(rotated[0].curve.end.y).toBeCloseTo(5);
+    expect(() => rectangleElementToCurves({ ...rectangle, size: { width: 0, height: 4 } })).toThrow("finite and positive");
+  });
+
   it("keeps unsupported elements empty and never mutates source entities", () => {
-    const rectangle = { type: "rectangle" as const, id: elementId("rectangle"), layerId: layer, position: { x: 0, y: 0 }, size: { width: 5, height: 4 }, cornerRadius: 0, rotation: 0, style };
-    expect(elementToCurves(rectangle)).toEqual([]);
-    const before = JSON.stringify([line(), sketch, path, spline]);
-    elementToCurves(line()); elementToCurves(sketch); elementToCurves(path); elementToCurves(spline);
-    expect(JSON.stringify([line(), sketch, path, spline])).toBe(before);
+    const rounded: RectangleElement = { type: "rectangle", id: elementId("rounded"), layerId: layer, position: { x: 0, y: 0 }, size: { width: 5, height: 4 }, cornerRadius: 1, rotation: 0, style };
+    expect(elementToCurves(rounded)).toEqual([]);
+    const before = JSON.stringify([line(), sketch, path, spline, rounded]);
+    elementToCurves(line()); elementToCurves(sketch); elementToCurves(path); elementToCurves(spline); elementToCurves(rounded);
+    expect(JSON.stringify([line(), sketch, path, spline, rounded])).toBe(before);
   });
 
   it("rejects numeric overflow while projecting source geometry", () => {

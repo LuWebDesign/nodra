@@ -1,8 +1,9 @@
-import type { ArcElement, CircleElement, Element, ElementId, EllipseElement, LineElement, PathElement, PointMm, SketchElement, SplineElement } from "@nodra/domain";
+import type { ArcElement, CircleElement, Element, ElementId, EllipseElement, LineElement, PathElement, PointMm, RectangleElement, SketchElement, SplineElement } from "@nodra/domain";
 import type { ArcCurve2D, CircleCurve2D, CubicBezierCurve2D, Curve2D, LineCurve2D } from "./curve2d.js";
 
 export type Curve2DSource =
   | { readonly kind: "line-element"; readonly elementId: ElementId }
+  | { readonly kind: "rectangle-edge"; readonly elementId: ElementId; readonly edge: "top" | "right" | "bottom" | "left" }
   | { readonly kind: "arc-element"; readonly elementId: ElementId }
   | { readonly kind: "sketch-edge"; readonly elementId: ElementId; readonly edgeId: string; readonly startNodeId: string; readonly endNodeId: string }
   | { readonly kind: "path-segment"; readonly elementId: ElementId; readonly segmentId: string; readonly startNodeId: string; readonly endNodeId: string }
@@ -132,11 +133,31 @@ export function ellipseElementToCurve(element: EllipseElement): SourcedCurve2D<C
   return undefined;
 }
 
+/** Adapts sharp Rectangle boundaries as four exact line curves. Rounded
+ * rectangles remain unsupported until exact corner-arc composition is added. */
+export function rectangleElementToCurves(element: RectangleElement): readonly SourcedCurve2D<LineCurve2D>[] {
+  const values = [element.position.x, element.position.y, element.size.width, element.size.height, element.rotation, element.cornerRadius];
+  if (!values.every(Number.isFinite) || element.size.width <= 0 || element.size.height <= 0 || element.cornerRadius < 0) throw new Error("Rectangle geometry must be finite and positive");
+  const radii = element.cornerRadii ?? { topLeft: element.cornerRadius, topRight: element.cornerRadius, bottomRight: element.cornerRadius, bottomLeft: element.cornerRadius };
+  if (!Object.values(radii).every((radius) => Number.isFinite(radius) && radius >= 0)) throw new Error("Rectangle corner radii must be finite and non-negative");
+  if (Object.values(radii).some((radius) => radius > 0)) return [];
+  const center = checkedPoint({ x: element.position.x + element.size.width / 2, y: element.position.y + element.size.height / 2 });
+  const points = [
+    { x: element.position.x, y: element.position.y },
+    { x: element.position.x + element.size.width, y: element.position.y },
+    { x: element.position.x + element.size.width, y: element.position.y + element.size.height },
+    { x: element.position.x, y: element.position.y + element.size.height },
+  ].map((point) => rotateAround(point, center, element.rotation, false, false));
+  const names = ["top", "right", "bottom", "left"] as const;
+  return names.map((edge, sourceIndex) => ({ curve: { type: "line", start: points[sourceIndex]!, end: points[(sourceIndex + 1) % points.length]! }, source: { kind: "rectangle-edge", elementId: element.id, edge }, sourceIndex }));
+}
+
 /** Returns supported source curves in persistent source order; unsupported elements return none. */
 export function elementToCurves(element: Element): readonly SourcedCurve2D[] {
   if (element.type === "arc") return [arcElementToCurve(element)];
   if (element.type === "line") return [lineElementToCurve(element)];
   if (element.type === "circle") return [circleElementToCurve(element)];
+  if (element.type === "rectangle") return rectangleElementToCurves(element);
   if (element.type === "ellipse") { const sourced = ellipseElementToCurve(element); return sourced ? [sourced] : []; }
   if (element.type === "sketch") return element.edges.map((edge) => sketchEdgeToCurve(element, edge.id));
   if (element.type === "path") return element.segments.map((segment) => pathSegmentToCurve(element, segment.id));

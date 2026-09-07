@@ -508,7 +508,9 @@ describe("drag geometry", () => {
     expect(pickCutIntervalPreview({ ...document, elements: [target, cutter] }, { x: 10, y: 5 }, 10)?.fragments).toEqual([]);
     const tangent = { ...cutter, id: elementId("cut-circle-tangent"), start: { x: -5, y: 0 }, end: { x: 15, y: 0 } };
     expect(pickCutIntervalPreview({ ...document, elements: [target, tangent] }, { x: 5, y: 10 }, 10)?.fragments).toEqual([]);
-    const unsupportedTangent = { type: "rectangle" as const, id: elementId("cut-circle-unsupported-tangent"), layerId: layer.id, position: { x: 3, y: -4 }, size: { width: 4, height: 4 }, cornerRadius: 0, rotation: 0, style };
+    const sharpRectangle = { type: "rectangle" as const, id: elementId("cut-circle-sharp-rectangle"), layerId: layer.id, position: { x: 3, y: -5 }, size: { width: 4, height: 20 }, cornerRadius: 0, rotation: 0, style };
+    expect(pickCutIntervalPreview({ ...document, elements: [target, sharpRectangle] }, { x: 5, y: 0 }, 10)?.fragments).toHaveLength(1);
+    const unsupportedTangent = { type: "rectangle" as const, id: elementId("cut-circle-unsupported-tangent"), layerId: layer.id, position: { x: 3, y: -4 }, size: { width: 4, height: 4 }, cornerRadius: 1, rotation: 0, style };
     const lowerPreview = pickCutIntervalPreview({ ...document, elements: [target, cutter] }, { x: 5, y: 10 }, 10);
     expect(pickCutIntervalPreview({ ...document, elements: [target, cutter, unsupportedTangent] }, { x: 5, y: 10 }, 10)?.fragments).toEqual(lowerPreview?.fragments);
   });
@@ -569,7 +571,7 @@ describe("drag geometry", () => {
     expect(preview?.fragments).toEqual([{ curve: { type: "line", start: { x: 0, y: 5 }, end: { x: 8, y: 5 } }, sourceInterval: { t0: 0, t1: 0.8 } }]);
     const coincident = { ...target, id: elementId("cut-filter-overlap") };
     expect(pickCutIntervalPreview({ ...document, elements: [target, crossing, coincident] }, { x: 6, y: 5 }, 10)?.fragments).toEqual([]);
-    const unsupportedRectangle = { type: "rectangle" as const, id: elementId("cut-filter-rectangle"), layerId: visible.id, position: { x: 4, y: 0 }, size: { width: 2, height: 10 }, cornerRadius: 0, rotation: 0, style };
+    const unsupportedRectangle = { type: "ellipse" as const, id: elementId("cut-filter-oval"), layerId: visible.id, position: { x: 4, y: 0 }, size: { width: 2, height: 10 }, rotation: 0, style };
     expect(pickCutIntervalPreview({ ...document, elements: [target, crossing, unsupportedRectangle] }, { x: 5, y: 5 }, 10)?.fragments).toEqual([]);
   });
 

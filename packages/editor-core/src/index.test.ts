@@ -44,6 +44,23 @@ describe("editor core", () => {
     expect(result).toMatchObject({ type: "arc", id: circle.id, startAngle: Math.PI / 2, endAngle: 0, direction: "clockwise" });
   });
 
+  it("uses sharp rectangles and closed sketches as exact read-only Circle Trim cutters", () => {
+    const circle: CircleElement = { type: "circle", id: elementId("closed-cutter-circle"), layerId: rectangle.layerId, center: { x: 10, y: 10 }, radius: 5, style: rectangle.style };
+    const sharp: RectangleElement = { ...rectangle, id: elementId("sharp-circle-cutter"), position: { x: 7, y: 0 }, size: { width: 6, height: 20 }, cornerRadius: 0 };
+    const sharpInitial = createEditor({ ...document, elements: [circle, sharp] });
+    const sharpResult = dispatch(sharpInitial, cutSegment(circle.id, 0, { x: 10, y: 5 }));
+    expect(sharpResult.document.elements[0]).toMatchObject({ type: "arc", id: circle.id, center: circle.center, radius: circle.radius });
+    expect(sharpResult.document.elements[1]).toMatchObject(sharp);
+    expect(undo(sharpResult).document).toEqual(sharpInitial.document);
+
+    const closed = createSketchLine(elementId("closed-sketch-circle-cutter"), circle.layerId, rectangle.style, { x: 7, y: 0 }, { x: 13, y: 0 });
+    const closedSketch: SketchElement = { ...closed, nodes: [...closed.nodes, { id: "closed-bottom-right", point: { x: 13, y: 20 } }, { id: "closed-bottom-left", point: { x: 7, y: 20 } }], edges: [closed.edges[0]!, { id: "closed-right", startNodeId: closed.nodes[1]!.id, endNodeId: "closed-bottom-right" }, { id: "closed-bottom", startNodeId: "closed-bottom-right", endNodeId: "closed-bottom-left" }, { id: "closed-left", startNodeId: "closed-bottom-left", endNodeId: closed.nodes[0]!.id }] };
+    const sketchInitial = createEditor({ ...document, elements: [circle, closedSketch] });
+    const sketchResult = dispatch(sketchInitial, cutSegment(circle.id, 0, { x: 10, y: 5 }));
+    expect(sketchResult.document.elements[0]).toMatchObject({ type: "arc", id: circle.id });
+    expect(sketchResult.document.elements[1]).toEqual(sketchInitial.document.elements[1]);
+  });
+
   it("keeps circle Trim dependencies only through valid stable arc references", () => {
     const circle: CircleElement = { type: "circle", id: elementId("dependent-circle"), layerId: rectangle.layerId, center: { x: 10, y: 10 }, radius: 5, style: rectangle.style, circleConstraints: [{ id: "radius-5", kind: "radius", value: 5, driving: true }] };
     const cutter: LineElement = { type: "line", id: elementId("dependent-cutter"), layerId: rectangle.layerId, start: { x: 0, y: 10 }, end: { x: 20, y: 10 }, rotation: 0, style: rectangle.style };
@@ -66,6 +83,8 @@ describe("editor core", () => {
       { ...connections[0], first: { elementId: circle.id, node: { kind: "named", name: "center" } } },
       { ...connections[1], first: { elementId: circle.id, node: { kind: "named", name: "end" } } },
     ]);
+    const resizedThroughAnnotation = dispatch(result, updateDimensionValue(radial.id, 8));
+    expect(resizedThroughAnnotation.document.elements.find((element) => element.id === circle.id)).toMatchObject({ type: "arc", radius: 8 });
   });
 
   it("rejects tangent, hidden, coincident, unsupported, and cursor-on-cut circle mutations", () => {
@@ -82,7 +101,7 @@ describe("editor core", () => {
     const coincident = { ...circle, id: elementId("coincident-circle") };
     const overlapState = createEditor({ ...base, elements: [circle, coincident] });
     expect(dispatch(overlapState, cutSegment(circle.id, 0, { x: 10, y: 15 }))).toBe(overlapState);
-    const unsupported = { ...rectangle, id: elementId("unsupported-cutter"), layerId: visible.id, position: { x: 4, y: 8 }, size: { width: 12, height: 4 } };
+    const unsupported = { ...rectangle, id: elementId("unsupported-cutter"), layerId: visible.id, position: { x: 4, y: 8 }, size: { width: 12, height: 4 }, cornerRadius: 1 };
     const unsupportedState = createEditor({ ...base, elements: [circle, unsupported] });
     expect(dispatch(unsupportedState, cutSegment(circle.id, 0, { x: 10, y: 15 }))).toBe(unsupportedState);
     const secant: LineElement = { ...tangent, id: elementId("secant"), start: { x: 0, y: 10 }, end: { x: 20, y: 10 } };
@@ -277,6 +296,17 @@ describe("editor core", () => {
         expect((perpendicular.document.elements[0] as SketchElement).nodes[3]?.point.x).toBeCloseTo(0);
       });
 
+      it("adds a compatible relation to a closed dimensioned sketch", () => {
+        const sketch: SketchElement = { type: "sketch", id: elementId("closed-dimensioned-relations"), layerId: layerId("default"), nodes: [{ id: "a", point: { x: 0, y: 0 } }, { id: "b", point: { x: 10, y: 0 } }, { id: "c", point: { x: 10, y: 8 } }, { id: "d", point: { x: 0, y: 8 } }], edges: [{ id: "top", startNodeId: "a", endNodeId: "b" }, { id: "right", startNodeId: "b", endNodeId: "c" }, { id: "bottom", startNodeId: "c", endNodeId: "d" }, { id: "left", startNodeId: "d", endNodeId: "a" }], constraints: [{ id: "width", kind: "distance", references: [{ elementId: elementId("closed-dimensioned-relations"), nodeId: "a" }, { elementId: elementId("closed-dimensioned-relations"), nodeId: "b" }], value: 10 }, { id: "auto:top:horizontal", kind: "horizontal", references: [{ elementId: elementId("closed-dimensioned-relations"), nodeId: "a" }, { elementId: elementId("closed-dimensioned-relations"), nodeId: "b" }] }, { id: "auto:right:vertical", kind: "vertical", references: [{ elementId: elementId("closed-dimensioned-relations"), nodeId: "b" }, { elementId: elementId("closed-dimensioned-relations"), nodeId: "c" }] }, { id: "auto:bottom:horizontal", kind: "horizontal", references: [{ elementId: elementId("closed-dimensioned-relations"), nodeId: "c" }, { elementId: elementId("closed-dimensioned-relations"), nodeId: "d" }] }, { id: "auto:left:vertical", kind: "vertical", references: [{ elementId: elementId("closed-dimensioned-relations"), nodeId: "d" }, { elementId: elementId("closed-dimensioned-relations"), nodeId: "a" }] }], style: rectangle.style };
+        const dimension: DimensionElement = { type: "dimension", id: elementId("closed-width-dimension"), layerId: sketch.layerId, kind: "aligned", driving: true, constraintId: "width", references: [{ kind: "node", elementId: sketch.id, nodeIndex: 0, nodeId: "a" }, { kind: "node", elementId: sketch.id, nodeIndex: 1, nodeId: "b" }], offset: { x: 0, y: -5 }, precision: 2, units: "mm", rotation: 0, style: rectangle.style };
+        const relation = { id: "opposite-parallel", kind: "parallel" as const, references: [{ elementId: sketch.id, edgeId: "top" }, { elementId: sketch.id, edgeId: "bottom" }] as const };
+        const initial = createEditor({ ...document, elements: [sketch, dimension] });
+        const constrained = dispatch(initial, addSketchConstraint(sketch.id, relation));
+        expect((constrained.document.elements[0] as SketchElement).constraints?.map((constraint) => constraint.id)).toEqual(["width", "auto:top:horizontal", "auto:right:vertical", "auto:left:vertical", relation.id]);
+        expect(constrained.document.elements[1]).toEqual(initial.document.elements[1]);
+        expect(constrained.undo).toHaveLength(1);
+      });
+
       it("replaces an automatic segment relation with an explicit stable-edge relation", () => {
         const sketch: SketchElement = { type: "sketch", id: elementId("replace-auto-segment"), layerId: layerId("default"), nodes: [{ id: "a", point: { x: 0, y: 0 } }, { id: "b", point: { x: 10, y: 0 } }, { id: "c", point: { x: 10, y: 10 } }], edges: [{ id: "ab", startNodeId: "a", endNodeId: "b" }, { id: "bc", startNodeId: "b", endNodeId: "c" }], constraints: [{ id: "auto:bc:perpendicular", kind: "perpendicular", references: [{ elementId: elementId("replace-auto-segment"), edgeId: "ab" }, { elementId: elementId("replace-auto-segment"), edgeId: "bc" }] }], style: rectangle.style };
         const explicit = { id: "parallel", kind: "parallel" as const, references: [{ elementId: sketch.id, edgeId: "ab" }, { elementId: sketch.id, edgeId: "bc" }] as const };
@@ -357,7 +387,7 @@ describe("editor core", () => {
     const branched = branch.document.elements[0] as SketchElement;
     const closed = dispatch(branch, appendSketchEdge(sketch.id, branched.nodes[2]!.id, branched.nodes[0]!.point, branched.nodes[0]!.id));
     expect(closed.document.elements[0]).toMatchObject({ type: "sketch", nodes: [{ id: sketch.nodes[0]!.id }, { id: sketch.nodes[1]!.id }, { point: { x: 10, y: 10 } }], edges: [{ startNodeId: sketch.nodes[0]!.id, endNodeId: sketch.nodes[1]!.id }, { startNodeId: sketch.nodes[1]!.id }, { startNodeId: branched.nodes[2]!.id, endNodeId: sketch.nodes[0]!.id }] });
-    expect((closed.document.elements[0] as SketchElement).constraints?.map((constraint) => constraint.kind)).toEqual(["horizontal", "vertical", "perpendicular"]);
+    expect((closed.document.elements[0] as SketchElement).constraints?.map((constraint) => constraint.kind)).toEqual(["horizontal", "vertical"]);
     const cut = dispatch(closed, cutSketchEdge(sketch.id, 1));
     expect(cut.document.elements[0]).toMatchObject({ type: "sketch", nodes: [{ id: sketch.nodes[0]!.id }, { id: sketch.nodes[1]!.id }, { point: { x: 10, y: 10 } }], edges: [{ startNodeId: sketch.nodes[0]!.id, endNodeId: sketch.nodes[1]!.id }, { startNodeId: branched.nodes[2]!.id, endNodeId: sketch.nodes[0]!.id }] });
   });
@@ -1305,6 +1335,25 @@ it("converts a zero-radius rectangle to an open path when cutting one edge", () 
     expect(state.undo).toHaveLength(1);
   });
 
+  it("updates annotation radius and diameter dimensions on native arcs without a constraint solver", () => {
+    const target: ArcElement = { ...arc, id: elementId("dimensioned-arc"), center: { x: 20, y: 20 }, radius: 10 };
+    const radial = (kind: "radius" | "diameter"): DimensionElement => ({ type: "dimension", id: elementId(`arc-${kind}`), layerId: target.layerId, kind, references: [{ kind: "node", elementId: target.id, nodeIndex: 0, nodeId: "center" }, { kind: "node", elementId: target.id, nodeIndex: 2, nodeId: "end" }], offset: { x: 8, y: 0 }, precision: 2, units: "mm", rotation: 0, style: rectangle.style });
+    const radius = radial("radius");
+    const initial = createEditor({ ...document, elements: [target, radius] });
+    const resized = dispatch(initial, updateDimensionValue(radius.id, 15));
+    expect(resized.document.elements[0]).toMatchObject({ type: "arc", radius: 15, center: target.center, startAngle: target.startAngle, endAngle: target.endAngle, direction: target.direction });
+    expect(resized.document.elements[1]).toEqual(initial.document.elements[1]);
+    expect(resized.undo).toHaveLength(1);
+    expect(undo(resized).document).toEqual(initial.document);
+    const diameter = radial("diameter");
+    const diameterResult = dispatch(createEditor({ ...document, elements: [target, diameter] }), updateDimensionValue(diameter.id, 30));
+    expect((diameterResult.document.elements[0] as ArcElement).radius).toBe(15);
+    expect(dispatch(initial, updateDimensionValue(radius.id, 10))).toBe(initial);
+    const malformed: DimensionElement = { ...radius, id: elementId("malformed-arc-radius"), references: [{ kind: "node", elementId: target.id, nodeIndex: 1, nodeId: "start" }, { kind: "node", elementId: target.id, nodeIndex: 2, nodeId: "end" }] };
+    const malformedInitial = createEditor({ ...document, elements: [target, malformed] });
+    expect(dispatch(malformedInitial, updateDimensionValue(malformed.id, 15))).toBe(malformedInitial);
+  });
+
   it("rejects a driving circle dimension whose persisted constraint is missing", () => {
     const circle: CircleElement = { type: "circle", id: elementId("missing-driving-circle"), layerId: rectangle.layerId, center: { x: 20, y: 20 }, radius: 10, style: rectangle.style };
     const radius: DimensionElement = { type: "dimension", id: elementId("missing-driving-radius"), layerId: rectangle.layerId, kind: "radius", driving: true, constraintId: "missing", references: [{ kind: "node", elementId: circle.id, nodeIndex: 0, nodeId: "center" }, { kind: "node", elementId: circle.id, nodeIndex: 2, nodeId: "e" }], offset: { x: 8, y: 0 }, precision: 2, units: "mm", rotation: 0, style: rectangle.style };
@@ -1555,7 +1604,9 @@ it("moves a dimension by changing only its placement offset and supports undo", 
     const closed = closePath(path.id).apply({ ...document, elements: [path] });
     expect(closed.success && closed.topology?.referenceMap.get(`${path.id}:segment:${path.segments[0]!.id}`)).toEqual({ kind: "preserved", reference: { kind: "path-segment", elementId: path.id, segmentId: path.segments[0]!.id } });
     let state = dispatch(createEditor({ ...document, elements: [path] }), closePath(path.id));
-    expect(state.document.elements[0]).toMatchObject({ closed: true, segments: [{ id: path.segments[0]!.id, type: "cubicBezier" }, { type: "line", startNodeId: "b", endNodeId: "a" }] });
+    expect(state.document.elements[0]).toMatchObject({ closed: true, style: { fill: "rgba(101,217,255,0.22)" }, segments: [{ id: path.segments[0]!.id, type: "cubicBezier" }, { type: "line", startNodeId: "b", endNodeId: "a" }] });
+    const explicitlyFilled = { ...path, id: elementId("explicit-pen-fill"), style: { ...path.style, fill: "#ff0000" } };
+    expect(dispatch(createEditor({ ...document, elements: [explicitlyFilled] }), closePath(explicitlyFilled.id)).document.elements[0]).toMatchObject({ closed: true, style: { fill: "#ff0000" } });
     expect(state.undo).toHaveLength(1);
     const closedPath = state.document.elements[0];
     const closingId = closedPath?.type === "path" ? closedPath.segments.at(-1)?.id : undefined;

@@ -214,7 +214,7 @@ export function solveSketchConstraints(sketch: SketchElement): SketchConstraintS
       const firstLength = Math.hypot(ax, ay); const secondLength = Math.hypot(bx, by);
       if (firstLength <= 1e-6 || secondLength <= 1e-6) { conflicts.push(constraint.id); continue; }
       if (constraint.kind === "equal") { const angle = Math.atan2(by, bx); fourth.x = third.x + firstLength * Math.cos(angle); fourth.y = third.y + firstLength * Math.sin(angle); }
-      else { const angle = Math.atan2(ay, ax) + (constraint.kind === "perpendicular" ? Math.PI / 2 : 0); fourth.x = third.x + secondLength * Math.cos(angle); fourth.y = third.y + secondLength * Math.sin(angle); }
+      else { const angle = Math.atan2(ay, ax) + (constraint.kind === "perpendicular" ? Math.PI / 2 : 0); const candidate = { x: Math.cos(angle), y: Math.sin(angle) }; const orientation = candidate.x * bx + candidate.y * by < 0 ? -1 : 1; fourth.x = third.x + secondLength * candidate.x * orientation; fourth.y = third.y + secondLength * candidate.y * orientation; }
     }
     else if (constraint.kind === "distance-horizontal" || constraint.kind === "distance-vertical" || constraint.kind === "distance" || constraint.kind === "angle") {
       const dx = second!.x - first.x; const dy = second!.y - first.y;

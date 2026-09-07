@@ -164,6 +164,7 @@ export function App() {
   const [centerHover, setCenterHover] = useState<{ elementId: ElementId; point: PointMm }>();
   const [transformMode, setTransformMode] = useState<TransformMode>("resize");
   const [selectedFormaNodeKeys, setSelectedFormaNodeKeys] = useState<readonly string[]>([]);
+  const [selectedFormaEdgeKeys, setSelectedFormaEdgeKeys] = useState<readonly string[]>([]);
   const [editModeElementIds, setEditModeElementIds] = useState<readonly ElementId[]>([]);
   const [selectedSplineNodeKey, setSelectedSplineNodeKey] = useState<string>();
   const [selectedPathSegment, setSelectedPathSegment] = useState<{ readonly elementId: ElementId; readonly segmentIndex: number }>();
@@ -346,7 +347,7 @@ export function App() {
     setSelectedSplineNodeKey(undefined);
     if (tool !== "spline" && tool !== "forma" && editorRef.current.selection.some((id) => editorRef.current.document.elements.some((element) => element.id === id && element.type === "spline"))) setEditorState(clearSelection(editorRef.current));
   }, [tool]);
-  useEffect(() => { setSelectedPathSegment(undefined); setSelectedFormaNodeKeys([]); if (tool !== "forma") setEditModeElementIds([]); }, [tool, project.activePageId]);
+  useEffect(() => { setSelectedPathSegment(undefined); setSelectedFormaNodeKeys([]); setSelectedFormaEdgeKeys([]); if (tool !== "forma") setEditModeElementIds([]); }, [tool, project.activePageId]);
   useEffect(() => {
     if (!constraintDraft || tool === "forma") return;
     setEditorState(cancelGesture(editorRef.current));
@@ -1010,8 +1011,11 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
            return;
          }
        }
-          const domDimensionId = (event.target as unknown as globalThis.Element).closest("[data-dimension]")?.getAttribute("data-element-id") as ElementId | null;
-          const hit = domDimensionId ?? formaNodeHit?.elementId ?? pathSegmentHit?.elementId ?? formaLineSegmentHit?.elementId ?? nodeHit?.elementId ?? pickElement(editorRef.current.document, point, zoom);
+          const domDimensionId = tool === "forma" ? null : (event.target as unknown as globalThis.Element).closest("[data-dimension]")?.getAttribute("data-element-id") as ElementId | null;
+          const pickedElementId = pickElement(editorRef.current.document, point, zoom);
+          const pickedBodyElement = editorRef.current.document.elements.find((element) => element.id === pickedElementId);
+          const formaBodyHit = tool === "forma" && pickedBodyElement?.type === "dimension" ? undefined : pickedElementId;
+          const hit = domDimensionId ?? formaNodeHit?.elementId ?? pathSegmentHit?.elementId ?? formaLineSegmentHit?.elementId ?? nodeHit?.elementId ?? formaBodyHit;
     if (isDrawingTool(tool) && pointerDownIntent(tool, hit) === "draw") {
       event.currentTarget.setPointerCapture(event.pointerId);
       setEditorState(beginGesture(editorRef.current));
@@ -1034,31 +1038,34 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
       event.currentTarget.setPointerCapture(event.pointerId);
         if (tool === "forma") {
            const hitElement = editorRef.current.document.elements.find((element) => element.id === hit);
+           const sketchSegmentEdge = hitElement?.type === "sketch" && formaLineSegmentHit?.elementId === hitElement.id ? hitElement.edges[formaLineSegmentHit.segmentIndex] : undefined;
+           const sketchSegmentEdgeKey = sketchSegmentEdge && formaLineSegmentHit ? `${formaLineSegmentHit.elementId}:e:${sketchSegmentEdge.id}` : undefined;
            const sketchSegmentNodeKeys = (() => {
              if (!hitElement || !formaLineSegmentHit || formaLineSegmentHit.elementId !== hitElement.id) return [];
              if (hitElement.type === "line") return [0, 1].map((nodeIndex) => `${hitElement.id}:p:${nodeIndex}`);
-             if (hitElement.type !== "sketch") return [];
-             const edge = hitElement.edges[formaLineSegmentHit.segmentIndex];
-             if (!edge) return [];
-             return [edge.startNodeId, edge.endNodeId].flatMap((nodeId) => { const nodeIndex = hitElement.nodes.findIndex((node) => node.id === nodeId); return nodeIndex >= 0 ? [`${hitElement.id}:p:${nodeIndex}`] : []; });
+             if (hitElement.type !== "sketch" || !sketchSegmentEdge) return [];
+             return [sketchSegmentEdge.startNodeId, sketchSegmentEdge.endNodeId].flatMap((nodeId) => { const nodeIndex = hitElement.nodes.findIndex((node) => node.id === nodeId); return nodeIndex >= 0 ? [`${hitElement.id}:p:${nodeIndex}`] : []; });
            })();
            if (hitElement && hitElement.type !== "text" && hitElement.type !== "dimension" && !editModeElementIds.includes(hitElement.id)) {
              setSelectedFormaNodeKeys((current) => event.shiftKey ? [...new Set([...current, ...sketchSegmentNodeKeys])] : sketchSegmentNodeKeys);
+             setSelectedFormaEdgeKeys((current) => event.shiftKey && sketchSegmentEdgeKey ? [...new Set([...current, sketchSegmentEdgeKey])] : sketchSegmentEdgeKey ? [sketchSegmentEdgeKey] : []);
              setSelectedPathSegment(undefined);
              setEditModeElementIds((current) => event.shiftKey ? [...new Set([...current, hitElement.id])] : [hitElement.id]);
              return;
            }
            if (sketchSegmentNodeKeys.length === 2) {
              setSelectedPathSegment(undefined);
-             setSelectedFormaNodeKeys((current) => {
-               if (!event.shiftKey) return sketchSegmentNodeKeys;
-               const selected = sketchSegmentNodeKeys.every((key) => current.includes(key));
-               return selected ? current.filter((key) => !sketchSegmentNodeKeys.includes(key)) : [...new Set([...current, ...sketchSegmentNodeKeys])];
+             setSelectedFormaNodeKeys((current) => event.shiftKey ? [...new Set([...current, ...sketchSegmentNodeKeys])] : sketchSegmentNodeKeys);
+             setSelectedFormaEdgeKeys((current) => {
+               if (!sketchSegmentEdgeKey) return [];
+               if (!event.shiftKey) return [sketchSegmentEdgeKey];
+               return current.includes(sketchSegmentEdgeKey) ? current.filter((key) => key !== sketchSegmentEdgeKey) : [...current, sketchSegmentEdgeKey];
              });
              return;
            }
            if (formaNodeHit && next.selection.includes(formaNodeHit.elementId)) {
              setSelectedPathSegment(undefined);
+             setSelectedFormaEdgeKeys([]);
              const key = formaNodeKey(formaNodeHit);
             setSelectedFormaNodeKeys((current) => event.shiftKey ? current.includes(key) ? current.filter((value) => value !== key) : [...current, key] : [key]);
             setEditorState(beginGesture(next));
@@ -1402,7 +1409,8 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
         : undefined;
     const selectedSketchElements = selectedElements.filter((element): element is Extract<Element, { type: "sketch" }> => element.type === "sketch" && editModeElementIds.includes(element.id));
     const selectedSketchConstraintNodes = selectedSketchElements.flatMap((sketch) => selectedFormaNodeKeys.flatMap((key) => { const match = key.match(new RegExp(`^${sketch.id}:p:(\\d+)$`)); const node = match ? sketch.nodes[Number(match[1])] : undefined; return node ? [{ elementId: sketch.id, nodeId: node.id }] : []; }));
-    const selectedSketchRelationEdges = selectedSketchElements.flatMap((sketch) => sketch.edges.flatMap((edge) => selectedSketchConstraintNodes.some((node) => node.elementId === sketch.id && node.nodeId === edge.startNodeId) && selectedSketchConstraintNodes.some((node) => node.elementId === sketch.id && node.nodeId === edge.endNodeId) ? [{ elementId: sketch.id, edge }] : []));
+    const explicitlySelectedSketchEdges = selectedSketchElements.flatMap((sketch) => sketch.edges.flatMap((edge) => selectedFormaEdgeKeys.includes(`${sketch.id}:e:${edge.id}`) ? [{ elementId: sketch.id, edge }] : []));
+    const selectedSketchRelationEdges = explicitlySelectedSketchEdges.length > 0 ? explicitlySelectedSketchEdges : selectedSketchElements.flatMap((sketch) => sketch.edges.flatMap((edge) => selectedSketchConstraintNodes.some((node) => node.elementId === sketch.id && node.nodeId === edge.startNodeId) && selectedSketchConstraintNodes.some((node) => node.elementId === sketch.id && node.nodeId === edge.endNodeId) ? [{ elementId: sketch.id, edge }] : []));
     const selectedGlobalConstraints = selectedElement?.type === "sketch" ? (document.constraints ?? []).filter((constraint) => constraint.references.some((reference) => reference.elementId === selectedElement.id)) : [];
     const componentStates = useMemo(() => constraintComponentStatesForDocument(document), [document]);
     const selectedSketchConstraintState = useMemo<ConstraintState>(() => {
@@ -1486,6 +1494,10 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
      const point = pagePointToCanvas(centerHover.point, zoom, panMm);
     return { left: point.x, top: point.y };
   })() : undefined;
+  const circularCenterReferenceStyle = selectedElement && (selectedElement.type === "circle" || selectedElement.type === "arc") && tool !== "forma" && !interaction.current ? (() => {
+    const point = pagePointToCanvas(selectedElement.center, zoom, panMm);
+    return { left: point.x, top: point.y };
+  })() : undefined;
   const marqueeStyle = marquee ? (() => {
     const bounds = normalizeBounds(marquee.start, marquee.end);
      const topLeft = pagePointToCanvas({ x: bounds.x, y: bounds.y }, zoom, panMm);
@@ -1514,10 +1526,11 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
       const arcStart = arc ? { x: arc.center.x + arc.radius * Math.cos(arc.startAngle), y: arc.center.y + arc.radius * Math.sin(arc.startAngle) } : undefined;
       const arcEnd = arc ? { x: arc.center.x + arc.radius * Math.cos(arc.endAngle), y: arc.center.y + arc.radius * Math.sin(arc.endAngle) } : undefined;
       const arcSweep = arc ? (((arc.endAngle - arc.startAngle) * (arc.direction === "clockwise" ? 1 : -1)) % (Math.PI * 2) + Math.PI * 2) % (Math.PI * 2) : 0;
+      const radiusGuideStart = arc?.center ?? start;
       const shape = rectangle ? <rect x={rectangle.position.x} y={rectangle.position.y} width={rectangle.size.width} height={rectangle.size.height} /> : circle ? <circle cx={creationDraft.points[0]!.x} cy={creationDraft.points[0]!.y} r={circle.radius} /> : arc && arcStart && arcEnd ? <path d={`M ${arcStart.x} ${arcStart.y} A ${arc.radius} ${arc.radius} 0 ${arcSweep > Math.PI ? 1 : 0} ${arc.direction === "clockwise" ? 1 : 0} ${arcEnd.x} ${arcEnd.y}`} style={{ fill: "none" }} /> : undefined;
        const guides: readonly CreationGuide[] = creationGuides(document, pointer, zoom);
            const nodeGuides = creationDraft.tool === "line" ? nodeAlignmentGuides(document, start, pointer, zoom, 5) : [];
-       return <svg className="creation-pending-overlay" viewBox={`0 0 ${document.page.width} ${document.page.height}`} style={{ left: pageStyle.left + 1, top: pageStyle.top + 1, width: document.page.width * zoom, height: document.page.height * zoom, right: "auto", bottom: "auto" }} aria-label="Vista previa de creación"><g className="creation-preview-shape">{shape}</g><line className="creation-preview-radius" x1={start.x} y1={start.y} x2={pointer.x} y2={pointer.y} />{nodeGuides.map((guide, index) => <line key={`node-guide-${index}`} className="creation-guide creation-guide-node-alignment" x1={guide.source.x} y1={guide.source.y} x2={guide.target.x} y2={guide.target.y} />)}{guides.map((guide, index) => <line key={index} className={`creation-guide creation-guide-${guide.kind}`} x1={guide.source.x} y1={guide.source.y} x2={guide.target.x} y2={guide.target.y} />)}</svg>;
+       return <svg className="creation-pending-overlay" viewBox={`0 0 ${document.page.width} ${document.page.height}`} style={{ left: pageStyle.left + 1, top: pageStyle.top + 1, width: document.page.width * zoom, height: document.page.height * zoom, right: "auto", bottom: "auto" }} aria-label="Vista previa de creación"><g className="creation-preview-shape">{shape}</g><line className="creation-preview-radius" x1={radiusGuideStart.x} y1={radiusGuideStart.y} x2={pointer.x} y2={pointer.y} />{nodeGuides.map((guide, index) => <line key={`node-guide-${index}`} className="creation-guide creation-guide-node-alignment" x1={guide.source.x} y1={guide.source.y} x2={guide.target.x} y2={guide.target.y} />)}{guides.map((guide, index) => <line key={index} className={`creation-guide creation-guide-${guide.kind}`} x1={guide.source.x} y1={guide.source.y} x2={guide.target.x} y2={guide.target.y} />)}</svg>;
     })() : undefined;
    const dimensionHoverStyle = dimensionNodeHover && (tool === "dimension" || tool === "radius") ? (() => { const point = pagePointToCanvas(dimensionNodeHover.node.point, zoom, panMm); return { left: point.x, top: point.y }; })() : undefined;
   const rulerMajorStep = [1, 5, 10, 25, 50, 100, 250, 500].find((step) => step * zoom >= 50) ?? 1000;
@@ -1835,8 +1848,8 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
                 const inputFontSize = (existing?.fontSize ?? textDraft.fontSize ?? 24) * zoom;
                 return <textarea ref={textInput} autoFocus value={textDraft.value} onPointerDown={(event) => event.stopPropagation()} onDoubleClick={(event) => { event.preventDefault(); event.stopPropagation(); }} aria-label="Texto editable" rows={Math.max(1, lines.length)} wrap={existing ? "off" : undefined} onChange={(event) => setTextDraft((current) => current ? { ...current, value: event.target.value } : current)} onKeyDown={(event) => { if (event.key === "Escape") { event.preventDefault(); textDraftRef.current = undefined; setTextDraft(undefined); } else if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); commitTextDraft(); } }} onBlur={() => { const blurredDraft = textDraftRef.current; window.setTimeout(() => { if (globalThis.document.activeElement !== textInput.current) commitTextDraft(blurredDraft); }, 0); }} placeholder="Escriba aquí…" style={{ caretColor: "#111827", position: "absolute", left: pagePointToCanvas(textDraft.position, zoom, panMm).x, top: pagePointToCanvas(textDraft.position, zoom, panMm).y, zIndex: 8, width: `${inputWidth}px`, height: `${inputHeight}px`, padding: 0, fontFamily: existing?.fontFamily ?? textFontFamily, fontSize: `${inputFontSize}px`, fontWeight: existing?.fontWeight ?? textFontWeight, fontStyle: existing?.fontStyle ?? textFontStyle, textAlign: existing?.textAlign ?? "left", lineHeight: existing?.lineHeight ?? 1.2, color: "#111827", background: "transparent", border: "none", outline: "none", resize: "none", overflow: "hidden", transform: existing ? `rotate(${existing.rotation}rad) scale(${existing.scaleX ?? 1}, ${existing.scaleY ?? 1})` : undefined, transformOrigin: existing ? "top left" : undefined }} />;
               })()}
-            {formaNodes.length > 0 && <div className="contour-node-overlay" role="group" aria-label={tool === "pen" ? "Nodos y controles del trazado" : "Nodos de forma"}>{formaNodes.map((node) => { const screen = pagePointToCanvas(node.point, zoom, panMm); const selected = selectedFormaNodeKeys.includes(node.key); const pathNode = node.kind === "path" ? node.pathNode : undefined; return <button key={node.key} type="button" className={`contour-node${(tool === "forma" || tool === "pen") && !(node.kind === "path" && pathNode?.node.kind === "control") ? " editing-node" : ""}${selected ? " active selected" : ""}`} data-contour-node={node.key} aria-label={node.kind === "contour" ? `Nodo del contorno, anillo ${node.contour.ringIndex + 1}, punto ${node.contour.pointIndex + 1}` : pathNode?.node.kind === "control" ? `Control Bézier ${pathNode.node.handle === "control1" ? "saliente" : "entrante"}` : `Nodo editable ${node.nodeIndex + 1}`} style={{ left: screen.x, top: screen.y }} onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); setSelectedFormaNodeKeys((current) => event.shiftKey ? current.includes(node.key) ? current.filter((value) => value !== node.key) : [...current, node.key] : [node.key]); if (tool === "pen" && pathNode?.node.kind === "anchor") { const currentPath = editorRef.current.document.elements.find((element) => element.id === node.elementId && element.type === "path"); if (currentPath?.type === "path" && !currentPath.closed && currentPath.nodes[0]?.id === pathNode.node.nodeId) { setPenDraftPoint(undefined); setEditorState(dispatch(select(editorRef.current, [node.elementId]), closePath(node.elementId))); return; } } canvas.current?.setPointerCapture(event.pointerId); if (pathNode) { setEditorState(beginGesture(select(editorRef.current, [node.elementId]))); interaction.current = { pointerId: event.pointerId, lastX: event.clientX, lastY: event.clientY, kind: "path-node", pathNode, startClient: { x: event.clientX, y: event.clientY }, dragged: false }; } else { setEditorState(beginGesture(editorRef.current)); interaction.current = { pointerId: event.pointerId, lastX: event.clientX, lastY: event.clientY, kind: "contour-node", ...(node.kind === "contour" ? { contourNode: node.contour } : {}), formaNode: node.kind === "contour" ? { elementId: node.contour.elementId, contourNode: node.contour, point: node.point } : { elementId: node.elementId, nodeIndex: node.nodeIndex, point: node.point }, startClient: { x: event.clientX, y: event.clientY }, dragged: false }; } }} />; })}</div>}
-          {centerHoverStyle && <div className="selection-center-feedback" style={centerHoverStyle} aria-hidden="true"><span className="selection-center-mark">×</span><span className="selection-center-label">centro</span></div>}
+            {formaNodes.length > 0 && <div className="contour-node-overlay" role="group" aria-label={tool === "pen" ? "Nodos y controles del trazado" : "Nodos de forma"}>{formaNodes.map((node) => { const screen = pagePointToCanvas(node.point, zoom, panMm); const selected = selectedFormaNodeKeys.includes(node.key); const pathNode = node.kind === "path" ? node.pathNode : undefined; return <button key={node.key} type="button" className={`contour-node${(tool === "forma" || tool === "pen") && !(node.kind === "path" && pathNode?.node.kind === "control") ? " editing-node" : ""}${selected ? " active selected" : ""}`} data-contour-node={node.key} aria-label={node.kind === "contour" ? `Nodo del contorno, anillo ${node.contour.ringIndex + 1}, punto ${node.contour.pointIndex + 1}` : pathNode?.node.kind === "control" ? `Control Bézier ${pathNode.node.handle === "control1" ? "saliente" : "entrante"}` : `Nodo editable ${node.nodeIndex + 1}`} style={{ left: screen.x, top: screen.y }} onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); setSelectedFormaEdgeKeys([]); setSelectedFormaNodeKeys((current) => event.shiftKey ? current.includes(node.key) ? current.filter((value) => value !== node.key) : [...current, node.key] : [node.key]); if (tool === "pen" && pathNode?.node.kind === "anchor") { const currentPath = editorRef.current.document.elements.find((element) => element.id === node.elementId && element.type === "path"); if (currentPath?.type === "path" && !currentPath.closed && currentPath.nodes[0]?.id === pathNode.node.nodeId) { setPenDraftPoint(undefined); setEditorState(dispatch(select(editorRef.current, [node.elementId]), closePath(node.elementId))); return; } } canvas.current?.setPointerCapture(event.pointerId); if (pathNode) { setEditorState(beginGesture(select(editorRef.current, [node.elementId]))); interaction.current = { pointerId: event.pointerId, lastX: event.clientX, lastY: event.clientY, kind: "path-node", pathNode, startClient: { x: event.clientX, y: event.clientY }, dragged: false }; } else { setEditorState(beginGesture(editorRef.current)); interaction.current = { pointerId: event.pointerId, lastX: event.clientX, lastY: event.clientY, kind: "contour-node", ...(node.kind === "contour" ? { contourNode: node.contour } : {}), formaNode: node.kind === "contour" ? { elementId: node.contour.elementId, contourNode: node.contour, point: node.point } : { elementId: node.elementId, nodeIndex: node.nodeIndex, point: node.point }, startClient: { x: event.clientX, y: event.clientY }, dragged: false }; } }} />; })}</div>}
+          {(centerHoverStyle ?? circularCenterReferenceStyle) && <div className="selection-center-feedback" data-center-reference="true" style={centerHoverStyle ?? circularCenterReferenceStyle} aria-hidden="true"><span className="selection-center-mark">×</span><span className="selection-center-label">centro</span></div>}
             {tool === "select" && transformMode === "resize" && (handlePoints || groupPoints) && <div className="resize-handles">{handleNames.map((handle) => <button key={handle} type="button" className={`resize-handle resize-handle-${handle}`} data-resize-handle={handle} aria-label={`Redimensionar ${handle}`} style={handleStyle(handle)} onPointerDown={(event) => resizePointerDown(event, handle)} onPointerUp={(event) => finishPointer(event, false)} onPointerCancel={(event) => finishPointer(event, true)} />)}{groupPoints && !isDrawingTool(tool) && <button type="button" className="resize-handle resize-handle-center" data-resize-handle="center" aria-label="Centro del grupo" style={handleStyle("center")} onPointerDown={(event) => event.stopPropagation()} />}</div>}
            {transformMode === "rotate" && selectedElements.length > 0 && <div className="rotation-controls" aria-label="Controles de rotación"><span className="rotation-center" style={selectedElements.length > 1 && selectedBounds ? { left: pagePointToCanvas(groupCenter(selectedBounds), zoom, panMm).x, top: pagePointToCanvas(groupCenter(selectedBounds), zoom, panMm).y } : centerStyle} aria-hidden="true" />{rotationPoints.map((point, index) => { const screen = pagePointToCanvas(point, zoom, panMm); return <button key={index} type="button" className="rotation-handle" aria-label={`Rotar objeto, control ${index + 1}`} style={{ left: screen.x, top: screen.y }} onPointerDown={rotationPointerDown} onPointerUp={(event) => finishPointer(event, false)} onPointerCancel={(event) => finishPointer(event, true)}><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M15.5 8A6 6 0 1 0 16 12" /><path d="m12.5 4 3 4-5 .5" /></svg></button>; })}</div>}
           {marqueeStyle && <div className="marquee" style={marqueeStyle} />}
