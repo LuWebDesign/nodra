@@ -1494,7 +1494,7 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
      const point = pagePointToCanvas(centerHover.point, zoom, panMm);
     return { left: point.x, top: point.y };
   })() : undefined;
-  const circularCenterReferenceStyle = selectedElement && (selectedElement.type === "circle" || selectedElement.type === "arc") && tool !== "forma" && !interaction.current ? (() => {
+  const circularCenterReferenceStyle = selectedElement && (selectedElement.type === "circle" || selectedElement.type === "arc") ? (() => {
     const point = pagePointToCanvas(selectedElement.center, zoom, panMm);
     return { left: point.x, top: point.y };
   })() : undefined;
