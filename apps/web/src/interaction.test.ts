@@ -511,6 +511,39 @@ describe("drag geometry", () => {
     expect(pickCutIntervalPreview({ ...document, elements: [target, cutter, unsupportedTangent] }, { x: 5, y: 10 }, 10)?.fragments).toEqual(lowerPreview?.fragments);
   });
 
+  it("picks and previews exact native Arc intervals, including whole open-arc deletion", () => {
+    const visible = { id: layerId("cut-arc-visible"), name: "Visible", visible: true, order: 0 };
+    const hidden = { id: layerId("cut-arc-hidden"), name: "Hidden", visible: false, order: 1 };
+    const document = createDocument("cut-arc-preview", [visible, hidden]); const style = { stroke: "#000", strokeWidth: 1 };
+    const target = { type: "arc" as const, id: elementId("cut-arc-target"), layerId: visible.id, center: { x: 0, y: 0 }, radius: 10, startAngle: Math.PI, endAngle: 0, direction: "clockwise" as const, style };
+    const hit = pickCuttableSegment({ ...document, elements: [target] }, { x: 0, y: -10.5 }, 10);
+    expect(hit).toMatchObject({ elementId: target.id, segmentIndex: 0 });
+    expect(hit?.start.x).toBeCloseTo(-10, 10); expect(hit?.start.y).toBeCloseTo(0, 10);
+    expect(hit?.end.x).toBeCloseTo(10, 10); expect(hit?.end.y).toBeCloseTo(0, 10);
+    expect(pickCuttableSegment({ ...document, elements: [{ ...target, layerId: hidden.id }] }, { x: 0, y: -10 }, 10)).toBeUndefined();
+    expect(pickCuttableSegment({ ...document, elements: [target] }, { x: 0, y: -11 }, 10, 8)).toBeUndefined();
+
+    const isolated = pickCutIntervalPreview({ ...document, elements: [target] }, { x: 0, y: -10 }, 10);
+    expect(isolated?.fragments).toMatchObject([{ curve: { type: "arc", center: target.center, radius: 10, direction: "clockwise" }, sourceInterval: { t0: 0, t1: 1 } }]);
+    const left = { type: "line" as const, id: elementId("cut-arc-left"), layerId: visible.id, start: { x: -5, y: -20 }, end: { x: -5, y: 5 }, rotation: 0, style };
+    const right = { ...left, id: elementId("cut-arc-right"), start: { x: 5, y: -20 }, end: { x: 5, y: 5 } };
+    const interval = pickCutIntervalPreview({ ...document, elements: [target, left, right] }, { x: 0, y: -10 }, 10);
+    expect(interval?.fragments).toHaveLength(1);
+    expect(interval?.fragments[0]?.curve).toMatchObject({ type: "arc", center: target.center, radius: 10, direction: "clockwise" });
+    expect(interval?.fragments[0]?.sourceInterval.t0).toBeCloseTo(1 / 3, 8);
+    expect(interval?.fragments[0]?.sourceInterval.t1).toBeCloseTo(2 / 3, 8);
+    const tangent = { ...left, id: elementId("cut-arc-tangent"), start: { x: -20, y: -10 }, end: { x: 20, y: -10 } };
+    expect(pickCutIntervalPreview({ ...document, elements: [target, tangent] }, { x: 5, y: -Math.sqrt(75) }, 10)?.fragments).toHaveLength(1);
+    const hiddenCutters = [{ ...left, layerId: hidden.id }, { ...right, layerId: hidden.id }];
+    expect(pickCutIntervalPreview({ ...document, elements: [target, ...hiddenCutters] }, { x: 0, y: -10 }, 10)?.fragments[0]?.sourceInterval).toEqual({ t0: 0, t1: 1 });
+    const overlap = { ...target, id: elementId("cut-arc-overlap") };
+    expect(pickCutIntervalPreview({ ...document, elements: [target, overlap] }, { x: 0, y: -10 }, 10)?.fragments).toEqual([]);
+    const unsupportedBounds = { type: "ellipse" as const, id: elementId("cut-arc-unsupported-bounds"), layerId: visible.id, position: { x: -1, y: -1 }, size: { width: 2, height: 1 }, rotation: 0, style };
+    expect(pickCutIntervalPreview({ ...document, elements: [target, unsupportedBounds] }, { x: 0, y: -10 }, 10)?.fragments).toEqual([]);
+    const disjoint = { ...unsupportedBounds, id: elementId("cut-arc-disjoint-unsupported"), position: { x: 30, y: 30 } };
+    expect(pickCutIntervalPreview({ ...document, elements: [target, disjoint] }, { x: 0, y: -10 }, 10)?.fragments).toHaveLength(1);
+  });
+
   it("picks and previews native Spline spans through the exact fallback", () => {
     const layer = { id: layerId("cut-spline-preview"), name: "Preview", visible: true, order: 0 };
     const document = createDocument("cut-spline-preview", [layer]); const style = { stroke: "#000", strokeWidth: 1 };

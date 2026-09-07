@@ -1,5 +1,5 @@
 import type { DocumentSnapshot, Element, ElementId, LineElement, PathElement, PathSegment, PointMm } from "@nodra/domain";
-import { boundsOf, boundsOfElements, closestParameter, connectableNodeAddress, contourSegmentAt, contourVertexNodes, dimensionGeometry, elementCenter, elementSegmentAt, hitTest, pathGeometryNodes, pointAt, cuttableSegments, splitCuttableSegments, pathSegmentAt, realGeometryNodes, elementToCurves, intersectCurves, partitionCurveByInterval, selectSourcedCurveInterval, type Bounds, type ContourSegmentHit, type ContourVertexNode, type CurveFragment, type PathGeometryNode, type RealGeometryNode, type PathSegmentHit } from "@nodra/geometry";
+import { boundsOf, boundsOfElements, closestParameter, connectableNodeAddress, contourSegmentAt, contourVertexNodes, dimensionGeometry, elementCenter, elementSegmentAt, hitTest, pathGeometryNodes, pointAt, cuttableSegments, splitCuttableSegments, pathSegmentAt, realGeometryNodes, elementToCurves, intersectCurves, partitionCurveByInterval, selectSourcedCurveInterval, GEOMETRY_EPSILON, type Bounds, type ContourSegmentHit, type ContourVertexNode, type CurveFragment, type PathGeometryNode, type RealGeometryNode, type PathSegmentHit } from "@nodra/geometry";
 
 export interface DragGeometry { readonly position: PointMm; readonly size: { readonly width: number; readonly height: number } }
 export interface CircleGeometry { readonly position: PointMm; readonly size: { readonly width: number; readonly height: number }; readonly radius: number }
@@ -101,6 +101,17 @@ export function pickPathNode(document: DocumentSnapshot, point: PointMm, zoom: n
       if (![point.x, point.y, zoom, tolerancePx].every(Number.isFinite) || zoom <= 0 || tolerancePx < 0) throw new Error("cut segment coordinates, zoom, and tolerance must be valid");
       const visible = new Set(document.layers.filter((layer) => layer.visible).map((layer) => layer.id));
       let best: CuttableSegmentHit | undefined;
+      // Native arcs are picked from their exact canonical curve. This is a
+      // hit-test projection only; persisted geometry is never flattened.
+      for (const element of document.elements) {
+        if (element.type !== "arc" || !visible.has(element.layerId)) continue;
+        const sourced = (() => { try { return elementToCurves(element)[0]; } catch { return undefined; } })();
+        if (!sourced) continue;
+        const parameter = closestParameter(sourced.curve, point);
+        const closest = pointAt(sourced.curve, parameter);
+        const distance = Math.hypot(point.x - closest.x, point.y - closest.y);
+        if (distance * zoom <= tolerancePx && (!best || distance < best.distance)) best = { elementId: element.id, segmentIndex: 0, distance, start: pointAt(sourced.curve, 0), end: pointAt(sourced.curve, 1) };
+      }
       const sourceSegments = document.elements.flatMap((element) => visible.has(element.layerId) ? cuttableSegments(element) : []);
       const splitSegments = splitCuttableSegments(sourceSegments);
       for (const segment of splitSegments) {
@@ -146,20 +157,45 @@ export function pickCutIntervalPreview(document: DocumentSnapshot, point: PointM
   const target = targetElement.type === "ellipse" || targetElement.type === "circle" ? targetCurves[0] : targetCurves.find((candidate) => candidate.sourceIndex === hit.segmentIndex);
   if (!target) return { hit, fragments: [] };
   const visibleLayers = new Set(document.layers.filter((element) => element.visible).map((element) => element.id));
+  const adaptedByElement = new Map<ElementId, ReturnType<typeof elementToCurves>>();
+  const targetBounds = targetElement.type === "arc" ? boundsOf(targetElement) : undefined;
   // Legacy elements without an exact adapter remain a conservative veto, but
   // never contribute approximate boundaries to the exact interval helper.
   for (const element of document.elements) {
-    if (!visibleLayers.has(element.layerId) || elementToCurves(element).length > 0) continue;
-    const unsupportedIntersection = cuttableSegments(element).some((segment) => {
+    if (!visibleLayers.has(element.layerId)) continue;
+    let adapted: ReturnType<typeof elementToCurves>;
+    try { adapted = elementToCurves(element); } catch { return { hit, fragments: [] }; }
+    adaptedByElement.set(element.id, adapted);
+    if (adapted.length > 0) continue;
+    const approximateSegments = cuttableSegments(element);
+    if (approximateSegments.length === 0) continue;
+    if (targetBounds) {
+      try {
+        const candidate = boundsOf(element);
+        const overlaps = targetBounds.x <= candidate.x + candidate.width + GEOMETRY_EPSILON
+          && candidate.x <= targetBounds.x + targetBounds.width + GEOMETRY_EPSILON
+          && targetBounds.y <= candidate.y + candidate.height + GEOMETRY_EPSILON
+          && candidate.y <= targetBounds.y + targetBounds.height + GEOMETRY_EPSILON;
+        if (overlaps) return { hit, fragments: [] };
+      } catch { return { hit, fragments: [] }; }
+      continue;
+    }
+    const unsupportedIntersection = approximateSegments.some((segment) => {
       const result = intersectCurves(target.curve, { type: "line", start: segment.start, end: segment.end });
       return result.kind === "overlap" || result.kind === "points" && result.points.some((point) => point.contact !== "tangent");
     });
     if (unsupportedIntersection) return { hit, fragments: [] };
   }
-  const candidates = document.elements.filter((element) => visibleLayers.has(element.layerId)).flatMap((element) => elementToCurves(element));
+  const candidates = document.elements.filter((element) => visibleLayers.has(element.layerId)).flatMap((element) => adaptedByElement.get(element.id) ?? []);
   const selection = selectSourcedCurveInterval(target, candidates, point);
-  if (selection.kind !== "selected") return { hit, fragments: [] };
-  return { hit, fragments: partitionCurveByInterval(target.curve, selection.interval).selected };
+  if (selection.kind === "selected") return { hit, fragments: partitionCurveByInterval(target.curve, selection.interval).selected };
+  // A partial native arc is an open curve. With no transversal boundaries
+  // (isolated or tangent-only) Cut removes the whole exact arc, matching open
+  // curve deletion rather than manufacturing an approximate fallback.
+  if (selection.kind === "rejected" && selection.reason === "insufficient-cuts" && target.curve.type === "arc" && !target.curve.fullTurn) {
+    return { hit, fragments: partitionCurveByInterval(target.curve, { start: 0, end: 1, wrapsSeam: false }).selected };
+  }
+  return { hit, fragments: [] };
 }
 
     export function pickPathSegment(document: DocumentSnapshot, point: PointMm, zoom: number, tolerancePx = 8): PathSegmentHitResult | undefined {

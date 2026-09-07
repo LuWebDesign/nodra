@@ -30,7 +30,7 @@ import {
   isCircleElement,
 } from "@nodra/domain";
 import { validateDocument } from "@nodra/validation";
-import { boundsOfElements, connectableNodeAddress, contourWithPoints, directionVector, elementCenter, elementToContour, dimensionGeometry, elementToCurves, glyphGeometryNodes, groupCenter, intersectCurves, lineElementToCurve, circleElementToCurve, mirrorHandleOffset, partitionCurveByInterval, selectRemovableCurveInterval, selectSourcedCurveInterval, realGeometryNodes, resizeGroup, rotateElements, shapeResultContours, tangentAt, transformPoint, splitCuttableSegments, classifyCutGraph, cuttableSegments, lineSegmentIntersection, rotatedLineEndpoints, sketchEdgeAtAddress, sketchEdgeIndexAtAddress, solveSketchConstraints, solveCircleConstraints, cubicBezierLineIntersections, splitCubicBezierAtParameters, flattenCubicBezier, GEOMETRY_EPSILON, type CubicBezier, type Direction, type LineCurve2D, type SourcedCurve2D } from "@nodra/geometry";
+import { boundsOf, boundsOfElements, connectableNodeAddress, contourWithPoints, directionVector, elementCenter, elementToContour, dimensionGeometry, elementToCurves, glyphGeometryNodes, groupCenter, intersectCurves, lineElementToCurve, circleElementToCurve, arcElementToCurve, mirrorHandleOffset, partitionCurveByInterval, selectRemovableCurveInterval, selectSourcedCurveInterval, realGeometryNodes, resizeGroup, rotateElements, shapeResultContours, tangentAt, transformPoint, splitCuttableSegments, classifyCutGraph, cuttableSegments, lineSegmentIntersection, rotatedLineEndpoints, sketchEdgeAtAddress, sketchEdgeIndexAtAddress, solveSketchConstraints, solveCircleConstraints, cubicBezierLineIntersections, splitCubicBezierAtParameters, flattenCubicBezier, GEOMETRY_EPSILON, type CubicBezier, type Direction, type LineCurve2D, type SourcedCurve2D } from "@nodra/geometry";
 import { insertSplineNode, moveSplineHandle as moveSplineHandleData, moveSplineNode as moveSplineNodeData } from "./spline.js";
 import { topologyReferenceKey, type ReferenceResolution, type TopologyEditResult, type TopologyReference } from "./topology.js";
 
@@ -1338,6 +1338,106 @@ export const cutContourSegment = (contourId: ElementId, ringIndex: number, segme
   },
 });
 
+/** Destructively trims a native partial arc using exact sourced intersections. */
+const cutArcExact = (document: DocumentSnapshot, arc: ArcElement, cursor: PointMm): CommandResult => {
+  if (![cursor.x, cursor.y].every(Number.isFinite)) return { success: false, error: "Arc cut point is invalid" };
+  let target: SourcedCurve2D;
+  try { target = arcElementToCurve(arc); } catch { return { success: false, error: "Invalid arc geometry" }; }
+  const visibleLayers = new Set(document.layers.filter((layer) => layer.visible).map((layer) => layer.id));
+  const targetBounds = boundsOf(arc);
+  const boundsOverlap = (element: Element): boolean => {
+    const candidate = boundsOf(element);
+    return targetBounds.x <= candidate.x + candidate.width + GEOMETRY_EPSILON
+      && candidate.x <= targetBounds.x + targetBounds.width + GEOMETRY_EPSILON
+      && targetBounds.y <= candidate.y + candidate.height + GEOMETRY_EPSILON
+      && candidate.y <= targetBounds.y + targetBounds.height + GEOMETRY_EPSILON;
+  };
+  let unsupported = false;
+  const candidates = document.elements.filter((element) => element.id !== arc.id && visibleLayers.has(element.layerId)).flatMap((element) => {
+    let adapted: readonly SourcedCurve2D[];
+    try { adapted = elementToCurves(element); } catch { unsupported = true; return []; }
+    if (adapted.length > 0) return adapted;
+    if (cuttableSegments(element).length === 0) return [];
+    try { if (boundsOverlap(element)) unsupported = true; } catch { unsupported = true; }
+    return [];
+  });
+  if (unsupported) return { success: false, error: "Arc cut has unsupported or overlapping geometry" };
+  let selection: ReturnType<typeof selectSourcedCurveInterval>;
+  try { selection = selectSourcedCurveInterval(target, candidates, cursor); } catch { return { success: false, error: "Arc cut geometry is invalid" }; }
+  if (selection.kind === "unsupported") return { success: false, error: "Arc cut has unsupported or overlapping geometry" };
+
+  let survivors: readonly { readonly sourceInterval: { readonly t0: number; readonly t1: number } }[];
+  if (selection.kind === "rejected" && selection.reason === "insufficient-cuts") {
+    // An open arc with no transversal cuts is entirely removed.  The helper is
+    // still authoritative for overlap, cursor-on-cut, and valid selections.
+    survivors = [];
+  } else if (selection.kind === "rejected") return { success: false, error: selection.reason === "cursor-on-cut" ? "Cut cursor lies on an intersection" : "Arc cut requires an intersection" };
+  else {
+    try { survivors = partitionCurveByInterval(target.curve, selection.interval).remainder; } catch { return { success: false, error: "Arc cut interval is invalid" }; }
+  }
+  const ordered = [...survivors].sort((first, second) => first.sourceInterval.t0 - second.sourceInterval.t0);
+  const usedIds = new Set(document.elements.map((element) => element.id));
+  const angleAt = (t: number): number => {
+    const sweep = normalizeArcAngle((arc.endAngle - arc.startAngle) * (arc.direction === "clockwise" ? 1 : -1));
+    return normalizeArcAngle(arc.startAngle + (arc.direction === "clockwise" ? 1 : -1) * sweep * t);
+  };
+  const pieces: ArcElement[] = [];
+  for (const [index, fragment] of ordered.entries()) {
+    let id = arc.id;
+    if (index > 0) { let suffix = 1; do { id = elementId(`${arc.id}:trim:${suffix++}`); } while (usedIds.has(id) || pieces.some((piece) => piece.id === id)); }
+    pieces.push({ type: "arc", id, layerId: arc.layerId, center: arc.center, radius: arc.radius, startAngle: angleAt(fragment.sourceInterval.t0), endAngle: angleAt(fragment.sourceInterval.t1), direction: arc.direction, style: arc.style, ...(arc.operation ? { operation: arc.operation } : {}) });
+  }
+  const sourceNode = (reference: DimensionElement["references"][number]): "center" | "start" | "end" | undefined => {
+    if (reference.elementId !== arc.id || !("nodeIndex" in reference)) return undefined;
+    if (reference.nodeId === "center" || reference.nodeIndex === 0) return "center";
+    if (reference.nodeId === "start" || reference.nodeIndex === 1) return "start";
+    if (reference.nodeId === "end" || reference.nodeIndex === 2) return "end";
+    return undefined;
+  };
+  const arcReference = (piece: ArcElement, name: "center" | "start" | "end"): DimensionElement["references"][number] => ({ kind: "node", elementId: piece.id, nodeIndex: name === "center" ? 0 : name === "start" ? 1 : 2, nodeId: name });
+  const nodeParameter = (name: "center" | "start" | "end"): number | undefined => name === "center" ? undefined : name === "start" ? 0 : 1;
+  const pieceAt = (t: number): { readonly piece: ArcElement; readonly fragment: typeof ordered[number] } | undefined => {
+    const index = ordered.findIndex((fragment) => fragment.sourceInterval.t0 - 1e-9 <= t && t <= fragment.sourceInterval.t1 + 1e-9);
+    return index < 0 ? undefined : { piece: pieces[index]!, fragment: ordered[index]! };
+  };
+  const remapReference = (reference: DimensionElement["references"][number], preferred?: ArcElement): DimensionElement["references"][number] | undefined => {
+    const name = sourceNode(reference);
+    if (!name) return reference.elementId === arc.id ? undefined : reference;
+    if (name === "center") return preferred ?? pieces[0] ? arcReference(preferred ?? pieces[0]!, "center") : undefined;
+    const mapped = pieceAt(nodeParameter(name)!);
+    if (!mapped) return undefined;
+    const endpoint = Math.abs(mapped.fragment.sourceInterval.t0 - nodeParameter(name)!) <= 1e-9 ? "start" : "end";
+    return arcReference(mapped.piece, endpoint);
+  };
+  const remapDimension = (dimension: DimensionElement): DimensionElement | undefined => {
+    const names = dimension.references.map(sourceNode);
+    const radial = dimension.kind === "radius" || dimension.kind === "diameter";
+    const rim = radial ? names.find((name): name is "start" | "end" => name === "start" || name === "end") : undefined;
+    const preferred = rim ? pieceAt(nodeParameter(rim)!)?.piece : undefined;
+    const refs = dimension.references.map((reference) => remapReference(reference, preferred));
+    if (!refs.every((reference) => reference !== undefined)) return undefined;
+    const next = { ...dimension, references: refs as [DimensionElement["references"][number], DimensionElement["references"][number]] };
+    if (radial) { delete next.driving; delete next.constraintId; }
+    return next;
+  };
+  const remapConnection = (reference: ExplicitConnection["first"]): ExplicitConnection["first"] | undefined => {
+    if (reference.elementId !== arc.id || reference.node.kind !== "named") return reference;
+    const name = reference.node.name;
+    if (name === "center") return pieces[0] ? { ...reference, elementId: pieces[0].id, node: { kind: "named", name: "center" } } : undefined;
+    if (name !== "start" && name !== "end") return undefined;
+    const mapped = pieceAt(name === "start" ? 0 : 1); if (!mapped) return undefined;
+    const endpoint = Math.abs(mapped.fragment.sourceInterval.t0 - (name === "start" ? 0 : 1)) <= 1e-9 ? "start" : "end";
+    return { ...reference, elementId: mapped.piece.id, node: { kind: "named", name: endpoint } };
+  };
+  const connections = (document.connections ?? []).flatMap((connection) => { const first = remapConnection(connection.first); const second = remapConnection(connection.second); return first && second && !(first.elementId === second.elementId && JSON.stringify(first.node) === JSON.stringify(second.node)) ? [{ ...connection, first, second }] : []; });
+  const elements = document.elements.flatMap<Element>((element) => {
+    if (element.id === arc.id) return pieces;
+    if (element.type !== "dimension" || !element.references.some((reference) => reference.elementId === arc.id)) return [element];
+    const remapped = remapDimension(element); return remapped ? [remapped] : [];
+  });
+  return replaceElements({ ...document, connections }, elements);
+};
+
 /** Unified Cut dispatch used by interaction clients. */
 const cutCircleExact = (document: DocumentSnapshot, circle: Extract<Element, { type: "circle" }>, cursor: PointMm): CommandResult => {
   if (![cursor.x, cursor.y].every(Number.isFinite)) return { success: false, error: "Circle cut point is invalid" };
@@ -1428,6 +1528,7 @@ export const cutSegment = (elementId: ElementId, segmentIndex: number, point?: P
     const element = document.elements.find((candidate) => candidate.id === elementId);
     if (!element) return { success: false, error: "Cut target not found" };
     if (element.type === "circle") return point ? cutCircleExact(document, element, point) : { success: false, error: "A circle cut requires a click point" };
+    if (element.type === "arc") return point ? cutArcExact(document, element, point) : { success: false, error: "An arc cut requires a click point" };
     if (element.type === "sketch") return cutSketchEdgeDestructive(elementId, segmentIndex, point).apply(document);
     if (element.type === "contour") return cutContourSegment(elementId, ringIndex, segmentIndex, point).apply(document);
     if (element.type === "line") return cutLineAtPoint(elementId, point ?? element.start).apply(document);

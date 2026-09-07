@@ -91,4 +91,13 @@ describe("selectSourcedCurveInterval", () => {
     const overlap = sourced({ type: "line", start: { x: 2, y: 5 }, end: { x: 8, y: 5 } }, "overlap");
     expect(selectSourcedCurveInterval(target, [overlap], { x: 5, y: 5 })).toEqual({ kind: "unsupported" });
   });
+
+  it("ignores unsupported pairs only when exact bounds prove them disjoint", () => {
+    const arcTarget = sourced({ type: "arc", center: { x: 0, y: 0 }, radius: 10, startAngle: Math.PI, endAngle: 0, direction: "clockwise" }, "arc-target");
+    const farCubic = sourced({ type: "cubicBezier", p0: { x: 30, y: 30 }, p1: { x: 35, y: 30 }, p2: { x: 35, y: 35 }, p3: { x: 30, y: 35 } }, "far-cubic");
+    expect(selectSourcedCurveInterval(arcTarget, [farCubic], { x: 0, y: -10 })).toEqual({ kind: "rejected", reason: "insufficient-cuts" });
+    const overlappingBounds = sourced({ type: "cubicBezier", p0: { x: -5, y: -8 }, p1: { x: -2, y: -12 }, p2: { x: 2, y: -12 }, p3: { x: 5, y: -8 } }, "near-cubic");
+    expect(selectSourcedCurveInterval(arcTarget, [overlappingBounds], { x: 0, y: -10 })).toEqual({ kind: "unsupported" });
+    expect(() => selectSourcedCurveInterval(arcTarget, [farCubic], { x: 0, y: -10 }, { boundsEpsilon: -1 })).toThrow("boundsEpsilon");
+  });
 });
