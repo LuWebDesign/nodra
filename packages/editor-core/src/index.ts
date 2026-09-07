@@ -82,12 +82,30 @@ const namedNodePoint = (document: DocumentSnapshot, reference: ExplicitConnectio
   return realGeometryNodes(element).find((_, index) => JSON.stringify(connectableNodeAddress(element, index)) === JSON.stringify(reference.node))?.point;
 };
 const arcGeometryThroughEndpoints = (arc: ArcElement, start: PointMm, end: PointMm, radius: number): Pick<ArcElement, "center" | "startAngle" | "endAngle"> | undefined => {
-  const dx = end.x - start.x; const dy = end.y - start.y; const chord = Math.hypot(dx, dy);
-  if (chord <= 1e-9 || radius < chord / 2) return undefined;
-  const midpoint = { x: (start.x + end.x) / 2, y: (start.y + end.y) / 2 }; const height = Math.sqrt(Math.max(0, radius * radius - chord * chord / 4));
+  const dx = end.x - start.x; const dy = end.y - start.y; const chord = Math.hypot(dx, dy); const halfChord = chord / 2;
+  if (!Number.isFinite(radius) || radius <= 0 || !Number.isFinite(chord) || chord <= 1e-9 || radius < halfChord) return undefined;
+  // Use a ratio rather than r² - c²/4: the latter can overflow for valid,
+  // finite model values even when the resulting height is representable.
+  const ratio = halfChord / radius; const height = radius * Math.sqrt(Math.max(0, 1 - ratio * ratio));
+  if (!Number.isFinite(height)) return undefined;
+  const midpoint = { x: (start.x + end.x) / 2, y: (start.y + end.y) / 2 };
   const normal = { x: -dy / chord, y: dx / chord }; const candidates = [{ x: midpoint.x + normal.x * height, y: midpoint.y + normal.y * height }, { x: midpoint.x - normal.x * height, y: midpoint.y - normal.y * height }];
   const center = candidates.sort((first, second) => Math.hypot(first.x - arc.center.x, first.y - arc.center.y) - Math.hypot(second.x - arc.center.x, second.y - arc.center.y))[0]!;
-  return { center, startAngle: Math.atan2(start.y - center.y, start.x - center.x), endAngle: Math.atan2(end.y - center.y, end.x - center.x) };
+  if (![center.x, center.y].every(Number.isFinite)) return undefined;
+  return { center, startAngle: normalizeArcAngle(Math.atan2(start.y - center.y, start.x - center.x)), endAngle: normalizeArcAngle(Math.atan2(end.y - center.y, end.x - center.x)) };
+};
+const preservesElementConnections = (document: DocumentSnapshot, before: Element, after: Element): boolean => {
+  const point = (element: Element, reference: ExplicitConnection["first"]): PointMm | undefined => realGeometryNodes(element).find((_, index) => JSON.stringify(connectableNodeAddress(element, index)) === JSON.stringify(reference.node))?.point;
+  for (const connection of document.connections ?? []) {
+    const own = connection.first.elementId === before.id ? connection.first : connection.second.elementId === before.id ? connection.second : undefined;
+    if (!own) continue;
+    const other = connection.first.elementId === before.id ? connection.second : connection.first;
+    const otherElement = document.elements.find((element) => element.id === other.elementId);
+    const oldOwn = point(before, own); const oldOther = otherElement ? point(otherElement, other) : undefined; const newOwn = point(after, own);
+    if (!oldOwn || !oldOther || !newOwn) return false;
+    if (Math.hypot(oldOwn.x - oldOther.x, oldOwn.y - oldOther.y) <= 1e-7 && Math.hypot(newOwn.x - oldOther.x, newOwn.y - oldOther.y) > 1e-7) return false;
+  }
+  return true;
 };
 const connectedArcEndpointPoints = (document: DocumentSnapshot, arc: ArcElement): Partial<Record<"start" | "end", PointMm>> => Object.fromEntries((document.connections ?? []).flatMap((connection) => {
   const source = connection.first.elementId === arc.id ? connection.first : connection.second.elementId === arc.id ? connection.second : undefined;
@@ -98,6 +116,32 @@ const connectedArcEndpointPoints = (document: DocumentSnapshot, arc: ArcElement)
 }));
 const ARC_EDIT_ANGLE_EPSILON = 1e-10;
 const arcAngleDistance = (first: number, second: number): number => Math.abs(Math.atan2(Math.sin(first - second), Math.cos(first - second)));
+
+/** Apply an exact native-arc radius change while keeping every connected
+ * endpoint fixed. A failed geometry/connection guard leaves the document
+ * untouched so inspector and annotation edits have identical semantics. */
+const updateArcRadius = (document: DocumentSnapshot, target: ArcElement, radius: number): CommandResult => {
+  if (!Number.isFinite(radius) || radius <= 0) return { success: false, error: "Arc radius must be positive" };
+  if (radius === target.radius) return { success: true, document };
+  const endpointPoints = connectedArcEndpointPoints(document, target);
+  let center = target.center; let startAngle = target.startAngle; let endAngle = target.endAngle;
+  if (endpointPoints.start && endpointPoints.end) {
+    const geometry = arcGeometryThroughEndpoints(target, endpointPoints.start, endpointPoints.end, radius);
+    if (!geometry) return { success: false, error: "Arc radius is too small for both endpoint relations" };
+    center = geometry.center; startAngle = geometry.startAngle; endAngle = geometry.endAngle;
+  } else if (endpointPoints.start || endpointPoints.end) {
+    const fixed = endpointPoints.start ?? endpointPoints.end!;
+    const endpoint = endpointPoints.start
+      ? { x: target.center.x + target.radius * Math.cos(target.startAngle), y: target.center.y + target.radius * Math.sin(target.startAngle) }
+      : { x: target.center.x + target.radius * Math.cos(target.endAngle), y: target.center.y + target.radius * Math.sin(target.endAngle) };
+    const length = Math.hypot(endpoint.x - target.center.x, endpoint.y - target.center.y);
+    if (length <= 1e-9) return { success: false, error: "Arc endpoint connection has zero length" };
+    center = { x: fixed.x - (endpoint.x - target.center.x) / length * radius, y: fixed.y - (endpoint.y - target.center.y) / length * radius };
+  }
+  const updated = { ...target, center, radius, startAngle, endAngle };
+  if (!preservesElementConnections(document, target, updated)) return { success: false, error: "Arc radius change would break an existing connection" };
+  return replaceElements(document, document.elements.map((element) => element.id === target.id && element.type === "arc" ? updated : element));
+};
 
 export const createElement = (element: Element, connections: readonly ExplicitConnection[] = []): EditorCommand => ({
   name: `create:${element.type}`,
@@ -110,7 +154,7 @@ export const createElement = (element: Element, connections: readonly ExplicitCo
 export const addPositionalConnection = (source: ExplicitConnection["first"], target: ExplicitConnection["second"]): EditorCommand => ({
   name: `position-connection:${source.elementId}:${target.elementId}`,
   apply: (document) => {
-    if (source.elementId === target.elementId && JSON.stringify(source.node) === JSON.stringify(target.node)) return { success: false, error: "A positional connection requires two different nodes" };
+    if (source.elementId === target.elementId) return { success: false, error: "A positional connection requires two different elements" };
     const sourceElement = document.elements.find((element) => element.id === source.elementId);
     const targetElement = document.elements.find((element) => element.id === target.elementId);
     if (!sourceElement || !targetElement) return { success: false, error: "Positional connection element not found" };
@@ -131,13 +175,14 @@ export const addPositionalConnection = (source: ExplicitConnection["first"], tar
         return candidate?.node.kind === "named" && candidate.node.name === opposite;
       });
       const existingPoint = existing ? namedNodePoint(document, existing.first.elementId === sourceElement.id ? existing.second : existing.first) : undefined;
-      const geometry = existingPoint ? arcGeometryThroughEndpoints(sourceElement, existingPoint, targetPoint, sourceElement.radius) : undefined;
+      const geometry = existingPoint ? arcGeometryThroughEndpoints(sourceElement, source.node.name === "start" ? targetPoint : existingPoint, source.node.name === "start" ? existingPoint : targetPoint, sourceElement.radius) : undefined;
       if (existingPoint && !geometry) return { success: false, error: "Arc radius is too small for both endpoint relations" };
       element = geometry ? { ...sourceElement, ...geometry } : { ...sourceElement, center: { x: sourceElement.center.x + targetPoint.x - sourcePoint.x, y: sourceElement.center.y + targetPoint.y - sourcePoint.y } };
     } else {
       const delta = { x: targetPoint.x - sourcePoint.x, y: targetPoint.y - sourcePoint.y };
       element = { ...sourceElement, center: { x: sourceElement.center.x + delta.x, y: sourceElement.center.y + delta.y } };
     }
+    if (!preservesElementConnections(document, sourceElement, element)) return { success: false, error: "Positional connection would break an existing connection" };
     const connection: ExplicitConnection = { id: `connection-${crypto.randomUUID()}`, first: source, second: target };
     return replaceElements({ ...document, connections: [...(document.connections ?? []), connection] }, document.elements.map((candidate) => candidate.id === source.elementId ? element : candidate));
   },
@@ -605,8 +650,7 @@ export const resizeElementToDimensions = (id: ElementId, field: "width" | "heigh
     if (!element || !Number.isFinite(value) || value <= 0) return { success: false, error: "Dimensions must be positive" };
     if (element.type === "arc") {
       if (field !== "radius") return { success: false, error: "Arc inspector only supports radius" };
-      if (value === element.radius) return { success: true, document };
-      return replaceElements(document, document.elements.map((candidate) => candidate.id === id && candidate.type === "arc" ? { ...candidate, radius: value } : candidate));
+      return updateArcRadius(document, element, value);
     }
     if (element.type === "circle") {
       const radius = field === "radius" ? value : value / 2;
@@ -617,7 +661,9 @@ export const resizeElementToDimensions = (id: ElementId, field: "width" | "heigh
         y: vertical.leftOrTop ? element.center.y - element.radius + radius : vertical.rightOrBottom ? element.center.y + element.radius - radius : element.center.y,
       };
       if (radius === element.radius && center.x === element.center.x && center.y === element.center.y) return { success: true, document };
-      return replaceElements(document, document.elements.map((candidate) => candidate.id === id && candidate.type === "circle" ? { ...candidate, center, radius } : candidate));
+      const updated = { ...element, center, radius };
+      if (!preservesElementConnections(document, element, updated)) return { success: false, error: "Circle resize would break an existing connection" };
+      return replaceElements(document, document.elements.map((candidate) => candidate.id === id && candidate.type === "circle" ? updated : candidate));
     }
     const target = aspectLock ? (field === "width" ? { width: value, height: value * element.size.height / element.size.width } : { width: value * element.size.width / element.size.height, height: value }) : { ...element.size, [field]: value };
     if (![target.width, target.height].every((candidate) => Number.isFinite(candidate) && candidate > 0)) return { success: false, error: "Dimensions must be positive" };
@@ -2003,20 +2049,7 @@ export const updateDimensionValue = (dimensionId: ElementId, value: number): Edi
       const nodeIds = [first, second].map((reference) => "nodeId" in reference ? reference.nodeId : undefined);
       if (first.elementId !== target.id || second.elementId !== target.id || !nodeIds.includes("center") || !nodeIds.some((nodeId) => nodeId === "start" || nodeId === "end")) return { success: false, error: "Arc radial dimensions require center and endpoint references" };
       const radius = dimension.kind === "diameter" ? value / 2 : value;
-      if (radius === target.radius) return { success: true, document };
-      const endpointPoints = connectedArcEndpointPoints(document, target);
-      let center = target.center; let startAngle = target.startAngle; let endAngle = target.endAngle;
-      if (endpointPoints.start && endpointPoints.end) {
-        const geometry = arcGeometryThroughEndpoints(target, endpointPoints.start, endpointPoints.end, radius);
-        if (!geometry) return { success: false, error: "Arc radius is too small for both endpoint relations" };
-        center = geometry.center; startAngle = geometry.startAngle; endAngle = geometry.endAngle;
-      } else if (endpointPoints.start || endpointPoints.end) {
-        const fixed = endpointPoints.start ?? endpointPoints.end!;
-        const endpoint = endpointPoints.start ? { x: target.center.x + target.radius * Math.cos(target.startAngle), y: target.center.y + target.radius * Math.sin(target.startAngle) } : { x: target.center.x + target.radius * Math.cos(target.endAngle), y: target.center.y + target.radius * Math.sin(target.endAngle) };
-        const length = Math.hypot(endpoint.x - target.center.x, endpoint.y - target.center.y);
-        center = { x: fixed.x - (endpoint.x - target.center.x) / length * radius, y: fixed.y - (endpoint.y - target.center.y) / length * radius };
-      }
-      return replaceElements(document, document.elements.map((element) => element.id === target.id && element.type === "arc" ? { ...element, center, radius, startAngle, endAngle } : element));
+      return updateArcRadius(document, target, radius);
     }
     if ((dimension.kind === "radius" || dimension.kind === "diameter") && dimension.driving !== true) return { success: false, error: "Only driving circular dimensions can change a circle" };
         if (dimension.kind === "radius" || dimension.kind === "diameter") {
@@ -2041,6 +2074,7 @@ export const updateDimensionValue = (dimensionId: ElementId, value: number): Edi
           center = { x: fixed.x - (endpoint.x - target.center.x) / length * radius, y: fixed.y - (endpoint.y - target.center.y) / length * radius };
         }
         const updated = { ...target, center, radius, circleConstraints: target.circleConstraints!.map((constraint) => constraint.id === dimension.constraintId ? { ...constraint, value } : constraint) };
+        if (!preservesElementConnections(document, target, updated)) return { success: false, error: "Circle radius change would break an existing connection" };
         return replaceElements(document, document.elements.map((element) => element.id === target.id ? updated : element));
       }
       return { success: false, error: "Circular driving dimensions require a circle" };

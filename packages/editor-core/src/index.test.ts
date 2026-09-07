@@ -1193,6 +1193,37 @@ it("converts a zero-radius rectangle to an open path when cutting one edge", () 
     expect(dispatch(positioned, addPositionalConnection(source, destination))).toBe(positioned);
   });
 
+  it("fits both endpoint attach orders canonically and rejects unsupported positional edits atomically", () => {
+    const rotatedTarget: RectangleElement = { ...rectangle, id: elementId("rotated-position-target"), position: { x: 12, y: 14 }, size: { width: 4, height: 4 }, rotation: 0.37 };
+    const start = { elementId: arc.id, node: { kind: "named" as const, name: "start" as const } };
+    const end = { elementId: arc.id, node: { kind: "named" as const, name: "end" as const } };
+    const targetNode = (name: "nw" | "se") => ({ elementId: rotatedTarget.id, node: { kind: "named" as const, name } });
+    const first = targetNode("nw"); const second = targetNode("se");
+    const initial = createEditor({ ...document, elements: [arc, rotatedTarget] });
+    const forward = dispatch(dispatch(initial, addPositionalConnection(start, first)), addPositionalConnection(end, second));
+    const forwardArc = forward.document.elements.find((element) => element.id === arc.id) as ArcElement;
+    expect(forwardArc.startAngle).toBeGreaterThanOrEqual(0);
+    expect(forwardArc.endAngle).toBeGreaterThanOrEqual(0);
+    expect(forwardArc.center.x + forwardArc.radius * Math.cos(forwardArc.startAngle)).toBeCloseTo(realGeometryNodes(rotatedTarget).find((node) => node.nodeId === "nw")!.point.x);
+    expect(forwardArc.center.y + forwardArc.radius * Math.sin(forwardArc.startAngle)).toBeCloseTo(realGeometryNodes(rotatedTarget).find((node) => node.nodeId === "nw")!.point.y);
+    const reverseInitial = createEditor({ ...document, elements: [arc, rotatedTarget] });
+    const reverse = dispatch(dispatch(reverseInitial, addPositionalConnection(end, second)), addPositionalConnection(start, first));
+    const reverseArc = reverse.document.elements.find((element) => element.id === arc.id) as ArcElement;
+    expect(reverseArc.startAngle).toBeGreaterThanOrEqual(0);
+    expect(reverseArc.endAngle).toBeGreaterThanOrEqual(0);
+    expect(reverseArc.center.x + reverseArc.radius * Math.cos(reverseArc.endAngle)).toBeCloseTo(realGeometryNodes(rotatedTarget).find((node) => node.nodeId === "se")!.point.x);
+    expect(reverseArc.center.y + reverseArc.radius * Math.sin(reverseArc.endAngle)).toBeCloseTo(realGeometryNodes(rotatedTarget).find((node) => node.nodeId === "se")!.point.y);
+    expect(redo(undo(reverse)).document).toEqual(reverse.document);
+
+    const impossibleTarget = createSketchLine(elementId("impossible-arc-target"), rectangle.layerId, rectangle.style, { x: 100, y: 100 }, { x: 130, y: 100 });
+    const impossible = dispatch(createEditor({ ...document, elements: [arc, impossibleTarget] }), addPositionalConnection(start, { elementId: impossibleTarget.id, node: { kind: "sketch", nodeId: impossibleTarget.nodes[0]!.id } }));
+    expect(dispatch(impossible, addPositionalConnection(end, { elementId: impossibleTarget.id, node: { kind: "sketch", nodeId: impossibleTarget.nodes[1]!.id } }))).toBe(impossible);
+    const centeredArc = { ...arc, center: { x: 14, y: 16 } };
+    const centerConnection = { id: "arc-center-existing", first: { elementId: centeredArc.id, node: { kind: "named" as const, name: "center" as const } }, second: { elementId: rotatedTarget.id, node: { kind: "named" as const, name: "center" as const } } };
+    const centered = createEditor({ ...document, elements: [centeredArc, rotatedTarget], connections: [centerConnection] });
+    expect(dispatch(centered, addPositionalConnection({ elementId: centeredArc.id, node: { kind: "named", name: "start" } }, first))).toBe(centered);
+  });
+
   it("edits native arc center, radius, and endpoint angles atomically", () => {
     const initial = createEditor({ ...document, elements: [arc] });
     const resized = dispatch(initial, resizeElementToDimensions(arc.id, "radius", 8));
@@ -1386,6 +1417,40 @@ it("converts a zero-radius rectangle to an open path when cutting one edge", () 
     const malformed: DimensionElement = { ...radius, id: elementId("malformed-arc-radius"), references: [{ kind: "node", elementId: target.id, nodeIndex: 1, nodeId: "start" }, { kind: "node", elementId: target.id, nodeIndex: 2, nodeId: "end" }] };
     const malformedInitial = createEditor({ ...document, elements: [target, malformed] });
     expect(dispatch(malformedInitial, updateDimensionValue(malformed.id, 15))).toBe(malformedInitial);
+  });
+
+  it("uses the same exact arc-radius geometry for inspector and radial dimension edits", () => {
+    const makeCase = (connectionCount: 0 | 1 | 2) => {
+      const target: ArcElement = { ...arc, id: elementId(`equivalent-arc-${connectionCount}`), center: { x: 10, y: 20 }, radius: 5 };
+      const startAnchor = { ...rectangle, id: elementId(`equivalent-start-${connectionCount}`), position: { x: 15, y: 20 } };
+      const endAnchor = { ...rectangle, id: elementId(`equivalent-end-${connectionCount}`), position: { x: 10, y: 25 } };
+      const connections = [
+        { id: `equivalent-start-connection-${connectionCount}`, first: { elementId: target.id, node: { kind: "named" as const, name: "start" as const } }, second: { elementId: startAnchor.id, node: { kind: "named" as const, name: "nw" as const } } },
+        { id: `equivalent-end-connection-${connectionCount}`, first: { elementId: target.id, node: { kind: "named" as const, name: "end" as const } }, second: { elementId: endAnchor.id, node: { kind: "named" as const, name: "nw" as const } } },
+      ].slice(0, connectionCount);
+      const radial: DimensionElement = { type: "dimension", id: elementId(`equivalent-radius-${connectionCount}`), layerId: target.layerId, kind: "radius", references: [{ kind: "node", elementId: target.id, nodeIndex: 0, nodeId: "center" }, { kind: "node", elementId: target.id, nodeIndex: 1, nodeId: "start" }], offset: { x: 8, y: 0 }, precision: 2, units: "mm", rotation: 0, style: rectangle.style };
+      const initial = createEditor({ ...document, elements: [target, startAnchor, endAnchor, radial], connections });
+      const inspector = dispatch(initial, resizeElementToDimensions(target.id, "radius", 8));
+      const dimensionEdit = dispatch(initial, updateDimensionValue(radial.id, 8));
+      expect(dimensionEdit.document.elements.find((element) => element.id === target.id)).toEqual(inspector.document.elements.find((element) => element.id === target.id));
+      return { initial, inspector, dimensionEdit };
+    };
+
+    for (const connectionCount of [0, 1, 2] as const) makeCase(connectionCount);
+    const impossible = makeCase(2);
+    expect(dispatch(impossible.initial, resizeElementToDimensions(impossible.initial.document.elements[0]!.id, "radius", 2))).toBe(impossible.initial);
+    expect(dispatch(impossible.initial, updateDimensionValue(impossible.initial.document.elements[3]!.id, 2))).toBe(impossible.initial);
+
+    const centeredTarget: ArcElement = { ...arc, id: elementId("center-connected-equivalent"), center: { x: 10, y: 20 }, radius: 5 };
+    const centeredAnchor = { ...rectangle, id: elementId("center-connected-anchor"), position: { x: 5, y: 15 } };
+    const centerConnection = { id: "center-connected", first: { elementId: centeredTarget.id, node: { kind: "named" as const, name: "center" as const } }, second: { elementId: centeredAnchor.id, node: { kind: "named" as const, name: "center" as const } } };
+    const centerRadial: DimensionElement = { type: "dimension", id: elementId("center-connected-radius"), layerId: centeredTarget.layerId, kind: "radius", references: [{ kind: "node", elementId: centeredTarget.id, nodeIndex: 0, nodeId: "center" }, { kind: "node", elementId: centeredTarget.id, nodeIndex: 1, nodeId: "start" }], offset: { x: 8, y: 0 }, precision: 2, units: "mm", rotation: 0, style: rectangle.style };
+    const centerInitial = createEditor({ ...document, elements: [centeredTarget, centeredAnchor, centerRadial], connections: [centerConnection] });
+    const centerResized = dispatch(centerInitial, resizeElementToDimensions(centeredTarget.id, "radius", 8));
+    const centerDimensionResized = dispatch(centerInitial, updateDimensionValue(centerRadial.id, 8));
+    expect(centerDimensionResized.document.elements.find((element) => element.id === centeredTarget.id)).toEqual(centerResized.document.elements.find((element) => element.id === centeredTarget.id));
+    expect((centerResized.document.elements[0] as ArcElement).center).toEqual(centeredTarget.center);
+    expect((centerResized.document.elements[0] as ArcElement).radius).toBe(8);
   });
 
   it("keeps a coincident arc endpoint fixed while changing its radius", () => {
