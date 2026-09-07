@@ -1154,8 +1154,15 @@ test("creates a circular Cota from a direct contour click", async ({ page }) => 
   await page.getByRole("group", { name: "Modo de cota" }).getByRole("button", { name: "Radio" }).click();
   await page.mouse.click(box!.x + box!.width / 2, box!.y);
   await page.mouse.click(box!.x + box!.width + 35, box!.y + box!.height / 2);
-  await expect(page.locator('[data-dimension="radius"]')).toHaveCount(1);
-  await expect(page.locator('[data-dimension="radius"]')).toContainText("R");
+  const radialDimension = page.locator('[data-dimension="radius"]');
+  await expect(radialDimension).toHaveCount(1);
+  await expect(radialDimension).toContainText("R");
+  const editor = page.getByRole("dialog", { name: "Modificar cota" });
+  await expect(editor).toBeVisible();
+  await editor.getByRole("spinbutton").fill("180");
+  await editor.getByRole("button", { name: "Confirmar", exact: true }).click();
+  await expect(radialDimension).toContainText("180");
+  await expect.poll(async () => (await circle.boundingBox())?.width ?? 0).toBeGreaterThan(box!.width);
 });
 
 test("creates an aligned Cota for a diagonal line", async ({ page }) => {
