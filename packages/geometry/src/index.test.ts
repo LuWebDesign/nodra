@@ -39,6 +39,14 @@ describe("canonical millimetre geometry", () => {
     expect(result.conflicts).toEqual([]);
     expect(result.sketch.nodes[3]!.point.y).toBeCloseTo(10);
   });
+  it("preserves the nearest antiparallel orientation for local sketch relations", () => {
+    const sketch = { type: "sketch" as const, id: elementId("antiparallel-local"), layerId: layerId("l"), nodes: [{ id: "a", point: { x: 0, y: 0 } }, { id: "b", point: { x: 10, y: 0 } }, { id: "c", point: { x: 10, y: 8 } }, { id: "d", point: { x: 0, y: 8 } }], edges: [{ id: "top", startNodeId: "a", endNodeId: "b" }, { id: "bottom", startNodeId: "c", endNodeId: "d" }], constraints: [{ id: "parallel", kind: "parallel" as const, references: [{ elementId: elementId("antiparallel-local"), edgeId: "top" }, { elementId: elementId("antiparallel-local"), edgeId: "bottom" }] as const }], style };
+    const result = solveSketchConstraints(sketch);
+    expect(result.status).toBe("underdefined");
+    expect(result.conflicts).toEqual([]);
+    expect(result.sketch.nodes[3]!.point).toEqual({ x: 0, y: 8 });
+  });
+
   it("rejects ambiguous zero-axis distances and detects reversed duplicates", () => {
         const sketch = { type: "sketch" as const, id: elementId("solver-safety"), layerId: layerId("l"), nodes: [{ id: "a", point: { x: 0, y: 0 } }, { id: "b", point: { x: 0, y: 5 } }], edges: [{ id: "ab", startNodeId: "a", endNodeId: "b" }], constraints: [{ id: "distance", kind: "distance-horizontal" as const, references: [{ elementId: elementId("solver-safety"), nodeId: "a" }, { elementId: elementId("solver-safety"), nodeId: "b" }] as const, value: 10 }, { id: "h1", kind: "horizontal" as const, references: [{ elementId: elementId("solver-safety"), nodeId: "a" }, { elementId: elementId("solver-safety"), nodeId: "b" }] as const }, { id: "h2", kind: "horizontal" as const, references: [{ elementId: elementId("solver-safety"), nodeId: "b" }, { elementId: elementId("solver-safety"), nodeId: "a" }] as const }], style };
         const result = solveSketchConstraints(sketch);

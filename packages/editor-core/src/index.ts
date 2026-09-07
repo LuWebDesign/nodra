@@ -165,8 +165,11 @@ export const appendSketchEdge = (sketchId: ElementId, fromNodeId: string, point:
     const previousStart = previous ? sketch.nodes.find((node) => node.id === previous.startNodeId)?.point : undefined;
     const previousEnd = previous ? sketch.nodes.find((node) => node.id === previous.endNodeId)?.point : undefined;
     const previousDx = previousEnd && previousStart ? previousEnd.x - previousStart.x : 0; const previousDy = previousEnd && previousStart ? previousEnd.y - previousStart.y : 0;
+    const previousAbsDx = Math.abs(previousDx); const previousAbsDy = Math.abs(previousDy);
+    const previousRelationKind = previousAbsDy <= previousAbsDx * 0.1 ? "horizontal" : previousAbsDx <= previousAbsDy * 0.1 ? "vertical" : undefined;
     const currentDx = end.x - start.x; const currentDy = end.y - start.y;
-    const perpendicular = previous && previousEnd && previousStart && Math.hypot(previousDx, previousDy) > 1e-9 && Math.hypot(currentDx, currentDy) > 1e-9 && Math.abs(previousDx * currentDx + previousDy * currentDy) <= Math.hypot(previousDx, previousDy) * Math.hypot(currentDx, currentDy) * 0.1 ? { id: `auto:${edgeId}:perpendicular`, kind: "perpendicular" as const, references: [{ elementId: sketch.id, nodeId: previous.startNodeId }, { elementId: sketch.id, nodeId: previous.endNodeId }, { elementId: sketch.id, nodeId: fromNodeId }, { elementId: sketch.id, nodeId: endNodeId }] as const } : undefined;
+    const axisRelationsAlreadyPerpendicular = relationKind !== undefined && previousRelationKind !== undefined && relationKind !== previousRelationKind;
+    const perpendicular = !axisRelationsAlreadyPerpendicular && previous && previousEnd && previousStart && Math.hypot(previousDx, previousDy) > 1e-9 && Math.hypot(currentDx, currentDy) > 1e-9 && Math.abs(previousDx * currentDx + previousDy * currentDy) <= Math.hypot(previousDx, previousDy) * Math.hypot(currentDx, currentDy) * 0.1 ? { id: `auto:${edgeId}:perpendicular`, kind: "perpendicular" as const, references: [{ elementId: sketch.id, nodeId: previous.startNodeId }, { elementId: sketch.id, nodeId: previous.endNodeId }, { elementId: sketch.id, nodeId: fromNodeId }, { elementId: sketch.id, nodeId: endNodeId }] as const } : undefined;
     const autoRelations = [relation, perpendicular].filter((candidate): candidate is SketchConstraint => candidate !== undefined);
     const next: SketchElement = { ...sketch, nodes: existingTarget ? sketch.nodes : [...sketch.nodes, { id: endNodeId, point }], edges: [...sketch.edges, { id: edgeId, startNodeId: fromNodeId, endNodeId }], ...(autoRelations.length ? { constraints: [...(sketch.constraints ?? []), ...autoRelations] } : {}) };
     return replaceElements(document, document.elements.map((element) => element.id === sketchId ? next : element));
@@ -1938,6 +1941,14 @@ export const updateDimensionValue = (dimensionId: ElementId, value: number): Edi
       const point = dimension.kind === "aligned" ? { x: firstNode.point.x + dx * value / length, y: firstNode.point.y + dy * value / length } : dimension.kind === "horizontal" ? { x: firstNode.point.x + Math.sign(dx || 1) * value, y: secondNode.point.y } : dimension.kind === "vertical" ? { x: secondNode.point.x, y: firstNode.point.y + Math.sign(dy || 1) * value } : undefined;
       return point ? updateElementNode(second.elementId, second.nodeIndex, point).apply(document) : { success: true, document }; 
     }
+    if ((dimension.kind === "radius" || dimension.kind === "diameter") && target?.type === "arc") {
+      const first = dimension.references[0]; const second = dimension.references[1];
+      const nodeIds = [first, second].map((reference) => "nodeId" in reference ? reference.nodeId : undefined);
+      if (first.elementId !== target.id || second.elementId !== target.id || !nodeIds.includes("center") || !nodeIds.some((nodeId) => nodeId === "start" || nodeId === "end")) return { success: false, error: "Arc radial dimensions require center and endpoint references" };
+      const radius = dimension.kind === "diameter" ? value / 2 : value;
+      if (radius === target.radius) return { success: true, document };
+      return replaceElements(document, document.elements.map((element) => element.id === target.id && element.type === "arc" ? { ...element, radius } : element));
+    }
     if ((dimension.kind === "radius" || dimension.kind === "diameter") && dimension.driving !== true) return { success: false, error: "Only driving circular dimensions can change a circle" };
         if (dimension.kind === "radius" || dimension.kind === "diameter") {
       if (target?.type === "circle") {
@@ -2164,12 +2175,20 @@ export const addSketchConstraint = (sketchId: ElementId, constraint: SketchConst
     const sketch = document.elements.find((element): element is SketchElement => element.id === sketchId && element.type === "sketch");
     if (!sketch || sketch.constraints?.some((current) => current.id === constraint.id)) return { success: false, error: "Sketch constraint cannot be added" };
     const sameReferences = (first: SketchConstraint, second: SketchConstraint) => first.kind === second.kind && first.references.length === second.references.length && first.references.every((reference, index) => constraintReferenceKey(reference) === (second.references[index] ? constraintReferenceKey(second.references[index]) : undefined));
-    const explicitEdges = segmentEdgeKeysForConstraint(sketch, constraint) ?? (constraint.references.length === 2 && constraint.references.every((reference) => "nodeId" in reference) ? sketch.edges.flatMap((edge) => { const [first, second] = constraint.references; return first && second && "nodeId" in first && "nodeId" in second && (edge.startNodeId === first.nodeId && edge.endNodeId === second.nodeId || edge.startNodeId === second.nodeId && edge.endNodeId === first.nodeId) ? [JSON.stringify([sketch.id, "edge", edge.id])] : []; }) : undefined);
+    const edgeKeyForNodePair = (first: SketchConstraint["references"][number] | undefined, second: SketchConstraint["references"][number] | undefined): string | undefined => {
+      if (!first || !second || !("nodeId" in first) || !("nodeId" in second)) return undefined;
+      const edge = sketch.edges.find((candidate) => candidate.startNodeId === first.nodeId && candidate.endNodeId === second.nodeId || candidate.startNodeId === second.nodeId && candidate.endNodeId === first.nodeId);
+      return edge ? JSON.stringify([sketch.id, "edge", edge.id]) : undefined;
+    };
+    const explicitEdges = segmentEdgeKeysForConstraint(sketch, constraint) ?? (constraint.references.length === 2 ? [edgeKeyForNodePair(constraint.references[0], constraint.references[1])].filter((key): key is string => key !== undefined) : undefined);
+    const secondExplicitEdgeKey = constraint.references.length === 2 && constraint.references.every((reference) => "edgeId" in reference) ? constraintReferenceKey(constraint.references[1]!) : constraint.references.length === 4 ? edgeKeyForNodePair(constraint.references[2], constraint.references[3]) : undefined;
     const constraints = (sketch.constraints ?? []).filter((current) => {
       if (!current.id.startsWith("auto:")) return true;
       const currentEdges = segmentEdgeKeysForConstraint(sketch, current);
+      const currentAxisEdge = (current.kind === "horizontal" || current.kind === "vertical") && current.references.length === 2 ? edgeKeyForNodePair(current.references[0], current.references[1]) : undefined;
       const sameEdges = explicitEdges !== undefined && explicitEdges.length > 0 && currentEdges !== undefined && explicitEdges.every((key) => currentEdges.includes(key));
-      return !(sameReferences(current, constraint) || sameEdges || constraint.references.every((reference) => current.references.some((candidate) => constraintReferenceKey(candidate) === constraintReferenceKey(reference))));
+      const replacesSecondEdgeDirection = (constraint.kind === "parallel" || constraint.kind === "perpendicular") && secondExplicitEdgeKey !== undefined && (currentEdges?.includes(secondExplicitEdgeKey) === true || currentAxisEdge === secondExplicitEdgeKey) && ["horizontal", "vertical", "perpendicular"].includes(current.kind);
+      return !(sameReferences(current, constraint) || sameEdges || replacesSecondEdgeDirection || constraint.references.every((reference) => current.references.some((candidate) => constraintReferenceKey(candidate) === constraintReferenceKey(reference))));
     });
     return solveSketchCandidate(document, sketch, [...constraints, constraint]);
   },

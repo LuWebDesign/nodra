@@ -1303,7 +1303,12 @@ test("crea un arco por tres puntos y solo persiste al confirmar", async ({ page 
   await page.mouse.click(start.x, start.y);
   await page.mouse.click(end.x, end.y);
   await page.mouse.move(through.x, through.y);
-  await expect(page.locator(".creation-pending-overlay path")).toBeVisible();
+  const previewPath = page.locator(".creation-pending-overlay path");
+  await expect(previewPath).toBeVisible();
+  const previewNumbers = (await previewPath.getAttribute("d"))!.match(/-?\d+(?:\.\d+)?(?:e[+-]?\d+)?/gi)!.map(Number);
+  const radiusGuide = page.locator(".creation-preview-radius");
+  expect(Number(await radiusGuide.getAttribute("x1"))).toBeCloseTo((previewNumbers[0]! + previewNumbers[7]!) / 2, 6);
+  expect(Number(await radiusGuide.getAttribute("y1"))).toBeCloseTo((previewNumbers[1]! + previewNumbers[8]!) / 2, 6);
   await expect(page.locator('.page-svg svg [data-element-id]')).toHaveCount(0);
   await page.keyboard.press("Escape");
   await expect(page.locator(".creation-pending-overlay")).toHaveCount(0);
@@ -1316,6 +1321,7 @@ test("crea un arco por tres puntos y solo persiste al confirmar", async ({ page 
   const arc = page.locator('.page-svg svg path[data-element-id]');
   await expect(arc).toHaveCount(1);
   await expect(arc).toHaveAttribute("d", / A /);
+  await expect(page.locator('[data-center-reference="true"]')).toBeVisible();
   await expect(page.getByRole("group", { name: "Operaciones de forma" })).toBeVisible();
   await page.getByRole("button", { name: "Deshacer" }).click();
   await expect(arc).toHaveCount(0);
@@ -1419,4 +1425,107 @@ test("edita el radio y los extremos de un arco nativo", async ({ page }) => {
   await expect(arc).not.toHaveAttribute("d", resizedPath!);
   await page.getByRole("button", { name: "Deshacer" }).click();
   await expect(arc).toHaveAttribute("d", resizedPath!);
+});
+
+test("edita una cota radial de arco sin exigir un solver de círculo", async ({ page }) => {
+  await page.goto("/");
+  const bounds = await page.locator(".page").boundingBox();
+  expect(bounds).not.toBeNull();
+  const center = { x: bounds!.x + 260, y: bounds!.y + 250 };
+  const start = { x: center.x - 70, y: center.y };
+  const end = { x: center.x + 70, y: center.y };
+  const through = { x: center.x, y: center.y - 70 };
+  await page.getByRole("button", { name: "Arco" }).click();
+  await page.mouse.click(start.x, start.y);
+  await page.mouse.click(end.x, end.y);
+  await page.mouse.move(through.x, through.y);
+  await page.mouse.click(through.x, through.y);
+  const arc = page.locator('.page-svg svg path[data-element-id]').first();
+  const before = await arc.boundingBox();
+  expect(before).not.toBeNull();
+
+  await page.getByRole("button", { name: "Cota" }).click();
+  await page.getByRole("group", { name: "Modo de cota" }).getByRole("button", { name: "Radio" }).click();
+  await page.mouse.click(center.x, center.y);
+  await page.mouse.click(end.x, end.y);
+  await page.mouse.click(end.x + 35, end.y - 20);
+  const editor = page.getByRole("dialog", { name: "Modificar cota" });
+  await expect(editor).toBeVisible();
+  await editor.getByRole("spinbutton").fill("150");
+  await editor.getByRole("button", { name: "Confirmar", exact: true }).click();
+  await expect(editor).toHaveCount(0);
+  await expect.poll(async () => (await arc.boundingBox())?.width ?? 0).toBeGreaterThan(before!.width);
+  await page.getByRole("button", { name: "Deshacer" }).click();
+  await expect.poll(async () => (await arc.boundingBox())?.width ?? 0).toBeCloseTo(before!.width, 0);
+});
+
+test("recorta un círculo con un rectángulo exacto sin modificar el rectángulo", async ({ page }) => {
+  await page.goto("/");
+  const bounds = await page.locator(".page").boundingBox();
+  expect(bounds).not.toBeNull();
+  const center = { x: bounds!.x + 300, y: bounds!.y + 260 };
+  await page.getByRole("button", { name: "Rectángulo" }).click();
+  await page.mouse.click(center.x - 40, center.y - 120);
+  await page.mouse.move(center.x + 40, center.y + 120);
+  await page.mouse.click(center.x + 40, center.y + 120);
+  const rectangle = page.locator('.page-svg svg rect[data-element-id]');
+  await expect(rectangle).toHaveCount(1);
+  const rectangleId = await rectangle.getAttribute("data-element-id");
+
+  await page.getByRole("button", { name: "Círculo" }).click();
+  await page.mouse.click(center.x, center.y);
+  await page.mouse.move(center.x + 80, center.y);
+  await page.mouse.click(center.x + 80, center.y);
+  const circle = page.locator('.page-svg svg circle[data-element-id]');
+  const circleId = await circle.getAttribute("data-element-id");
+  expect(circleId).not.toBeNull();
+  await expect(page.locator('[data-center-reference="true"]')).toBeVisible();
+
+  await page.getByRole("button", { name: "Cortar segmentos" }).click();
+  await page.mouse.move(center.x, center.y - 80);
+  await expect(page.locator('.cut-segment-hover-overlay path[d*=" A "]')).toBeVisible();
+  await page.mouse.click(center.x, center.y - 80);
+  await expect(page.locator(`.page-svg svg path[data-element-id="${circleId}"]`)).toHaveCount(1);
+  await expect(page.locator(`.page-svg svg rect[data-element-id="${rectangleId}"]`)).toHaveCount(1);
+  await page.getByRole("button", { name: "Deshacer" }).click();
+  await expect(page.locator(`.page-svg svg circle[data-element-id="${circleId}"]`)).toHaveCount(1);
+  await expect(page.locator(`.page-svg svg rect[data-element-id="${rectangleId}"]`)).toHaveCount(1);
+});
+
+test("añade relaciones a un croquis cerrado que ya tiene una cota", async ({ page }) => {
+  await page.goto("/");
+  const bounds = await page.locator(".page").boundingBox();
+  expect(bounds).not.toBeNull();
+  const a = { x: bounds!.x + 180, y: bounds!.y + 180 };
+  const b = { x: a.x + 140, y: a.y };
+  const c = { x: b.x, y: a.y + 100 };
+  const d = { x: a.x, y: c.y };
+  await page.getByRole("button", { name: "Línea" }).click();
+  for (const point of [a, b, c, d, a]) await page.mouse.click(point.x, point.y);
+  const sketch = page.locator('.page-svg svg g[data-element-id]').first();
+  await expect(sketch.locator('line')).toHaveCount(4);
+
+  await page.getByRole("button", { name: "Cota" }).click();
+  await page.mouse.click(a.x, a.y);
+  await page.mouse.click(b.x, b.y);
+  await page.mouse.click((a.x + b.x) / 2, a.y - 45);
+  await expect(page.locator('[data-dimension]')).toHaveCount(1);
+  const dimensionEditor = page.getByRole("dialog", { name: "Modificar cota" });
+  if (await dimensionEditor.count()) await dimensionEditor.getByRole("button", { name: "Cancelar" }).click();
+
+  await page.getByRole("button", { name: "Forma" }).click();
+  await page.mouse.click((a.x + b.x) / 2, a.y);
+  await expect(page.locator(".contour-node.active")).toHaveCount(2);
+  await page.keyboard.down("Shift");
+  try {
+    await page.mouse.click((c.x + d.x) / 2, c.y);
+  } finally {
+    await page.keyboard.up("Shift");
+  }
+  await expect(page.locator(".contour-node.active")).toHaveCount(4);
+  const parallel = page.locator('.constraint-buttons').getByRole("button", { name: "Paralela", exact: true });
+  await expect(parallel).toBeEnabled();
+  await parallel.click();
+  await page.getByRole("button", { name: "Confirmar relación" }).click();
+  await expect(page.getByRole("list", { name: "Relaciones aplicadas" })).toContainText("Paralela");
 });
