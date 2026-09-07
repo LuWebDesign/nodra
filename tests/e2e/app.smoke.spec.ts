@@ -1376,3 +1376,47 @@ test("recorta un arco nativo en dos arcos exactos y conserva los cortadores", as
   await expect(survivors).toHaveCount(2);
   await expect(cutters).toHaveCount(2);
 });
+
+test("edita el radio y los extremos de un arco nativo", async ({ page }) => {
+  await page.goto("/");
+  const pageBounds = await page.locator(".page").boundingBox();
+  expect(pageBounds).not.toBeNull();
+  const center = { x: pageBounds!.x + 280, y: pageBounds!.y + 260 };
+  const start = { x: center.x - 70, y: center.y };
+  const end = { x: center.x + 70, y: center.y };
+  const through = { x: center.x, y: center.y - 70 };
+  await page.getByRole("button", { name: "Arco" }).click();
+  await page.mouse.click(start.x, start.y);
+  await page.mouse.click(end.x, end.y);
+  await page.mouse.move(through.x, through.y);
+  await page.mouse.click(through.x, through.y);
+
+  const arc = page.locator('.page-svg svg path[data-element-id]').first();
+  const originalPath = await arc.getAttribute("d");
+  const radius = page.locator('.inspector').getByLabel("Radio en milímetros");
+  await expect(radius).toBeVisible();
+  await radius.fill("100");
+  await radius.press("Enter");
+  await expect(arc).not.toHaveAttribute("d", originalPath!);
+  const resizedPath = await arc.getAttribute("d");
+  await page.getByRole("button", { name: "Deshacer" }).click();
+  await expect(arc).toHaveAttribute("d", originalPath!);
+  await page.getByRole("button", { name: "Rehacer" }).click();
+  await expect(arc).toHaveAttribute("d", resizedPath!);
+
+  const resizedBounds = await arc.boundingBox();
+  expect(resizedBounds).not.toBeNull();
+  await page.getByRole("button", { name: "Forma" }).click();
+  await page.mouse.click(resizedBounds!.x + resizedBounds!.width / 2, resizedBounds!.y + 1);
+  const nodes = page.getByRole("group", { name: "Nodos de forma" }).getByRole("button");
+  await expect(nodes).toHaveCount(3);
+  const startNode = await nodes.nth(1).boundingBox();
+  expect(startNode).not.toBeNull();
+  await page.mouse.move(startNode!.x + startNode!.width / 2, startNode!.y + startNode!.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(startNode!.x + 45, startNode!.y + 45, { steps: 5 });
+  await page.mouse.up();
+  await expect(arc).not.toHaveAttribute("d", resizedPath!);
+  await page.getByRole("button", { name: "Deshacer" }).click();
+  await expect(arc).toHaveAttribute("d", resizedPath!);
+});

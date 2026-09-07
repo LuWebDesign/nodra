@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { elementId, layerId, type CircleElement, type RectangleElement } from "@nodra/domain";
+import { elementId, layerId, type ArcElement, type CircleElement, type RectangleElement } from "@nodra/domain";
 import { aspectGeometryPatch, aspectSize, centeredGeometryPatch, cornerRadiusPatch, cornerRadiusValue, geometryPatch, geometryValue, rotationDegreesValue, rotationPatch } from "./propertyBar.js";
 
 const rectangle: RectangleElement = { type: "rectangle", id: elementId("r"), layerId: layerId("l"), position: { x: 2, y: 3 }, size: { width: 20, height: 10 }, cornerRadius: 1.5, rotation: 0, style: { stroke: "#000", strokeWidth: 1 } };
@@ -16,6 +16,15 @@ describe("property bar helpers", () => {
     expect(geometryValue(circle, "radius")).toBe(5);
     expect(geometryPatch(circle, "y", 30)).toEqual({ center: { x: 10, y: 30 } });
     expect(geometryPatch(circle, "radius", 8)).toEqual({ radius: 8 });
+  });
+
+  it("reads and patches canonical arc center and radius fields", () => {
+    const arc: ArcElement = { type: "arc", id: elementId("a"), layerId: layerId("l"), center: { x: 12, y: 18 }, radius: 7, startAngle: 0, endAngle: Math.PI, direction: "clockwise", style: rectangle.style };
+    expect(geometryValue(arc, "x")).toBe(12);
+    expect(geometryValue(arc, "y")).toBe(18);
+    expect(geometryValue(arc, "radius")).toBe(7);
+    expect(geometryPatch(arc, "x", 20)).toEqual({ center: { x: 20, y: 18 } });
+    expect(geometryPatch(arc, "radius", 9)).toEqual({ radius: 9 });
   });
 
   it("keeps a single selection proportional when the aspect lock is enabled", () => {

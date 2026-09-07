@@ -2,26 +2,27 @@ import type { Element, PointMm, SizeMm } from "@nodra/domain";
 import { degreesToRadians, radiansToDegrees } from "@nodra/geometry";
 
 export type GeometryField = "x" | "y" | "width" | "height" | "radius";
-export type PropertyElement = Extract<Element, { type: "rectangle" | "ellipse" | "circle" }>;
+export type PropertyElement = Extract<Element, { type: "rectangle" | "ellipse" | "circle" | "arc" }>;
+export type ResizablePropertyElement = Exclude<PropertyElement, Extract<Element, { type: "circle" | "arc" }>>;
 export type RotatableElement = Extract<Element, { readonly rotation: number }>;
 
 export const formatMm = (value: number) => Number.isFinite(value) ? value.toFixed(3).replace(/\.?0+$/, "") : "";
 
 export function geometryValue(element: PropertyElement, field: GeometryField): number {
-  if (element.type === "circle") return field === "x" ? element.center.x : field === "y" ? element.center.y : element.radius;
+  if (element.type === "circle" || element.type === "arc") return field === "x" ? element.center.x : field === "y" ? element.center.y : element.radius;
   return field === "x" ? element.position.x : field === "y" ? element.position.y : field === "width" ? element.size.width : element.size.height;
 }
 
 export function geometryPatch(element: PropertyElement, field: GeometryField, value: number): Partial<PropertyElement> {
-  if (element.type === "circle") return field === "x" || field === "y" ? { center: { ...element.center, [field]: value } } : { radius: value };
+  if (element.type === "circle" || element.type === "arc") return field === "x" || field === "y" ? { center: { ...element.center, [field]: value } } : { radius: value };
   return field === "x" ? { position: { ...element.position, x: value }, size: element.size } : field === "y" ? { position: { ...element.position, y: value }, size: element.size } : field === "width" ? { position: element.position, size: { ...element.size, width: value } } : { position: element.position, size: { ...element.size, height: value } };
 }
 
-export function centeredGeometryPatch(element: Exclude<PropertyElement, Extract<Element, { type: "circle" }>>, field: "width" | "height", value: number, aspectLock: boolean): { position: PointMm; size: SizeMm } {
+export function centeredGeometryPatch(element: ResizablePropertyElement, field: "width" | "height", value: number, aspectLock: boolean): { position: PointMm; size: SizeMm } {
   const patch = aspectGeometryPatch(element, field, value, aspectLock);
   return { position: { x: element.position.x + (element.size.width - patch.size.width) / 2, y: element.position.y + (element.size.height - patch.size.height) / 2 }, size: patch.size };
 }
-export function aspectGeometryPatch(element: Exclude<PropertyElement, Extract<Element, { type: "circle" }>>, field: "width" | "height", value: number, aspectLock: boolean): { position: PointMm; size: SizeMm } {
+export function aspectGeometryPatch(element: ResizablePropertyElement, field: "width" | "height", value: number, aspectLock: boolean): { position: PointMm; size: SizeMm } {
   if (!aspectLock) return geometryPatch(element, field, value) as { position: PointMm; size: SizeMm };
   return { position: element.position, size: aspectSize(element.size.width, element.size.height, field, value) };
 }

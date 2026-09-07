@@ -1129,6 +1129,49 @@ it("converts a zero-radius rectangle to an open path when cutting one edge", () 
     expect(dispatch(initial, createElement(invalid))).toBe(initial);
   });
 
+  it("edits native arc center, radius, and endpoint angles atomically", () => {
+    const initial = createEditor({ ...document, elements: [arc] });
+    const resized = dispatch(initial, resizeElementToDimensions(arc.id, "radius", 8));
+    expect(resized.document.elements[0]).toMatchObject({ type: "arc", id: arc.id, center: arc.center, radius: 8, startAngle: arc.startAngle, endAngle: arc.endAngle, direction: arc.direction });
+    expect(resized.undo).toHaveLength(1);
+    expect(dispatch(resized, resizeElementToDimensions(arc.id, "radius", 8))).toBe(resized);
+    expect(dispatch(initial, resizeElementToDimensions(arc.id, "width", 8))).toBe(initial);
+
+    const movedCenter = dispatch(initial, updateElementNode(arc.id, 0, { x: 14, y: 25 }));
+    expect(movedCenter.document.elements[0]).toMatchObject({ type: "arc", center: { x: 14, y: 25 }, radius: arc.radius, startAngle: arc.startAngle, endAngle: arc.endAngle });
+    const movedStart = dispatch(initial, updateElementNode(arc.id, 1, { x: 5, y: 20 }));
+    expect(movedStart.document.elements[0]).toMatchObject({ type: "arc", center: arc.center, radius: arc.radius, startAngle: Math.PI, endAngle: arc.endAngle, direction: arc.direction });
+    const movedEnd = dispatch(initial, updateElementNode(arc.id, 2, { x: 10, y: 15 }));
+    expect(movedEnd.document.elements[0]).toMatchObject({ type: "arc", startAngle: arc.startAngle, endAngle: Math.PI * 1.5, direction: arc.direction });
+    expect(dispatch(initial, updateElementNode(arc.id, 1, { x: 10, y: 25 }))).toBe(initial);
+    const nearEndAngle = arc.endAngle + 5e-11;
+    expect(dispatch(initial, updateElementNode(arc.id, 1, { x: arc.center.x + arc.radius * Math.cos(nearEndAngle), y: arc.center.y + arc.radius * Math.sin(nearEndAngle) }))).toBe(initial);
+    expect(dispatch(initial, updateElementNode(arc.id, 1, { x: arc.center.x + arc.radius, y: arc.center.y }))).toBe(initial);
+    expect(dispatch(initial, updateElementNode(arc.id, 1, arc.center))).toBe(initial);
+  });
+
+  it("previews, commits, cancels, and undoes one native arc endpoint gesture", () => {
+    const connection = { id: "edited-arc-end", first: { elementId: arc.id, node: { kind: "named" as const, name: "end" as const } }, second: { elementId: rectangle.id, node: { kind: "named" as const, name: "center" as const } } };
+    const radial: DimensionElement = { type: "dimension", id: elementId("edited-arc-radius"), layerId: arc.layerId, kind: "radius", references: [{ kind: "node", elementId: arc.id, nodeIndex: 0, nodeId: "center" }, { kind: "node", elementId: arc.id, nodeIndex: 2, nodeId: "end" }], offset: { x: 0, y: -4 }, precision: 2, units: "mm", rotation: 0, style: rectangle.style };
+    const initial = createEditor({ ...document, elements: [arc, rectangle, radial], connections: [connection] });
+    const gesture = beginGesture(initial);
+    const preview = previewGestureFromBase(gesture, updateElementNode(arc.id, 2, { x: 5, y: 20 }));
+    expect(preview.document.elements[0]).toMatchObject({ type: "arc", endAngle: Math.PI });
+    expect(preview.document.connections).toEqual(initial.document.connections);
+    expect((preview.document.elements[2] as DimensionElement).references).toEqual(radial.references);
+    expect(cancelGesture(preview).document).toEqual(initial.document);
+    const committed = commitGesture(preview);
+    expect(committed.undo).toHaveLength(1);
+    expect(undo(committed).document).toEqual(initial.document);
+    expect(redo(undo(committed)).document).toEqual(committed.document);
+    const resized = dispatch(initial, resizeElementToDimensions(arc.id, "radius", 9));
+    expect(resized.document.connections).toEqual(initial.document.connections);
+    expect((resized.document.elements[2] as DimensionElement).references).toEqual(radial.references);
+    const translated = dispatch(initial, updateElement(arc.id, { center: { x: 30, y: 40 } }));
+    expect(translated.document.connections).toEqual(initial.document.connections);
+    expect((translated.document.elements[2] as DimensionElement).references).toEqual(radial.references);
+  });
+
   it("moves an arc by translating only its center", () => {
     const initial = createEditor({ ...document, elements: [arc] });
     const moved = dispatch(initial, moveElement(arc.id, { x: 3, y: -4 }));

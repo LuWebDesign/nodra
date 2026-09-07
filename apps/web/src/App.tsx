@@ -40,7 +40,8 @@ const saveProjectMirror = (project: ProjectSnapshot): void => {
 const defaultStyle = { stroke: "#000000", strokeWidth: 1 };
 const pointAlignedToNodeGuides = (point: PointMm, guides: readonly CreationGuide[]): PointMm => guides.reduce((current, guide) => guide.target.y === guide.source.y ? { x: guide.target.x, y: current.y } : { x: current.x, y: guide.target.y }, point);
 const defaultClosedFill = "rgba(101,217,255,0.22)";
-const isPropertyElement = (element: Element): element is PropertyElement => element.type === "rectangle" || element.type === "ellipse" || element.type === "circle";
+const isPropertyElement = (element: Element): element is Exclude<PropertyElement, ArcElement> => element.type === "rectangle" || element.type === "ellipse" || element.type === "circle";
+const isInspectorPropertyElement = (element: Element): element is PropertyElement => isPropertyElement(element) || element.type === "arc";
 const isRotatableElement = (element: Element): element is RotatableElement => hasRotation(element);
 const palette = [
   { name: "Negro", color: "#111827" }, { name: "Rojo", color: "#ef4444" }, { name: "Naranja", color: "#f59e0b" },
@@ -335,7 +336,7 @@ export function App() {
     : undefined;
   const propertyElement = selectedElements.length > 1 && selectedBounds
     ? { type: "rectangle" as const, id: selectedElements[0]!.id, layerId: selectedElements[0]!.layerId, position: { x: selectedBounds.x, y: selectedBounds.y }, size: { width: selectedBounds.width, height: selectedBounds.height }, cornerRadius: 0, rotation: 0, style: selectedElements[0]!.style }
-    : selectedElement && isPropertyElement(selectedElement) ? selectedElement : undefined;
+    : selectedElement && isInspectorPropertyElement(selectedElement) ? selectedElement : undefined;
   const selectionKey = selection.join(":");
   useEffect(() => { setDimensionDraft(undefined); setDimensionNodeHover(undefined); setNodeHover(undefined); setCutSegmentHover(undefined); setTransformMode("resize"); }, [tool, project.activePageId, selectionKey]);
   useEffect(() => { creationDraftRef.current = undefined; setCreationDraft(undefined); setCreationPoint(undefined); }, [tool, project.activePageId]);
@@ -871,7 +872,7 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
      }
      const pickedElement = tool === "forma" ? pickFormaElement(editorRef.current.document, point, zoom) : pickElement(editorRef.current.document, point, zoom);
     const picked = pickedElement ? editorRef.current.document.elements.find((element) => element.id === pickedElement) : undefined;
-    if (tool === "forma" && (picked?.type === "text" || picked?.type === "arc")) {
+    if (tool === "forma" && picked?.type === "text") {
       setEditorState(clearSelection(editorRef.current));
       return;
     }
@@ -932,7 +933,7 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
       }
       return;
     }
-      const pickedFormaNode = tool === "forma" && picked && picked.type !== "text" && picked.type !== "dimension" && picked.type !== "arc" ? realGeometryNodes(picked).map((node, nodeIndex) => ({ node, nodeIndex, distance: Math.hypot(node.point.x - point.x, node.point.y - point.y) * zoom })).filter((candidate) => candidate.distance <= 20).sort((first, second) => first.distance - second.distance)[0] : undefined;
+      const pickedFormaNode = tool === "forma" && picked && picked.type !== "text" && picked.type !== "dimension" ? realGeometryNodes(picked).map((node, nodeIndex) => ({ node, nodeIndex, distance: Math.hypot(node.point.x - point.x, node.point.y - point.y) * zoom })).filter((candidate) => candidate.distance <= 20).sort((first, second) => first.distance - second.distance)[0] : undefined;
       const rawFormaNodeHit = tool === "forma" ? pickedFormaNode && picked ? { elementId: picked.id, nodeIndex: pickedFormaNode.nodeIndex, point: pickedFormaNode.node.point } : pickFormaNode(editorRef.current.document, point, zoom, 14) : undefined;
       const formaNodeHit = rawFormaNodeHit && editModeElementIds.includes(rawFormaNodeHit.elementId) ? rawFormaNodeHit : undefined;
       const contourNodeHit = formaNodeHit?.contourNode;
@@ -941,7 +942,7 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
       const formaLineSegmentHit = tool === "forma" && !formaNodeHit ? (() => { const hit = pickFormaSegment(editorRef.current.document, point, zoom); const element = hit ? editorRef.current.document.elements.find((candidate) => candidate.id === hit.elementId) : undefined; return hit && (element?.type === "sketch" || element?.type === "line") ? hit : undefined; })() : undefined;
       if (tool === "forma" && rawFormaNodeHit) {
         const nodeElement = editorRef.current.document.elements.find((element) => element.id === rawFormaNodeHit.elementId);
-        if (!nodeElement || nodeElement.type === "text" || nodeElement.type === "dimension" || nodeElement.type === "arc") return;
+        if (!nodeElement || nodeElement.type === "text" || nodeElement.type === "dimension") return;
         const next = editorRef.current.selection.includes(rawFormaNodeHit.elementId) ? editorRef.current : selectForPointerDown(editorRef.current, rawFormaNodeHit.elementId, event.shiftKey);
         setEditorState(next);
         setEditModeElementIds((current) => current.includes(rawFormaNodeHit.elementId) ? current : [...current, rawFormaNodeHit.elementId]);
@@ -1041,7 +1042,7 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
              if (!edge) return [];
              return [edge.startNodeId, edge.endNodeId].flatMap((nodeId) => { const nodeIndex = hitElement.nodes.findIndex((node) => node.id === nodeId); return nodeIndex >= 0 ? [`${hitElement.id}:p:${nodeIndex}`] : []; });
            })();
-           if (hitElement && hitElement.type !== "text" && hitElement.type !== "dimension" && hitElement.type !== "arc" && !editModeElementIds.includes(hitElement.id)) {
+           if (hitElement && hitElement.type !== "text" && hitElement.type !== "dimension" && !editModeElementIds.includes(hitElement.id)) {
              setSelectedFormaNodeKeys((current) => event.shiftKey ? [...new Set([...current, ...sketchSegmentNodeKeys])] : sketchSegmentNodeKeys);
              setSelectedPathSegment(undefined);
              setEditModeElementIds((current) => event.shiftKey ? [...new Set([...current, hitElement.id])] : [hitElement.id]);
@@ -1094,7 +1095,7 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
     if (tool === "forma") {
        const hit = pickFormaElement(editorRef.current.document, point, zoom);
       const hitElement = hit ? editorRef.current.document.elements.find((element) => element.id === hit) : undefined;
-      if (!hitElement || hitElement.type === "text" || hitElement.type === "dimension" || hitElement.type === "arc") return;
+      if (!hitElement || hitElement.type === "text" || hitElement.type === "dimension") return;
       if (!editModeElementIds.includes(hitElement.id)) {
         setSelectedFormaNodeKeys([]);
         setSelectedPathSegment(undefined);
@@ -1102,7 +1103,7 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
         setEditorState(select(editorRef.current, [hitElement.id]));
         return;
       }
-      if (pickFormaNode(editorRef.current.document, point, zoom)) return;
+      if (pickFormaNode(editorRef.current.document, point, zoom) || hitElement.type === "arc") return;
       const segment = pickFormaSegment(editorRef.current.document, point, zoom);
       if (segment) setEditorState(dispatch(select(editorRef.current, [segment.elementId]), insertFormaNode(segment.elementId, segment, point)));
       return;
@@ -1120,7 +1121,7 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
        beginTextEdit(hitElement);
        return;
     }
-    if (tool === "select" && hitElement && (hitElement.type === "path" || hitElement.type === "glyph" || hitElement.type === "spline")) {
+    if (tool === "select" && hitElement && (hitElement.type === "path" || hitElement.type === "glyph" || hitElement.type === "spline" || hitElement.type === "arc")) {
       event.preventDefault();
       setSelectedFormaNodeKeys([]);
       setSelectedPathSegment(undefined);
@@ -1378,7 +1379,7 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
     }, [activeSplineId, constraintDraft, editModeElementIds, selectionKey, selectedFormaNodeKeys, tool, selectedElements]);
 
      const editableSelectionIds = tool === "pen" ? selection : editModeElementIds;
-      const formaNodes: readonly FormaNodeOverlay[] = (tool === "forma" || tool === "pen") ? selectedElements.filter((element) => editableSelectionIds.includes(element.id) && element.type !== "text" && element.type !== "dimension" && element.type !== "arc").flatMap((element): readonly FormaNodeOverlay[] => {
+      const formaNodes: readonly FormaNodeOverlay[] = (tool === "forma" || tool === "pen") ? selectedElements.filter((element) => editableSelectionIds.includes(element.id) && element.type !== "text" && element.type !== "dimension").flatMap((element): readonly FormaNodeOverlay[] => {
         try {
         type EditablePathNode = ReturnType<typeof pathGeometryNodes>[number] & { readonly ringIndex?: number };
        const visiblePathNodes = (nodes: readonly EditablePathNode[], segmentForNode: (node: EditablePathNode) => { readonly startNodeId: string; readonly endNodeId: string } | undefined) => {
@@ -1615,7 +1616,8 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
     const raw = drafts[key];
     if (raw === undefined) return;
     const value = Number(raw.trim());
-    if (!raw.trim() || !Number.isFinite(value) || value <= 0) {
+    const requiresPositiveValue = field === "width" || field === "height" || field === "radius";
+    if (!raw.trim() || !Number.isFinite(value) || requiresPositiveValue && value <= 0) {
       setDrafts((current) => ({ ...current, [key]: formatMm(geometryValue(element, field)) }));
       return;
     }
@@ -1637,7 +1639,7 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
        } else {
          const next = field === "width" || field === "height" || field === "radius"
            ? dispatch(editorRef.current, resizeElementToDimensions(element.id, field, value, aspectLock))
-           : dispatch(editorRef.current, element.type === "circle" ? updateElement(element.id, { center: { ...element.center, [field]: value } }) : updateElement(element.id, { position: { ...element.position, [field]: value } }));
+           : dispatch(editorRef.current, element.type === "circle" || element.type === "arc" ? updateElement(element.id, { center: { ...element.center, [field]: value } }) : updateElement(element.id, { position: { ...element.position, [field]: value } }));
          if (next === editorRef.current && (field === "width" || field === "height" || field === "radius")) persist.set("failed", "No se puede redimensionar sin romper una conexión existente.");
          setEditorState(next);
        }
@@ -1795,10 +1797,10 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
      </div>
      {inspector && <div className="inspector-property-card inspector-dimensions-card" role="group" aria-label="Dimensiones">
        <div className="inspector-dimensions-fields">
-         {propertyElement.type === "circle" ? geometryInput(propertyElement, "radius", "Radio", dimensionIcon("width", "Radio")) : <>{geometryInput(propertyElement, "width", "Ancho", dimensionIcon("width", "Ancho"))}
+         {propertyElement.type === "circle" || propertyElement.type === "arc" ? geometryInput(propertyElement, "radius", "Radio", dimensionIcon("width", "Radio")) : <>{geometryInput(propertyElement, "width", "Ancho", dimensionIcon("width", "Ancho"))}
          {geometryInput(propertyElement, "height", "Alto", dimensionIcon("height", "Alto"))}</>}
        </div>
-       {propertyElement.type !== "circle" && aspectLockButton()}
+       {propertyElement.type !== "circle" && propertyElement.type !== "arc" && aspectLockButton()}
      </div>}
     {inspector && selectedElement?.type === "rectangle" && <div className="inspector-property-card inspector-radius-card" role="group" aria-label="Radio de esquina">{cornerRadiusField(selectedElement)}</div>}
     {selectedElement && isRotatableElement(selectedElement) && rotationField(selectedElement)}
