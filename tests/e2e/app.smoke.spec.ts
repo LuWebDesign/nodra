@@ -1152,6 +1152,10 @@ test("creates a circular Cota from a direct contour click", async ({ page }) => 
   const box = await visibleBoundingBox(circle);
   await page.getByRole("button", { name: "Cota" }).click();
   await page.getByRole("group", { name: "Modo de cota" }).getByRole("button", { name: "Radio" }).click();
+  await page.mouse.move(box!.x + box!.width / 2, box!.y);
+  const contourHover = page.locator(".dimension-contour-hover-overlay circle");
+  await expect(contourHover).toBeVisible();
+  await expect(contourHover).toHaveCSS("stroke", "rgb(249, 115, 22)");
   await page.mouse.click(box!.x + box!.width / 2, box!.y);
   await page.mouse.click(box!.x + box!.width + 35, box!.y + box!.height / 2);
   const radialDimension = page.locator('[data-dimension="radius"]');
@@ -1162,6 +1166,8 @@ test("creates a circular Cota from a direct contour click", async ({ page }) => 
   await editor.getByRole("spinbutton").fill("180");
   await editor.getByRole("button", { name: "Confirmar", exact: true }).click();
   await expect(radialDimension).toContainText("180");
+  const radialLine = radialDimension.locator("line").last();
+  await expect(radialLine).toHaveAttribute("x2", /.+/);
   await expect.poll(async () => (await circle.boundingBox())?.width ?? 0).toBeGreaterThan(box!.width);
 });
 
