@@ -31,6 +31,14 @@ describe("domain contracts", () => {
     const spline = { type: "spline" as const, id: elementId("spline-1"), layerId: layer.id, nodes: [{ id: "a", anchor: { x: 0, y: 0 }, continuity: "smooth" as const }, { id: "b", anchor: { x: 10, y: 0 }, continuity: "smooth" as const }], closed: false, style: { stroke: "#000", strokeWidth: 0.2 } };
     expect(withElements(createDocument("doc-1", [layer]), [spline]).elements).toEqual([spline]);
   });
+  it("clears positional coincidences when importing a document that omits them", () => {
+    const layer = { id: layerId("design"), name: "Design", visible: true, order: 0 } as const;
+    const source = createDocument("doc-1", [layer]);
+    const project = createProject({ ...source, positionalCoincidences: [{ id: "old", first: { elementId: elementId("a"), node: { kind: "line", name: "start" } }, second: { elementId: elementId("b"), node: { kind: "line", name: "start" } } }] });
+    const imported = projectFromDocument(project, source);
+    expect(imported.pages[0]?.positionalCoincidences).toEqual([]);
+  });
+
   it("switches active pages by stable id without using dimensions as identity", () => {
     const first = createDocument("doc-1");
     const project = createProject(first);

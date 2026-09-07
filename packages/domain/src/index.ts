@@ -201,6 +201,8 @@ export type ConnectableNodeAddress =
   | { readonly kind: "path" | "spline" | "sketch"; readonly nodeId: string; readonly handle?: "in" | "out" };
 export interface ConnectableNodeReference { readonly elementId: ElementId; readonly node: ConnectableNodeAddress }
 export interface ExplicitConnection { readonly id: string; readonly first: ConnectableNodeReference; readonly second: ConnectableNodeReference }
+/** Opt-in persistent geometric coincidence. Unlike ExplicitConnection, this is enforced by editor commands. */
+export interface PositionalCoincidence { readonly id: string; readonly first: ConnectableNodeReference; readonly second: ConnectableNodeReference }
 export interface DocumentCapabilities { readonly spline?: 1 }
 /** Elements that expose a document-space rotation, independent of their geometry representation. */
     export type RotatableElement = Extract<Element, { readonly rotation: number }>;
@@ -225,6 +227,7 @@ export interface DocumentCapabilities { readonly spline?: 1 }
   readonly elements: readonly Element[];
   readonly constraints?: readonly DocumentConstraint[];
   readonly connections?: readonly ExplicitConnection[];
+  readonly positionalCoincidences?: readonly PositionalCoincidence[];
 }
 
 export interface PageSnapshot {
@@ -234,6 +237,7 @@ export interface PageSnapshot {
   readonly elements: readonly Element[];
   readonly constraints?: readonly DocumentConstraint[];
   readonly connections?: readonly ExplicitConnection[];
+  readonly positionalCoincidences?: readonly PositionalCoincidence[];
 }
 
 export interface ProjectPreferences {
@@ -264,7 +268,7 @@ export function createDocument(id: string, layers: readonly Layer[] = []): Docum
 }
 
 export function createProject(document: DocumentSnapshot): ProjectSnapshot {
-  const page = { id: pageId("page-1"), page: document.page, layers: document.layers, elements: document.elements, ...(document.constraints ? { constraints: document.constraints } : {}), connections: document.connections ?? [] };
+  const page = { id: pageId("page-1"), page: document.page, layers: document.layers, elements: document.elements, ...(document.constraints ? { constraints: document.constraints } : {}), connections: document.connections ?? [], ...(document.positionalCoincidences ? { positionalCoincidences: document.positionalCoincidences } : {}) };
   return { schemaVersion: CURRENT_SCHEMA_VERSION, id: document.id, revision: document.revision, origin: document.origin, units: document.units, ...(document.capabilities ? { capabilities: document.capabilities } : {}), preferences: { lineGuidesEnabled: true, lineGuideAngle: 45 }, pages: [page], activePageId: page.id };
 }
 
@@ -274,11 +278,11 @@ export function projectPage(project: ProjectSnapshot, pageIdValue = project.acti
 
 export function documentFromProject(project: ProjectSnapshot, pageIdValue = project.activePageId): DocumentSnapshot {
   const page = projectPage(project, pageIdValue);
-  return { schemaVersion: project.schemaVersion, id: project.id, revision: project.revision, origin: project.origin, units: project.units, ...(project.capabilities ? { capabilities: project.capabilities } : {}), page: page.page, layers: page.layers, elements: page.elements, ...(page.constraints ? { constraints: page.constraints } : {}), connections: page.connections ?? [] };
+  return { schemaVersion: project.schemaVersion, id: project.id, revision: project.revision, origin: project.origin, units: project.units, ...(project.capabilities ? { capabilities: project.capabilities } : {}), page: page.page, layers: page.layers, elements: page.elements, ...(page.constraints ? { constraints: page.constraints } : {}), connections: page.connections ?? [], ...(page.positionalCoincidences ? { positionalCoincidences: page.positionalCoincidences } : {}) };
 }
 
 export function projectFromDocument(project: ProjectSnapshot, document: DocumentSnapshot): ProjectSnapshot {
-  return { ...project, revision: document.revision, ...(document.capabilities ? { capabilities: document.capabilities } : {}), pages: project.pages.map((page) => page.id === project.activePageId ? { ...page, page: document.page, layers: document.layers, elements: document.elements, constraints: document.constraints ?? [], connections: document.connections ?? [] } : page) };
+  return { ...project, revision: document.revision, ...(document.capabilities ? { capabilities: document.capabilities } : {}), pages: project.pages.map((page) => page.id === project.activePageId ? { ...page, page: document.page, layers: document.layers, elements: document.elements, constraints: document.constraints ?? [], connections: document.connections ?? [], positionalCoincidences: document.positionalCoincidences ?? [] } : page) };
 }
 
 export function nextRevision(value: Revision): Revision {

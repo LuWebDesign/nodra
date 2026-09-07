@@ -28,6 +28,12 @@ Do not treat a passing smoke suite as evidence that a unified positional workflo
 
 These guards do not implement propagation when a different connected object moves. Existing legacy connection metadata is not automatically reinterpreted as an enforced constraint.
 
+## Bounded shared foundation (current branch)
+
+Documents may now opt in with `positionalCoincidences`, a separate record list using the same stable `ConnectableNodeReference` addresses. `connections` remains legacy snap metadata and is retained for compatibility; loading an old document does not make it enforced. The shared `editor-core` result boundary enforces opted-in coincidences for native line, sketch-node, path-anchor, circle, and arc geometry: a feasible edit translates the other element atomically, while unsupported propagation, conflicting movement, broken references, and cycles reject without a revision/history entry. Creation positions the requested source and records both the legacy metadata and the new opt-in relation for API compatibility; relation removal removes only the enforced record.
+
+This slice intentionally does not solve Bézier handles as independent anchors, rectangles/ellipses/glyphs, topology-changing edits, or general horizontal/vertical/distance systems. Those operations conservatively reject when they would invalidate an opted-in relation; no claim of a general CAD solver is made.
+
 ## Remaining implementation stages
 
 1. **Common persistent relation contract**: select the canonical constraint representation and migration policy, reusing stable node addresses. Review existing SketchConstraint references, page-level constraints, explicit snap connections, and driving dimensions. Do not silently change the meaning of existing saved connections.

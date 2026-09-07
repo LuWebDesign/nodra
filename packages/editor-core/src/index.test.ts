@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createDocument, elementId, layerId, type ArcElement, type DimensionElement, type Element, type EllipseElement, type CircleElement, type LineElement, type GlyphElement, type PathElement, type PointMm, type RectangleElement, type SketchElement, type SplineElement, type TextElement } from "@nodra/domain";
-import { addDocumentConstraint, deleteDocumentConstraint, addSketchConstraint, addSketchSegmentRelation, addToSelection, appendSketchEdge, appendSplineNode, beginGesture, cancelGesture, clearSelection, closePath, closeSplineElement, commitGesture, createEditor, createElement, addPositionalConnection, createPathCubicNode, createSketchLine, cutContourSegment, cutLineAtPoint, cutPathSegment, cutSegment, cutSketchEdge, splitPathLineAt, deleteContourNodes, deleteElement, deleteElementNodes, deletePathNodes, deleteSketchConstraint, dispatch, duplicateElements, flipElements, insertContourNode, invalidDimensionIdsForShapeOperation, moveElement, moveElements, movePathNode, movePathHandle, openPath, previewGesture, previewGestureFromBase, redo, reversePath, removeFromSelection, reorderLayer, resizeElement, resizeElementToDimensions, resizeElements, resizeElementsToDimensions, rotateElementsAroundCenter, select, selectForPointerDown, setDimensionDriving, updateCircleConstraint, deleteCircleConstraint, solveCircle, setLayerVisibility, setPathJoin, shapeOperation, splitPathSegment, toggleSelection, topologyEditForPathSegmentReplacement, topologyReferenceKey, undo, updateContourNode, updateDimensionValue, updateElement, updateElementNode, updateElementStyles, updateSketchConstraint, updateDocumentConstraint, updateSplineHandle, updateSplineNode } from "./index.js";
+import { addDocumentConstraint, deleteDocumentConstraint, addSketchConstraint, addSketchSegmentRelation, addToSelection, appendSketchEdge, appendSplineNode, beginGesture, cancelGesture, clearSelection, closePath, closeSplineElement, commitGesture, createEditor, createElement, addPositionalConnection, addPositionalCoincidence, deletePositionalCoincidence, createPathCubicNode, createSketchLine, cutContourSegment, cutLineAtPoint, cutPathSegment, cutSegment, cutSketchEdge, splitPathLineAt, deleteContourNodes, deleteElement, deleteElementNodes, deletePathNodes, deleteSketchConstraint, dispatch, duplicateElements, flipElements, insertContourNode, invalidDimensionIdsForShapeOperation, moveElement, moveElements, movePathNode, movePathHandle, openPath, previewGesture, previewGestureFromBase, redo, reversePath, removeFromSelection, reorderLayer, resizeElement, resizeElementToDimensions, resizeElements, resizeElementsToDimensions, rotateElementsAroundCenter, select, selectForPointerDown, setDimensionDriving, updateCircleConstraint, deleteCircleConstraint, solveCircle, setLayerVisibility, setPathJoin, shapeOperation, splitPathSegment, toggleSelection, topologyEditForPathSegmentReplacement, topologyReferenceKey, undo, updateContourNode, updateDimensionValue, updateElement, updateElementNode, updateElementStyles, updateSketchConstraint, updateDocumentConstraint, updateSplineHandle, updateSplineNode } from "./index.js";
 import { boundsOfElements, realGeometryNodes } from "@nodra/geometry";
 import type { Direction } from "@nodra/geometry";
 import { appendLinePoint } from "./index.js";
@@ -2186,6 +2186,81 @@ it("moves a dimension by changing only its placement offset and supports undo", 
     expect(undone.document.elements).toEqual([rectangle, line, contour]);
     expect(undone.selection).toEqual(state.selection);
     expect(redo(undone).selection).toHaveLength(6);
+  });
+
+  it("creates enforced positional coincidences for line, sketch, and path anchors only", () => {
+    const line: LineElement = { type: "line", id: elementId("coincidence-line"), layerId: rectangle.layerId, start: { x: 0, y: 0 }, end: { x: 5, y: 0 }, rotation: 0, style: rectangle.style };
+    const target: LineElement = { ...line, id: elementId("coincidence-target"), start: { x: 20, y: 10 }, end: { x: 25, y: 10 } };
+    const lineState = dispatch(createEditor({ ...document, elements: [line, target] }), addPositionalCoincidence({ elementId: line.id, node: { kind: "line", name: "start" } }, { elementId: target.id, node: { kind: "line", name: "end" } }));
+    expect(lineState.document.positionalCoincidences).toHaveLength(1);
+    expect(lineState.document.connections).toEqual([]);
+    const moved = dispatch(lineState, moveElement(target.id, { x: 3, y: 4 }));
+    expect((moved.document.elements.find((element) => element.id === line.id) as LineElement).start).toEqual({ x: 28, y: 14 });
+    const sketch = createSketchLine(elementId("coincidence-sketch"), line.layerId, line.style, { x: 0, y: 0 }, { x: 5, y: 0 });
+    const sketchTarget = { ...target, id: elementId("coincidence-sketch-target") };
+    expect(dispatch(createEditor({ ...document, elements: [sketch, sketchTarget] }), addPositionalCoincidence({ elementId: sketch.id, node: { kind: "sketch", nodeId: sketch.nodes[0]!.id } }, { elementId: sketchTarget.id, node: { kind: "line", name: "start" } })).document.positionalCoincidences).toHaveLength(1);
+    expect(dispatch(createEditor({ ...document, elements: [path, target] }), addPositionalCoincidence({ elementId: path.id, node: { kind: "path", nodeId: "a" } }, { elementId: target.id, node: { kind: "line", name: "start" } })).document.positionalCoincidences).toHaveLength(1);
+    expect(dispatch(lineState, deletePositionalCoincidence(lineState.document.positionalCoincidences![0]!.id)).document.positionalCoincidences).toEqual([]);
+  });
+
+  it("propagates enforced arc endpoint coincidences through two native lines or sketches", () => {
+    for (const targetType of ["line", "sketch"] as const) {
+      const targetOneId = elementId(`arc-propagation-${targetType}-one`);
+      const targetTwoId = elementId(`arc-propagation-${targetType}-two`);
+      const targetOne: LineElement | SketchElement = targetType === "line"
+        ? { type: "line", id: targetOneId, layerId: rectangle.layerId, start: { x: -10, y: 0 }, end: { x: -6, y: -2 }, rotation: 0, style: rectangle.style }
+        : { type: "sketch", id: targetOneId, layerId: rectangle.layerId, nodes: [{ id: "one-start", point: { x: -10, y: 0 } }, { id: "one-end", point: { x: -6, y: -2 } }], edges: [{ id: "one-edge", startNodeId: "one-start", endNodeId: "one-end" }], style: rectangle.style };
+      const targetTwo: LineElement | SketchElement = targetType === "line"
+        ? { type: "line", id: targetTwoId, layerId: rectangle.layerId, start: { x: 10, y: 0 }, end: { x: 14, y: 2 }, rotation: 0, style: rectangle.style }
+        : { type: "sketch", id: targetTwoId, layerId: rectangle.layerId, nodes: [{ id: "two-start", point: { x: 10, y: 0 } }, { id: "two-end", point: { x: 14, y: 2 } }], edges: [{ id: "two-edge", startNodeId: "two-start", endNodeId: "two-end" }], style: rectangle.style };
+      const endpoint = (element: LineElement | SketchElement, nodeIndex: 0 | 1) => element.type === "line"
+        ? { elementId: element.id, node: { kind: "line" as const, name: (nodeIndex === 0 ? "start" : "end") as "start" | "end" } }
+        : { elementId: element.id, node: { kind: "sketch" as const, nodeId: element.nodes[nodeIndex]!.id } };
+      const arcTarget: ArcElement = { ...arc, id: elementId(`arc-propagation-${targetType}`), center: { x: 0, y: 0 }, radius: 10, startAngle: Math.PI, endAngle: 0 };
+      const initial = createEditor({ ...document, elements: [arcTarget, targetOne, targetTwo] });
+      const linked = dispatch(
+        dispatch(initial, addPositionalCoincidence({ elementId: arcTarget.id, node: { kind: "named", name: "start" } }, endpoint(targetOne, 0))),
+        addPositionalCoincidence({ elementId: arcTarget.id, node: { kind: "named", name: "end" } }, endpoint(targetTwo, 0)),
+      );
+      const otherBefore = linked.document.elements.find((element) => element.id === targetTwo.id)!;
+      const moved = dispatch(linked, updateElementNode(targetOne.id, 0, { x: -8, y: 3 }));
+      const movedArc = moved.document.elements.find((element): element is ArcElement => element.id === arcTarget.id && element.type === "arc")!;
+      const movedTargetOne = moved.document.elements.find((element) => element.id === targetOne.id)!;
+      const movedTargetTwo = moved.document.elements.find((element) => element.id === targetTwo.id)!;
+      const point = (element: LineElement | SketchElement, index: 0 | 1) => element.type === "line" ? (index === 0 ? element.start : element.end) : element.nodes[index]!.point;
+      const start = point(movedTargetOne as LineElement | SketchElement, 0);
+      const end = point(movedTargetTwo as LineElement | SketchElement, 0);
+      expect(JSON.stringify(movedTargetTwo)).toBe(JSON.stringify(otherBefore));
+      expect(movedArc.radius).toBe(arcTarget.radius);
+      expect(movedArc.center.x + movedArc.radius * Math.cos(movedArc.startAngle)).toBeCloseTo(start.x, 10);
+      expect(movedArc.center.y + movedArc.radius * Math.sin(movedArc.startAngle)).toBeCloseTo(start.y, 10);
+      expect(movedArc.center.x + movedArc.radius * Math.cos(movedArc.endAngle)).toBeCloseTo(end.x, 10);
+      expect(movedArc.center.y + movedArc.radius * Math.sin(movedArc.endAngle)).toBeCloseTo(end.y, 10);
+      expect(moved.undo).toHaveLength(linked.undo.length + 1);
+      expect(undo(moved).document).toEqual(linked.document);
+      expect(redo(undo(moved)).document).toEqual(moved.document);
+
+      const impossible = dispatch(moved, updateElementNode(targetOne.id, 0, { x: 100, y: 0 }));
+      expect(impossible).toBe(moved);
+    }
+
+    const fixed = createSketchLine(elementId("arc-propagation-fixed-source"), rectangle.layerId, rectangle.style, { x: 0, y: 0 }, { x: 5, y: 0 });
+    const fixedSource: SketchElement = { ...fixed, constraints: [{ id: "fixed-source", kind: "fixed", references: [{ elementId: fixed.id, nodeId: fixed.nodes[0]!.id }] }] };
+    const destination: LineElement = { type: "line", id: elementId("arc-propagation-fixed-destination"), layerId: rectangle.layerId, start: { x: 20, y: 0 }, end: { x: 25, y: 0 }, rotation: 0, style: rectangle.style };
+    const fixedState = createEditor({ ...document, elements: [fixedSource, destination] });
+    expect(dispatch(fixedState, addPositionalCoincidence(
+      { elementId: fixedSource.id, node: { kind: "sketch", nodeId: fixedSource.nodes[0]!.id } },
+      { elementId: destination.id, node: { kind: "line", name: "start" } },
+    ))).toBe(fixedState);
+  });
+
+  it("rejects handle anchors and impossible propagation atomically, with undo/redo", () => {
+    const target: LineElement = { type: "line", id: elementId("coincidence-handle-target"), layerId: rectangle.layerId, start: { x: 20, y: 0 }, end: { x: 25, y: 0 }, rotation: 0, style: rectangle.style };
+    const state = createEditor({ ...document, elements: [path, target] });
+    const rejected = dispatch(state, addPositionalCoincidence({ elementId: path.id, node: { kind: "path", nodeId: "a", handle: "out" } }, { elementId: target.id, node: { kind: "line", name: "start" } }));
+    expect(rejected).toBe(state);
+    const linked = dispatch(state, addPositionalCoincidence({ elementId: path.id, node: { kind: "path", nodeId: "a" } }, { elementId: target.id, node: { kind: "line", name: "start" } }));
+    expect(redo(undo(linked)).document).toEqual(linked.document);
   });
 
   it("rejects invalid duplication input without mutation or history", () => {
