@@ -37,6 +37,7 @@ import { topologyReferenceKey, type ReferenceResolution, type TopologyEditResult
 
 export * from "./spline.js";
 export * from "./topology.js";
+export * from "./sketchSession.js";
 
 export type ElementPatch = { readonly position?: PointMm; readonly size?: SizeMm; readonly center?: PointMm; readonly radius?: number; readonly rotation?: number; readonly cornerRadius?: number; readonly cornerRadii?: { readonly topLeft: number; readonly topRight: number; readonly bottomRight: number; readonly bottomLeft: number }; readonly style?: VisualStyle; readonly operation?: OperationMetadata; readonly start?: PointMm; readonly end?: PointMm; readonly text?: string; readonly fontFamily?: string; readonly fontSize?: number; readonly fontWeight?: "normal" | "bold"; readonly fontStyle?: "normal" | "italic"; readonly textAlign?: "left" | "center" | "right"; readonly lineHeight?: number; readonly scaleX?: number; readonly scaleY?: number };
 export interface ContourNodeAddress { readonly ringIndex: number; readonly pointIndex: number }
