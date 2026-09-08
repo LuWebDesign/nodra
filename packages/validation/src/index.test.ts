@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { CURRENT_SCHEMA_VERSION, createDocument, elementId, layerId } from "@nodra/domain";
+import { CURRENT_SCHEMA_VERSION, createDocument, createProject, defaultPieceId, elementId, layerId } from "@nodra/domain";
 import { migrateDocument, migrateProject, parseDocument, serializeDocument, validateDesign, validateDocument, validateProject } from "./index.js";
 
 describe("native document validation", () => {
@@ -72,6 +72,41 @@ describe("native document validation", () => {
     expect(validateDocument({ ...document, elements: [path] }).success).toBe(true);
     expect(validateDocument({ ...document, elements: [{ ...path, segments: [] }] }).success).toBe(false);
   });
+  it("backfills deterministic piece ownership across pages for current and older projects", () => {
+    const base = createProject(createDocument("piece-migration", [{ id: layerId("layer-1"), name: "Design", visible: true, order: 0 }]));
+    const sketch = (id: string) => ({ type: "sketch", id, layerId: "layer-1", nodes: [{ id: `${id}-a`, point: { x: 0, y: 0 } }, { id: `${id}-b`, point: { x: 10, y: 0 } }], edges: [{ id: `${id}-edge`, startNodeId: `${id}-a`, endNodeId: `${id}-b` }], style: { stroke: "#000", strokeWidth: 1 } });
+    const withoutPieces = { ...base, pages: [{ ...base.pages[0], elements: [sketch("first")] }, { ...base.pages[0], id: "page-2", elements: [sketch("second")] }] } as Record<string, unknown>;
+    delete withoutPieces.pieces;
+
+    for (const schemaVersion of [9, 6]) {
+      const migrated = migrateProject({ ...withoutPieces, schemaVersion });
+      expect(migrated).toMatchObject({ pieces: [{ id: defaultPieceId(base.id), name: "Pieza 1", process: "cut", state: "underdefined", sketches: [{ pageId: "page-1", sketchId: "first" }, { pageId: "page-2", sketchId: "second" }] }] });
+      expect(migrateProject(migrated)).toEqual(migrated);
+      expect(validateProject({ ...withoutPieces, schemaVersion }).success).toBe(true);
+    }
+  });
+
+  it("validates optional piece fields and rejects malformed or multiply-owned sketch references", () => {
+    const base = createProject(createDocument("piece-validation", [{ id: layerId("layer-1"), name: "Design", visible: true, order: 0 }]));
+    const sketch = { type: "sketch", id: "sketch", layerId: "layer-1", nodes: [{ id: "a", point: { x: 0, y: 0 } }, { id: "b", point: { x: 10, y: 0 } }], edges: [{ id: "ab", startNodeId: "a", endNodeId: "b" }], style: { stroke: "#000", strokeWidth: 1 } };
+    const project = { ...base, pages: [{ ...base.pages[0], elements: [sketch] }], pieces: [{ ...base.pieces[0], material: "MDF", thicknessMm: 3, state: "underdefined", sketches: [{ pageId: "page-1", sketchId: "sketch" }] }] };
+    expect(validateProject(project).success).toBe(true);
+    expect(validateProject({ ...project, pieces: [{ ...project.pieces[0], thicknessMm: 0 }] }).success).toBe(false);
+    expect(validateProject({ ...project, pieces: [{ ...project.pieces[0], sketches: [{ pageId: "missing", sketchId: "sketch" }] }] }).success).toBe(false);
+    expect(validateProject({ ...project, pieces: [{ ...project.pieces[0], sketches: [{ pageId: "page-1", sketchId: "missing" }] }] }).success).toBe(false);
+    expect(validateProject({ ...project, pieces: [{ ...project.pieces[0], sketches: [] }] }).success).toBe(false);
+    expect(validateProject({ ...project, pieces: [{ ...project.pieces[0], sketches: [project.pieces[0]!.sketches[0]!, project.pieces[0]!.sketches[0]!] }] }).success).toBe(false);
+    const lineElement = { type: "line", id: "line", layerId: "layer-1", start: { x: 0, y: 0 }, end: { x: 1, y: 0 }, rotation: 0, style: { stroke: "#000", strokeWidth: 1 } };
+    expect(validateProject({ ...project, pages: [{ ...project.pages[0], elements: [sketch, lineElement] }], pieces: [{ ...project.pieces[0], sketches: [{ pageId: "page-1", sketchId: "line" }] }] }).success).toBe(false);
+    expect(validateProject({ ...project, pieces: [project.pieces[0], { ...project.pieces[0], id: "second" }] }).success).toBe(false);
+    expect(validateProject({ ...project, pieces: [{ ...project.pieces[0], process: "engrave" }] }).success).toBe(false);
+  });
+
+  it("does not replace explicit malformed pieces during migration", () => {
+    const project = createProject(createDocument("malformed-pieces"));
+    expect(validateProject({ ...project, pieces: "broken" }).success).toBe(false);
+  });
+
   it("migrates schema 8 documents and projects explicitly to schema 9", () => {
     const base = createDocument("schema-8", []);
     expect(migrateDocument({ ...base, schemaVersion: 8 })).toMatchObject({ schemaVersion: 9 });

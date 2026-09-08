@@ -5,6 +5,7 @@ export type DocumentId = string & { readonly __brand: "DocumentId" };
 export type LayerId = string & { readonly __brand: "LayerId" };
 export type ElementId = string & { readonly __brand: "ElementId" };
 export type PageId = string & { readonly __brand: "PageId" };
+export type PieceId = string & { readonly __brand: "PieceId" };
 export type Revision = number & { readonly __brand: "Revision" };
 
 export interface PointMm { readonly x: number; readonly y: number }
@@ -245,6 +246,22 @@ export interface ProjectPreferences {
   readonly lineGuideAngle: 45;
 }
 
+export type PieceProcess = "cut";
+export type PieceState = "design" | "underdefined" | "defined" | "validated" | "ready";
+export interface PieceSketchReference {
+  readonly pageId: PageId;
+  readonly sketchId: ElementId;
+}
+export interface PieceSnapshot {
+  readonly id: PieceId;
+  readonly name: string;
+  readonly material?: string;
+  readonly thicknessMm?: number;
+  readonly process: PieceProcess;
+  readonly state: PieceState;
+  readonly sketches: readonly PieceSketchReference[];
+}
+
 export interface ProjectSnapshot {
   readonly schemaVersion: SchemaVersion;
   readonly id: DocumentId;
@@ -253,6 +270,7 @@ export interface ProjectSnapshot {
   readonly units: "mm";
   readonly capabilities?: DocumentCapabilities;
   readonly preferences: ProjectPreferences;
+  readonly pieces: readonly PieceSnapshot[];
   readonly pages: readonly PageSnapshot[];
   readonly activePageId: PageId;
 }
@@ -261,7 +279,10 @@ export const documentId = (value: string): DocumentId => value as DocumentId;
 export const layerId = (value: string): LayerId => value as LayerId;
 export const elementId = (value: string): ElementId => value as ElementId;
 export const pageId = (value: string): PageId => value as PageId;
+export const pieceId = (value: string): PieceId => value as PieceId;
 export const revision = (value: number): Revision => value as Revision;
+export const defaultPieceId = (projectId: DocumentId | string): PieceId => pieceId(`${projectId}:piece-1`);
+export const createDefaultPiece = (projectId: DocumentId | string): PieceSnapshot => ({ id: defaultPieceId(projectId), name: "Pieza 1", process: "cut", state: "design", sketches: [] });
 
 export function createDocument(id: string, layers: readonly Layer[] = []): DocumentSnapshot {
   return { schemaVersion: CURRENT_SCHEMA_VERSION, id: documentId(id), revision: revision(0), origin: "top-left", units: "mm", page: { width: 1200, height: 900 }, layers: [...layers], elements: [], connections: [] };
@@ -269,7 +290,7 @@ export function createDocument(id: string, layers: readonly Layer[] = []): Docum
 
 export function createProject(document: DocumentSnapshot): ProjectSnapshot {
   const page = { id: pageId("page-1"), page: document.page, layers: document.layers, elements: document.elements, ...(document.constraints ? { constraints: document.constraints } : {}), connections: document.connections ?? [], ...(document.positionalCoincidences ? { positionalCoincidences: document.positionalCoincidences } : {}) };
-  return { schemaVersion: CURRENT_SCHEMA_VERSION, id: document.id, revision: document.revision, origin: document.origin, units: document.units, ...(document.capabilities ? { capabilities: document.capabilities } : {}), preferences: { lineGuidesEnabled: true, lineGuideAngle: 45 }, pages: [page], activePageId: page.id };
+  return { schemaVersion: CURRENT_SCHEMA_VERSION, id: document.id, revision: document.revision, origin: document.origin, units: document.units, ...(document.capabilities ? { capabilities: document.capabilities } : {}), preferences: { lineGuidesEnabled: true, lineGuideAngle: 45 }, pieces: [createDefaultPiece(document.id)], pages: [page], activePageId: page.id };
 }
 
 export function projectPage(project: ProjectSnapshot, pageIdValue = project.activePageId): PageSnapshot {
@@ -282,7 +303,12 @@ export function documentFromProject(project: ProjectSnapshot, pageIdValue = proj
 }
 
 export function projectFromDocument(project: ProjectSnapshot, document: DocumentSnapshot): ProjectSnapshot {
-  return { ...project, revision: document.revision, ...(document.capabilities ? { capabilities: document.capabilities } : {}), pages: project.pages.map((page) => page.id === project.activePageId ? { ...page, page: document.page, layers: document.layers, elements: document.elements, constraints: document.constraints ?? [], connections: document.connections ?? [], positionalCoincidences: document.positionalCoincidences ?? [] } : page) };
+  const activeSketchIds = new Set(document.elements.filter((element) => element.type === "sketch").map((element) => element.id));
+  const pieces = project.pieces.map((piece) => {
+    const sketches = piece.sketches.filter((reference) => reference.pageId !== project.activePageId || activeSketchIds.has(reference.sketchId));
+    return { ...piece, state: sketches.length === 0 && piece.state === "underdefined" ? "design" as const : piece.state, sketches };
+  });
+  return { ...project, revision: document.revision, ...(document.capabilities ? { capabilities: document.capabilities } : {}), pieces, pages: project.pages.map((page) => page.id === project.activePageId ? { ...page, page: document.page, layers: document.layers, elements: document.elements, constraints: document.constraints ?? [], connections: document.connections ?? [], positionalCoincidences: document.positionalCoincidences ?? [] } : page) };
 }
 
 export function nextRevision(value: Revision): Revision {

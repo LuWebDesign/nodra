@@ -109,6 +109,19 @@ describe("DexieProjectRepository", () => {
     expect(await db.listFonts(metadata.id)).toEqual([]);
   });
 
+  it("recovers schema-9 project payloads that predate persisted pieces", async () => {
+    db = await repository();
+    const base = createProject(document());
+    const legacy = { ...base } as Record<string, unknown>;
+    delete legacy.pieces;
+    const rawDb = (db as unknown as { db: { projects: { put: (value: unknown) => Promise<void> }; revisions: { put: (value: unknown) => Promise<void> } } }).db;
+    await rawDb.projects.put(metadata);
+    await rawDb.revisions.put({ key: `${metadata.id}:0`, recordVersion: 1, projectId: metadata.id, revision: 0, savedAt: 1, document: legacy });
+
+    const recovered = await db.getProject(metadata.id);
+    expect(recovered.ok && recovered.revision.document).toMatchObject({ pieces: [{ id: `${metadata.id}:piece-1`, name: "Pieza 1", state: "design", sketches: [] }] });
+  });
+
   it("persists and recovers a multi-page project", async () => {
     db = await repository();
     const base = createProject(document());

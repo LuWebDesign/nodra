@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent, type PointerEvent, type ReactNode, type WheelEvent } from "react";
-import { createDocument, createProject, elementId, layerId, pageId, projectFromDocument, revision, type DocumentSnapshot, hasRotation, type ArcElement, type DimensionElement, type Element, type SketchConstraint, type ElementId, type PointMm, type ProjectSnapshot, type SplineElement, type TextElement, type ExplicitConnection } from "@nodra/domain";
+import { createDocument, createProject, elementId, layerId, pageId, projectFromDocument, revision, type DocumentSnapshot, hasRotation, type ArcElement, type DimensionElement, type Element, type SketchConstraint, type ElementId, type PieceId, type PointMm, type ProjectSnapshot, type SplineElement, type TextElement, type ExplicitConnection } from "@nodra/domain";
 import { deleteDocumentConstraint, addPositionalCoincidence, deletePositionalCoincidence, addSketchConstraint, addToSelection, appendSketchEdge, appendSplineNode, beginGesture, cancelGesture, clearSelection, closePath, cutSegment, closeSplineElement, commitGesture, convertTextToGlyphs, createElement, createPathCubicNode, createPathNode, createSketchLine, deleteContourNodes, deleteElement, deleteElementNodes, deletePathNodes, deleteSketchConstraint, dispatch, duplicateElements, flipElements, insertFormaNode, invalidDimensionIdsForShapeOperation, moveElements, movePathHandle, movePathNode, openPath, updateSplineNode, previewGesture, previewGestureFromBase, redo, resizeElement, resizeElementToDimensions, resizeElements, resizeElementsToDimensions, rotateElement, updateDimensionValue, setDimensionDriving, rotateElementsAroundCenter, select, selectForPointerDown, setPathJoin, shapeOperation, splitPathSegment, undo, updateContourNode, updateElement, updateElementNode, updateElementStyles, updatePage, updateSketchConstraint, updateSplineHandle, type EditorCommand, type FlipAxis, type ShapeOperation } from "@nodra/editor-core";
 import { constraintComponentStatesForDocument, constraintResidualsForDocument, type ConstraintState } from "@nodra/constraints";
 import { arcThroughThreePoints, boundsOfElements, connectableNodeAddress, contourVertexNodes, dimensionKindForPlacement, dimensionOffsetForAlignedPlacement, dimensionOffsetForPlacement, elementCenter, editableGeometryNodes, glyphGeometryNodes, groupCenter, groupHandlePoints, pathGeometryNodes, pointMidpoint, dimensionGeometry, realGeometryNodes, solveSketchConstraints, resizeHandle, rotatedResizeHandles, rotationFromDrag, rotationHandlePoints, visibleBezierHandleGuides, type CurveFragment, type Direction, type GroupHandle, type ResizeHandle } from "@nodra/geometry";
@@ -9,10 +9,10 @@ import { addSolvedDocumentConstraint, documentConstraintDiagnosticId, supportsGl
 import { renderSvg } from "@nodra/renderer-svg";
 import { canActivateRotation, centerPageInCanvas, clientPointToCanvas, clientPointToPage, cubicPlacementControls, formaNodeKey, hoveredSelectionCenter, isDrawingTool, marqueeSelection, movementExceedsThreshold, normalizeBounds, normalizeDrag, pagePointToCanvas, pathGuides, pickDimensionTarget, pickElement, pickFormaElement, pickFormaNode, pickFormaSegment, pickHoverNode, pickCutIntervalPreview, pickCuttableSegment, pickNode, pickPathNode, pickPathSegment, pointerDownIntent, visibleEditablePathNodeIndexes, screenDeltaToMm, screenPointToMm, selectedNodeAnchor, selectedPathAnchorIds, alignmentGuides, snapCreationPoint, snapFormaNodePoint, snapMoveDelta, viewportPointToCanvas, zoomAtPoint, type AlignmentGuide, type ContourNodeHit, type CutIntervalPreview, type DimensionTarget, type FormaNodeHit, type HoverNode, type NodeHit, type PathNodeHit, type SnapGuide, type TransformMode, type CreationSnap } from "./interaction.js";
 import { aspectSize, formatMm, geometryValue, rotationDegreesValue, rotationPatch, type GeometryField, type PropertyElement, type RotatableElement } from "./propertyBar.js";
-import { shouldPersistEditorSnapshot, useDocumentStore, usePersistenceStore, useSavePolicyStore, useSelectionStore, useUiStore, useViewportStore, type Tool } from "./stores.js";
+import { sessionForSketchEditor, shouldPersistEditorSnapshot, useDocumentStore, usePersistenceStore, useSavePolicyStore, useSelectionStore, useUiStore, useViewportStore, type Tool } from "./stores.js";
     import { createSketchSession, isSketchScopedDocumentChange, isSketchSessionHistoryLocked, reduceSketchSession, type SketchSessionState } from "@nodra/editor-core";
 import { pathJoinGuidance, pathJoinOptions } from "./pathJoins.js";
-    import { dashboardProjects, newProjectMetadata, projectDisplayName } from "./projectDashboard.js";
+    import { addPiece, dashboardProjects, newProjectMetadata, pieceDisplayLabel, projectDisplayName, type DashboardProjectSource } from "./projectDashboard.js";
     import type { ProjectMetadata } from "@nodra/persistence";
 import { textSizeFor } from "./textMetrics.js";
 import { extractTextGlyphOutlines, fontFamilyFromFileName, FontOutlineError } from "./fontOutline.js";
@@ -149,8 +149,7 @@ const toolCursorLabels: Record<Tool, string> = { radius: "Radio", select: "Selec
 export function App() {
   const { mode, tool, setMode, setTool } = useUiStore();
       const [view, setView] = useState<"dashboard" | "editor">("editor");
-      const [projectMetadata, setProjectMetadata] = useState<readonly ProjectMetadata[]>([]);
-  const { editor, project, setEditor, setProject, setProjectPreferences } = useDocumentStore();
+  const { editor, project, setEditor, commitNewSketch, setProject, setProjectPreferences } = useDocumentStore();
   const document = editor.document;
   const selection = editor.selection;
       const [sketchSession, setSketchSession] = useState<SketchSessionState>(() => createSketchSession(editor.document, { undo: editor.undo, redo: editor.redo }, editor.selection));
@@ -194,7 +193,13 @@ export function App() {
   const [autosavePrompt, setAutosavePrompt] = useState(false);
       const [autosavePromptCycle, setAutosavePromptCycle] = useState(0);
   const [nativeProjectPath, setNativeProjectPath] = useState<string>();
-      const [creationPending, setCreationPending] = useState(false);
+      const [creationPending, setCreationPending] = useState<PieceId>();
+      const [activePieceId, setActivePieceId] = useState<PieceId>(() => project.pieces[0]!.id);
+      const [dashboardSources, setDashboardSources] = useState<readonly DashboardProjectSource[]>([]);
+      const [pieceFormProjectId, setPieceFormProjectId] = useState<string>();
+      const [pieceName, setPieceName] = useState("");
+      const [pieceMaterial, setPieceMaterial] = useState("");
+      const [pieceThickness, setPieceThickness] = useState("");
       const pendingNavigationRef = useRef<(() => void) | undefined>(undefined);
   const [textDraft, setTextDraft] = useState<{ readonly position: PointMm; readonly value: string; readonly elementId?: ElementId; readonly fontSize?: number; readonly element?: TextElement }>();
   type DimensionDraft = { readonly phase: "first"; readonly first: DimensionTarget } | { readonly phase: "placement"; readonly first: DimensionTarget; readonly second: DimensionTarget };
@@ -219,7 +224,17 @@ export function App() {
   textDraftRef.current = textDraft;
   const textInput = useRef<HTMLTextAreaElement>(null);
   const repository = useMemo(() => new DexieProjectRepository(), []);
-      useEffect(() => { void repository.listProjects().then(setProjectMetadata).catch(() => undefined); }, [repository]);
+      const refreshDashboard = async () => {
+        const metadata = await repository.listProjects();
+        const sources = await Promise.all(metadata.map(async (item) => {
+          const result = await repository.getProject(item.id);
+          if (!result.ok) return undefined;
+          const loaded = "pages" in result.revision.document ? result.revision.document : createProject(result.revision.document);
+          return { metadata: item, project: loaded } satisfies DashboardProjectSource;
+        }));
+        setDashboardSources(sources.filter((source): source is DashboardProjectSource => source !== undefined));
+      };
+      useEffect(() => { void refreshDashboard().catch(() => undefined); }, [repository]);
   const autosave = useMemo(() => new DebouncedAutosave(repository), [repository]);
   const canvas = useRef<HTMLDivElement>(null);
   const pageElement = useRef<HTMLDivElement>(null);
@@ -236,6 +251,11 @@ export function App() {
   const directionTooltipTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   editorRef.current = editor;
   creationDraftRef.current = creationDraft;
+  const activePiece = project.pieces.find((piece) => piece.id === activePieceId) ?? project.pieces[0]!;
+
+  useEffect(() => {
+    if (!project.pieces.some((piece) => piece.id === activePieceId)) setActivePieceId(project.pieces[0]!.id);
+  }, [project.id, project.pieces, activePieceId]);
 
   useEffect(() => {
     if (sketchSession.status !== "idle") return;
@@ -550,11 +570,16 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
     if (shouldPersistEditorSnapshot(session.status, Boolean(next.gesture)) && (persistenceReady || next.document.revision > document.revision)) saveProjectMirror(projectFromDocument(project, next.document));
     setEditor(next, session.status === "active" ? { syncProject: false } : undefined);
   };
-  const enterSketchSession = (sketchId: ElementId) => {
-        const current = sketchSessionRef.current;
-        if (current.status !== "idle") return;
-        const next = reduceSketchSession(current, { type: "enter", sketchId });
-        if (next !== current) { setSketchSession(next); setEditorState(select(editorRef.current, [sketchId])); setTool("forma"); setEditModeElementIds([sketchId]); }
+  const enterSketchSession = (sketchId: ElementId, sourceEditor = editorRef.current) => {
+        if (sketchSessionRef.current.status !== "idle") return;
+        const selectedEditor = select(sourceEditor, [sketchId]);
+        const next = sessionForSketchEditor(selectedEditor, sketchId);
+        if (next.status !== "active") return;
+        sketchSessionRef.current = next;
+        editorRef.current = selectedEditor;
+        setSketchSession(next);
+        setEditor(selectedEditor, { syncProject: false });
+        setTool("forma"); setEditModeElementIds([sketchId]);
       };
       const checkpointSketchSession = () => {
         const current = sketchSessionRef.current;
@@ -627,7 +652,7 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
       };
       const startNewSketch = () => guardedNavigation(() => {
         resetCreationGesture();
-        setCreationPending(true);
+        setCreationPending(activePiece.id);
         setEditModeElementIds([]);
         setMode("design");
         setView("editor");
@@ -637,8 +662,19 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
         const result = await repository.getProject(metadata.id);
         if (!result.ok) { persist.set("failed", "No se pudo abrir el proyecto local"); return; }
         const loaded = "pages" in result.revision.document ? result.revision.document : createProject(result.revision.document);
-        setProject(loaded); useSelectionStore.getState().setSelected(undefined); setMode("design"); setView("editor");
+        setProject(loaded); setActivePieceId(loaded.pieces[0]!.id); useSelectionStore.getState().setSelected(undefined); setMode("design"); setView("editor");
         persist.set("recovered", `Proyecto abierto: ${projectDisplayName(metadata)}`);
+      };
+      const createPersistedPiece = async (source: DashboardProjectSource) => {
+        const thicknessMm = pieceThickness.trim() ? Number(pieceThickness) : undefined;
+        try {
+          const nextProject = addPiece(source.project, { name: pieceName, material: pieceMaterial, ...(thicknessMm === undefined ? {} : { thicknessMm }) });
+          const result = await repository.saveProject(source.metadata, nextProject);
+          if (!result.ok) { persist.set("failed", result.error ?? "No se pudo crear la pieza"); return; }
+          setDashboardSources((current) => current.map((item) => item.metadata.id === source.metadata.id ? { ...item, project: nextProject } : item));
+          setPieceFormProjectId(undefined); setPieceName(""); setPieceMaterial(""); setPieceThickness("");
+          persist.set("saved", "Pieza creada");
+        } catch (error) { persist.set("failed", error instanceof Error ? error.message : "No se pudo crear la pieza"); }
       };
       const createPersistedProject = async () => {
         const projectId = `nodra-project-${crypto.randomUUID()}`;
@@ -646,8 +682,8 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
         const nextProject = createProject(blank); const metadata = newProjectMetadata(projectId);
         const result = await repository.saveProject(metadata, nextProject);
         if (!result.ok) { persist.set("failed", result.error ?? "No se pudo crear el proyecto"); return; }
-        setProjectMetadata((current) => [metadata, ...current]); setProject(nextProject); setMode("design"); setView("editor");
-        persist.set("saved", "Proyecto creado. Pieza 1 disponible como concepto inicial");
+        setDashboardSources((current) => [{ metadata, project: nextProject }, ...current]); setProject(nextProject); setActivePieceId(nextProject.pieces[0]!.id); setMode("design"); setView("editor");
+        persist.set("saved", "Proyecto creado con Pieza 1 en diseño");
       };
       const openDesktopProject = async () => {
     const bridge = desktopFileBridge();
@@ -1032,8 +1068,10 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
           const nextDraft = { tool, points: [...draft.points, creationPoint], pointer: creationPoint, elementId: sketch.id, currentNodeId: sketch.nodes[1]!.id } as const;
          creationDraftRef.current = nextDraft;
          setCreationDraft(nextDraft);
-         setEditorState(select(next, [sketch.id]));
-             if (creationPending) { setCreationPending(false); enterSketchSession(sketch.id); }
+         const selectedNext = select(next, [sketch.id]);
+          editorRef.current = selectedNext;
+              commitNewSketch(selectedNext, sketch.id, creationPending ?? activePiece.id);
+             if (creationPending) { setCreationPending(undefined); enterSketchSession(sketch.id, selectedNext); }
        } else if (draft.elementId && draft.currentNodeId) {
           const targetNodeId = snappedSketchNode?.elementId === draft.elementId ? snappedSketchNode.nodeId : undefined;
           const next = dispatch(editorRef.current, appendSketchEdge(draft.elementId, draft.currentNodeId, creationPoint, targetNodeId));
@@ -2057,13 +2095,13 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
         {pendingShapeOperation && <div className="nodra-modal-backdrop" role="presentation"><section className="nodra-modal" role="dialog" aria-modal="true" aria-labelledby="shape-operation-confirmation-title"><h2 id="shape-operation-confirmation-title">Confirmar operación</h2><p>Esta operación eliminará {pendingShapeOperation.invalidDimensionCount} cotas porque sus referencias dejarán de existir. ¿Continuar?</p><div className="nodra-modal-actions"><button type="button" onClick={() => setPendingShapeOperation(undefined)}>Cancelar</button><button type="button" className="nodra-modal-primary" onClick={confirmPendingShapeOperation}>Continuar</button></div></section></div>}
     <header className="topbar">
       <div className="brand" aria-label="KOND DESIGN"><span className="brand-kond">KOND</span> <span className="brand-design">DESIGN</span></div>
-      <nav aria-label="Navegación principal"><button className={view === "dashboard" ? "active" : ""} onClick={() => guardedNavigation(() => { setView("dashboard"); void repository.listProjects().then(setProjectMetadata); })}>Proyectos</button><button className={mode === "design" && view === "editor" ? "active" : ""} onClick={() => guardedNavigation(() => { setView("editor"); setMode("design"); })}>Diseño</button><button className={mode === "prepare" ? "active" : ""} onClick={() => guardedNavigation(() => { setView("editor"); setMode("prepare"); })}>Preparar <small>Vista previa</small></button></nav>
+      <nav aria-label="Navegación principal"><button className={view === "dashboard" ? "active" : ""} onClick={() => guardedNavigation(() => { setView("dashboard"); void refreshDashboard(); })}>Proyectos</button><button className={mode === "design" && view === "editor" ? "active" : ""} onClick={() => guardedNavigation(() => { setView("editor"); setMode("design"); })}>Diseño</button><button className={mode === "prepare" ? "active" : ""} onClick={() => guardedNavigation(() => { setView("editor"); setMode("prepare"); })}>Preparar <small>Vista previa</small></button></nav>
       <div className="top-actions"><label>Guardado <select aria-label="Modo de guardado" value={savePolicy.mode} onChange={(event) => setSaveMode(event.target.value as "manual" | "prompted-autosave")}><option value="prompted-autosave">Preguntar cada 20 min</option><option value="manual">Manual</option></select></label>{sketchSession.status === "active" && <><span role="status">Editando croquis</span><button type="button" onClick={acceptSketchSession}>Aceptar</button><button type="button" onClick={requestCancelSketchSession}>Cancelar</button></>}{sketchSession.status === "confirming-cancel" && <span role="status">Confirmá la cancelación</span>}{desktopFileBridge() && <><button aria-label="Abrir proyecto" title="Abrir proyecto" onClick={() => guardedNavigation(() => void openDesktopProject())}>Abrir</button><button aria-label="Guardar proyecto" title="Guardar proyecto" onClick={() => void saveDesktopProject()}>Guardar</button><button aria-label="Guardar como" title="Guardar como" onClick={() => void saveDesktopProject(true)}>Guardar como</button></>}<button aria-label="Deshacer" onClick={() => { if (!isSketchSessionHistoryLocked(sketchSessionRef.current)) setEditorState(undo(editorRef.current)); }}>↶</button><button aria-label="Rehacer" onClick={() => { if (!isSketchSessionHistoryLocked(sketchSessionRef.current)) setEditorState(redo(editorRef.current)); }}>↷</button><span className="project-name">Diseño sin título</span></div>
     </header>
-    {view === "dashboard" ? <section className="dashboard-view"><div className="dashboard-hero"><div><p className="dashboard-eyebrow">NODRA / PROYECTOS</p><h1>¿Qué querés diseñar hoy?</h1><p className="muted">Tus proyectos guardados localmente, listos para continuar.</p></div><button type="button" className="dashboard-primary" onClick={() => guardedNavigation(() => void createPersistedProject())}>+ Nuevo proyecto</button></div><div className="dashboard-future" aria-label="Funciones futuras"><span>3D <small>Próximamente</small></span><span>Validar <small>Próximamente</small></span></div><div className="dashboard-grid">{dashboardProjects(projectMetadata).map((item) => <article className="project-card" key={item.id}><div className="project-card-preview" aria-hidden="true">◇</div><div className="project-card-body"><h2>{projectDisplayName(item)}</h2><p>{item.pieceLabel}</p><small>{new Date(item.updatedAt).toLocaleDateString("es-AR")}</small><button type="button" onClick={() => guardedNavigation(() => void openPersistedProject(item))}>Abrir proyecto</button></div></article>)}{projectMetadata.length === 0 && <div className="dashboard-empty"><strong>Todavía no hay proyectos</strong><p className="muted">Creá uno para empezar con Pieza 1.</p></div>}</div></section> : mode === "prepare" ? <section className="prepare"><div><div className="prepare-icon">◇</div><h1>Preparar aún no está disponible</h1><p>Nodra ofrece actualmente solo un espacio de trabajo de Diseño sin conexión. No hay hardware conectado, controlado ni listo.</p><button onClick={() => setMode("design")}>Volver a Diseño</button></div></section> : <div className="workspace">
+    {view === "dashboard" ? <section className="dashboard-view"><div className="dashboard-hero"><div><p className="dashboard-eyebrow">NODRA / PROYECTOS</p><h1>¿Qué querés diseñar hoy?</h1><p className="muted">Tus proyectos guardados localmente, listos para continuar.</p></div><button type="button" className="dashboard-primary" onClick={() => guardedNavigation(() => void createPersistedProject())}>+ Nuevo proyecto</button></div><div className="dashboard-future" aria-label="Funciones futuras"><span>3D <small>Próximamente</small></span><span>Validar <small>Próximamente</small></span></div><div className="dashboard-grid">{dashboardProjects(dashboardSources).map((item) => <article className="project-card" key={item.id}><div className="project-card-preview" aria-hidden="true">◇</div><div className="project-card-body"><h2>{projectDisplayName(item)}</h2><div className="project-piece-list">{item.pieces.map((piece) => <p key={piece.id}>{pieceDisplayLabel(piece)}</p>)}</div><button type="button" onClick={() => { setPieceFormProjectId(item.id); setPieceName(`Pieza ${item.pieces.length + 1}`); setPieceMaterial(""); setPieceThickness(""); }}>Nueva pieza</button>{pieceFormProjectId === item.id && <form className="piece-form" onSubmit={(event) => { event.preventDefault(); const source = dashboardSources.find((candidate) => candidate.metadata.id === item.id); if (source) void createPersistedPiece(source); }}><label>Nombre<input aria-label="Nombre de la pieza" value={pieceName} onChange={(event) => setPieceName(event.target.value)} required /></label><label>Material (opcional)<input aria-label="Material de la pieza" value={pieceMaterial} onChange={(event) => setPieceMaterial(event.target.value)} /></label><label>Espesor mm (opcional)<input aria-label="Espesor de la pieza" type="number" min="0.01" step="0.01" value={pieceThickness} onChange={(event) => setPieceThickness(event.target.value)} /></label><label>Proceso<select aria-label="Proceso de la pieza" value="cut" disabled><option value="cut">Corte</option></select></label><button type="button" onClick={() => { setPieceMaterial(""); setPieceThickness(""); }}>Definir material después</button><button type="submit">Crear pieza</button></form>}<small>{new Date(item.updatedAt).toLocaleDateString("es-AR")}</small><button type="button" onClick={() => guardedNavigation(() => void openPersistedProject(item))}>Abrir proyecto</button></div></article>)}{dashboardSources.length === 0 && <div className="dashboard-empty"><strong>Todavía no hay proyectos</strong><p className="muted">Creá uno para empezar con Pieza 1.</p></div>}</div></section> : mode === "prepare" ? <section className="prepare"><div><div className="prepare-icon">◇</div><h1>Preparar aún no está disponible</h1><p>Nodra ofrece actualmente solo un espacio de trabajo de Diseño sin conexión. No hay hardware conectado, controlado ni listo.</p><button onClick={() => setMode("design")}>Volver a Diseño</button></div></section> : <div className="workspace">
       <section className="properties-bar" aria-label="Barra de propiedades">
         {tool === "dimension" && <div className="dimension-mode-controls" role="group" aria-label="Modo de cota"><button type="button" className={dimensionMode === "auto" ? "active" : ""} onClick={() => setDimensionMode("auto")}>Lineal</button><button type="button" className={dimensionMode === "radius" ? "active" : ""} onClick={() => setDimensionMode("radius")}>Radio</button><button type="button" className={dimensionMode === "diameter" ? "active" : ""} onClick={() => setDimensionMode("diameter")}>Diámetro</button></div>}
-         <div className="page-selector"><button type="button" className="new-sketch-button" onClick={startNewSketch}>+ Nuevo croquis</button><label>Fuente de texto<select aria-label="Tipografía del texto" value={textFontFamily} onChange={(event) => { const family = event.target.value; setTextFontFamily(family); const textElements = selectedElements.filter((element): element is TextElement => element.type === "text"); let next = editorRef.current; for (const element of textElements) next = dispatch(next, updateElement(element.id, { fontFamily: family, size: textSizeFor(element.text, element.fontSize, family, element.fontWeight, element.fontStyle, element.lineHeight) })); if (textElements.length) setEditorState(next); }}>{availableFonts.map((font) => <option key={font} style={{ fontFamily: font }}>{font}</option>)}</select><label className="font-upload-button">+ Fuente<input type="file" accept=".ttf,.otf,.woff,.woff2,font/ttf,font/otf,font/woff,font/woff2" onChange={(event) => { const file = event.target.files?.[0]; if (file) void loadFontFile(file); event.currentTarget.value = ""; }} /></label></label><label>Página<select aria-label="Página activa" value={project.activePageId} onChange={(event) => switchPage(event.target.value)}>{project.pages.map((page, index) => <option key={page.id} value={page.id}>{index + 1} · {page.page.width} × {page.page.height} mm</option>)}</select></label><button type="button" onClick={createPageAndSelect}>+ Nueva página</button></div>
+         <div className="piece-context"><label>Pieza<select aria-label="Pieza activa" value={activePiece.id} onChange={(event) => setActivePieceId(event.target.value as PieceId)}>{project.pieces.map((piece) => <option key={piece.id} value={piece.id}>{piece.name}</option>)}</select></label><span>{activePiece.material ?? "Material por definir"}</span><span>{activePiece.thicknessMm === undefined ? "Espesor por definir" : `${activePiece.thicknessMm} mm`}</span><span>{pieceDisplayLabel(activePiece).split(" · ").at(-1)}</span></div><div className="page-selector"><button type="button" className="new-sketch-button" onClick={startNewSketch}>+ Nuevo croquis</button><label>Fuente de texto<select aria-label="Tipografía del texto" value={textFontFamily} onChange={(event) => { const family = event.target.value; setTextFontFamily(family); const textElements = selectedElements.filter((element): element is TextElement => element.type === "text"); let next = editorRef.current; for (const element of textElements) next = dispatch(next, updateElement(element.id, { fontFamily: family, size: textSizeFor(element.text, element.fontSize, family, element.fontWeight, element.fontStyle, element.lineHeight) })); if (textElements.length) setEditorState(next); }}>{availableFonts.map((font) => <option key={font} style={{ fontFamily: font }}>{font}</option>)}</select><label className="font-upload-button">+ Fuente<input type="file" accept=".ttf,.otf,.woff,.woff2,font/ttf,font/otf,font/woff,font/woff2" onChange={(event) => { const file = event.target.files?.[0]; if (file) void loadFontFile(file); event.currentTarget.value = ""; }} /></label></label><label>Página<select aria-label="Página activa" value={project.activePageId} onChange={(event) => switchPage(event.target.value)}>{project.pages.map((page, index) => <option key={page.id} value={page.id}>{index + 1} · {page.page.width} × {page.page.height} mm</option>)}</select></label><button type="button" onClick={createPageAndSelect}>+ Nueva página</button></div>
            {selectedElements.length > 0 ? <div className="property-fields">
                 {objectPropertySections()}{mirrorButton("horizontal")}{mirrorButton("vertical")}{shapeOperations()}
          </div> : <p className="muted">Seleccione un objeto para editar sus propiedades.</p>}

@@ -9,6 +9,12 @@ describe("Kond Design project files", () => {
     expect(decodeProjectFile(encodeProjectFile(project))).toEqual(project);
   });
 
+  it("backfills pieces when opening an older compatible schema-9 file", () => {
+    const legacy = { ...project } as Record<string, unknown>;
+    delete legacy.pieces;
+    expect(decodeProjectFile(JSON.stringify(legacy))).toMatchObject({ pieces: [{ id: "codec-test:piece-1", state: "design", sketches: [] }] });
+  });
+
   it("rejects malformed JSON", () => {
     expect(() => decodeProjectFile("not-json")).toThrow("JSON válido");
   });

@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { CURRENT_SCHEMA_VERSION, hasBounds, type DocumentSnapshot, type Element, type PointMm, type ProjectSnapshot, type SizeMm } from "@nodra/domain";
+import { CURRENT_SCHEMA_VERSION, createDefaultPiece, hasBounds, type DocumentSnapshot, type Element, type PointMm, type ProjectSnapshot, type SizeMm } from "@nodra/domain";
 
 const finite = z.number().finite();
 const nonEmptyId = z.string().min(1);
@@ -307,11 +307,29 @@ const documentSchema = z.object({ schemaVersion: z.literal(CURRENT_SCHEMA_VERSIO
 });
 const pageSchema = z.object({ id: nonEmptyId, page: size, layers: z.array(layerSchema), elements: z.array(elementSchema), constraints: z.array(sketchConstraint).optional(), connections: z.array(explicitConnection).default([]), positionalCoincidences: z.array(positionalCoincidence).optional() }).strict();
 const projectPreferencesSchema = z.object({ lineGuidesEnabled: z.boolean().default(true), lineGuideAngle: z.union([z.literal(15), z.literal(45)]).default(45).transform(() => 45) }).strict().default({ lineGuidesEnabled: true, lineGuideAngle: 45 });
-export const projectSchema = z.object({ schemaVersion: z.literal(CURRENT_SCHEMA_VERSION), id: nonEmptyId, revision: finite.int().nonnegative(), origin: z.literal("top-left"), units: z.literal("mm"), capabilities: z.object({ spline: z.literal(1).optional() }).strict().optional(), preferences: projectPreferencesSchema, pages: z.array(pageSchema).min(1), activePageId: nonEmptyId }).strict().superRefine((value, ctx) => {
+const pieceSketchReferenceSchema = z.object({ pageId: nonEmptyId, sketchId: nonEmptyId }).strict();
+const pieceSchema = z.object({ id: nonEmptyId, name: z.string().trim().min(1), material: z.string().trim().min(1).optional(), thicknessMm: finite.gt(0).optional(), process: z.literal("cut"), state: z.enum(["design", "underdefined", "defined", "validated", "ready"]), sketches: z.array(pieceSketchReferenceSchema) }).strict();
+export const projectSchema = z.object({ schemaVersion: z.literal(CURRENT_SCHEMA_VERSION), id: nonEmptyId, revision: finite.int().nonnegative(), origin: z.literal("top-left"), units: z.literal("mm"), capabilities: z.object({ spline: z.literal(1).optional() }).strict().optional(), preferences: projectPreferencesSchema, pieces: z.array(pieceSchema).min(1), pages: z.array(pageSchema).min(1), activePageId: nonEmptyId }).strict().superRefine((value, ctx) => {
   if (!value.pages.some((page) => page.id === value.activePageId)) ctx.addIssue({ code: "custom", message: "Active page does not exist", path: ["activePageId"] });
   const pageIds = new Set(value.pages.map((page) => page.id));
   if (pageIds.size !== value.pages.length) ctx.addIssue({ code: "custom", message: "Page IDs must be unique", path: ["pages"] });
+  const pieceIds = new Set(value.pieces.map((piece) => piece.id));
+  if (pieceIds.size !== value.pieces.length) ctx.addIssue({ code: "custom", message: "Piece IDs must be unique", path: ["pieces"] });
+  const ownedSketches = new Set<string>();
+  value.pieces.forEach((piece, pieceIndex) => piece.sketches.forEach((reference, referenceIndex) => {
+    const page = value.pages.find((candidate) => candidate.id === reference.pageId);
+    const target = page?.elements.find((element) => element.id === reference.sketchId);
+    const key = `${reference.pageId}\u0000${reference.sketchId}`;
+    if (!page) ctx.addIssue({ code: "custom", message: "Piece sketch reference uses an unknown page", path: ["pieces", pieceIndex, "sketches", referenceIndex, "pageId"] });
+    else if (!target) ctx.addIssue({ code: "custom", message: "Piece sketch reference uses an unknown element", path: ["pieces", pieceIndex, "sketches", referenceIndex, "sketchId"] });
+    else if (target.type !== "sketch") ctx.addIssue({ code: "custom", message: "Piece sketch reference must identify a sketch", path: ["pieces", pieceIndex, "sketches", referenceIndex, "sketchId"] });
+    if (ownedSketches.has(key)) ctx.addIssue({ code: "custom", message: "A sketch may belong to only one piece", path: ["pieces", pieceIndex, "sketches", referenceIndex] });
+    ownedSketches.add(key);
+  }));
   value.pages.forEach((page, pageIndex) => {
+    page.elements.forEach((element, elementIndex) => {
+      if (element.type === "sketch" && !ownedSketches.has(`${page.id}\u0000${element.id}`)) ctx.addIssue({ code: "custom", message: "Sketch elements must belong to a piece", path: ["pages", pageIndex, "elements", elementIndex, "id"] });
+    });
     const checked = documentSchema.safeParse({ schemaVersion: CURRENT_SCHEMA_VERSION, id: value.id, revision: value.revision, origin: value.origin, units: value.units, ...(value.capabilities ? { capabilities: value.capabilities } : {}), page: page.page, layers: page.layers, elements: page.elements, ...(page.constraints ? { constraints: page.constraints } : {}), connections: page.connections, positionalCoincidences: page.positionalCoincidences });
     if (!checked.success) checked.error.issues.forEach((issue) => ctx.addIssue({ code: "custom", message: issue.message, path: ["pages", pageIndex, ...issue.path] }));
   });
@@ -540,11 +558,24 @@ export function validateProject(input: unknown): { readonly success: true; reado
 export function migrateProject(input: unknown): unknown {
   if (typeof input !== "object" || input === null || Array.isArray(input)) return input;
   const candidate = input as Record<string, unknown>;
-  if (candidate.schemaVersion === 7) return { ...migrateSchema7CircleElements(candidate) as Record<string, unknown>, schemaVersion: CURRENT_SCHEMA_VERSION };
-  if (candidate.schemaVersion === 8) return { ...candidate, schemaVersion: CURRENT_SCHEMA_VERSION };
-  if (candidate.schemaVersion !== 1 && candidate.schemaVersion !== 2 && candidate.schemaVersion !== 3 && candidate.schemaVersion !== 4 && candidate.schemaVersion !== 5 && candidate.schemaVersion !== 6) return input;
-  const pages = migrateLegacyPages(candidate.pages);
-  return { ...migrateSchema7CircleElements({ ...candidate, pages }) as Record<string, unknown>, schemaVersion: CURRENT_SCHEMA_VERSION };
+  if (![1, 2, 3, 4, 5, 6, 7, 8, CURRENT_SCHEMA_VERSION].includes(candidate.schemaVersion as number)) return input;
+  let migrated: Record<string, unknown>;
+  if (candidate.schemaVersion === 7) migrated = { ...migrateSchema7CircleElements(candidate) as Record<string, unknown>, schemaVersion: CURRENT_SCHEMA_VERSION };
+  else if (candidate.schemaVersion === 8 || candidate.schemaVersion === CURRENT_SCHEMA_VERSION) migrated = { ...candidate, schemaVersion: CURRENT_SCHEMA_VERSION };
+  else {
+    const pages = migrateLegacyPages(candidate.pages);
+    migrated = { ...migrateSchema7CircleElements({ ...candidate, pages }) as Record<string, unknown>, schemaVersion: CURRENT_SCHEMA_VERSION };
+  }
+  if (migrated.pieces !== undefined) return migrated;
+  const sketches = Array.isArray(migrated.pages) ? migrated.pages.flatMap((page) => {
+    if (typeof page !== "object" || page === null || Array.isArray(page)) return [];
+    const currentPage = page as Record<string, unknown>;
+    if (typeof currentPage.id !== "string" || !Array.isArray(currentPage.elements)) return [];
+    return currentPage.elements.flatMap((element) => typeof element === "object" && element !== null && !Array.isArray(element) && (element as Record<string, unknown>).type === "sketch" && typeof (element as Record<string, unknown>).id === "string" ? [{ pageId: currentPage.id, sketchId: (element as Record<string, unknown>).id }] : []);
+  }) : [];
+  const projectId = typeof migrated.id === "string" ? migrated.id : "";
+  const piece = createDefaultPiece(projectId);
+  return { ...migrated, pieces: [{ ...piece, state: sketches.length > 0 ? "underdefined" : "design", sketches }] };
 }
 
 export function serializeDocument(document: DocumentSnapshot): string {

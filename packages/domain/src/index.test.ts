@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createDocument, createProject, documentFromProject, elementId, hasBounds, hasRotation, layerId, pageId, projectFromDocument, revision, withElements } from "./index.js";
+import { createDocument, createProject, defaultPieceId, documentFromProject, elementId, hasBounds, hasRotation, layerId, pageId, projectFromDocument, revision, withElements } from "./index.js";
 
 describe("domain contracts", () => {
   it("creates immutable-shaped versioned documents and increments revisions", () => {
@@ -31,6 +31,44 @@ describe("domain contracts", () => {
     const spline = { type: "spline" as const, id: elementId("spline-1"), layerId: layer.id, nodes: [{ id: "a", anchor: { x: 0, y: 0 }, continuity: "smooth" as const }, { id: "b", anchor: { x: 10, y: 0 }, continuity: "smooth" as const }], closed: false, style: { stroke: "#000", strokeWidth: 0.2 } };
     expect(withElements(createDocument("doc-1", [layer]), [spline]).elements).toEqual([spline]);
   });
+  it("creates one deterministic persisted design piece and retains it across document bridges", () => {
+    const source = createDocument("piece-project");
+    const project = createProject(source);
+
+    expect(project.pieces).toEqual([{
+      id: defaultPieceId(source.id),
+      name: "Pieza 1",
+      process: "cut",
+      state: "design",
+      sketches: [],
+    }]);
+    expect(createProject(source).pieces[0]?.id).toBe(project.pieces[0]?.id);
+    expect(projectFromDocument(project, documentFromProject(project)).pieces).toEqual(project.pieces);
+  });
+
+  it("prunes removed active-page sketch references without disturbing other pieces or pages", () => {
+    const source = createDocument("piece-pruning");
+    const firstSketch = { type: "sketch" as const, id: elementId("first"), layerId: layerId("design"), nodes: [{ id: "a", point: { x: 0, y: 0 } }, { id: "b", point: { x: 1, y: 0 } }], edges: [{ id: "ab", startNodeId: "a", endNodeId: "b" }], style: { stroke: "#000", strokeWidth: 1 } };
+    const secondSketch = { ...firstSketch, id: elementId("second") };
+    const project = createProject(source);
+    const withReferences = {
+      ...project,
+      pieces: [
+        { ...project.pieces[0]!, state: "underdefined" as const, sketches: [{ pageId: pageId("page-1"), sketchId: firstSketch.id }] },
+        { ...project.pieces[0]!, id: "piece-2" as never, name: "Pieza 2", state: "underdefined" as const, sketches: [{ pageId: pageId("page-2"), sketchId: secondSketch.id }] },
+      ],
+      pages: [
+        { ...project.pages[0]!, elements: [firstSketch] },
+        { ...project.pages[0]!, id: pageId("page-2"), elements: [secondSketch] },
+      ],
+    };
+
+    const synced = projectFromDocument(withReferences, { ...source, elements: [], revision: revision(1) });
+
+    expect(synced.pieces[0]).toMatchObject({ state: "design", sketches: [] });
+    expect(synced.pieces[1]?.sketches).toEqual([{ pageId: pageId("page-2"), sketchId: secondSketch.id }]);
+  });
+
   it("clears positional coincidences when importing a document that omits them", () => {
     const layer = { id: layerId("design"), name: "Design", visible: true, order: 0 } as const;
     const source = createDocument("doc-1", [layer]);
