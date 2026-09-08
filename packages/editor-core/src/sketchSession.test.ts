@@ -10,6 +10,7 @@ const sketch = (id: ElementId) => ({ type: "sketch" as const, id, layerId: layer
 const document = createDocument("doc", [layer]);
 const entry = { ...document, elements: [sketch(sketchId), sketch(otherId)] };
 const changed = { ...entry, revision: revision(1), elements: [{ ...sketch(sketchId), nodes: [{ id: "n", point: { x: 1, y: 2 } }] }, sketch(otherId)] };
+    const changedAfterCheckpoint = { ...changed, revision: revision(2), elements: [{ ...sketch(sketchId), nodes: [{ id: "n", point: { x: 3, y: 4 } }] }, sketch(otherId)] };
     const otherChanged = { ...entry, revision: revision(1), elements: [sketch(sketchId), { ...sketch(otherId), nodes: [{ id: "n", point: { x: 1, y: 2 } }] }] };
 const transaction = (before: DocumentSnapshot, after: DocumentSnapshot, command = "gesture"): Transaction => ({ command, before, after, selectionBefore: [], selectionAfter: [] });
 const enter = { type: "enter", sketchId } as const;
@@ -76,7 +77,17 @@ describe("sketch session reducer", () => {
     expect(accepted).toEqual({ status: "idle", document: changed, editorHistory: { undo: [transaction(entry, changed)], redo: [] }, selection: [] });
   });
 
-  it("confirms cancellation by restoring the exact entry boundary", () => {
+  it("checkpoints explicitly and cancels only work after the latest checkpoint", () => {
+        const active = reduce(createSketchSession(entry), enter);
+        const checkpointed = reduce(active, { type: "commit-gesture", sketchId, affectedElementIds: [sketchId], transaction: transaction(entry, changed) });
+        const afterCheckpoint = reduce(checkpointed, { type: "checkpoint", document: changed, editorHistory: { undo: [transaction(entry, changed)], redo: [] }, selection: [sketchId] });
+        const worked = reduce(afterCheckpoint, { type: "commit-gesture", sketchId, affectedElementIds: [sketchId], transaction: transaction(changed, changedAfterCheckpoint) });
+        const confirming = reduce(worked, { type: "cancel-session" });
+        expect(confirming.status).toBe("confirming-cancel");
+        expect(reduce(confirming, { type: "confirm-cancel" })).toEqual({ status: "idle", document: changed, editorHistory: { undo: [transaction(entry, changed)], redo: [] }, selection: [sketchId] });
+      });
+
+      it("confirms cancellation by restoring the exact entry boundary", () => {
     const initialHistory = { undo: [transaction(document, entry, "prior")], redo: [transaction(entry, document, "redo")] };
     const active = reduce(createSketchSession(entry, initialHistory, [otherId]), enter);
     const worked = reduce(active, { type: "commit-gesture", sketchId, affectedElementIds: [sketchId], transaction: transaction(entry, changed) });

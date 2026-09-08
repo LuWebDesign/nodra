@@ -1,10 +1,17 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { elementId, layerId } from "@nodra/domain";
 import { beginGesture, commitGesture, createElement, previewGestureFromBase } from "@nodra/editor-core";
-import { useDocumentStore } from "./stores.js";
+import { shouldPersistEditorSnapshot, useDocumentStore } from "./stores.js";
 
 describe("document store persistence boundary", () => {
   beforeEach(() => useDocumentStore.setState(useDocumentStore.getInitialState(), true));
+
+  it("gates recovery mirrors while sketch edits are active", () => {
+    expect(shouldPersistEditorSnapshot("active", false)).toBe(false);
+    expect(shouldPersistEditorSnapshot("confirming-cancel", false)).toBe(false);
+    expect(shouldPersistEditorSnapshot("idle", true)).toBe(false);
+    expect(shouldPersistEditorSnapshot("idle", false)).toBe(true);
+  });
 
   it("renders gesture previews without replacing committed project state", () => {
     const state = useDocumentStore.getState();
