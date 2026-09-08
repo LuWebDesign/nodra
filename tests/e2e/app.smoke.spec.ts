@@ -1622,3 +1622,76 @@ test("alinea el centro de un círculo con un nodo de croquis y conserva la coinc
   await relationList.getByRole("button", { name: "Eliminar", exact: true }).click();
   await expect(relationList).toHaveCount(0);
 });
+
+
+test("keeps native circle and arc center datums visible after deselect and tool changes", async ({ page }) => {
+  await page.goto("/");
+  const bounds = await page.locator(".page").boundingBox();
+  expect(bounds).not.toBeNull();
+  const center = { x: bounds!.x + 180, y: bounds!.y + 180 };
+
+  await page.getByRole("button", { name: "Círculo" }).click();
+  await page.mouse.click(center.x, center.y);
+  await page.mouse.click(center.x + 55, center.y);
+  await page.mouse.click(center.x + 220, center.y);
+  await page.mouse.click(center.x + 265, center.y);
+  await expect(page.locator("[data-native-center-datum], [data-center-reference=\"true\"]")).toHaveCount(2);
+
+  await page.getByRole("button", { name: "Arco" }).click();
+  const start = { x: center.x - 70, y: center.y + 130 };
+  const end = { x: start.x + 120, y: start.y };
+  const through = { x: center.x - 10, y: center.y + 75 };
+  await page.mouse.click(start.x, start.y);
+  await page.mouse.click(end.x, end.y);
+  await page.mouse.click(through.x, through.y);
+  await expect(page.locator("[data-native-center-datum], [data-center-reference=\"true\"]")).toHaveCount(3);
+
+  const assertNativeCircleDatumsAligned = async () => {
+    const datumIds = await page.locator("[data-native-center-datum]").evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-native-center-datum")));
+    for (const datumId of datumIds.slice(0, 2)) {
+      expect(datumId).not.toBeNull();
+      const datum = page.locator(`[data-native-center-datum="${datumId}"]`);
+      const circle = page.locator(`circle[data-element-id="${datumId}"]`);
+      const datumBox = await datum.boundingBox();
+      const circleBox = await circle.boundingBox();
+      expect(datumBox).not.toBeNull();
+      expect(circleBox).not.toBeNull();
+      expect(Math.hypot((datumBox!.x + datumBox!.width / 2) - (circleBox!.x + circleBox!.width / 2), (datumBox!.y + datumBox!.height / 2) - (circleBox!.y + circleBox!.height / 2))).toBeLessThan(2);
+    }
+  };
+
+  await page.getByRole("button", { name: "Seleccion" }).click();
+  const canvasBounds = await page.locator(".canvas").boundingBox();
+  const pageAfterDrawBounds = await page.locator(".page").boundingBox();
+  expect(canvasBounds).not.toBeNull();
+  expect(pageAfterDrawBounds).not.toBeNull();
+  const deselectPoint = [
+    { x: canvasBounds!.x + 8, y: canvasBounds!.y + 8 },
+    { x: canvasBounds!.x + canvasBounds!.width - 8, y: canvasBounds!.y + 8 },
+    { x: canvasBounds!.x + 8, y: canvasBounds!.y + canvasBounds!.height - 8 },
+    { x: canvasBounds!.x + canvasBounds!.width - 8, y: canvasBounds!.y + canvasBounds!.height - 8 },
+  ].find(({ x, y }) => x < pageAfterDrawBounds!.x || x > pageAfterDrawBounds!.x + pageAfterDrawBounds!.width || y < pageAfterDrawBounds!.y || y > pageAfterDrawBounds!.y + pageAfterDrawBounds!.height);
+  expect(deselectPoint).toBeDefined();
+  await page.mouse.click(deselectPoint!.x, deselectPoint!.y);
+  await page.keyboard.press("Escape");
+  await expect(page.locator("[data-native-center-datum]")).toHaveCount(3);
+  await expect(page.locator("[data-native-center-datum]").first()).toHaveCSS("pointer-events", "none");
+  await assertNativeCircleDatumsAligned();
+
+  const datumBeforePan = await page.locator("[data-native-center-datum]").evaluateAll((nodes) => nodes.map((node) => { const box = node.getBoundingClientRect(); return { x: box.x + box.width / 2, y: box.y + box.height / 2 }; }));
+  await page.getByRole("button", { name: "Desplazar" }).click();
+  await page.mouse.move(deselectPoint!.x, deselectPoint!.y);
+  await page.mouse.down();
+  await page.mouse.move(deselectPoint!.x + 45, deselectPoint!.y + 30);
+  await page.mouse.up();
+  await expect.poll(() => page.locator("[data-native-center-datum]").count()).toBe(3);
+  await assertNativeCircleDatumsAligned();
+  const datumAfterPan = await page.locator("[data-native-center-datum]").evaluateAll((nodes) => nodes.map((node) => { const box = node.getBoundingClientRect(); return { x: box.x + box.width / 2, y: box.y + box.height / 2 }; }));
+  const panDeltas = datumAfterPan.map((point, index) => ({ x: point.x - datumBeforePan[index]!.x, y: point.y - datumBeforePan[index]!.y }));
+  expect(Math.hypot(panDeltas[0]!.x, panDeltas[0]!.y)).toBeGreaterThan(1);
+  for (const delta of panDeltas.slice(1)) expect(Math.hypot(delta.x - panDeltas[0]!.x, delta.y - panDeltas[0]!.y)).toBeLessThan(2);
+
+  await page.getByRole("button", { name: "Acercar" }).click();
+  await expect.poll(() => page.locator("[data-native-center-datum]").count()).toBe(3);
+  await assertNativeCircleDatumsAligned();
+});
