@@ -10,6 +10,7 @@ import { renderSvg } from "@nodra/renderer-svg";
 import { canActivateRotation, centerPageInCanvas, clientPointToCanvas, clientPointToPage, cubicPlacementControls, formaNodeKey, hoveredSelectionCenter, isDrawingTool, marqueeSelection, movementExceedsThreshold, normalizeBounds, normalizeDrag, pagePointToCanvas, pathGuides, pickDimensionTarget, pickElement, pickFormaElement, pickFormaNode, pickFormaSegment, pickHoverNode, pickCutIntervalPreview, pickCuttableSegment, pickNode, pickPathNode, pickPathSegment, pointerDownIntent, visibleEditablePathNodeIndexes, screenDeltaToMm, screenPointToMm, selectedNodeAnchor, selectedPathAnchorIds, alignmentGuides, snapCreationPoint, snapFormaNodePoint, snapMoveDelta, viewportPointToCanvas, zoomAtPoint, type AlignmentGuide, type ContourNodeHit, type CutIntervalPreview, type DimensionTarget, type FormaNodeHit, type HoverNode, type NodeHit, type PathNodeHit, type SnapGuide, type TransformMode, type CreationSnap } from "./interaction.js";
 import { aspectSize, formatMm, geometryValue, rotationDegreesValue, rotationPatch, type GeometryField, type PropertyElement, type RotatableElement } from "./propertyBar.js";
 import { useDocumentStore, usePersistenceStore, useSelectionStore, useUiStore, useViewportStore, type Tool } from "./stores.js";
+    import { createSketchSession, isSketchScopedDocumentChange, isSketchSessionHistoryLocked, reduceSketchSession, type SketchSessionState } from "@nodra/editor-core";
 import { pathJoinGuidance, pathJoinOptions } from "./pathJoins.js";
 import { textSizeFor } from "./textMetrics.js";
 import { extractTextGlyphOutlines, fontFamilyFromFileName, FontOutlineError } from "./fontOutline.js";
@@ -148,6 +149,7 @@ export function App() {
   const { editor, project, setEditor, setProject, setProjectPreferences } = useDocumentStore();
   const document = editor.document;
   const selection = editor.selection;
+      const [sketchSession, setSketchSession] = useState<SketchSessionState>(() => createSketchSession(editor.document, { undo: editor.undo, redo: editor.redo }, editor.selection));
   const { zoom, panMm, setZoom, setPanMm } = useViewportStore();
   const persist = usePersistenceStore();
   const [online, setOnline] = useState(navigator.onLine);
@@ -212,6 +214,8 @@ export function App() {
   const canvas = useRef<HTMLDivElement>(null);
   const pageElement = useRef<HTMLDivElement>(null);
   const editorRef = useRef(editor);
+      const sketchSessionRef = useRef(sketchSession);
+      sketchSessionRef.current = sketchSession;
   const interaction = useRef<ActiveInteraction | undefined>(undefined);
   const creationDraftRef = useRef<CreationDraft | undefined>(undefined);
   const viewportInteracted = useRef(false);
@@ -221,6 +225,13 @@ export function App() {
   const directionTooltipTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   editorRef.current = editor;
   creationDraftRef.current = creationDraft;
+
+  useEffect(() => {
+    if (sketchSession.status !== "idle") return;
+    const selectionMatches = sketchSession.selection.length === editor.selection.length && sketchSession.selection.every((id, index) => id === editor.selection[index]);
+    if (sketchSession.document === editor.document && sketchSession.editorHistory.undo === editor.undo && sketchSession.editorHistory.redo === editor.redo && selectionMatches) return;
+    setSketchSession(createSketchSession(editor.document, { undo: editor.undo, redo: editor.redo }, editor.selection));
+  }, [editor.document, editor.undo, editor.redo, editor.selection, sketchSession.status]);
 
   useLayoutEffect(() => {
     pageElement.current = canvas.current ? canvas.current.querySelector<HTMLDivElement>(".page") : null;
@@ -489,11 +500,66 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
   const dimensionPreview = dimensionDraft?.phase === "placement" && documentCursorPoint ? dimensionDraft.first.kind === "node" && dimensionDraft.second.kind === "node" ? newDimension("layer-1", dimensionDraft.first.hit, dimensionDraft.second.hit, documentCursorPoint, tool === "radius" ? "radius" : dimensionMode) : dimensionDraft.first.kind === "line" && dimensionDraft.second.kind === "line" ? newAngularDimension("layer-1", dimensionDraft.first, dimensionDraft.second, documentCursorPoint) : undefined : undefined;
   const rendered = renderSvg({ ...document, elements: dimensionPreview ? [...document.elements, dimensionPreview] : document.elements }, { zoom: 1, panMm: { x: 0, y: 0 } });
   const setEditorState = (next: typeof editor) => {
+    const previous = editorRef.current;
+    const session = sketchSessionRef.current;
+    if (session.status === "active" && next.gesture) {
+      const previewId = "editor-gesture";
+      setSketchSession((current) => reduceSketchSession(current, { type: previous.gesture ? "update-preview" : "begin-preview", previewId, sketchId: session.sketchId }));
+    }
+    if (session.status === "active" && next.document !== previous.document && !isSketchScopedDocumentChange(previous.document, next.document, session.sketchId)) {
+      const cancelled = cancelGesture(previous);
+      editorRef.current = cancelled;
+      setEditor(cancelled);
+      return;
+    }
     editorRef.current = next;
+    if (session.status === "active" && !next.gesture && !previous.gesture && next.document !== previous.document) {
+      const transaction = next.undo.at(-1);
+      if (transaction) {
+        const affectedElementIds = transaction.before.elements.flatMap((element, index) => JSON.stringify(element) === JSON.stringify(transaction.after.elements[index]) ? [] : [element.id]);
+        setSketchSession((current) => reduceSketchSession(current, { type: "commit-gesture", sketchId: session.sketchId, affectedElementIds, transaction }));
+      }
+    }
     if (!next.gesture && (persistenceReady || next.document.revision > document.revision)) saveProjectMirror(projectFromDocument(project, next.document));
     setEditor(next);
   };
-  const openDesktopProject = async () => {
+  const enterSketchSession = (sketchId: ElementId) => {
+        const current = sketchSessionRef.current;
+        if (current.status !== "idle") return;
+        const next = reduceSketchSession(current, { type: "enter", sketchId });
+        if (next !== current) { setSketchSession(next); setEditorState(select(editorRef.current, [sketchId])); setTool("forma"); setEditModeElementIds([sketchId]); }
+      };
+      const acceptSketchSession = () => {
+        if (sketchSessionRef.current.status !== "active") return;
+        setSketchSession((current) => reduceSketchSession(current, { type: "accept" }));
+        setEditModeElementIds([]); setEditorState(clearSelection(editorRef.current)); setTool("select");
+      };
+      const restoreSketchSessionEntry = (current: Extract<SketchSessionState, { status: "active" | "confirming-cancel" }>) => {
+        const restored = { ...editorRef.current, document: current.entryDocument, undo: [...current.entryEditorHistory.undo], redo: [...current.entryEditorHistory.redo], selection: [...current.entrySelection], gesture: undefined };
+        editorRef.current = restored;
+        setEditor(restored);
+        setEditModeElementIds([]);
+        setTool("select");
+      };
+      const requestCancelSketchSession = () => {
+        const current = sketchSessionRef.current;
+        if (current.status !== "active") return;
+        if (current.committed.length === 0) {
+          restoreSketchSessionEntry(current);
+        } else if (editorRef.current.gesture) {
+          const canceled = cancelGesture(editorRef.current);
+          editorRef.current = canceled;
+          setEditor(canceled);
+        }
+        setSketchSession(reduceSketchSession(current, { type: "cancel-session" }));
+      };
+      const confirmCancelSketchSession = () => {
+        const current = sketchSessionRef.current;
+        if (current.status !== "confirming-cancel") return;
+        restoreSketchSessionEntry(current);
+        setSketchSession(reduceSketchSession(current, { type: "confirm-cancel" }));
+      };
+      const openDesktopProject = async () => {
     const bridge = desktopFileBridge();
     if (!bridge) return;
     try {
@@ -1094,6 +1160,10 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
   };
 
   const onCanvasDoubleClick = (event: MouseEvent<HTMLDivElement>) => {
+         const sketchPoint = documentPointAtClient(event.clientX, event.clientY);
+         const sketchHit = pickElement(editorRef.current.document, sketchPoint, zoom);
+         const sketchElement = sketchHit ? editorRef.current.document.elements.find((element) => element.id === sketchHit) : undefined;
+         if (sketchElement?.type === "sketch") { enterSketchSession(sketchElement.id); return; }
      const point = documentPointAtClient(event.clientX, event.clientY);
      if (!(tool === "forma" ? pickFormaElement(editorRef.current.document, point, zoom) : pickElement(editorRef.current.document, point, zoom))) {
       setSelectedSplineNodeKey(undefined);
@@ -1337,6 +1407,9 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
           if (event.key === "Enter" && constraintDraft) { event.preventDefault(); confirmConstraintDraft(); return; }
           if (event.key === "Escape" && constraintDraft) { event.preventDefault(); cancelConstraintDraft(); return; }
       if (event.key === "Escape") {
+        const session = sketchSessionRef.current;
+        if (session.status === "confirming-cancel") { event.preventDefault(); setSketchSession((current) => reduceSketchSession(current, { type: "escape" })); return; }
+        if (session.status === "active" && (interaction.current || session.pending)) { event.preventDefault(); setSketchSession((current) => reduceSketchSession(current, { type: "escape" })); }
         creationDraftRef.current = undefined;
         setCreationDraft(undefined);
         if (interaction.current) {
@@ -1384,10 +1457,12 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
         for (const selectedId of selection) next = dispatch(next, deleteElement(selectedId));
         setEditorState(next);
       }
-      if (event.metaKey || event.ctrlKey) {
+      if ((event.metaKey || event.ctrlKey) && !isSketchSessionHistoryLocked(sketchSessionRef.current)) {
         const key = event.key.toLowerCase();
         if (key === "z") { event.preventDefault(); setEditorState(event.shiftKey ? redo(editorRef.current) : undo(editorRef.current)); }
         if (key === "y") { event.preventDefault(); setEditorState(redo(editorRef.current)); }
+      } else if ((event.metaKey || event.ctrlKey) && (event.key.toLowerCase() === "z" || event.key.toLowerCase() === "y")) {
+        event.preventDefault();
       }
     };
     addEventListener("keydown", onKey);
@@ -1871,11 +1946,12 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
   </> : null;
 
   return <main className="app-shell">
-    {pendingShapeOperation && <div className="nodra-modal-backdrop" role="presentation"><section className="nodra-modal" role="dialog" aria-modal="true" aria-labelledby="shape-operation-confirmation-title"><h2 id="shape-operation-confirmation-title">Confirmar operación</h2><p>Esta operación eliminará {pendingShapeOperation.invalidDimensionCount} cotas porque sus referencias dejarán de existir. ¿Continuar?</p><div className="nodra-modal-actions"><button type="button" onClick={() => setPendingShapeOperation(undefined)}>Cancelar</button><button type="button" className="nodra-modal-primary" onClick={confirmPendingShapeOperation}>Continuar</button></div></section></div>}
+    {sketchSession.status === "confirming-cancel" && <div className="nodra-modal-backdrop" role="presentation"><section className="nodra-modal" role="dialog" aria-modal="true" aria-labelledby="sketch-cancel-title"><h2 id="sketch-cancel-title">Cancelar croquis</h2><p>Se perderán los cambios realizados en este croquis. ¿Querés continuar?</p><div className="nodra-modal-actions"><button type="button" autoFocus onClick={() => setSketchSession((current) => reduceSketchSession(current, { type: "decline-cancel" }))}>Seguir editando</button><button type="button" className="nodra-modal-primary" onClick={confirmCancelSketchSession}>Cancelar croquis</button></div></section></div>}
+        {pendingShapeOperation && <div className="nodra-modal-backdrop" role="presentation"><section className="nodra-modal" role="dialog" aria-modal="true" aria-labelledby="shape-operation-confirmation-title"><h2 id="shape-operation-confirmation-title">Confirmar operación</h2><p>Esta operación eliminará {pendingShapeOperation.invalidDimensionCount} cotas porque sus referencias dejarán de existir. ¿Continuar?</p><div className="nodra-modal-actions"><button type="button" onClick={() => setPendingShapeOperation(undefined)}>Cancelar</button><button type="button" className="nodra-modal-primary" onClick={confirmPendingShapeOperation}>Continuar</button></div></section></div>}
     <header className="topbar">
       <div className="brand" aria-label="KOND DESIGN"><span className="brand-kond">KOND</span> <span className="brand-design">DESIGN</span></div>
       <nav aria-label="Modo de espacio de trabajo"><button className={mode === "design" ? "active" : ""} onClick={() => setMode("design")}>Diseño</button><button className={mode === "prepare" ? "active" : ""} onClick={() => setMode("prepare")}>Preparar <small>Vista previa</small></button></nav>
-      <div className="top-actions">{desktopFileBridge() && <><button aria-label="Abrir proyecto" title="Abrir proyecto" onClick={() => void openDesktopProject()}>Abrir</button><button aria-label="Guardar proyecto" title="Guardar proyecto" onClick={() => void saveDesktopProject()}>Guardar</button><button aria-label="Guardar como" title="Guardar como" onClick={() => void saveDesktopProject(true)}>Guardar como</button></>}<button aria-label="Deshacer" onClick={() => setEditorState(undo(editorRef.current))}>↶</button><button aria-label="Rehacer" onClick={() => setEditorState(redo(editorRef.current))}>↷</button><span className="project-name">Diseño sin título</span></div>
+      <div className="top-actions">{sketchSession.status === "active" && <><span role="status">Editando croquis</span><button type="button" onClick={acceptSketchSession}>Aceptar</button><button type="button" onClick={requestCancelSketchSession}>Cancelar</button></>}{sketchSession.status === "confirming-cancel" && <span role="status">Confirmá la cancelación</span>}{desktopFileBridge() && <><button aria-label="Abrir proyecto" title="Abrir proyecto" onClick={() => void openDesktopProject()}>Abrir</button><button aria-label="Guardar proyecto" title="Guardar proyecto" onClick={() => void saveDesktopProject()}>Guardar</button><button aria-label="Guardar como" title="Guardar como" onClick={() => void saveDesktopProject(true)}>Guardar como</button></>}<button aria-label="Deshacer" onClick={() => { if (!isSketchSessionHistoryLocked(sketchSessionRef.current)) setEditorState(undo(editorRef.current)); }}>↶</button><button aria-label="Rehacer" onClick={() => { if (!isSketchSessionHistoryLocked(sketchSessionRef.current)) setEditorState(redo(editorRef.current)); }}>↷</button><span className="project-name">Diseño sin título</span></div>
     </header>
     {mode === "prepare" ? <section className="prepare"><div><div className="prepare-icon">◇</div><h1>Preparar aún no está disponible</h1><p>Nodra ofrece actualmente solo un espacio de trabajo de Diseño sin conexión. No hay hardware conectado, controlado ni listo.</p><button onClick={() => setMode("design")}>Volver a Diseño</button></div></section> : <div className="workspace">
       <section className="properties-bar" aria-label="Barra de propiedades">
