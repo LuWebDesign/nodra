@@ -1,9 +1,23 @@
 import { describe, expect, it } from "vitest";
 import { createDocument, elementId, layerId, type DocumentSnapshot } from "@nodra/domain";
 import { validateDocument } from "@nodra/validation";
-import { canActivateRotation, circleGeometry, centerPageInCanvas, clientPointToCanvas, clientPointToPage, creationGuides, directionalGuide, hasNonCollinearPoints, hoveredSelectionCenter, INITIAL_ZOOM, isDrawingTool, marqueeSelection, MAX_ZOOM, MIN_ZOOM, movementExceedsThreshold, nodeAlignmentGuides, normalizeBounds, normalizeDrag, pagePointToScreen, screenDeltaToMm, screenPointToMm, viewportPointToCanvas, containsBounds, elementsContainedBy, pickDimensionTarget, pickElement, pickFormaElement, pickFormaNode, pickFormaSegment, pickHoverNode, pickCutIntervalPreview, pickCuttableSegment, pickNode, pointerDownIntent, selectedNodeAnchor, selectionCenter, selectionFrame, snapCreationPoint, snapMoveDelta, visibleEditablePathNodeIndexes, zoomAtPoint } from "./interaction.js";
+import { canActivateRotation, circleGeometry, centerPageInCanvas, clientPointToCanvas, clientPointToPage, creationGuides, directionalGuide, hasNonCollinearPoints, hoveredSelectionCenter, INITIAL_ZOOM, isDrawingTool, marqueeSelection, MAX_ZOOM, MIN_ZOOM, movementExceedsThreshold, nodeAlignmentGuides, normalizeBounds, normalizeDrag, pagePointToScreen, screenDeltaToMm, screenPointToMm, viewportPointToCanvas, containsBounds, elementsContainedBy, pickDimensionTarget, pickElement, pickFormaElement, pickFormaNode, pickFormaSegment, pickHoverNode, pickCutIntervalPreview, pickCuttableSegment, pickNode, pointerDownIntent, selectedNodeAnchor, selectionCenter, selectionFrame, snapCreationPoint, snapMoveDelta, visibleEditablePathNodeIndexes, visibleNativeCircularCenters, zoomAtPoint } from "./interaction.js";
 import { geometryPatch, geometryValue } from "./propertyBar.js";
 import { dimensionKindForNodes, dimensionOffsetForPlacement, pointMidpoint } from "@nodra/geometry";
+
+describe("native center datums", () => {
+  it("returns only visible native circle and arc centers", () => {
+    const visible = { id: layerId("datum-visible"), name: "Visible", visible: true, order: 0 };
+    const hidden = { id: layerId("datum-hidden"), name: "Hidden", visible: false, order: 1 };
+    const circle = { type: "circle" as const, id: elementId("datum-circle"), layerId: visible.id, center: { x: 10, y: 20 }, radius: 5, style: { stroke: "#000", strokeWidth: 1 } };
+    const arc = { type: "arc" as const, id: elementId("datum-arc"), layerId: visible.id, center: { x: 40, y: 50 }, radius: 8, startAngle: 0, endAngle: Math.PI, direction: "clockwise" as const, style: { stroke: "#000", strokeWidth: 1 } };
+    const hiddenCircle = { ...circle, id: elementId("datum-hidden-circle"), layerId: hidden.id };
+    expect(visibleNativeCircularCenters({ ...createDocument("native-datums", [visible, hidden]), elements: [circle, arc, hiddenCircle] })).toEqual([
+      { elementId: circle.id, point: circle.center },
+      { elementId: arc.id, point: arc.center },
+    ]);
+  });
+});
 
 describe("editable path handles", () => {
   const nodes = [
