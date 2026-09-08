@@ -3,7 +3,7 @@ import { createDocument, createProject, elementId, layerId, pageId, projectFromD
 import { deleteDocumentConstraint, addPositionalCoincidence, deletePositionalCoincidence, addSketchConstraint, addToSelection, appendSketchEdge, appendSplineNode, beginGesture, cancelGesture, clearSelection, closePath, cutSegment, closeSplineElement, commitGesture, convertTextToGlyphs, createElement, createPathCubicNode, createPathNode, createSketchLine, deleteContourNodes, deleteElement, deleteElementNodes, deletePathNodes, deleteSketchConstraint, dispatch, duplicateElements, flipElements, insertFormaNode, invalidDimensionIdsForShapeOperation, moveElements, movePathHandle, movePathNode, openPath, updateSplineNode, previewGesture, previewGestureFromBase, redo, resizeElement, resizeElementToDimensions, resizeElements, resizeElementsToDimensions, rotateElement, updateDimensionValue, setDimensionDriving, rotateElementsAroundCenter, select, selectForPointerDown, setPathJoin, shapeOperation, splitPathSegment, undo, updateContourNode, updateElement, updateElementNode, updateElementStyles, updatePage, updateSketchConstraint, updateSplineHandle, type EditorCommand, type FlipAxis, type ShapeOperation } from "@nodra/editor-core";
 import { constraintComponentStatesForDocument, constraintResidualsForDocument, type ConstraintState } from "@nodra/constraints";
 import { arcThroughThreePoints, boundsOfElements, connectableNodeAddress, contourVertexNodes, dimensionKindForPlacement, dimensionOffsetForAlignedPlacement, dimensionOffsetForPlacement, elementCenter, editableGeometryNodes, glyphGeometryNodes, groupCenter, groupHandlePoints, pathGeometryNodes, pointMidpoint, dimensionGeometry, realGeometryNodes, solveSketchConstraints, resizeHandle, rotatedResizeHandles, rotationFromDrag, rotationHandlePoints, visibleBezierHandleGuides, type CurveFragment, type Direction, type GroupHandle, type ResizeHandle } from "@nodra/geometry";
-import { DebouncedAutosave, DexieProjectRepository, requestStoragePersistence, type FontRecord } from "@nodra/persistence";
+import { DexieProjectRepository, requestStoragePersistence, type FontRecord } from "@nodra/persistence";
 import { validateDesign, validateProject } from "@nodra/validation";
 import { addSolvedDocumentConstraint, documentConstraintDiagnosticId, supportsGlobalConstraintKind, updateSolvedDocumentConstraint } from "./globalConstraintCommands.js";
 import { renderSvg } from "@nodra/renderer-svg";
@@ -12,7 +12,7 @@ import { aspectSize, formatMm, geometryValue, rotationDegreesValue, rotationPatc
 import { sessionForSketchEditor, shouldPersistEditorSnapshot, useDocumentStore, usePersistenceStore, useSavePolicyStore, useSelectionStore, useUiStore, useViewportStore, type Tool } from "./stores.js";
     import { createSketchSession, isSketchScopedDocumentChange, isSketchSessionHistoryLocked, reduceSketchSession, type SketchSessionState } from "@nodra/editor-core";
 import { pathJoinGuidance, pathJoinOptions } from "./pathJoins.js";
-    import { addPiece, dashboardProjects, newProjectMetadata, pieceDisplayLabel, projectDisplayName, type DashboardProjectSource } from "./projectDashboard.js";
+    import { addPiece, configureInitialProject, dashboardProjects, pieceDisplayLabel, projectDisplayName, type DashboardProjectSource } from "./projectDashboard.js";
     import type { ProjectMetadata } from "@nodra/persistence";
 import { textSizeFor } from "./textMetrics.js";
 import { extractTextGlyphOutlines, fontFamilyFromFileName, FontOutlineError } from "./fontOutline.js";
@@ -40,6 +40,9 @@ const loadProjectMirror = (projectId: string): ProjectSnapshot | undefined => {
 };
 const saveProjectMirror = (project: ProjectSnapshot): void => {
   try { localStorage.setItem(projectMirrorKey(project.id), JSON.stringify(project)); } catch { /* best-effort reload mirror */ }
+};
+const removeProjectMirror = (projectId: string): void => {
+  try { localStorage.removeItem(projectMirrorKey(projectId)); } catch { /* best-effort mirror cleanup */ }
 };
 const defaultStyle = { stroke: "#000000", strokeWidth: 1 };
 const pointAlignedToNodeGuides = (point: PointMm, guides: readonly CreationGuide[]): PointMm => guides.reduce((current, guide) => guide.target.y === guide.source.y ? { x: guide.target.x, y: current.y } : { x: current.x, y: guide.target.y }, point);
@@ -151,6 +154,7 @@ export function App() {
       const [view, setView] = useState<"dashboard" | "editor">("editor");
   const { editor, project, setEditor, commitNewSketch, setProject, setProjectPreferences } = useDocumentStore();
   const document = editor.document;
+  const [activeProjectMetadata, setActiveProjectMetadata] = useState<ProjectMetadata>(() => ({ id: project.id, name: "Proyecto sin título", updatedAt: Date.now() }));
   const selection = editor.selection;
       const [sketchSession, setSketchSession] = useState<SketchSessionState>(() => createSketchSession(editor.document, { undo: editor.undo, redo: editor.redo }, editor.selection));
   const { zoom, panMm, setZoom, setPanMm } = useViewportStore();
@@ -200,6 +204,8 @@ export function App() {
       const [pieceName, setPieceName] = useState("");
       const [pieceMaterial, setPieceMaterial] = useState("");
       const [pieceThickness, setPieceThickness] = useState("");
+      const [newProjectDraft, setNewProjectDraft] = useState<{ projectName: string; pieceName: string; material: string; thickness: string }>();
+      const [deleteProjectId, setDeleteProjectId] = useState<string>();
       const pendingNavigationRef = useRef<(() => void) | undefined>(undefined);
   const [textDraft, setTextDraft] = useState<{ readonly position: PointMm; readonly value: string; readonly elementId?: ElementId; readonly fontSize?: number; readonly element?: TextElement }>();
   type DimensionDraft = { readonly phase: "first"; readonly first: DimensionTarget } | { readonly phase: "placement"; readonly first: DimensionTarget; readonly second: DimensionTarget };
@@ -235,7 +241,6 @@ export function App() {
         setDashboardSources(sources.filter((source): source is DashboardProjectSource => source !== undefined));
       };
       useEffect(() => { void refreshDashboard().catch(() => undefined); }, [repository]);
-  const autosave = useMemo(() => new DebouncedAutosave(repository), [repository]);
   const canvas = useRef<HTMLDivElement>(null);
   const pageElement = useRef<HTMLDivElement>(null);
   const editorRef = useRef(editor);
@@ -247,6 +252,7 @@ export function App() {
   const centeredViewport = useRef<string | undefined>(undefined);
   const recoveredNotice = useRef(false);
   const lastObservedRevision = useRef<{ readonly projectId: string; readonly revision: number } | undefined>(undefined);
+  const lastOfficialSave = useRef<{ readonly projectId: string; readonly snapshot: string } | undefined>(undefined);
   const restoredFontIds = useRef(new Set<string>());
   const directionTooltipTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   editorRef.current = editor;
@@ -287,7 +293,9 @@ export function App() {
     }
     void repository.getProject(document.id).then((result) => {
       if (!result.ok) return;
+      setActiveProjectMetadata(result.revision.metadata);
       const recovered = "pages" in result.revision.document ? result.revision.document : createProject(result.revision.document);
+      lastOfficialSave.current = { projectId: result.revision.metadata.id, snapshot: JSON.stringify(recovered) };
       if (mirrored && mirrored.revision > recovered.revision) return;
       setProject(recovered);
       recoveredNotice.current = true;
@@ -305,6 +313,7 @@ export function App() {
     void bridge.initialProject().then((result) => {
       if (!result) return;
       setProject(result.project);
+      setActiveProjectMetadata({ id: result.project.id, name: "Proyecto sin título", updatedAt: Date.now() });
       setNativeProjectPath(result.path); setMode("design"); setView("editor");
       useSelectionStore.getState().setSelected(undefined);
       persist.set("recovered", "Proyecto abierto desde archivo");
@@ -522,11 +531,10 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
     const preserveRecoveryNotice = recoveredNotice.current;
     recoveredNotice.current = false;
     if (!persistenceReady) return;
-    if (!preserveRecoveryNotice || !online) persist.set(online ? "saving" : "offline", online ? "Guardando recuperación localmente" : "Sin conexión — la edición permanece local");
     if (sketchSessionRef.current.status === "active" || sketchSessionRef.current.status === "confirming-cancel") return;
     saveProjectMirror(project);
-    autosave.schedule({ id: project.id, name: "Diseño sin título", updatedAt: Date.now() }, project);
-    void autosave.flush().then((result) => { if (result?.ok && online && !preserveRecoveryNotice) persist.set("saved", "Recuperación local actualizada"); });
+    const officiallySaved = lastOfficialSave.current?.projectId === project.id && lastOfficialSave.current.snapshot === JSON.stringify(project);
+    if ((!preserveRecoveryNotice && !officiallySaved) || !online) persist.set(online ? "pending" : "offline", online ? "Cambios pendientes de Guardar proyecto; recuperación local actualizada" : "Sin conexión — la edición permanece local");
   }, [persistenceReady, project, online]);
 
   useEffect(() => {
@@ -662,6 +670,8 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
         const result = await repository.getProject(metadata.id);
         if (!result.ok) { persist.set("failed", "No se pudo abrir el proyecto local"); return; }
         const loaded = "pages" in result.revision.document ? result.revision.document : createProject(result.revision.document);
+        setActiveProjectMetadata(result.revision.metadata);
+        lastOfficialSave.current = { projectId: result.revision.metadata.id, snapshot: JSON.stringify(loaded) };
         setProject(loaded); setActivePieceId(loaded.pieces[0]!.id); useSelectionStore.getState().setSelected(undefined); setMode("design"); setView("editor");
         persist.set("recovered", `Proyecto abierto: ${projectDisplayName(metadata)}`);
       };
@@ -677,13 +687,37 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
         } catch (error) { persist.set("failed", error instanceof Error ? error.message : "No se pudo crear la pieza"); }
       };
       const createPersistedProject = async () => {
-        const projectId = `nodra-project-${crypto.randomUUID()}`;
-        const blank = createDocument(projectId, [{ id: layerId("layer-1"), name: "Capa de diseño", visible: true, order: 0 }]);
-        const nextProject = createProject(blank); const metadata = newProjectMetadata(projectId);
-        const result = await repository.saveProject(metadata, nextProject);
-        if (!result.ok) { persist.set("failed", result.error ?? "No se pudo crear el proyecto"); return; }
-        setDashboardSources((current) => [{ metadata, project: nextProject }, ...current]); setProject(nextProject); setActivePieceId(nextProject.pieces[0]!.id); setMode("design"); setView("editor");
-        persist.set("saved", "Proyecto creado con Pieza 1 en diseño");
+        if (!newProjectDraft) return;
+        const thicknessMm = newProjectDraft.thickness.trim() ? Number(newProjectDraft.thickness) : undefined;
+        try {
+          const projectId = `nodra-project-${crypto.randomUUID()}`;
+          const blank = createProject(createDocument(projectId, [{ id: layerId("layer-1"), name: "Capa de diseño", visible: true, order: 0 }]));
+          const source = configureInitialProject(blank, { projectName: newProjectDraft.projectName, pieceName: newProjectDraft.pieceName, material: newProjectDraft.material, ...(thicknessMm === undefined ? {} : { thicknessMm }) });
+          persist.set("saving", "Guardando proyecto");
+          const result = await repository.saveProject(source.metadata, source.project);
+          if (!result.ok) { persist.set("failed", result.error ?? "No se pudo crear el proyecto"); return; }
+          lastOfficialSave.current = { projectId: source.metadata.id, snapshot: JSON.stringify(source.project) };
+          setDashboardSources((current) => [source, ...current]); setActiveProjectMetadata(source.metadata); setProject(source.project); setActivePieceId(source.project.pieces[0]!.id); setNewProjectDraft(undefined); setMode("design"); setView("editor");
+          saveProjectMirror(source.project);
+          persist.set("saved", "Proyecto guardado");
+        } catch (error) { persist.set("failed", error instanceof Error ? error.message : "No se pudo crear el proyecto"); }
+      };
+      const deletePersistedProject = async () => {
+        const projectId = deleteProjectId;
+        if (!projectId) return;
+        try {
+          await repository.deleteProject(projectId);
+          removeProjectMirror(projectId);
+          setDashboardSources((current) => current.filter((source) => source.metadata.id !== projectId));
+          if (activeProjectMetadata.id === projectId) {
+            const scratchId = `nodra-local-${crypto.randomUUID()}`;
+            const scratch = createProject(createDocument(scratchId, [{ id: layerId("layer-1"), name: "Capa de diseño", visible: true, order: 0 }]));
+            recoveredNotice.current = true;
+            setProject(scratch); setActivePieceId(scratch.pieces[0]!.id); setActiveProjectMetadata({ id: scratch.id, name: "Proyecto sin título", updatedAt: Date.now() });
+            persist.set("saved", "Proyecto eliminado; abrí o creá otro proyecto para continuar");
+          } else persist.set("saved", "Proyecto eliminado");
+          setDeleteProjectId(undefined);
+        } catch (error) { persist.set("failed", error instanceof Error ? error.message : "No se pudo eliminar el proyecto"); }
       };
       const openDesktopProject = async () => {
     const bridge = desktopFileBridge();
@@ -692,6 +726,7 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
       const result = await bridge.openProject();
       if (!result) return;
       setProject(result.project);
+      setActiveProjectMetadata({ id: result.project.id, name: "Proyecto sin título", updatedAt: Date.now() });
       setNativeProjectPath(result.path); setMode("design"); setView("editor");
       useSelectionStore.getState().setSelected(undefined);
       persist.set("recovered", "Proyecto abierto");
@@ -699,7 +734,21 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
       persist.set("failed", error instanceof Error ? error.message : "No se pudo abrir el proyecto");
     }
   };
-  const saveDesktopProject = async (saveAs = false) => {
+  const saveBrowserProject = async () => {
+     if (activeProjectMetadata.id !== project.id) { persist.set("failed", "La identidad del proyecto activo no coincide"); return; }
+     const session = sketchSessionRef.current;
+     const committedProject = session.status === "idle" ? projectFromDocument(project, editorRef.current.document) : project;
+     const metadata = { ...activeProjectMetadata, updatedAt: Date.now() };
+     persist.set("saving", "Guardando proyecto");
+     const result = await repository.saveProject(metadata, committedProject);
+     if (!result.ok) { persist.set("failed", result.error ?? "No se pudo guardar el proyecto"); return; }
+     lastOfficialSave.current = { projectId: metadata.id, snapshot: JSON.stringify(committedProject) };
+     setActiveProjectMetadata(metadata);
+     setDashboardSources((current) => current.some((source) => source.metadata.id === metadata.id) ? current.map((source) => source.metadata.id === metadata.id ? { metadata, project: committedProject } : source) : [{ metadata, project: committedProject }, ...current]);
+     saveProjectMirror(committedProject);
+     persist.set("saved", "Proyecto guardado");
+   };
+   const saveDesktopProject = async (saveAs = false) => {
     const bridge = desktopFileBridge();
     if (!bridge) return;
     try {
@@ -715,16 +764,9 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
   };
   const respondToAutosavePrompt = async (save: boolean) => {
     setAutosavePrompt(false);
-    if (!save) { persist.set("saving", "Edición pendiente de guardado"); setAutosavePromptCycle((cycle) => cycle + 1); return; }
+    if (!save) { persist.set("pending", "Cambios pendientes de Guardar proyecto"); setAutosavePromptCycle((cycle) => cycle + 1); return; }
     if (desktopFileBridge()) await saveDesktopProject();
-    else {
-      const currentProject = projectFromDocument(project, editorRef.current.document);
-      saveProjectMirror(currentProject);
-      autosave.schedule({ id: currentProject.id, name: "Diseño sin título", updatedAt: Date.now() }, currentProject);
-      const result = await autosave.flush();
-      if (result?.ok) { checkpointSketchSession(); persist.set("saved", "Recuperación local actualizada; no se realizó un guardado oficial"); }
-      else if (result) persist.set("failed", result.error ?? "No se pudo actualizar la recuperación local");
-    }
+    else await saveBrowserProject();
   };
   /** The only client-coordinate ingress for document interactions. */
   const documentPointAtClient = (clientX: number, clientY: number): PointMm => {
@@ -2090,15 +2132,17 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
   </> : null;
 
   return <main className="app-shell">
+    {newProjectDraft && <div className="nodra-modal-backdrop" role="presentation"><form className="nodra-modal project-create-form" role="dialog" aria-modal="true" aria-labelledby="new-project-title" onSubmit={(event) => { event.preventDefault(); void createPersistedProject(); }}><h2 id="new-project-title">Nuevo proyecto</h2><label>Nombre del proyecto<input aria-label="Nombre del proyecto" autoFocus required value={newProjectDraft.projectName} onChange={(event) => setNewProjectDraft((current) => current ? { ...current, projectName: event.target.value } : current)} /></label><label>Nombre de la pieza inicial<input aria-label="Nombre de la pieza inicial" required value={newProjectDraft.pieceName} onChange={(event) => setNewProjectDraft((current) => current ? { ...current, pieceName: event.target.value } : current)} /></label><label>Material (opcional)<input aria-label="Material de la pieza inicial" value={newProjectDraft.material} onChange={(event) => setNewProjectDraft((current) => current ? { ...current, material: event.target.value } : current)} /></label><label>Espesor mm (opcional)<input aria-label="Espesor de la pieza inicial" type="number" min="0.01" step="0.01" value={newProjectDraft.thickness} onChange={(event) => setNewProjectDraft((current) => current ? { ...current, thickness: event.target.value } : current)} /></label><label>Proceso<select aria-label="Proceso de la pieza inicial" value="cut" disabled><option value="cut">Corte</option></select></label><button type="button" onClick={() => setNewProjectDraft((current) => current ? { ...current, material: "", thickness: "" } : current)}>Definir material después</button><div className="nodra-modal-actions"><button type="button" onClick={() => setNewProjectDraft(undefined)}>Cancelar</button><button type="submit" className="nodra-modal-primary">Crear proyecto</button></div></form></div>}
+    {deleteProjectId && <div className="nodra-modal-backdrop" role="presentation"><section className="nodra-modal" role="dialog" aria-modal="true" aria-labelledby="delete-project-title"><h2 id="delete-project-title">Eliminar proyecto</h2><p>Esta acción elimina permanentemente el proyecto{activeProjectMetadata.id === deleteProjectId ? " activo" : ""} y su recuperación local. No se puede deshacer.</p><div className="nodra-modal-actions"><button type="button" onClick={() => setDeleteProjectId(undefined)}>Cancelar</button><button type="button" className="nodra-modal-primary" onClick={() => void deletePersistedProject()}>Eliminar proyecto</button></div></section></div>}
     {autosavePrompt && <div className="nodra-modal-backdrop" role="presentation"><section className="nodra-modal" role="dialog" aria-modal="true" aria-labelledby="autosave-title"><h2 id="autosave-title">¿Guardar cambios?</h2><p>Hace aproximadamente 20 minutos que editás este proyecto. Si no guardás, podés perder los cambios del croquis activo.</p><div className="nodra-modal-actions"><button type="button" onClick={() => void respondToAutosavePrompt(false)}>Seguir editando</button><button type="button" className="nodra-modal-primary" onClick={() => void respondToAutosavePrompt(true)}>Guardar ahora</button></div></section></div>}
     {sketchSession.status === "confirming-cancel" && <div className="nodra-modal-backdrop" role="presentation"><section className="nodra-modal" role="dialog" aria-modal="true" aria-labelledby="sketch-cancel-title"><h2 id="sketch-cancel-title">Cancelar croquis</h2><p>Se perderán los cambios realizados en este croquis. ¿Querés continuar?</p><div className="nodra-modal-actions"><button type="button" autoFocus onClick={() => { pendingNavigationRef.current = undefined; setSketchSession((current) => reduceSketchSession(current, { type: "decline-cancel" })); }}>Seguir editando</button><button type="button" className="nodra-modal-primary" onClick={confirmCancelSketchSession}>Cancelar croquis</button></div></section></div>}
         {pendingShapeOperation && <div className="nodra-modal-backdrop" role="presentation"><section className="nodra-modal" role="dialog" aria-modal="true" aria-labelledby="shape-operation-confirmation-title"><h2 id="shape-operation-confirmation-title">Confirmar operación</h2><p>Esta operación eliminará {pendingShapeOperation.invalidDimensionCount} cotas porque sus referencias dejarán de existir. ¿Continuar?</p><div className="nodra-modal-actions"><button type="button" onClick={() => setPendingShapeOperation(undefined)}>Cancelar</button><button type="button" className="nodra-modal-primary" onClick={confirmPendingShapeOperation}>Continuar</button></div></section></div>}
     <header className="topbar">
       <div className="brand" aria-label="KOND DESIGN"><span className="brand-kond">KOND</span> <span className="brand-design">DESIGN</span></div>
       <nav aria-label="Navegación principal"><button className={view === "dashboard" ? "active" : ""} onClick={() => guardedNavigation(() => { setView("dashboard"); void refreshDashboard(); })}>Proyectos</button><button className={mode === "design" && view === "editor" ? "active" : ""} onClick={() => guardedNavigation(() => { setView("editor"); setMode("design"); })}>Diseño</button><button className={mode === "prepare" ? "active" : ""} onClick={() => guardedNavigation(() => { setView("editor"); setMode("prepare"); })}>Preparar <small>Vista previa</small></button></nav>
-      <div className="top-actions"><label>Guardado <select aria-label="Modo de guardado" value={savePolicy.mode} onChange={(event) => setSaveMode(event.target.value as "manual" | "prompted-autosave")}><option value="prompted-autosave">Preguntar cada 20 min</option><option value="manual">Manual</option></select></label>{sketchSession.status === "active" && <><span role="status">Editando croquis</span><button type="button" onClick={acceptSketchSession}>Aceptar</button><button type="button" onClick={requestCancelSketchSession}>Cancelar</button></>}{sketchSession.status === "confirming-cancel" && <span role="status">Confirmá la cancelación</span>}{desktopFileBridge() && <><button aria-label="Abrir proyecto" title="Abrir proyecto" onClick={() => guardedNavigation(() => void openDesktopProject())}>Abrir</button><button aria-label="Guardar proyecto" title="Guardar proyecto" onClick={() => void saveDesktopProject()}>Guardar</button><button aria-label="Guardar como" title="Guardar como" onClick={() => void saveDesktopProject(true)}>Guardar como</button></>}<button aria-label="Deshacer" onClick={() => { if (!isSketchSessionHistoryLocked(sketchSessionRef.current)) setEditorState(undo(editorRef.current)); }}>↶</button><button aria-label="Rehacer" onClick={() => { if (!isSketchSessionHistoryLocked(sketchSessionRef.current)) setEditorState(redo(editorRef.current)); }}>↷</button><span className="project-name">Diseño sin título</span></div>
+      <div className="top-actions"><label>Guardado <select aria-label="Modo de guardado" value={savePolicy.mode} onChange={(event) => setSaveMode(event.target.value as "manual" | "prompted-autosave")}><option value="prompted-autosave">Preguntar cada 20 min</option><option value="manual">Manual</option></select></label>{sketchSession.status === "active" && <><span role="status">Editando croquis</span><button type="button" onClick={acceptSketchSession}>Aceptar</button><button type="button" onClick={requestCancelSketchSession}>Cancelar</button></>}{sketchSession.status === "confirming-cancel" && <span role="status">Confirmá la cancelación</span>}{desktopFileBridge() ? <><button aria-label="Abrir proyecto" title="Abrir proyecto" onClick={() => guardedNavigation(() => void openDesktopProject())}>Abrir</button><button aria-label="Guardar proyecto" title="Guardar proyecto" onClick={() => void saveDesktopProject()}>Guardar</button><button aria-label="Guardar como" title="Guardar como" onClick={() => void saveDesktopProject(true)}>Guardar como</button></> : <button type="button" aria-label="Guardar proyecto" onClick={() => void saveBrowserProject()}>Guardar proyecto</button>}<button aria-label="Deshacer" onClick={() => { if (!isSketchSessionHistoryLocked(sketchSessionRef.current)) setEditorState(undo(editorRef.current)); }}>↶</button><button aria-label="Rehacer" onClick={() => { if (!isSketchSessionHistoryLocked(sketchSessionRef.current)) setEditorState(redo(editorRef.current)); }}>↷</button><span className="project-name">{projectDisplayName(activeProjectMetadata)}</span></div>
     </header>
-    {view === "dashboard" ? <section className="dashboard-view"><div className="dashboard-hero"><div><p className="dashboard-eyebrow">NODRA / PROYECTOS</p><h1>¿Qué querés diseñar hoy?</h1><p className="muted">Tus proyectos guardados localmente, listos para continuar.</p></div><button type="button" className="dashboard-primary" onClick={() => guardedNavigation(() => void createPersistedProject())}>+ Nuevo proyecto</button></div><div className="dashboard-future" aria-label="Funciones futuras"><span>3D <small>Próximamente</small></span><span>Validar <small>Próximamente</small></span></div><div className="dashboard-grid">{dashboardProjects(dashboardSources).map((item) => <article className="project-card" key={item.id}><div className="project-card-preview" aria-hidden="true">◇</div><div className="project-card-body"><h2>{projectDisplayName(item)}</h2><div className="project-piece-list">{item.pieces.map((piece) => <p key={piece.id}>{pieceDisplayLabel(piece)}</p>)}</div><button type="button" onClick={() => { setPieceFormProjectId(item.id); setPieceName(`Pieza ${item.pieces.length + 1}`); setPieceMaterial(""); setPieceThickness(""); }}>Nueva pieza</button>{pieceFormProjectId === item.id && <form className="piece-form" onSubmit={(event) => { event.preventDefault(); const source = dashboardSources.find((candidate) => candidate.metadata.id === item.id); if (source) void createPersistedPiece(source); }}><label>Nombre<input aria-label="Nombre de la pieza" value={pieceName} onChange={(event) => setPieceName(event.target.value)} required /></label><label>Material (opcional)<input aria-label="Material de la pieza" value={pieceMaterial} onChange={(event) => setPieceMaterial(event.target.value)} /></label><label>Espesor mm (opcional)<input aria-label="Espesor de la pieza" type="number" min="0.01" step="0.01" value={pieceThickness} onChange={(event) => setPieceThickness(event.target.value)} /></label><label>Proceso<select aria-label="Proceso de la pieza" value="cut" disabled><option value="cut">Corte</option></select></label><button type="button" onClick={() => { setPieceMaterial(""); setPieceThickness(""); }}>Definir material después</button><button type="submit">Crear pieza</button></form>}<small>{new Date(item.updatedAt).toLocaleDateString("es-AR")}</small><button type="button" onClick={() => guardedNavigation(() => void openPersistedProject(item))}>Abrir proyecto</button></div></article>)}{dashboardSources.length === 0 && <div className="dashboard-empty"><strong>Todavía no hay proyectos</strong><p className="muted">Creá uno para empezar con Pieza 1.</p></div>}</div></section> : mode === "prepare" ? <section className="prepare"><div><div className="prepare-icon">◇</div><h1>Preparar aún no está disponible</h1><p>Nodra ofrece actualmente solo un espacio de trabajo de Diseño sin conexión. No hay hardware conectado, controlado ni listo.</p><button onClick={() => setMode("design")}>Volver a Diseño</button></div></section> : <div className="workspace">
+    {view === "dashboard" ? <section className="dashboard-view"><div className="dashboard-hero"><div><p className="dashboard-eyebrow">NODRA / PROYECTOS</p><h1>¿Qué querés diseñar hoy?</h1><p className="muted">Tus proyectos guardados localmente, listos para continuar.</p></div><button type="button" className="dashboard-primary" onClick={() => guardedNavigation(() => setNewProjectDraft({ projectName: "", pieceName: "Pieza 1", material: "", thickness: "" }))}>+ Nuevo proyecto</button></div><div className="dashboard-future" aria-label="Funciones futuras"><span>3D <small>Próximamente</small></span><span>Validar <small>Próximamente</small></span></div><div className="dashboard-grid">{dashboardProjects(dashboardSources).map((item) => <article className="project-card" key={item.id}><div className="project-card-preview" aria-hidden="true">◇</div><div className="project-card-body"><h2>{projectDisplayName(item)}</h2><div className="project-piece-list">{item.pieces.map((piece) => <p key={piece.id}>{pieceDisplayLabel(piece)}</p>)}</div><button type="button" onClick={() => { setPieceFormProjectId(item.id); setPieceName(`Pieza ${item.pieces.length + 1}`); setPieceMaterial(""); setPieceThickness(""); }}>Nueva pieza</button>{pieceFormProjectId === item.id && <form className="piece-form" onSubmit={(event) => { event.preventDefault(); const source = dashboardSources.find((candidate) => candidate.metadata.id === item.id); if (source) void createPersistedPiece(source); }}><label>Nombre<input aria-label="Nombre de la pieza" value={pieceName} onChange={(event) => setPieceName(event.target.value)} required /></label><label>Material (opcional)<input aria-label="Material de la pieza" value={pieceMaterial} onChange={(event) => setPieceMaterial(event.target.value)} /></label><label>Espesor mm (opcional)<input aria-label="Espesor de la pieza" type="number" min="0.01" step="0.01" value={pieceThickness} onChange={(event) => setPieceThickness(event.target.value)} /></label><label>Proceso<select aria-label="Proceso de la pieza" value="cut" disabled><option value="cut">Corte</option></select></label><button type="button" onClick={() => { setPieceMaterial(""); setPieceThickness(""); }}>Definir material después</button><button type="submit">Crear pieza</button></form>}<small>{new Date(item.updatedAt).toLocaleDateString("es-AR")}</small><button type="button" onClick={() => guardedNavigation(() => void openPersistedProject(item))}>Abrir proyecto</button><button type="button" onClick={() => setDeleteProjectId(item.id)}>Eliminar proyecto</button></div></article>)}{dashboardSources.length === 0 && <div className="dashboard-empty"><strong>Todavía no hay proyectos</strong><p className="muted">Creá uno para empezar con Pieza 1.</p></div>}</div></section> : mode === "prepare" ? <section className="prepare"><div><div className="prepare-icon">◇</div><h1>Preparar aún no está disponible</h1><p>Nodra ofrece actualmente solo un espacio de trabajo de Diseño sin conexión. No hay hardware conectado, controlado ni listo.</p><button onClick={() => setMode("design")}>Volver a Diseño</button></div></section> : <div className="workspace">
       <section className="properties-bar" aria-label="Barra de propiedades">
         {tool === "dimension" && <div className="dimension-mode-controls" role="group" aria-label="Modo de cota"><button type="button" className={dimensionMode === "auto" ? "active" : ""} onClick={() => setDimensionMode("auto")}>Lineal</button><button type="button" className={dimensionMode === "radius" ? "active" : ""} onClick={() => setDimensionMode("radius")}>Radio</button><button type="button" className={dimensionMode === "diameter" ? "active" : ""} onClick={() => setDimensionMode("diameter")}>Diámetro</button></div>}
          <div className="page-selector"><button type="button" className="new-sketch-button" onClick={startNewSketch}>+ Nuevo croquis</button><label>Fuente de texto<select aria-label="Tipografía del texto" value={textFontFamily} onChange={(event) => { const family = event.target.value; setTextFontFamily(family); const textElements = selectedElements.filter((element): element is TextElement => element.type === "text"); let next = editorRef.current; for (const element of textElements) next = dispatch(next, updateElement(element.id, { fontFamily: family, size: textSizeFor(element.text, element.fontSize, family, element.fontWeight, element.fontStyle, element.lineHeight) })); if (textElements.length) setEditorState(next); }}>{availableFonts.map((font) => <option key={font} style={{ fontFamily: font }}>{font}</option>)}</select><label className="font-upload-button">+ Fuente<input type="file" accept=".ttf,.otf,.woff,.woff2,font/ttf,font/otf,font/woff,font/woff2" onChange={(event) => { const file = event.target.files?.[0]; if (file) void loadFontFile(file); event.currentTarget.value = ""; }} /></label></label><label>Página<select aria-label="Página activa" value={project.activePageId} onChange={(event) => switchPage(event.target.value)}>{project.pages.map((page, index) => <option key={page.id} value={page.id}>{index + 1} · {page.page.width} × {page.page.height} mm</option>)}</select></label><button type="button" onClick={createPageAndSelect}>+ Nueva página</button></div>
@@ -2108,7 +2152,7 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
       </section>
          <aside className="workspace-tools"><div className="tool-column" role="toolbar" aria-label="Herramientas de diseño">{(["select", "forma", "pen", "spline", "text", "rectangle", "circle", "line", "arc", "cut", "dimension", "pan"] as const).map((item) => <ToolButton key={item} label={toolCursorLabels[item]} icon={item} active={tool === item} onClick={() => { setTransformMode("resize"); setPenDraftPoint(undefined); creationDraftRef.current = undefined; setCreationDraft(undefined); if (item === "forma" && selectedElements.some((element) => element.type === "text")) setEditorState(clearSelection(editorRef.current)); if (item !== "forma") setEditModeElementIds([]); setTool(item); }} />)}</div></aside>
       <section className="canvas-area">
-        <header className="canvas-header"><span>DISEÑO / SIN TÍTULO</span><span>{document.elements.length} objetos · {document.page.width} × {document.page.height} mm</span><div className="zoom-controls"><button aria-label="Alejar" onClick={() => setZoom(zoom - 0.5)}>−</button><span className="zoom-label">{Math.round(zoom * 100 / 3)}%</span><button aria-label="Acercar" onClick={() => setZoom(zoom + 0.5)}>+</button></div></header>
+        <header className="canvas-header"><span>DISEÑO / {projectDisplayName(activeProjectMetadata).toUpperCase()}</span><span>{document.elements.length} objetos · {document.page.width} × {document.page.height} mm</span><div className="zoom-controls"><button aria-label="Alejar" onClick={() => setZoom(zoom - 0.5)}>−</button><span className="zoom-label">{Math.round(zoom * 100 / 3)}%</span><button aria-label="Acercar" onClick={() => setZoom(zoom + 0.5)}>+</button></div></header>
              <div ref={canvas} className={`${grid ? "canvas" : "canvas no-grid"}${isDrawingTool(tool) ? " drawing-tool" : ""}`} onPointerDown={onCanvasPointerDown} onPointerMove={onCanvasPointerMove} onPointerUp={(event) => finishPointer(event, false)} onPointerCancel={(event) => finishPointer(event, true)} onLostPointerCapture={cancelPointerInteraction} onPointerLeave={() => { setCursorPoint(undefined); setNodeHover(undefined); setCutSegmentHover(undefined); setDimensionNodeHover(undefined); setFormaSegmentHover(undefined); }} onDoubleClick={onCanvasDoubleClick} onWheel={onWheel}>
             {rulerHorizontal}{rulerVertical}<span className="ruler-corner" aria-hidden="true" />
             <div className="page" style={pageStyle}>{/* SAFETY: renderSvg emits allowlisted SVG from validated document data. */}<div className={`page-svg${textDraft ? " editing-text" : ""}`} dangerouslySetInnerHTML={{ __html: rendered.success ? rendered.svg : "" }} />{(alignmentGuideOverlay.length > 0 || splineOverlay.length > 0 || selectedEditOverlay.length > 0 || pathGuideOverlay.length > 0) && <svg data-spline-overlay-layer="true" viewBox={`0 0 ${document.page.width} ${document.page.height}`} style={{ position: "absolute", inset: 0, width: "100%", height: "100%", pointerEvents: "none", overflow: "visible", zIndex: 5 }}><defs><marker id="forma-handle-arrow" markerWidth="5" markerHeight="5" refX="4" refY="2.5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0,0 L5,2.5 L0,5 Z" fill="#1683ff" /></marker></defs>{alignmentGuideOverlay}{selectedEditOverlay}{pathGuideOverlay}{splineOverlay}</svg>}</div>
@@ -2152,7 +2196,7 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
          <section className="inspector-lower-card design-validation-card"><div className="panel-title">VALIDACIÓN DEL DISEÑO</div><div className={designValidation.ready ? "validation-status ok" : "validation-status warning"}><span aria-hidden="true">{designValidation.ready ? "●" : "▲"}</span><span>{designValidation.ready ? "Todo listo para procesar" : "Revisar antes de procesar"}</span></div><div className={`validation-check ${designValidation.openCurveCount ? "warning" : "ok"}`}><span aria-hidden="true">{designValidation.openCurveCount ? "▲" : "●"}</span><span>{designValidation.openCurveCount ? `${designValidation.openCurveCount} ${designValidation.openCurveCount === 1 ? "curva abierta" : "curvas abiertas"}` : "No hay curvas abiertas"}</span></div><div className={`validation-check ${designValidation.duplicateLineCount ? "warning" : "ok"}`}><span aria-hidden="true">{designValidation.duplicateLineCount ? "▲" : "●"}</span><span>{designValidation.duplicateLineCount ? `${designValidation.duplicateLineCount} ${designValidation.duplicateLineCount === 1 ? "línea duplicada" : "líneas duplicadas"}` : "No hay líneas duplicadas"}</span></div><div className={`validation-check ${designValidation.outsideElementCount ? "warning" : "ok"}`}><span aria-hidden="true">{designValidation.outsideElementCount ? "▲" : "●"}</span><span>{designValidation.outsideElementCount ? `${designValidation.outsideElementCount} objetos fuera del área` : "Todos los objetos dentro del área"}</span></div></section>
        </aside>
     </div>}
-     <footer className="statusbar"><div className="status-message"><span className={`status-dot ${persist.state === "saving" ? "saving" : ""}`} />{persist.message}</div>{paletteControls()}</footer>
+     <footer className="statusbar"><div className="status-message"><span className={`status-dot ${persist.state}`} />{persist.message}</div>{paletteControls()}</footer>
   </main>;
 }
 

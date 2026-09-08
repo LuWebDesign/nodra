@@ -1,10 +1,15 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { elementId, layerId } from "@nodra/domain";
 import { beginGesture, commitGesture, createElement, deleteElement, dispatch, previewGestureFromBase } from "@nodra/editor-core";
-import { sessionForSketchEditor, shouldPersistEditorSnapshot, useDocumentStore } from "./stores.js";
+import { sessionForSketchEditor, shouldPersistEditorSnapshot, useDocumentStore, usePersistenceStore } from "./stores.js";
 
 describe("document store persistence boundary", () => {
-  beforeEach(() => useDocumentStore.setState(useDocumentStore.getInitialState(), true));
+  beforeEach(() => { useDocumentStore.setState(useDocumentStore.getInitialState(), true); usePersistenceStore.setState(usePersistenceStore.getInitialState(), true); });
+
+  it("surfaces an explicit pending official-save state", () => {
+    usePersistenceStore.getState().set("pending", "Cambios pendientes de guardar");
+    expect(usePersistenceStore.getState()).toMatchObject({ state: "pending", message: "Cambios pendientes de guardar" });
+  });
 
   it("gates recovery mirrors while sketch edits are active", () => {
     expect(shouldPersistEditorSnapshot("active", false)).toBe(false);

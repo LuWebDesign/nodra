@@ -16,6 +16,13 @@ export interface NewPieceInput {
   readonly thicknessMm?: number;
 }
 
+export interface NewProjectInput {
+  readonly projectName: string;
+  readonly pieceName: string;
+  readonly material?: string;
+  readonly thicknessMm?: number;
+}
+
 const pieceStateLabels: Readonly<Record<PieceSnapshot["state"], string>> = {
   design: "En diseño",
   underdefined: "Subdefinida",
@@ -57,8 +64,19 @@ export const addPiece = (project: ProjectSnapshot, input: NewPieceInput): Projec
 
 export const projectDisplayName = (project: ProjectMetadata): string => project.name.trim() || "Proyecto sin título";
 
-export const newProjectMetadata = (id: string, now = Date.now()): ProjectMetadata => ({
-  id,
-  name: "Proyecto sin título",
-  updatedAt: now,
-});
+export const newProjectMetadata = (id: string, name: string, now = Date.now()): ProjectMetadata => {
+  const normalizedName = name.trim();
+  if (!normalizedName) throw new Error("Project name is required");
+  return { id, name: normalizedName, updatedAt: now };
+};
+
+export const configureInitialProject = (project: ProjectSnapshot, input: NewProjectInput, now = Date.now()): DashboardProjectSource => {
+  const metadata = newProjectMetadata(project.id, input.projectName, now);
+  const pieceName = input.pieceName.trim();
+  if (!pieceName) throw new Error("Piece name is required");
+  if (input.thicknessMm !== undefined && (!Number.isFinite(input.thicknessMm) || input.thicknessMm <= 0)) throw new Error("Piece thickness must be positive");
+  const material = input.material?.trim();
+  const initial = project.pieces[0]!;
+  const piece: PieceSnapshot = { ...initial, name: pieceName, ...(material ? { material } : {}), ...(input.thicknessMm === undefined ? {} : { thicknessMm: input.thicknessMm }) };
+  return { metadata, project: { ...project, revision: nextRevision(project.revision), pieces: [piece, ...project.pieces.slice(1)] } };
+};
