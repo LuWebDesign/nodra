@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent, type PointerEvent, type ReactNode, type WheelEvent } from "react";
-import { createProject, elementId, layerId, pageId, projectFromDocument, revision, type DocumentSnapshot, hasRotation, type ArcElement, type DimensionElement, type Element, type SketchConstraint, type ElementId, type PointMm, type ProjectSnapshot, type SplineElement, type TextElement, type ExplicitConnection } from "@nodra/domain";
+import { createDocument, createProject, elementId, layerId, pageId, projectFromDocument, revision, type DocumentSnapshot, hasRotation, type ArcElement, type DimensionElement, type Element, type SketchConstraint, type ElementId, type PointMm, type ProjectSnapshot, type SplineElement, type TextElement, type ExplicitConnection } from "@nodra/domain";
 import { deleteDocumentConstraint, addPositionalCoincidence, deletePositionalCoincidence, addSketchConstraint, addToSelection, appendSketchEdge, appendSplineNode, beginGesture, cancelGesture, clearSelection, closePath, cutSegment, closeSplineElement, commitGesture, convertTextToGlyphs, createElement, createPathCubicNode, createPathNode, createSketchLine, deleteContourNodes, deleteElement, deleteElementNodes, deletePathNodes, deleteSketchConstraint, dispatch, duplicateElements, flipElements, insertFormaNode, invalidDimensionIdsForShapeOperation, moveElements, movePathHandle, movePathNode, openPath, updateSplineNode, previewGesture, previewGestureFromBase, redo, resizeElement, resizeElementToDimensions, resizeElements, resizeElementsToDimensions, rotateElement, updateDimensionValue, setDimensionDriving, rotateElementsAroundCenter, select, selectForPointerDown, setPathJoin, shapeOperation, splitPathSegment, undo, updateContourNode, updateElement, updateElementNode, updateElementStyles, updatePage, updateSketchConstraint, updateSplineHandle, type EditorCommand, type FlipAxis, type ShapeOperation } from "@nodra/editor-core";
 import { constraintComponentStatesForDocument, constraintResidualsForDocument, type ConstraintState } from "@nodra/constraints";
 import { arcThroughThreePoints, boundsOfElements, connectableNodeAddress, contourVertexNodes, dimensionKindForPlacement, dimensionOffsetForAlignedPlacement, dimensionOffsetForPlacement, elementCenter, editableGeometryNodes, glyphGeometryNodes, groupCenter, groupHandlePoints, pathGeometryNodes, pointMidpoint, dimensionGeometry, realGeometryNodes, solveSketchConstraints, resizeHandle, rotatedResizeHandles, rotationFromDrag, rotationHandlePoints, visibleBezierHandleGuides, type CurveFragment, type Direction, type GroupHandle, type ResizeHandle } from "@nodra/geometry";
@@ -12,6 +12,8 @@ import { aspectSize, formatMm, geometryValue, rotationDegreesValue, rotationPatc
 import { shouldPersistEditorSnapshot, useDocumentStore, usePersistenceStore, useSavePolicyStore, useSelectionStore, useUiStore, useViewportStore, type Tool } from "./stores.js";
     import { createSketchSession, isSketchScopedDocumentChange, isSketchSessionHistoryLocked, reduceSketchSession, type SketchSessionState } from "@nodra/editor-core";
 import { pathJoinGuidance, pathJoinOptions } from "./pathJoins.js";
+    import { dashboardProjects, newProjectMetadata, projectDisplayName } from "./projectDashboard.js";
+    import type { ProjectMetadata } from "@nodra/persistence";
 import { textSizeFor } from "./textMetrics.js";
 import { extractTextGlyphOutlines, fontFamilyFromFileName, FontOutlineError } from "./fontOutline.js";
 import { circleGeometry, creationGuides, cursorNodeGuides, directionalGuide, lineAngleDegrees, nodeAlignmentGuides, visibleNativeCircularCenters, type CreationGuide } from "./interaction.js";
@@ -146,6 +148,8 @@ const toolCursorLabels: Record<Tool, string> = { radius: "Radio", select: "Selec
 
 export function App() {
   const { mode, tool, setMode, setTool } = useUiStore();
+      const [view, setView] = useState<"dashboard" | "editor">("editor");
+      const [projectMetadata, setProjectMetadata] = useState<readonly ProjectMetadata[]>([]);
   const { editor, project, setEditor, setProject, setProjectPreferences } = useDocumentStore();
   const document = editor.document;
   const selection = editor.selection;
@@ -190,6 +194,8 @@ export function App() {
   const [autosavePrompt, setAutosavePrompt] = useState(false);
       const [autosavePromptCycle, setAutosavePromptCycle] = useState(0);
   const [nativeProjectPath, setNativeProjectPath] = useState<string>();
+      const [creationPending, setCreationPending] = useState(false);
+      const pendingNavigationRef = useRef<(() => void) | undefined>(undefined);
   const [textDraft, setTextDraft] = useState<{ readonly position: PointMm; readonly value: string; readonly elementId?: ElementId; readonly fontSize?: number; readonly element?: TextElement }>();
   type DimensionDraft = { readonly phase: "first"; readonly first: DimensionTarget } | { readonly phase: "placement"; readonly first: DimensionTarget; readonly second: DimensionTarget };
   const [dimensionDraft, setDimensionDraft] = useState<DimensionDraft>();
@@ -213,6 +219,7 @@ export function App() {
   textDraftRef.current = textDraft;
   const textInput = useRef<HTMLTextAreaElement>(null);
   const repository = useMemo(() => new DexieProjectRepository(), []);
+      useEffect(() => { void repository.listProjects().then(setProjectMetadata).catch(() => undefined); }, [repository]);
   const autosave = useMemo(() => new DebouncedAutosave(repository), [repository]);
   const canvas = useRef<HTMLDivElement>(null);
   const pageElement = useRef<HTMLDivElement>(null);
@@ -278,7 +285,7 @@ export function App() {
     void bridge.initialProject().then((result) => {
       if (!result) return;
       setProject(result.project);
-      setNativeProjectPath(result.path);
+      setNativeProjectPath(result.path); setMode("design"); setView("editor");
       useSelectionStore.getState().setSelected(undefined);
       persist.set("recovered", "Proyecto abierto desde archivo");
     }).catch((error: unknown) => {
@@ -585,6 +592,62 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
         if (current.status !== "confirming-cancel") return;
         restoreSketchSessionEntry(current);
         setSketchSession(reduceSketchSession(current, { type: "confirm-cancel" }));
+        confirmPendingNavigation();
+      };
+      const confirmPendingNavigation = () => {
+        const pendingNavigation = pendingNavigationRef.current;
+        pendingNavigationRef.current = undefined;
+        pendingNavigation?.();
+      };
+      const guardedNavigation = (destination: () => void) => {
+        const current = sketchSessionRef.current;
+        if (current.status === "confirming-cancel") return;
+        if (current.status !== "active") { destination(); return; }
+        pendingNavigationRef.current = destination;
+        requestCancelSketchSession();
+        if (current.committed.length === 0) {
+          pendingNavigationRef.current = undefined;
+          destination();
+        }
+      };
+      const resetCreationGesture = () => {
+        creationDraftRef.current = undefined;
+        setCreationDraft(undefined);
+        setCreationPoint(undefined);
+        setPenDraftPoint(undefined);
+        setSplineDraftPoint(undefined);
+        setActiveSplineId(undefined);
+        setDimensionDraft(undefined);
+        setConstraintDraft(undefined);
+        setPositionalDraft(undefined);
+        if (interaction.current) {
+          setEditorState(cancelGesture(editorRef.current));
+          interaction.current = undefined;
+        }
+      };
+      const startNewSketch = () => guardedNavigation(() => {
+        resetCreationGesture();
+        setCreationPending(true);
+        setEditModeElementIds([]);
+        setMode("design");
+        setView("editor");
+        setTool("line");
+      });
+      const openPersistedProject = async (metadata: ProjectMetadata) => {
+        const result = await repository.getProject(metadata.id);
+        if (!result.ok) { persist.set("failed", "No se pudo abrir el proyecto local"); return; }
+        const loaded = "pages" in result.revision.document ? result.revision.document : createProject(result.revision.document);
+        setProject(loaded); useSelectionStore.getState().setSelected(undefined); setMode("design"); setView("editor");
+        persist.set("recovered", `Proyecto abierto: ${projectDisplayName(metadata)}`);
+      };
+      const createPersistedProject = async () => {
+        const projectId = `nodra-project-${crypto.randomUUID()}`;
+        const blank = createDocument(projectId, [{ id: layerId("layer-1"), name: "Capa de diseño", visible: true, order: 0 }]);
+        const nextProject = createProject(blank); const metadata = newProjectMetadata(projectId);
+        const result = await repository.saveProject(metadata, nextProject);
+        if (!result.ok) { persist.set("failed", result.error ?? "No se pudo crear el proyecto"); return; }
+        setProjectMetadata((current) => [metadata, ...current]); setProject(nextProject); setMode("design"); setView("editor");
+        persist.set("saved", "Proyecto creado. Pieza 1 disponible como concepto inicial");
       };
       const openDesktopProject = async () => {
     const bridge = desktopFileBridge();
@@ -593,7 +656,7 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
       const result = await bridge.openProject();
       if (!result) return;
       setProject(result.project);
-      setNativeProjectPath(result.path);
+      setNativeProjectPath(result.path); setMode("design"); setView("editor");
       useSelectionStore.getState().setSelected(undefined);
       persist.set("recovered", "Proyecto abierto");
     } catch (error) {
@@ -970,6 +1033,7 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
          creationDraftRef.current = nextDraft;
          setCreationDraft(nextDraft);
          setEditorState(select(next, [sketch.id]));
+             if (creationPending) { setCreationPending(false); enterSketchSession(sketch.id); }
        } else if (draft.elementId && draft.currentNodeId) {
           const targetNodeId = snappedSketchNode?.elementId === draft.elementId ? snappedSketchNode.nodeId : undefined;
           const next = dispatch(editorRef.current, appendSketchEdge(draft.elementId, draft.currentNodeId, creationPoint, targetNodeId));
@@ -1450,7 +1514,7 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
           if (event.key === "Escape" && constraintDraft) { event.preventDefault(); cancelConstraintDraft(); return; }
       if (event.key === "Escape") {
         const session = sketchSessionRef.current;
-        if (session.status === "confirming-cancel") { event.preventDefault(); setSketchSession((current) => reduceSketchSession(current, { type: "escape" })); return; }
+        if (session.status === "confirming-cancel") { event.preventDefault(); pendingNavigationRef.current = undefined; setSketchSession((current) => reduceSketchSession(current, { type: "escape" })); return; }
         if (session.status === "active" && (interaction.current || session.pending)) { event.preventDefault(); setSketchSession((current) => reduceSketchSession(current, { type: "escape" })); }
         creationDraftRef.current = undefined;
         setCreationDraft(undefined);
@@ -1989,17 +2053,17 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
 
   return <main className="app-shell">
     {autosavePrompt && <div className="nodra-modal-backdrop" role="presentation"><section className="nodra-modal" role="dialog" aria-modal="true" aria-labelledby="autosave-title"><h2 id="autosave-title">¿Guardar cambios?</h2><p>Hace aproximadamente 20 minutos que editás este proyecto. Si no guardás, podés perder los cambios del croquis activo.</p><div className="nodra-modal-actions"><button type="button" onClick={() => void respondToAutosavePrompt(false)}>Seguir editando</button><button type="button" className="nodra-modal-primary" onClick={() => void respondToAutosavePrompt(true)}>Guardar ahora</button></div></section></div>}
-    {sketchSession.status === "confirming-cancel" && <div className="nodra-modal-backdrop" role="presentation"><section className="nodra-modal" role="dialog" aria-modal="true" aria-labelledby="sketch-cancel-title"><h2 id="sketch-cancel-title">Cancelar croquis</h2><p>Se perderán los cambios realizados en este croquis. ¿Querés continuar?</p><div className="nodra-modal-actions"><button type="button" autoFocus onClick={() => setSketchSession((current) => reduceSketchSession(current, { type: "decline-cancel" }))}>Seguir editando</button><button type="button" className="nodra-modal-primary" onClick={confirmCancelSketchSession}>Cancelar croquis</button></div></section></div>}
+    {sketchSession.status === "confirming-cancel" && <div className="nodra-modal-backdrop" role="presentation"><section className="nodra-modal" role="dialog" aria-modal="true" aria-labelledby="sketch-cancel-title"><h2 id="sketch-cancel-title">Cancelar croquis</h2><p>Se perderán los cambios realizados en este croquis. ¿Querés continuar?</p><div className="nodra-modal-actions"><button type="button" autoFocus onClick={() => { pendingNavigationRef.current = undefined; setSketchSession((current) => reduceSketchSession(current, { type: "decline-cancel" })); }}>Seguir editando</button><button type="button" className="nodra-modal-primary" onClick={confirmCancelSketchSession}>Cancelar croquis</button></div></section></div>}
         {pendingShapeOperation && <div className="nodra-modal-backdrop" role="presentation"><section className="nodra-modal" role="dialog" aria-modal="true" aria-labelledby="shape-operation-confirmation-title"><h2 id="shape-operation-confirmation-title">Confirmar operación</h2><p>Esta operación eliminará {pendingShapeOperation.invalidDimensionCount} cotas porque sus referencias dejarán de existir. ¿Continuar?</p><div className="nodra-modal-actions"><button type="button" onClick={() => setPendingShapeOperation(undefined)}>Cancelar</button><button type="button" className="nodra-modal-primary" onClick={confirmPendingShapeOperation}>Continuar</button></div></section></div>}
     <header className="topbar">
       <div className="brand" aria-label="KOND DESIGN"><span className="brand-kond">KOND</span> <span className="brand-design">DESIGN</span></div>
-      <nav aria-label="Modo de espacio de trabajo"><button className={mode === "design" ? "active" : ""} onClick={() => setMode("design")}>Diseño</button><button className={mode === "prepare" ? "active" : ""} onClick={() => setMode("prepare")}>Preparar <small>Vista previa</small></button></nav>
-      <div className="top-actions"><label>Guardado <select aria-label="Modo de guardado" value={savePolicy.mode} onChange={(event) => setSaveMode(event.target.value as "manual" | "prompted-autosave")}><option value="prompted-autosave">Preguntar cada 20 min</option><option value="manual">Manual</option></select></label>{sketchSession.status === "active" && <><span role="status">Editando croquis</span><button type="button" onClick={acceptSketchSession}>Aceptar</button><button type="button" onClick={requestCancelSketchSession}>Cancelar</button></>}{sketchSession.status === "confirming-cancel" && <span role="status">Confirmá la cancelación</span>}{desktopFileBridge() && <><button aria-label="Abrir proyecto" title="Abrir proyecto" onClick={() => void openDesktopProject()}>Abrir</button><button aria-label="Guardar proyecto" title="Guardar proyecto" onClick={() => void saveDesktopProject()}>Guardar</button><button aria-label="Guardar como" title="Guardar como" onClick={() => void saveDesktopProject(true)}>Guardar como</button></>}<button aria-label="Deshacer" onClick={() => { if (!isSketchSessionHistoryLocked(sketchSessionRef.current)) setEditorState(undo(editorRef.current)); }}>↶</button><button aria-label="Rehacer" onClick={() => { if (!isSketchSessionHistoryLocked(sketchSessionRef.current)) setEditorState(redo(editorRef.current)); }}>↷</button><span className="project-name">Diseño sin título</span></div>
+      <nav aria-label="Navegación principal"><button className={view === "dashboard" ? "active" : ""} onClick={() => guardedNavigation(() => { setView("dashboard"); void repository.listProjects().then(setProjectMetadata); })}>Proyectos</button><button className={mode === "design" && view === "editor" ? "active" : ""} onClick={() => guardedNavigation(() => { setView("editor"); setMode("design"); })}>Diseño</button><button className={mode === "prepare" ? "active" : ""} onClick={() => guardedNavigation(() => { setView("editor"); setMode("prepare"); })}>Preparar <small>Vista previa</small></button></nav>
+      <div className="top-actions"><label>Guardado <select aria-label="Modo de guardado" value={savePolicy.mode} onChange={(event) => setSaveMode(event.target.value as "manual" | "prompted-autosave")}><option value="prompted-autosave">Preguntar cada 20 min</option><option value="manual">Manual</option></select></label>{sketchSession.status === "active" && <><span role="status">Editando croquis</span><button type="button" onClick={acceptSketchSession}>Aceptar</button><button type="button" onClick={requestCancelSketchSession}>Cancelar</button></>}{sketchSession.status === "confirming-cancel" && <span role="status">Confirmá la cancelación</span>}{desktopFileBridge() && <><button aria-label="Abrir proyecto" title="Abrir proyecto" onClick={() => guardedNavigation(() => void openDesktopProject())}>Abrir</button><button aria-label="Guardar proyecto" title="Guardar proyecto" onClick={() => void saveDesktopProject()}>Guardar</button><button aria-label="Guardar como" title="Guardar como" onClick={() => void saveDesktopProject(true)}>Guardar como</button></>}<button aria-label="Deshacer" onClick={() => { if (!isSketchSessionHistoryLocked(sketchSessionRef.current)) setEditorState(undo(editorRef.current)); }}>↶</button><button aria-label="Rehacer" onClick={() => { if (!isSketchSessionHistoryLocked(sketchSessionRef.current)) setEditorState(redo(editorRef.current)); }}>↷</button><span className="project-name">Diseño sin título</span></div>
     </header>
-    {mode === "prepare" ? <section className="prepare"><div><div className="prepare-icon">◇</div><h1>Preparar aún no está disponible</h1><p>Nodra ofrece actualmente solo un espacio de trabajo de Diseño sin conexión. No hay hardware conectado, controlado ni listo.</p><button onClick={() => setMode("design")}>Volver a Diseño</button></div></section> : <div className="workspace">
+    {view === "dashboard" ? <section className="dashboard-view"><div className="dashboard-hero"><div><p className="dashboard-eyebrow">NODRA / PROYECTOS</p><h1>¿Qué querés diseñar hoy?</h1><p className="muted">Tus proyectos guardados localmente, listos para continuar.</p></div><button type="button" className="dashboard-primary" onClick={() => guardedNavigation(() => void createPersistedProject())}>+ Nuevo proyecto</button></div><div className="dashboard-future" aria-label="Funciones futuras"><span>3D <small>Próximamente</small></span><span>Validar <small>Próximamente</small></span></div><div className="dashboard-grid">{dashboardProjects(projectMetadata).map((item) => <article className="project-card" key={item.id}><div className="project-card-preview" aria-hidden="true">◇</div><div className="project-card-body"><h2>{projectDisplayName(item)}</h2><p>{item.pieceLabel}</p><small>{new Date(item.updatedAt).toLocaleDateString("es-AR")}</small><button type="button" onClick={() => guardedNavigation(() => void openPersistedProject(item))}>Abrir proyecto</button></div></article>)}{projectMetadata.length === 0 && <div className="dashboard-empty"><strong>Todavía no hay proyectos</strong><p className="muted">Creá uno para empezar con Pieza 1.</p></div>}</div></section> : mode === "prepare" ? <section className="prepare"><div><div className="prepare-icon">◇</div><h1>Preparar aún no está disponible</h1><p>Nodra ofrece actualmente solo un espacio de trabajo de Diseño sin conexión. No hay hardware conectado, controlado ni listo.</p><button onClick={() => setMode("design")}>Volver a Diseño</button></div></section> : <div className="workspace">
       <section className="properties-bar" aria-label="Barra de propiedades">
         {tool === "dimension" && <div className="dimension-mode-controls" role="group" aria-label="Modo de cota"><button type="button" className={dimensionMode === "auto" ? "active" : ""} onClick={() => setDimensionMode("auto")}>Lineal</button><button type="button" className={dimensionMode === "radius" ? "active" : ""} onClick={() => setDimensionMode("radius")}>Radio</button><button type="button" className={dimensionMode === "diameter" ? "active" : ""} onClick={() => setDimensionMode("diameter")}>Diámetro</button></div>}
-         <div className="page-selector"><label>Fuente de texto<select aria-label="Tipografía del texto" value={textFontFamily} onChange={(event) => { const family = event.target.value; setTextFontFamily(family); const textElements = selectedElements.filter((element): element is TextElement => element.type === "text"); let next = editorRef.current; for (const element of textElements) next = dispatch(next, updateElement(element.id, { fontFamily: family, size: textSizeFor(element.text, element.fontSize, family, element.fontWeight, element.fontStyle, element.lineHeight) })); if (textElements.length) setEditorState(next); }}>{availableFonts.map((font) => <option key={font} style={{ fontFamily: font }}>{font}</option>)}</select><label className="font-upload-button">+ Fuente<input type="file" accept=".ttf,.otf,.woff,.woff2,font/ttf,font/otf,font/woff,font/woff2" onChange={(event) => { const file = event.target.files?.[0]; if (file) void loadFontFile(file); event.currentTarget.value = ""; }} /></label></label><label>Página<select aria-label="Página activa" value={project.activePageId} onChange={(event) => switchPage(event.target.value)}>{project.pages.map((page, index) => <option key={page.id} value={page.id}>{index + 1} · {page.page.width} × {page.page.height} mm</option>)}</select></label><button type="button" onClick={createPageAndSelect}>+ Nueva página</button></div>
+         <div className="page-selector"><button type="button" className="new-sketch-button" onClick={startNewSketch}>+ Nuevo croquis</button><label>Fuente de texto<select aria-label="Tipografía del texto" value={textFontFamily} onChange={(event) => { const family = event.target.value; setTextFontFamily(family); const textElements = selectedElements.filter((element): element is TextElement => element.type === "text"); let next = editorRef.current; for (const element of textElements) next = dispatch(next, updateElement(element.id, { fontFamily: family, size: textSizeFor(element.text, element.fontSize, family, element.fontWeight, element.fontStyle, element.lineHeight) })); if (textElements.length) setEditorState(next); }}>{availableFonts.map((font) => <option key={font} style={{ fontFamily: font }}>{font}</option>)}</select><label className="font-upload-button">+ Fuente<input type="file" accept=".ttf,.otf,.woff,.woff2,font/ttf,font/otf,font/woff,font/woff2" onChange={(event) => { const file = event.target.files?.[0]; if (file) void loadFontFile(file); event.currentTarget.value = ""; }} /></label></label><label>Página<select aria-label="Página activa" value={project.activePageId} onChange={(event) => switchPage(event.target.value)}>{project.pages.map((page, index) => <option key={page.id} value={page.id}>{index + 1} · {page.page.width} × {page.page.height} mm</option>)}</select></label><button type="button" onClick={createPageAndSelect}>+ Nueva página</button></div>
            {selectedElements.length > 0 ? <div className="property-fields">
                 {objectPropertySections()}{mirrorButton("horizontal")}{mirrorButton("vertical")}{shapeOperations()}
          </div> : <p className="muted">Seleccione un objeto para editar sus propiedades.</p>}
@@ -2028,7 +2092,7 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
               {constraintValueDraft && <form className="dimension-value-editor constraint-value-editor" onPointerDown={(event) => event.stopPropagation()} onKeyDown={(event) => { if (event.key === "Escape") { event.preventDefault(); setConstraintValueDraft(undefined); } }} onSubmit={(event) => { event.preventDefault(); const value = Number(constraintValueDraft.value); if (Number.isFinite(value) && value > 0) { addRelationToSelectedSketch(constraintValueDraft.kind, value); setConstraintValueDraft(undefined); } }}><label>{constraintValueDraft.kind === "angle" ? "Ángulo en grados" : "Distancia en mm"}<input autoFocus type="number" min="0.01" step="0.01" value={constraintValueDraft.value} onFocus={(event) => event.currentTarget.select()} onChange={(event) => setConstraintValueDraft((current) => current ? { ...current, value: event.target.value } : current)} /></label><button type="submit">Confirmar</button><button type="button" onClick={() => setConstraintValueDraft(undefined)}>Cancelar</button></form>}{cursorPoint && <span className="tool-cursor" style={{ left: cursorPoint.x, top: cursorPoint.y }} aria-label={`Herramienta activa: ${toolCursorLabels[tool]}`} title={dimensionNodeHover && (tool === "dimension" || tool === "radius") ? "Nodo de dimensión" : tool === "forma" && documentCursorPoint && pickFormaSegment(document, documentCursorPoint, zoom) ? "Doble clic para insertar un nodo" : undefined}>{toolCursorIcons[tool]}{tool === "line" && creationDraft && lineCursorAngle !== undefined && <span className="line-guide-cursor-hud" data-line-guide-hud="true"><span aria-hidden="true">{Math.abs(lineCursorAngle) < 0.1 ? "↔" : Math.abs(Math.abs(lineCursorAngle) - 90) < 0.1 ? "↕" : "↗"}</span><span>{lineCursorAngle.toFixed(1)}°</span></span>}</span>}
             {nodeHover && tool !== "dimension" && tool !== "radius" && !interaction.current && (() => { const point = "node" in nodeHover ? nodeHover.node.point : nodeHover.point; const screen = pagePointToCanvas(point, zoom, panMm); return <span className="node-hover-feedback" data-node-hover-feedback={`${nodeHover.elementId}:${nodeHover.nodeIndex ?? "forma"}`} style={{ left: screen.x, top: screen.y }} aria-label="Nodo bajo el puntero" />; })()}
            {dimensionHoverStyle && <span className="node-hover-feedback" data-dimension-node-target={`${dimensionNodeHover!.elementId}:${dimensionNodeHover!.nodeIndex}`} style={dimensionHoverStyle} aria-label="Nodo de dimensión bajo el puntero" title="Nodo de dimensión" />}
-          <span className="canvas-hint">{(tool === "dimension" || tool === "radius") ? !dimensionDraft ? "Cota: seleccione el primer nodo" : dimensionDraft.phase === "first" ? "Cota: seleccione el segundo nodo" : "Cota: coloque la cota" : `Clic: relleno · clic derecho: contorno · ${toolCursorLabels[tool]}`}</span>
+          <span className="canvas-hint">{creationPending ? "Nuevo croquis: elegí Línea y dibujá el primer segmento para crearlo." : (tool === "dimension" || tool === "radius") ? !dimensionDraft ? "Cota: seleccione el primer nodo" : dimensionDraft.phase === "first" ? "Cota: seleccione el segundo nodo" : "Cota: coloque la cota" : `Clic: relleno · clic derecho: contorno · ${toolCursorLabels[tool]}`}</span>
         </div>
       </section>
        <aside className="inspector">
