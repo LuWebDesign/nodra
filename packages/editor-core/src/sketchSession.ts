@@ -41,6 +41,7 @@ export type SketchSessionEvent =
   | { readonly type: "begin-preview"; readonly previewId: string; readonly sketchId: ElementId }
   | { readonly type: "update-preview"; readonly previewId: string; readonly sketchId: ElementId }
   | { readonly type: "commit-gesture"; readonly sketchId: ElementId; readonly transaction: Transaction; readonly affectedElementIds: readonly ElementId[] }
+  | { readonly type: "checkpoint"; readonly document: DocumentSnapshot; readonly editorHistory: SketchSessionHistory; readonly selection: readonly ElementId[] }
   | { readonly type: "escape" }
   | { readonly type: "accept" }
   | { readonly type: "cancel-session" }
@@ -93,6 +94,10 @@ export function reduceSketchSession(state: SketchSessionState, event: SketchSess
       const nextTransaction = clone(transaction);
       return { ...state, document: clone(transaction.after), editorHistory: { undo: [...state.editorHistory.undo, nextTransaction], redo: [] }, pending: undefined, committed: [...state.committed, nextTransaction] };
     }
+    case "checkpoint":
+      return event.document.id === state.document.id && preservesSketchScope(state.document, event.document, state.sketchId)
+        ? { ...state, document: clone(event.document), editorHistory: historyClone(event.editorHistory), entryDocument: clone(event.document), entryEditorHistory: historyClone(event.editorHistory), entrySelection: [...event.selection], pending: undefined, committed: [] }
+        : state;
     case "accept": return { status: "idle", document: state.document, editorHistory: state.editorHistory, selection: [...state.entrySelection] };
     case "cancel-session": return state.committed.length === 0 ? { status: "idle", document: state.entryDocument, editorHistory: state.entryEditorHistory, selection: [...state.entrySelection] } : { status: "confirming-cancel", sketchId: state.sketchId, document: state.document, editorHistory: state.editorHistory, entryDocument: state.entryDocument, entryEditorHistory: state.entryEditorHistory, entrySelection: state.entrySelection, committed: state.committed };
     default: return state;
