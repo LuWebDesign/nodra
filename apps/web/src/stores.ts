@@ -22,6 +22,9 @@ const loadSavePolicy = (): SavePolicy => {
 const saveSavePolicy = (policy: SavePolicy): void => { try { localStorage.setItem(savePolicyKey, JSON.stringify(policy)); } catch { /* best effort application preference */ } };
 export const useSavePolicyStore = create<{ policy: SavePolicy; setMode: (mode: SaveMode) => void }>((set) => ({ policy: loadSavePolicy(), setMode: (mode) => set((state) => { const policy = { ...state.policy, mode, intervalMs: SAVE_INTERVAL_MS }; saveSavePolicy(policy); return { policy }; }) }));
 export const useUiStore = create<{ mode: "design" | "prepare"; tool: Tool; setMode: (mode: "design" | "prepare") => void; setTool: (tool: Tool) => void }>((set) => ({ mode: "design", tool: "select", setMode: (mode) => set({ mode }), setTool: (tool) => set({ tool }) }));
+export const resolveActivePieceId = (project: ProjectSnapshot, requested: PieceId): PieceId => project.pieces.some((piece) => piece.id === requested) ? requested : project.pieces[0]!.id;
+export const shouldAutosaveProject = (mode: SaveMode, sessionStatus: SketchSessionState["status"], project: ProjectSnapshot, lastSaved?: { readonly projectId: string; readonly snapshot: string }): boolean => mode === "prompted-autosave" && sessionStatus === "idle" && !(lastSaved?.projectId === project.id && lastSaved.snapshot === JSON.stringify(project));
+
 export const projectWithSketchAssociation = (project: ProjectSnapshot, document: DocumentSnapshot, pieceId: PieceId | undefined, sketchId: ElementId): ProjectSnapshot => {
   const piece = project.pieces.find((candidate) => candidate.id === pieceId) ?? project.pieces[0];
   const sketch = document.elements.find((element) => element.id === sketchId && element.type === "sketch");

@@ -9,10 +9,10 @@ import { addSolvedDocumentConstraint, documentConstraintDiagnosticId, supportsGl
 import { renderSvg } from "@nodra/renderer-svg";
 import { canActivateRotation, centerPageInCanvas, clientPointToCanvas, clientPointToPage, cubicPlacementControls, formaNodeKey, hoveredSelectionCenter, isDrawingTool, marqueeSelection, movementExceedsThreshold, normalizeBounds, normalizeDrag, pagePointToCanvas, pathGuides, pickDimensionTarget, pickElement, pickFormaElement, pickFormaNode, pickFormaSegment, pickHoverNode, pickCutIntervalPreview, pickCuttableSegment, pickNode, pickPathNode, pickPathSegment, pointerDownIntent, visibleEditablePathNodeIndexes, screenDeltaToMm, screenPointToMm, selectedNodeAnchor, selectedPathAnchorIds, alignmentGuides, snapCreationPoint, snapFormaNodePoint, snapMoveDelta, viewportPointToCanvas, zoomAtPoint, type AlignmentGuide, type ContourNodeHit, type CutIntervalPreview, type DimensionTarget, type FormaNodeHit, type HoverNode, type NodeHit, type PathNodeHit, type SnapGuide, type TransformMode, type CreationSnap } from "./interaction.js";
 import { aspectSize, formatMm, geometryValue, rotationDegreesValue, rotationPatch, type GeometryField, type PropertyElement, type RotatableElement } from "./propertyBar.js";
-import { sessionForSketchEditor, shouldPersistEditorSnapshot, useDocumentStore, usePersistenceStore, useSavePolicyStore, useSelectionStore, useUiStore, useViewportStore, type Tool } from "./stores.js";
+import { resolveActivePieceId, sessionForSketchEditor, shouldAutosaveProject, shouldPersistEditorSnapshot, useDocumentStore, usePersistenceStore, useSavePolicyStore, useSelectionStore, useUiStore, useViewportStore, type Tool } from "./stores.js";
     import { createSketchSession, isSketchScopedDocumentChange, isSketchSessionHistoryLocked, reduceSketchSession, type SketchSessionState } from "@nodra/editor-core";
 import { pathJoinGuidance, pathJoinOptions } from "./pathJoins.js";
-    import { addPiece, configureInitialProject, dashboardProjects, pieceDisplayLabel, projectDisplayName, type DashboardProjectSource } from "./projectDashboard.js";
+    import { addPiece, configureInitialProject, dashboardProjects, pieceDisplayLabel, projectDetail, projectDisplayName, type DashboardProjectSource } from "./projectDashboard.js";
     import type { ProjectMetadata } from "@nodra/persistence";
 import { textSizeFor } from "./textMetrics.js";
 import { extractTextGlyphOutlines, fontFamilyFromFileName, FontOutlineError } from "./fontOutline.js";
@@ -151,7 +151,7 @@ const toolCursorLabels: Record<Tool, string> = { radius: "Radio", select: "Selec
 
 export function App() {
   const { mode, tool, setMode, setTool } = useUiStore();
-      const [view, setView] = useState<"dashboard" | "editor">("editor");
+      const [view, setView] = useState<"dashboard" | "project" | "editor">("editor");
   const { editor, project, setEditor, commitNewSketch, setProject, setProjectPreferences } = useDocumentStore();
   const document = editor.document;
   const [activeProjectMetadata, setActiveProjectMetadata] = useState<ProjectMetadata>(() => ({ id: project.id, name: "Proyecto sin título", updatedAt: Date.now() }));
@@ -194,12 +194,12 @@ export function App() {
   const [fontSources, setFontSources] = useState<Record<string, ArrayBuffer>>({});
   const [fontLoadError, setFontLoadError] = useState<string>();
   const [persistenceReady, setPersistenceReady] = useState(false);
-  const [autosavePrompt, setAutosavePrompt] = useState(false);
-      const [autosavePromptCycle, setAutosavePromptCycle] = useState(0);
   const [nativeProjectPath, setNativeProjectPath] = useState<string>();
       const [creationPending, setCreationPending] = useState<PieceId>();
       const [activePieceId, setActivePieceId] = useState<PieceId>(() => project.pieces[0]!.id);
       const [dashboardSources, setDashboardSources] = useState<readonly DashboardProjectSource[]>([]);
+      const [detailProjectId, setDetailProjectId] = useState<string>();
+      const [pendingDetailSketchId, setPendingDetailSketchId] = useState<ElementId>();
       const [pieceFormProjectId, setPieceFormProjectId] = useState<string>();
       const [pieceName, setPieceName] = useState("");
       const [pieceMaterial, setPieceMaterial] = useState("");
@@ -251,16 +251,15 @@ export function App() {
   const viewportInteracted = useRef(false);
   const centeredViewport = useRef<string | undefined>(undefined);
   const recoveredNotice = useRef(false);
-  const lastObservedRevision = useRef<{ readonly projectId: string; readonly revision: number } | undefined>(undefined);
   const lastOfficialSave = useRef<{ readonly projectId: string; readonly snapshot: string } | undefined>(undefined);
   const restoredFontIds = useRef(new Set<string>());
   const directionTooltipTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   editorRef.current = editor;
   creationDraftRef.current = creationDraft;
-  const activePiece = project.pieces.find((piece) => piece.id === activePieceId) ?? project.pieces[0]!;
+  const activePiece = project.pieces.find((piece) => piece.id === resolveActivePieceId(project, activePieceId))!;
 
   useEffect(() => {
-    if (!project.pieces.some((piece) => piece.id === activePieceId)) setActivePieceId(project.pieces[0]!.id);
+    if (!project.pieces.some((piece) => piece.id === activePieceId)) setActivePieceId(resolveActivePieceId(project, activePieceId));
   }, [project.id, project.pieces, activePieceId]);
 
   useEffect(() => {
@@ -534,23 +533,8 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
     if (sketchSessionRef.current.status === "active" || sketchSessionRef.current.status === "confirming-cancel") return;
     saveProjectMirror(project);
     const officiallySaved = lastOfficialSave.current?.projectId === project.id && lastOfficialSave.current.snapshot === JSON.stringify(project);
-    if ((!preserveRecoveryNotice && !officiallySaved) || !online) persist.set(online ? "pending" : "offline", online ? "Cambios pendientes de Guardar proyecto; recuperación local actualizada" : "Sin conexión — la edición permanece local");
+    if ((!preserveRecoveryNotice && !officiallySaved) || !online) persist.set(online ? "pending" : "offline", online ? "Cambios pendientes; recuperación local actualizada" : "Sin conexión — la edición permanece local");
   }, [persistenceReady, project, online]);
-
-  useEffect(() => {
-    if (!persistenceReady) return;
-    if (savePolicy.mode !== "prompted-autosave") return;
-    const hadPreviousRevision = lastObservedRevision.current?.projectId === project.id;
-    const sameRevision = hadPreviousRevision && lastObservedRevision.current?.revision === project.revision;
-    if (sameRevision && autosavePromptCycle === 0) return;
-    if (!sameRevision) {
-      lastObservedRevision.current = { projectId: project.id, revision: project.revision };
-      if (!hadPreviousRevision) return;
-    }
-
-    const timer = window.setTimeout(() => setAutosavePrompt(true), savePolicy.intervalMs);
-    return () => window.clearTimeout(timer);
-  }, [autosavePromptCycle, persistenceReady, project.id, project.revision, savePolicy]);
 
   const dimensionPreview = dimensionDraft?.phase === "placement" && documentCursorPoint ? dimensionDraft.first.kind === "node" && dimensionDraft.second.kind === "node" ? newDimension("layer-1", dimensionDraft.first.hit, dimensionDraft.second.hit, documentCursorPoint, tool === "radius" ? "radius" : dimensionMode) : dimensionDraft.first.kind === "line" && dimensionDraft.second.kind === "line" ? newAngularDimension("layer-1", dimensionDraft.first, dimensionDraft.second, documentCursorPoint) : undefined : undefined;
   const rendered = renderSvg({ ...document, elements: dimensionPreview ? [...document.elements, dimensionPreview] : document.elements }, { zoom: 1, panMm: { x: 0, y: 0 } });
@@ -589,6 +573,12 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
         setEditor(selectedEditor, { syncProject: false });
         setTool("forma"); setEditModeElementIds([sketchId]);
       };
+      useEffect(() => {
+        if (!pendingDetailSketchId || !document.elements.some((element) => element.id === pendingDetailSketchId && element.type === "sketch")) return;
+        const sketchId = pendingDetailSketchId;
+        setPendingDetailSketchId(undefined);
+        enterSketchSession(sketchId);
+      }, [document, pendingDetailSketchId]);
       const checkpointSketchSession = () => {
         const current = sketchSessionRef.current;
         if (current.status !== "active") return;
@@ -658,6 +648,10 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
           interaction.current = undefined;
         }
       };
+      const openProjectInDesign = (source: DashboardProjectSource, pieceId: PieceId, pageIdValue?: string, sketchId?: ElementId) => guardedNavigation(() => {
+        const nextProject = pageIdValue ? { ...source.project, activePageId: pageIdValue as never } : source.project;
+        setActiveProjectMetadata(source.metadata); setProject(nextProject); setActivePieceId(pieceId); setPendingDetailSketchId(sketchId); setMode("design"); setView("editor");
+      });
       const startNewSketch = () => guardedNavigation(() => {
         resetCreationGesture();
         setCreationPending(activePiece.id);
@@ -672,16 +666,20 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
         const loaded = "pages" in result.revision.document ? result.revision.document : createProject(result.revision.document);
         setActiveProjectMetadata(result.revision.metadata);
         lastOfficialSave.current = { projectId: result.revision.metadata.id, snapshot: JSON.stringify(loaded) };
-        setProject(loaded); setActivePieceId(loaded.pieces[0]!.id); useSelectionStore.getState().setSelected(undefined); setMode("design"); setView("editor");
+        setProject(loaded); setActivePieceId(loaded.pieces[0]!.id); setDetailProjectId(loaded.id); useSelectionStore.getState().setSelected(undefined); setView("project");
         persist.set("recovered", `Proyecto abierto: ${projectDisplayName(metadata)}`);
       };
       const createPersistedPiece = async (source: DashboardProjectSource) => {
         const thicknessMm = pieceThickness.trim() ? Number(pieceThickness) : undefined;
         try {
           const nextProject = addPiece(source.project, { name: pieceName, material: pieceMaterial, ...(thicknessMm === undefined ? {} : { thicknessMm }) });
-          const result = await repository.saveProject(source.metadata, nextProject);
+          const metadata = { ...source.metadata, updatedAt: Date.now() };
+          const result = await repository.saveProject(metadata, nextProject);
           if (!result.ok) { persist.set("failed", result.error ?? "No se pudo crear la pieza"); return; }
-          setDashboardSources((current) => current.map((item) => item.metadata.id === source.metadata.id ? { ...item, project: nextProject } : item));
+          lastOfficialSave.current = { projectId: metadata.id, snapshot: JSON.stringify(nextProject) };
+          setDashboardSources((current) => current.map((item) => item.metadata.id === source.metadata.id ? { metadata, project: nextProject } : item));
+          if (activeProjectMetadata.id === source.metadata.id) { setActiveProjectMetadata(metadata); setProject(nextProject); setActivePieceId(nextProject.pieces.at(-1)!.id); }
+          saveProjectMirror(nextProject);
           setPieceFormProjectId(undefined); setPieceName(""); setPieceMaterial(""); setPieceThickness("");
           persist.set("saved", "Pieza creada");
         } catch (error) { persist.set("failed", error instanceof Error ? error.message : "No se pudo crear la pieza"); }
@@ -748,6 +746,11 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
      saveProjectMirror(committedProject);
      persist.set("saved", "Proyecto guardado");
    };
+   useEffect(() => {
+     if (!persistenceReady || desktopFileBridge() || savePolicy.mode !== "prompted-autosave") return;
+     if (!shouldAutosaveProject(savePolicy.mode, sketchSessionRef.current.status, project, lastOfficialSave.current)) return;
+     void saveBrowserProject();
+   }, [persistenceReady, project, savePolicy.mode]);
    const saveDesktopProject = async (saveAs = false) => {
     const bridge = desktopFileBridge();
     if (!bridge) return;
@@ -761,12 +764,6 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
     } catch (error) {
       persist.set("failed", error instanceof Error ? error.message : "No se pudo guardar el proyecto");
     }
-  };
-  const respondToAutosavePrompt = async (save: boolean) => {
-    setAutosavePrompt(false);
-    if (!save) { persist.set("pending", "Cambios pendientes de Guardar proyecto"); setAutosavePromptCycle((cycle) => cycle + 1); return; }
-    if (desktopFileBridge()) await saveDesktopProject();
-    else await saveBrowserProject();
   };
   /** The only client-coordinate ingress for document interactions. */
   const documentPointAtClient = (clientX: number, clientY: number): PointMm => {
@@ -2132,17 +2129,17 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
   </> : null;
 
   return <main className="app-shell">
+     {pieceFormProjectId && (() => { const source = activeProjectMetadata.id === pieceFormProjectId ? { metadata: activeProjectMetadata, project } : dashboardSources.find((candidate) => candidate.metadata.id === pieceFormProjectId); return source ? <div className="nodra-modal-backdrop" role="presentation"><form className="nodra-modal piece-form" role="dialog" aria-modal="true" aria-labelledby="new-piece-title" onSubmit={(event) => { event.preventDefault(); void createPersistedPiece(source); }}><h2 id="new-piece-title">Nueva pieza</h2><label>Nombre<input aria-label="Nombre de la pieza" autoFocus required value={pieceName} onChange={(event) => setPieceName(event.target.value)} /></label><label>Material (opcional)<input aria-label="Material de la pieza" value={pieceMaterial} onChange={(event) => setPieceMaterial(event.target.value)} /></label><label>Espesor mm (opcional)<input aria-label="Espesor de la pieza" type="number" min="0.01" step="0.01" value={pieceThickness} onChange={(event) => setPieceThickness(event.target.value)} /></label><label>Proceso<select aria-label="Proceso de la pieza" value="cut" disabled><option value="cut">Corte</option></select></label><button type="button" onClick={() => { setPieceMaterial(""); setPieceThickness(""); }}>Definir material después</button><div className="nodra-modal-actions"><button type="button" onClick={() => setPieceFormProjectId(undefined)}>Cancelar</button><button type="submit" className="nodra-modal-primary">Crear pieza</button></div></form></div> : null; })()}
     {newProjectDraft && <div className="nodra-modal-backdrop" role="presentation"><form className="nodra-modal project-create-form" role="dialog" aria-modal="true" aria-labelledby="new-project-title" onSubmit={(event) => { event.preventDefault(); void createPersistedProject(); }}><h2 id="new-project-title">Nuevo proyecto</h2><label>Nombre del proyecto<input aria-label="Nombre del proyecto" autoFocus required value={newProjectDraft.projectName} onChange={(event) => setNewProjectDraft((current) => current ? { ...current, projectName: event.target.value } : current)} /></label><label>Nombre de la pieza inicial<input aria-label="Nombre de la pieza inicial" required value={newProjectDraft.pieceName} onChange={(event) => setNewProjectDraft((current) => current ? { ...current, pieceName: event.target.value } : current)} /></label><label>Material (opcional)<input aria-label="Material de la pieza inicial" value={newProjectDraft.material} onChange={(event) => setNewProjectDraft((current) => current ? { ...current, material: event.target.value } : current)} /></label><label>Espesor mm (opcional)<input aria-label="Espesor de la pieza inicial" type="number" min="0.01" step="0.01" value={newProjectDraft.thickness} onChange={(event) => setNewProjectDraft((current) => current ? { ...current, thickness: event.target.value } : current)} /></label><label>Proceso<select aria-label="Proceso de la pieza inicial" value="cut" disabled><option value="cut">Corte</option></select></label><button type="button" onClick={() => setNewProjectDraft((current) => current ? { ...current, material: "", thickness: "" } : current)}>Definir material después</button><div className="nodra-modal-actions"><button type="button" onClick={() => setNewProjectDraft(undefined)}>Cancelar</button><button type="submit" className="nodra-modal-primary">Crear proyecto</button></div></form></div>}
     {deleteProjectId && <div className="nodra-modal-backdrop" role="presentation"><section className="nodra-modal" role="dialog" aria-modal="true" aria-labelledby="delete-project-title"><h2 id="delete-project-title">Eliminar proyecto</h2><p>Esta acción elimina permanentemente el proyecto{activeProjectMetadata.id === deleteProjectId ? " activo" : ""} y su recuperación local. No se puede deshacer.</p><div className="nodra-modal-actions"><button type="button" onClick={() => setDeleteProjectId(undefined)}>Cancelar</button><button type="button" className="nodra-modal-primary" onClick={() => void deletePersistedProject()}>Eliminar proyecto</button></div></section></div>}
-    {autosavePrompt && <div className="nodra-modal-backdrop" role="presentation"><section className="nodra-modal" role="dialog" aria-modal="true" aria-labelledby="autosave-title"><h2 id="autosave-title">¿Guardar cambios?</h2><p>Hace aproximadamente 20 minutos que editás este proyecto. Si no guardás, podés perder los cambios del croquis activo.</p><div className="nodra-modal-actions"><button type="button" onClick={() => void respondToAutosavePrompt(false)}>Seguir editando</button><button type="button" className="nodra-modal-primary" onClick={() => void respondToAutosavePrompt(true)}>Guardar ahora</button></div></section></div>}
     {sketchSession.status === "confirming-cancel" && <div className="nodra-modal-backdrop" role="presentation"><section className="nodra-modal" role="dialog" aria-modal="true" aria-labelledby="sketch-cancel-title"><h2 id="sketch-cancel-title">Cancelar croquis</h2><p>Se perderán los cambios realizados en este croquis. ¿Querés continuar?</p><div className="nodra-modal-actions"><button type="button" autoFocus onClick={() => { pendingNavigationRef.current = undefined; setSketchSession((current) => reduceSketchSession(current, { type: "decline-cancel" })); }}>Seguir editando</button><button type="button" className="nodra-modal-primary" onClick={confirmCancelSketchSession}>Cancelar croquis</button></div></section></div>}
         {pendingShapeOperation && <div className="nodra-modal-backdrop" role="presentation"><section className="nodra-modal" role="dialog" aria-modal="true" aria-labelledby="shape-operation-confirmation-title"><h2 id="shape-operation-confirmation-title">Confirmar operación</h2><p>Esta operación eliminará {pendingShapeOperation.invalidDimensionCount} cotas porque sus referencias dejarán de existir. ¿Continuar?</p><div className="nodra-modal-actions"><button type="button" onClick={() => setPendingShapeOperation(undefined)}>Cancelar</button><button type="button" className="nodra-modal-primary" onClick={confirmPendingShapeOperation}>Continuar</button></div></section></div>}
     <header className="topbar">
       <div className="brand" aria-label="KOND DESIGN"><span className="brand-kond">KOND</span> <span className="brand-design">DESIGN</span></div>
       <nav aria-label="Navegación principal"><button className={view === "dashboard" ? "active" : ""} onClick={() => guardedNavigation(() => { setView("dashboard"); void refreshDashboard(); })}>Proyectos</button><button className={mode === "design" && view === "editor" ? "active" : ""} onClick={() => guardedNavigation(() => { setView("editor"); setMode("design"); })}>Diseño</button><button className={mode === "prepare" ? "active" : ""} onClick={() => guardedNavigation(() => { setView("editor"); setMode("prepare"); })}>Preparar <small>Vista previa</small></button></nav>
-      <div className="top-actions"><label>Guardado <select aria-label="Modo de guardado" value={savePolicy.mode} onChange={(event) => setSaveMode(event.target.value as "manual" | "prompted-autosave")}><option value="prompted-autosave">Preguntar cada 20 min</option><option value="manual">Manual</option></select></label>{sketchSession.status === "active" && <><span role="status">Editando croquis</span><button type="button" onClick={acceptSketchSession}>Aceptar</button><button type="button" onClick={requestCancelSketchSession}>Cancelar</button></>}{sketchSession.status === "confirming-cancel" && <span role="status">Confirmá la cancelación</span>}{desktopFileBridge() ? <><button aria-label="Abrir proyecto" title="Abrir proyecto" onClick={() => guardedNavigation(() => void openDesktopProject())}>Abrir</button><button aria-label="Guardar proyecto" title="Guardar proyecto" onClick={() => void saveDesktopProject()}>Guardar</button><button aria-label="Guardar como" title="Guardar como" onClick={() => void saveDesktopProject(true)}>Guardar como</button></> : <button type="button" aria-label="Guardar proyecto" onClick={() => void saveBrowserProject()}>Guardar proyecto</button>}<button aria-label="Deshacer" onClick={() => { if (!isSketchSessionHistoryLocked(sketchSessionRef.current)) setEditorState(undo(editorRef.current)); }}>↶</button><button aria-label="Rehacer" onClick={() => { if (!isSketchSessionHistoryLocked(sketchSessionRef.current)) setEditorState(redo(editorRef.current)); }}>↷</button><span className="project-name">{projectDisplayName(activeProjectMetadata)}</span></div>
+      <div className="top-actions"><button type="button" className={savePolicy.mode === "prompted-autosave" ? "active" : ""} aria-pressed={savePolicy.mode === "prompted-autosave"} onClick={() => setSaveMode(savePolicy.mode === "prompted-autosave" ? "manual" : "prompted-autosave")}>Autosave: {savePolicy.mode === "prompted-autosave" ? "Activo" : "Inactivo"}</button>{sketchSession.status === "active" && <><span role="status">Editando croquis</span><button type="button" onClick={acceptSketchSession}>Aceptar</button><button type="button" onClick={requestCancelSketchSession}>Cancelar</button></>}{sketchSession.status === "confirming-cancel" && <span role="status">Confirmá la cancelación</span>}{desktopFileBridge() && <><button aria-label="Abrir proyecto" title="Abrir proyecto" onClick={() => guardedNavigation(() => void openDesktopProject())}>Abrir</button><button aria-label="Guardar proyecto" title="Guardar proyecto" onClick={() => void saveDesktopProject()}>Guardar</button><button aria-label="Guardar como" title="Guardar como" onClick={() => void saveDesktopProject(true)}>Guardar como</button></>}<button aria-label="Deshacer" onClick={() => { if (!isSketchSessionHistoryLocked(sketchSessionRef.current)) setEditorState(undo(editorRef.current)); }}>↶</button><button aria-label="Rehacer" onClick={() => { if (!isSketchSessionHistoryLocked(sketchSessionRef.current)) setEditorState(redo(editorRef.current)); }}>↷</button><span className="project-name">{projectDisplayName(activeProjectMetadata)}</span></div>
     </header>
-    {view === "dashboard" ? <section className="dashboard-view"><div className="dashboard-hero"><div><p className="dashboard-eyebrow">NODRA / PROYECTOS</p><h1>¿Qué querés diseñar hoy?</h1><p className="muted">Tus proyectos guardados localmente, listos para continuar.</p></div><button type="button" className="dashboard-primary" onClick={() => guardedNavigation(() => setNewProjectDraft({ projectName: "", pieceName: "Pieza 1", material: "", thickness: "" }))}>+ Nuevo proyecto</button></div><div className="dashboard-future" aria-label="Funciones futuras"><span>3D <small>Próximamente</small></span><span>Validar <small>Próximamente</small></span></div><div className="dashboard-grid">{dashboardProjects(dashboardSources).map((item) => <article className="project-card" key={item.id}><div className="project-card-preview" aria-hidden="true">◇</div><div className="project-card-body"><h2>{projectDisplayName(item)}</h2><div className="project-piece-list">{item.pieces.map((piece) => <p key={piece.id}>{pieceDisplayLabel(piece)}</p>)}</div><button type="button" onClick={() => { setPieceFormProjectId(item.id); setPieceName(`Pieza ${item.pieces.length + 1}`); setPieceMaterial(""); setPieceThickness(""); }}>Nueva pieza</button>{pieceFormProjectId === item.id && <form className="piece-form" onSubmit={(event) => { event.preventDefault(); const source = dashboardSources.find((candidate) => candidate.metadata.id === item.id); if (source) void createPersistedPiece(source); }}><label>Nombre<input aria-label="Nombre de la pieza" value={pieceName} onChange={(event) => setPieceName(event.target.value)} required /></label><label>Material (opcional)<input aria-label="Material de la pieza" value={pieceMaterial} onChange={(event) => setPieceMaterial(event.target.value)} /></label><label>Espesor mm (opcional)<input aria-label="Espesor de la pieza" type="number" min="0.01" step="0.01" value={pieceThickness} onChange={(event) => setPieceThickness(event.target.value)} /></label><label>Proceso<select aria-label="Proceso de la pieza" value="cut" disabled><option value="cut">Corte</option></select></label><button type="button" onClick={() => { setPieceMaterial(""); setPieceThickness(""); }}>Definir material después</button><button type="submit">Crear pieza</button></form>}<small>{new Date(item.updatedAt).toLocaleDateString("es-AR")}</small><button type="button" onClick={() => guardedNavigation(() => void openPersistedProject(item))}>Abrir proyecto</button><button type="button" onClick={() => setDeleteProjectId(item.id)}>Eliminar proyecto</button></div></article>)}{dashboardSources.length === 0 && <div className="dashboard-empty"><strong>Todavía no hay proyectos</strong><p className="muted">Creá uno para empezar con Pieza 1.</p></div>}</div></section> : mode === "prepare" ? <section className="prepare"><div><div className="prepare-icon">◇</div><h1>Preparar aún no está disponible</h1><p>Nodra ofrece actualmente solo un espacio de trabajo de Diseño sin conexión. No hay hardware conectado, controlado ni listo.</p><button onClick={() => setMode("design")}>Volver a Diseño</button></div></section> : <div className="workspace">
+    {view === "dashboard" ? <section className="dashboard-view"><div className="dashboard-hero"><div><p className="dashboard-eyebrow">NODRA / PROYECTOS</p><h1>¿Qué querés diseñar hoy?</h1><p className="muted">Tus proyectos guardados localmente, listos para continuar.</p></div><button type="button" className="dashboard-primary" onClick={() => guardedNavigation(() => setNewProjectDraft({ projectName: "", pieceName: "Pieza 1", material: "", thickness: "" }))}>+ Nuevo proyecto</button></div><div className="dashboard-future" aria-label="Funciones futuras"><span>3D <small>Próximamente</small></span><span>Validar <small>Próximamente</small></span></div><div className="dashboard-grid">{dashboardProjects(dashboardSources).map((item) => <article className="project-card" key={item.id}><div className="project-card-preview" aria-hidden="true">◇</div><div className="project-card-body"><h2>{projectDisplayName(item)}</h2><div className="project-piece-list">{item.pieces.map((piece) => <p key={piece.id}>{pieceDisplayLabel(piece)}</p>)}</div><button type="button" onClick={() => { setPieceFormProjectId(item.id); setPieceName(`Pieza ${item.pieces.length + 1}`); setPieceMaterial(""); setPieceThickness(""); }}>Nueva pieza</button><small>{new Date(item.updatedAt).toLocaleDateString("es-AR")}</small><button type="button" onClick={() => guardedNavigation(() => void openPersistedProject(item))}>Ver proyecto</button><button type="button" onClick={() => setDeleteProjectId(item.id)}>Eliminar proyecto</button></div></article>)}{dashboardSources.length === 0 && <div className="dashboard-empty"><strong>Todavía no hay proyectos</strong><p className="muted">Creá uno para empezar con Pieza 1.</p></div>}</div></section> : view === "project" ? (() => { const source = dashboardSources.find((candidate) => candidate.metadata.id === detailProjectId); if (!source) return <section className="project-detail"><button type="button" onClick={() => setView("dashboard")}>← Volver a Proyectos</button><p>El proyecto ya no está disponible.</p></section>; const detail = projectDetail(source); return <section className="project-detail"><button type="button" onClick={() => setView("dashboard")}>← Volver a Proyectos</button><div className="project-detail-heading"><div><p className="dashboard-eyebrow">PROYECTO</p><h1>{detail.name}</h1></div><button type="button" onClick={() => { setPieceFormProjectId(source.metadata.id); setPieceName(`Pieza ${source.project.pieces.length + 1}`); setPieceMaterial(""); setPieceThickness(""); }}>+ Nueva pieza</button></div><div className="project-detail-sections"><section><h2>Piezas</h2>{detail.pieces.map((piece) => <article className="project-detail-card" key={piece.id}><div><h3>{piece.name}</h3><p>{[piece.material, piece.thicknessMm === undefined ? undefined : `${piece.thicknessMm} mm`, piece.state].filter(Boolean).join(" · ")}</p></div><button type="button" onClick={() => openProjectInDesign(source, piece.id as PieceId)}>Abrir en Diseño</button><ul>{piece.sketches.map((sketch) => <li key={`${sketch.pageId}:${sketch.sketchId}`}><span>{sketch.label}</span><button type="button" onClick={() => openProjectInDesign(source, piece.id as PieceId, sketch.pageId, sketch.sketchId as ElementId)}>Editar croquis</button></li>)}</ul></article>)}</section><section><h2>Layouts / Páginas</h2><ul className="project-detail-list">{detail.pages.map((page) => <li key={page.id}><span>{page.label}</span><small>{page.sketchCount} croquis</small><button type="button" onClick={() => openProjectInDesign(source, source.project.pieces[0]!.id, page.id)}>Abrir</button></li>)}</ul></section><section><h2>Ensamblajes</h2><p className="muted">Todavía no hay ensamblajes. Esta sección queda preparada para una futura versión.</p></section></div></section>; })() : mode === "prepare" ? <section className="prepare"><div><div className="prepare-icon">◇</div><h1>Preparar aún no está disponible</h1><p>Nodra ofrece actualmente solo un espacio de trabajo de Diseño sin conexión. No hay hardware conectado, controlado ni listo.</p><button onClick={() => setMode("design")}>Volver a Diseño</button></div></section> : <div className="workspace">
       <section className="properties-bar" aria-label="Barra de propiedades">
         {tool === "dimension" && <div className="dimension-mode-controls" role="group" aria-label="Modo de cota"><button type="button" className={dimensionMode === "auto" ? "active" : ""} onClick={() => setDimensionMode("auto")}>Lineal</button><button type="button" className={dimensionMode === "radius" ? "active" : ""} onClick={() => setDimensionMode("radius")}>Radio</button><button type="button" className={dimensionMode === "diameter" ? "active" : ""} onClick={() => setDimensionMode("diameter")}>Diámetro</button></div>}
          <div className="page-selector"><button type="button" className="new-sketch-button" onClick={startNewSketch}>+ Nuevo croquis</button><label>Fuente de texto<select aria-label="Tipografía del texto" value={textFontFamily} onChange={(event) => { const family = event.target.value; setTextFontFamily(family); const textElements = selectedElements.filter((element): element is TextElement => element.type === "text"); let next = editorRef.current; for (const element of textElements) next = dispatch(next, updateElement(element.id, { fontFamily: family, size: textSizeFor(element.text, element.fontSize, family, element.fontWeight, element.fontStyle, element.lineHeight) })); if (textElements.length) setEditorState(next); }}>{availableFonts.map((font) => <option key={font} style={{ fontFamily: font }}>{font}</option>)}</select><label className="font-upload-button">+ Fuente<input type="file" accept=".ttf,.otf,.woff,.woff2,font/ttf,font/otf,font/woff,font/woff2" onChange={(event) => { const file = event.target.files?.[0]; if (file) void loadFontFile(file); event.currentTarget.value = ""; }} /></label></label><label>Página<select aria-label="Página activa" value={project.activePageId} onChange={(event) => switchPage(event.target.value)}>{project.pages.map((page, index) => <option key={page.id} value={page.id}>{index + 1} · {page.page.width} × {page.page.height} mm</option>)}</select></label><button type="button" onClick={createPageAndSelect}>+ Nueva página</button></div>
@@ -2178,7 +2175,7 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
         </div>
       </section>
        <aside className="inspector">
-             <div className="piece-context" aria-label="Contexto de pieza activa"><label>Pieza<select aria-label="Pieza activa" value={activePiece.id} onChange={(event) => setActivePieceId(event.target.value as PieceId)}>{project.pieces.map((piece) => <option key={piece.id} value={piece.id}>{piece.name}</option>)}</select></label><span>{activePiece.material ?? "Material por definir"}</span><span>{activePiece.thicknessMm === undefined ? "Espesor por definir" : `${activePiece.thicknessMm} mm`}</span><span>{pieceDisplayLabel(activePiece).split(" · ").at(-1)}</span></div>
+             <div className="piece-context" aria-label="Contexto de pieza activa"><div className="piece-tabs" role="tablist" aria-label="Piezas">{project.pieces.map((piece) => <button type="button" role="tab" aria-selected={piece.id === activePiece.id} className={piece.id === activePiece.id ? "active" : ""} key={piece.id} onClick={() => guardedNavigation(() => setActivePieceId(piece.id))}>{piece.name}</button>)}<button type="button" onClick={() => guardedNavigation(() => { setPieceFormProjectId(activeProjectMetadata.id); setPieceName(`Pieza ${project.pieces.length + 1}`); setPieceMaterial(""); setPieceThickness(""); })}>+ Nueva pieza</button></div><span>{activePiece.material ?? "Material por definir"}</span><span>{activePiece.thicknessMm === undefined ? "Espesor por definir" : `${activePiece.thicknessMm} mm`}</span><span>{pieceDisplayLabel(activePiece).split(" · ").at(-1)}</span></div>
          <div className="inspector-tabs" role="tablist" aria-label="Inspector">
            <button type="button" role="tab" aria-selected={inspectorTab === "properties"} className={inspectorTab === "properties" ? "active" : ""} onClick={() => setInspectorTab("properties")}>Propiedades</button>
             <button type="button" role="tab" aria-selected={inspectorTab === "transform"} className={inspectorTab === "transform" ? "active" : ""} onClick={() => setInspectorTab("transform")}>Transformar</button>

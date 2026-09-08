@@ -1,10 +1,26 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { elementId, layerId } from "@nodra/domain";
 import { beginGesture, commitGesture, createElement, deleteElement, dispatch, previewGestureFromBase } from "@nodra/editor-core";
-import { sessionForSketchEditor, shouldPersistEditorSnapshot, useDocumentStore, usePersistenceStore } from "./stores.js";
+import { resolveActivePieceId, sessionForSketchEditor, shouldAutosaveProject, shouldPersistEditorSnapshot, useDocumentStore, usePersistenceStore } from "./stores.js";
 
 describe("document store persistence boundary", () => {
   beforeEach(() => { useDocumentStore.setState(useDocumentStore.getInitialState(), true); usePersistenceStore.setState(usePersistenceStore.getInitialState(), true); });
+
+  it("keeps a requested piece tab active and falls back to the first piece", () => {
+    const project = useDocumentStore.getState().project;
+    const second = { ...project.pieces[0]!, id: "piece-2" as never, name: "Pieza 2" };
+    const withPieces = { ...project, pieces: [...project.pieces, second] };
+    expect(resolveActivePieceId(withPieces, second.id)).toBe(second.id);
+    expect(resolveActivePieceId(withPieces, "missing" as never)).toBe(project.pieces[0]!.id);
+  });
+
+  it("autosaves only unsaved committed project state while active", () => {
+    const project = useDocumentStore.getState().project;
+    expect(shouldAutosaveProject("prompted-autosave", "idle", project)).toBe(true);
+    expect(shouldAutosaveProject("manual", "idle", project)).toBe(false);
+    expect(shouldAutosaveProject("prompted-autosave", "active", project)).toBe(false);
+    expect(shouldAutosaveProject("prompted-autosave", "idle", project, { projectId: project.id, snapshot: JSON.stringify(project) })).toBe(false);
+  });
 
   it("surfaces an explicit pending official-save state", () => {
     usePersistenceStore.getState().set("pending", "Cambios pendientes de guardar");

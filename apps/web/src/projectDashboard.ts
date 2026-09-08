@@ -35,6 +35,32 @@ const pieceStateLabels: Readonly<Record<PieceSnapshot["state"], string>> = {
 export const dashboardProjects = (projects: readonly DashboardProjectSource[]): readonly DashboardProject[] =>
   projects.map(({ metadata, project }) => ({ ...metadata, pieces: project.pieces }));
 
+export interface ProjectDetail {
+  readonly id: string;
+  readonly name: string;
+  readonly pieces: readonly { readonly id: string; readonly name: string; readonly material: string | undefined; readonly thicknessMm: number | undefined; readonly state: string; readonly sketches: readonly { readonly pageId: string; readonly sketchId: string; readonly label: string }[] }[];
+  readonly pages: readonly { readonly id: string; readonly label: string; readonly sketchCount: number }[];
+  readonly assemblies: readonly [];
+}
+
+export const projectDetail = ({ metadata, project }: DashboardProjectSource): ProjectDetail => {
+  const pageNumbers = new Map(project.pages.map((page, index) => [page.id, index + 1]));
+  return {
+    id: metadata.id,
+    name: projectDisplayName(metadata),
+    pieces: project.pieces.map((piece) => ({
+      id: piece.id,
+      name: piece.name,
+      material: piece.material,
+      thicknessMm: piece.thicknessMm,
+      state: pieceStateLabels[piece.state],
+      sketches: piece.sketches.map((reference, index) => ({ ...reference, label: `Croquis ${index + 1} · Página ${pageNumbers.get(reference.pageId) ?? "?"}` })),
+    })),
+    pages: project.pages.map((page, index) => ({ id: page.id, label: `Página ${index + 1}`, sketchCount: page.elements.filter((element) => element.type === "sketch").length })),
+    assemblies: [],
+  };
+};
+
 export const pieceDisplayLabel = (piece: PieceSnapshot): string => [
   piece.name,
   piece.material,
