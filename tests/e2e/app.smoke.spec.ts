@@ -1662,7 +1662,7 @@ test("keeps native circle and arc center datums visible after deselect and tool 
   };
 
   await page.getByRole("button", { name: "Seleccion" }).click();
-  await page.mouse.dblclick(blankPoint.x, blankPoint.y);
+  await page.mouse.dblclick(bounds!.x + 500, bounds!.y + 500);
   await expect(page.locator("[data-native-center-datum]")).toHaveCount(3);
   await expect(page.locator("[data-native-center-datum]").first()).toHaveCSS("pointer-events", "none");
   await assertNativeCircleDatumsAligned();

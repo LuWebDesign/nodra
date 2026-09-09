@@ -721,7 +721,7 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
           const result = await repository.saveProject(source.metadata, source.project);
           if (!result.ok) { persist.set("failed", result.error ?? "No se pudo crear el proyecto"); return; }
           lastOfficialSave.current = { projectId: source.metadata.id, snapshot: JSON.stringify(source.project) };
-          setDashboardSources((current) => [source, ...current]); setActiveProjectMetadata(source.metadata); setProject(source.project); setActivePieceId(source.project.pieces[0]!.id); setNewProjectDraft(undefined); setMode("design"); setView("editor");
+          setDashboardSources((current) => [source, ...current]); setActiveProjectMetadata(source.metadata); setProject(source.project); setActivePieceId(source.project.pieces[0]!.id); setDetailProjectId(source.metadata.id); setNewProjectDraft(undefined); setMode("design"); setView("project");
           saveProjectMirror(source.project);
           persist.set("saved", "Proyecto guardado");
         } catch (error) { persist.set("failed", error instanceof Error ? error.message : "No se pudo crear el proyecto"); }
@@ -1943,11 +1943,11 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
     centeredViewport.current = undefined;
     setPanMm({ x: 0, y: 0 });
   };
-  const switchPage = (nextPageId: string) => {
+  const switchPage = (nextPageId: string) => guardedNavigation(() => {
     if (nextPageId === project.activePageId) return;
     setProject({ ...project, activePageId: pageId(nextPageId) });
     resetPageInteraction();
-  };
+  });
   const activatePiece = (pieceIdValue: PieceId) => guardedNavigation(() => {
     const piece = project.pieces.find((candidate) => candidate.id === pieceIdValue) ?? project.pieces[0]!;
     setActivePieceId(piece.id);
