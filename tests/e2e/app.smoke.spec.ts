@@ -1423,6 +1423,7 @@ test("edita el radio y los extremos de un arco nativo", async ({ page }) => {
   await page.getByRole("button", { name: "Rehacer" }).click();
   await expect(arc).toHaveAttribute("d", resizedPath!);
 
+  await expect.poll(() => arc.boundingBox()).not.toBeNull();
   const resizedBounds = await arc.boundingBox();
   expect(resizedBounds).not.toBeNull();
   await page.getByRole("button", { name: "Forma" }).click();
@@ -1629,7 +1630,9 @@ test("keeps native circle and arc center datums visible after deselect and tool 
   const bounds = await page.locator(".page").boundingBox();
   expect(bounds).not.toBeNull();
   const center = { x: bounds!.x + 180, y: bounds!.y + 180 };
-  const blankPoint = { x: bounds!.x + 40, y: bounds!.y + 40 };
+  const canvasBounds = await page.locator(".canvas").boundingBox();
+  expect(canvasBounds).not.toBeNull();
+  const blankPoint = { x: canvasBounds!.x + 40, y: canvasBounds!.y + 40 };
 
   await page.getByRole("button", { name: "Círculo" }).click();
   await page.mouse.click(center.x, center.y);
@@ -1669,9 +1672,10 @@ test("keeps native circle and arc center datums visible after deselect and tool 
 
   const datumBeforePan = await page.locator("[data-native-center-datum]").evaluateAll((nodes) => nodes.map((node) => { const box = node.getBoundingClientRect(); return { x: box.x + box.width / 2, y: box.y + box.height / 2 }; }));
   await page.getByRole("button", { name: "Desplazar" }).click();
+  await expect(page.getByRole("button", { name: "Desplazar" })).toHaveAttribute("aria-pressed", "true");
   await page.mouse.move(blankPoint.x, blankPoint.y);
   await page.mouse.down();
-  await page.mouse.move(blankPoint.x + 45, blankPoint.y + 30);
+  await page.mouse.move(blankPoint.x + 45, blankPoint.y + 30, { steps: 5 });
   await page.mouse.up();
   await expect.poll(() => page.locator("[data-native-center-datum]").count()).toBe(3);
   await assertNativeCircleDatumsAligned();
