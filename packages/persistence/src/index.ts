@@ -209,6 +209,7 @@ export class DexieProjectRepository implements ProjectRepository, FontRepository
 export interface AutosaveOptions { readonly debounceMs?: number; readonly retryMs?: number; readonly maxRetries?: number }
 export class DebouncedAutosave {
   private timer: ReturnType<typeof setTimeout> | undefined;
+  private latestProjectId: string | undefined;
   private latestRevision = -1;
   private pending: { metadata: ProjectMetadata; document: DocumentSnapshot | ProjectSnapshot } | undefined;
   private attempts = 0;
@@ -217,6 +218,13 @@ export class DebouncedAutosave {
   constructor(private readonly repository: ProjectRepository, private readonly options: AutosaveOptions = {}) {}
 
   schedule(metadata: ProjectMetadata, document: DocumentSnapshot | ProjectSnapshot): void {
+    if (metadata.id !== this.latestProjectId) {
+      if (this.timer) clearTimeout(this.timer);
+      this.timer = undefined;
+      this.pending = undefined;
+      this.latestProjectId = metadata.id;
+      this.latestRevision = -1;
+    }
     if (document.revision < this.latestRevision) return;
     this.latestRevision = document.revision;
     this.pending = { metadata, document };
@@ -230,7 +238,7 @@ export class DebouncedAutosave {
   async flush(): Promise<SaveResult | undefined> {
     if (!this.pending) return undefined;
     const pending = this.pending;
-    if (pending.document.revision < this.latestRevision) return undefined;
+    if (pending.metadata.id !== this.latestProjectId || pending.document.revision < this.latestRevision) return undefined;
     this.pending = undefined;
     const result = await this.repository.saveProject(pending.metadata, pending.document);
     if (result.ok) { this.status.state = "saved"; return result; }

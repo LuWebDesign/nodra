@@ -23,6 +23,7 @@ import {
   type SketchElement,
   type ConnectableNodeAddress,
   type ExplicitConnection,
+  type PositionalCoincidence,
   elementId,
   nextRevision,
   revision,
@@ -30,12 +31,13 @@ import {
   isCircleElement,
 } from "@nodra/domain";
 import { validateDocument } from "@nodra/validation";
-import { boundsOf, boundsOfElements, connectableNodeAddress, contourWithPoints, directionVector, elementCenter, elementToContour, dimensionGeometry, elementToCurves, glyphGeometryNodes, groupCenter, intersectCurves, lineElementToCurve, circleElementToCurve, arcElementToCurve, mirrorHandleOffset, partitionCurveByInterval, selectRemovableCurveInterval, selectSourcedCurveInterval, realGeometryNodes, resizeGroup, rotateElements, shapeResultContours, tangentAt, transformPoint, splitCuttableSegments, classifyCutGraph, cuttableSegments, lineSegmentIntersection, rotatedLineEndpoints, sketchEdgeAtAddress, sketchEdgeIndexAtAddress, solveSketchConstraints, solveCircleConstraints, cubicBezierLineIntersections, splitCubicBezierAtParameters, flattenCubicBezier, GEOMETRY_EPSILON, type CubicBezier, type Direction, type LineCurve2D, type SourcedCurve2D } from "@nodra/geometry";
+import { boundsOf, boundsOfElements, connectableNodeAddress, contourWithPoints, directionVector, elementCenter, elementToContour, dimensionGeometry, elementToCurves, glyphGeometryNodes, groupCenter, intersectCurves, lineElementToCurve, circleElementToCurve, arcElementToCurve, mirrorHandleOffset, partitionCurveByInterval, selectRemovableCurveInterval, selectSourcedCurveInterval, realGeometryNodes, resizeGroup, rotateElements, shapeResultContours, tangentAt, transformPoint, connectableNode, splitCuttableSegments, classifyCutGraph, cuttableSegments, lineSegmentIntersection, rotatedLineEndpoints, sketchEdgeAtAddress, sketchEdgeIndexAtAddress, solveSketchConstraints, solveCircleConstraints, cubicBezierLineIntersections, splitCubicBezierAtParameters, flattenCubicBezier, GEOMETRY_EPSILON, type CubicBezier, type Direction, type LineCurve2D, type SourcedCurve2D } from "@nodra/geometry";
 import { insertSplineNode, moveSplineHandle as moveSplineHandleData, moveSplineNode as moveSplineNodeData } from "./spline.js";
 import { topologyReferenceKey, type ReferenceResolution, type TopologyEditResult, type TopologyReference } from "./topology.js";
 
 export * from "./spline.js";
 export * from "./topology.js";
+export * from "./sketchSession.js";
 
 export type ElementPatch = { readonly position?: PointMm; readonly size?: SizeMm; readonly center?: PointMm; readonly radius?: number; readonly rotation?: number; readonly cornerRadius?: number; readonly cornerRadii?: { readonly topLeft: number; readonly topRight: number; readonly bottomRight: number; readonly bottomLeft: number }; readonly style?: VisualStyle; readonly operation?: OperationMetadata; readonly start?: PointMm; readonly end?: PointMm; readonly text?: string; readonly fontFamily?: string; readonly fontSize?: number; readonly fontWeight?: "normal" | "bold"; readonly fontStyle?: "normal" | "italic"; readonly textAlign?: "left" | "center" | "right"; readonly lineHeight?: number; readonly scaleX?: number; readonly scaleY?: number };
 export interface ContourNodeAddress { readonly ringIndex: number; readonly pointIndex: number }
@@ -63,12 +65,81 @@ const withoutDanglingDocumentConstraints = (document: DocumentSnapshot, elements
   const constraints = document.constraints.filter((constraint) => constraint.references.every((reference) => { const sketch = sketches.get(reference.elementId); return sketch !== undefined && ("nodeId" in reference ? sketch.nodes.some((node) => node.id === reference.nodeId) : sketch.edges.some((edge) => edge.id === reference.edgeId)); }));
   return constraints.length === document.constraints.length ? document : { ...document, constraints };
 };
-const replaceElements = (document: DocumentSnapshot, elements: readonly Element[]): CommandResult => result(withElements(withoutDanglingDocumentConstraints(document, elements), elements));
+const relationPoint = (elements: readonly Element[], reference: PositionalCoincidence["first"]): PointMm | undefined => {
+  const element = elements.find((candidate) => candidate.id === reference.elementId);
+  return element ? connectableNode(element, reference.node)?.point : undefined;
+};
+const translateRelationElement = (element: Element, delta: PointMm): Element | undefined => {
+  if (element.type === "line") return { ...element, start: { x: element.start.x + delta.x, y: element.start.y + delta.y }, end: { x: element.end.x + delta.x, y: element.end.y + delta.y } };
+  if (element.type === "circle" || element.type === "arc") return { ...element, center: { x: element.center.x + delta.x, y: element.center.y + delta.y } };
+  if (element.type === "sketch") return { ...element, nodes: element.nodes.map((node) => ({ ...node, point: { x: node.point.x + delta.x, y: node.point.y + delta.y } })) };
+  if (element.type === "path") return translatePath(element, delta);
+  return undefined;
+};
+const translationWouldBreakFixedSketch = (document: DocumentSnapshot, element: Element): boolean => {
+  if (element.type === "circle") return (element.circleConstraints ?? []).some((constraint) => constraint.kind === "center-horizontal" || constraint.kind === "center-vertical");
+  if ((document.constraints ?? []).some((constraint) => constraint.references.some((reference) => reference.elementId === element.id))) return true;
+  if (element.type !== "sketch") return false;
+  const fixed = [...(element.constraints ?? []), ...(document.constraints ?? [])].filter((constraint) => constraint.kind === "fixed");
+  return fixed.some((constraint) => constraint.references.some((reference) => reference.elementId === element.id));
+};
+/** Enforces only explicitly opted-in coincidences. Legacy connections remain metadata. */
+const enforcePositionalCoincidences = (document: DocumentSnapshot, proposed: readonly Element[]): readonly Element[] | string => {
+  const relations = document.positionalCoincidences ?? [];
+  if (!relations.length) return proposed;
+  const elements = [...proposed];
+  const before = document.elements;
+  for (const relation of relations) {
+    const firstBefore = relationPoint(before, relation.first); const secondBefore = relationPoint(before, relation.second);
+    if (!firstBefore || !secondBefore || Math.hypot(firstBefore.x - secondBefore.x, firstBefore.y - secondBefore.y) > 1e-6) return "Positional coincidence has invalid initial geometry";
+  }
+  for (let pass = 0; pass <= relations.length; pass++) {
+    let changed = false;
+    for (const relation of relations) {
+      const first = relationPoint(elements, relation.first); const second = relationPoint(elements, relation.second);
+      if (!first || !second) return "Positional coincidence references unsupported geometry";
+      const dx = first.x - second.x; const dy = first.y - second.y;
+      if (Math.hypot(dx, dy) <= 1e-6) continue;
+      const firstBefore = relationPoint(before, relation.first)!; const secondBefore = relationPoint(before, relation.second)!;
+      const firstMoved = Math.hypot(first.x - firstBefore.x, first.y - firstBefore.y) > 1e-7;
+      const secondMoved = Math.hypot(second.x - secondBefore.x, second.y - secondBefore.y) > 1e-7;
+      if (firstMoved && secondMoved) return "Positional coincidence conflict: both anchors moved";
+      const moveReference = firstMoved ? relation.second : relation.first;
+      const movedElementId = moveReference.elementId;
+      const current = elements.find((element) => element.id === movedElementId);
+      if (!current) return "Positional coincidence references a missing element";
+      const delta = firstMoved ? { x: dx, y: dy } : { x: -dx, y: -dy };
+      if (translationWouldBreakFixedSketch(document, current)) return "Positional coincidence cannot move a fixed sketch";
+      let translated = translateRelationElement(current, delta);
+      if (current.type === "arc") {
+        const endpoints = connectedArcEndpointPoints({ ...document, elements }, current);
+        if (endpoints.start && endpoints.end) {
+          const geometry = arcGeometryThroughEndpoints(current, endpoints.start, endpoints.end, current.radius);
+          if (!geometry) return "Arc radius is too small for both endpoint relations";
+          translated = { ...current, ...geometry };
+        }
+      }
+      if (!translated) return "Positional coincidence cannot propagate through this geometry";
+      const index = elements.findIndex((element) => element.id === movedElementId);
+      elements[index] = translated;
+      changed = true;
+    }
+    if (!changed) return elements;
+  }
+  return "Positional coincidence cycle could not be solved";
+};
+const replaceElements = (document: DocumentSnapshot, elements: readonly Element[]): CommandResult => {
+  const enforced = enforcePositionalCoincidences(document, elements);
+  if (typeof enforced === "string") return { success: false, error: enforced };
+  return result(withElements(withoutDanglingDocumentConstraints(document, enforced), enforced));
+};
 const replaceTopology = (document: DocumentSnapshot, edit: TopologyEditResult): CommandResult => {
-  const checked = result(withElements(withoutDanglingDocumentConstraints(document, edit.elements), edit.elements));
+  const enforced = enforcePositionalCoincidences(document, edit.elements);
+  if (typeof enforced === "string") return { success: false, error: enforced };
+  const checked = result(withElements(withoutDanglingDocumentConstraints(document, enforced), enforced));
   return checked.success ? { ...checked, topology: { ...edit, elements: checked.document.elements } } : checked;
 };
-const removeConnectionsFor = (document: DocumentSnapshot, ids: ReadonlySet<ElementId>): DocumentSnapshot => ({ ...document, connections: (document.connections ?? []).filter((connection) => !ids.has(connection.first.elementId) && !ids.has(connection.second.elementId)) });
+const removeConnectionsFor = (document: DocumentSnapshot, ids: ReadonlySet<ElementId>): DocumentSnapshot => ({ ...document, connections: (document.connections ?? []).filter((connection) => !ids.has(connection.first.elementId) && !ids.has(connection.second.elementId)), positionalCoincidences: (document.positionalCoincidences ?? []).filter((relation) => !ids.has(relation.first.elementId) && !ids.has(relation.second.elementId)) });
 const elementIndex = (document: DocumentSnapshot, id: ElementId): number => document.elements.findIndex((element) => element.id === id);
 
 /** Keeps native Arc handling explicit where generic property-element transforms
@@ -76,14 +147,140 @@ const elementIndex = (document: DocumentSnapshot, id: ElementId): number => docu
 const isArcElement = (element: Element): element is ArcElement => element.type === "arc";
 const translateArc = (element: ArcElement, delta: PointMm, id = element.id): ArcElement => ({ ...element, id, center: { x: element.center.x + delta.x, y: element.center.y + delta.y } });
 const normalizeArcAngle = (angle: number): number => ((angle % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2);
+const namedNodePoint = (document: DocumentSnapshot, reference: ExplicitConnection["first"]): PointMm | undefined => {
+  const element = document.elements.find((candidate) => candidate.id === reference.elementId);
+  if (!element) return undefined;
+  return realGeometryNodes(element).find((_, index) => JSON.stringify(connectableNodeAddress(element, index)) === JSON.stringify(reference.node))?.point;
+};
+const arcGeometryThroughEndpoints = (arc: ArcElement, start: PointMm, end: PointMm, radius: number): Pick<ArcElement, "center" | "startAngle" | "endAngle"> | undefined => {
+  const dx = end.x - start.x; const dy = end.y - start.y; const chord = Math.hypot(dx, dy); const halfChord = chord / 2;
+  if (!Number.isFinite(radius) || radius <= 0 || !Number.isFinite(chord) || chord <= 1e-9 || radius < halfChord) return undefined;
+  // Use a ratio rather than r² - c²/4: the latter can overflow for valid,
+  // finite model values even when the resulting height is representable.
+  const ratio = halfChord / radius; const height = radius * Math.sqrt(Math.max(0, 1 - ratio * ratio));
+  if (!Number.isFinite(height)) return undefined;
+  const midpoint = { x: (start.x + end.x) / 2, y: (start.y + end.y) / 2 };
+  const normal = { x: -dy / chord, y: dx / chord }; const candidates = [{ x: midpoint.x + normal.x * height, y: midpoint.y + normal.y * height }, { x: midpoint.x - normal.x * height, y: midpoint.y - normal.y * height }];
+  const center = candidates.sort((first, second) => Math.hypot(first.x - arc.center.x, first.y - arc.center.y) - Math.hypot(second.x - arc.center.x, second.y - arc.center.y))[0]!;
+  if (![center.x, center.y].every(Number.isFinite)) return undefined;
+  return { center, startAngle: normalizeArcAngle(Math.atan2(start.y - center.y, start.x - center.x)), endAngle: normalizeArcAngle(Math.atan2(end.y - center.y, end.x - center.x)) };
+};
+const allConnectionMetadata = (document: DocumentSnapshot): readonly ExplicitConnection[] => [...(document.connections ?? []), ...(document.positionalCoincidences ?? []).map((relation) => ({ id: relation.id, first: relation.first, second: relation.second }))];
+const isEnforcedConnection = (document: DocumentSnapshot, connection: ExplicitConnection): boolean => (document.positionalCoincidences ?? []).some((relation) => relation.id === connection.id);
+const preservesElementConnections = (document: DocumentSnapshot, before: Element, after: Element): boolean => {
+  const point = (element: Element, reference: ExplicitConnection["first"]): PointMm | undefined => realGeometryNodes(element).find((_, index) => JSON.stringify(connectableNodeAddress(element, index)) === JSON.stringify(reference.node))?.point;
+  for (const connection of allConnectionMetadata(document)) {
+    if (isEnforcedConnection(document, connection)) continue;
+    const own = connection.first.elementId === before.id ? connection.first : connection.second.elementId === before.id ? connection.second : undefined;
+    if (!own) continue;
+    const other = connection.first.elementId === before.id ? connection.second : connection.first;
+    const otherElement = document.elements.find((element) => element.id === other.elementId);
+    const oldOwn = point(before, own); const oldOther = otherElement ? point(otherElement, other) : undefined; const newOwn = point(after, own);
+    if (!oldOwn || !oldOther || !newOwn) return false;
+    if (Math.hypot(oldOwn.x - oldOther.x, oldOwn.y - oldOther.y) <= 1e-7 && Math.hypot(newOwn.x - oldOther.x, newOwn.y - oldOther.y) > 1e-7) return false;
+  }
+  return true;
+};
+const connectedArcEndpointPoints = (document: DocumentSnapshot, arc: ArcElement): Partial<Record<"start" | "end", PointMm>> => Object.fromEntries(allConnectionMetadata(document).flatMap((connection) => {
+  const source = connection.first.elementId === arc.id ? connection.first : connection.second.elementId === arc.id ? connection.second : undefined;
+  if (!source || source.node.kind !== "named" || (source.node.name !== "start" && source.node.name !== "end")) return [];
+  const other = connection.first.elementId === arc.id ? connection.second : connection.first;
+  const point = namedNodePoint(document, other);
+  return point ? [[source.node.name, point]] : [];
+}));
 const ARC_EDIT_ANGLE_EPSILON = 1e-10;
 const arcAngleDistance = (first: number, second: number): number => Math.abs(Math.atan2(Math.sin(first - second), Math.cos(first - second)));
+
+/** Apply an exact native-arc radius change while keeping every connected
+ * endpoint fixed. A failed geometry/connection guard leaves the document
+ * untouched so inspector and annotation edits have identical semantics. */
+const updateArcRadius = (document: DocumentSnapshot, target: ArcElement, radius: number): CommandResult => {
+  if (!Number.isFinite(radius) || radius <= 0) return { success: false, error: "Arc radius must be positive" };
+  if (radius === target.radius) return { success: true, document };
+  const endpointPoints = connectedArcEndpointPoints(document, target);
+  let center = target.center; let startAngle = target.startAngle; let endAngle = target.endAngle;
+  if (endpointPoints.start && endpointPoints.end) {
+    const geometry = arcGeometryThroughEndpoints(target, endpointPoints.start, endpointPoints.end, radius);
+    if (!geometry) return { success: false, error: "Arc radius is too small for both endpoint relations" };
+    center = geometry.center; startAngle = geometry.startAngle; endAngle = geometry.endAngle;
+  } else if (endpointPoints.start || endpointPoints.end) {
+    const fixed = endpointPoints.start ?? endpointPoints.end!;
+    const endpoint = endpointPoints.start
+      ? { x: target.center.x + target.radius * Math.cos(target.startAngle), y: target.center.y + target.radius * Math.sin(target.startAngle) }
+      : { x: target.center.x + target.radius * Math.cos(target.endAngle), y: target.center.y + target.radius * Math.sin(target.endAngle) };
+    const length = Math.hypot(endpoint.x - target.center.x, endpoint.y - target.center.y);
+    if (length <= 1e-9) return { success: false, error: "Arc endpoint connection has zero length" };
+    center = { x: fixed.x - (endpoint.x - target.center.x) / length * radius, y: fixed.y - (endpoint.y - target.center.y) / length * radius };
+  }
+  const updated = { ...target, center, radius, startAngle, endAngle };
+  if (!preservesElementConnections(document, target, updated)) return { success: false, error: "Arc radius change would break an existing connection" };
+  return replaceElements(document, document.elements.map((element) => element.id === target.id && element.type === "arc" ? updated : element));
+};
 
 export const createElement = (element: Element, connections: readonly ExplicitConnection[] = []): EditorCommand => ({
   name: `create:${element.type}`,
   apply: (document) => document.elements.some((current) => current.id === element.id)
     ? { success: false, error: `Element already exists: ${element.id}` }
      : replaceElements({ ...document, connections: [...(document.connections ?? []), ...connections] }, [...document.elements, { ...element }]),
+});
+
+/** Creates only an enforced positional coincidence; legacy connections are untouched. */
+const makePositionalCoincidence = (source: ExplicitConnection["first"], target: ExplicitConnection["second"], legacy: boolean): EditorCommand => ({
+  name: `position-connection:${source.elementId}:${target.elementId}`,
+  apply: (document) => {
+    if (source.elementId === target.elementId) return { success: false, error: "A positional connection requires two different elements" };
+    const sourceElement = document.elements.find((element) => element.id === source.elementId);
+    const targetElement = document.elements.find((element) => element.id === target.elementId);
+    if (!sourceElement || !targetElement) return { success: false, error: "Positional connection element not found" };
+    const supported = (element: Element): boolean => element.type === "line" || element.type === "sketch" || element.type === "path" || element.type === "circle" || element.type === "arc";
+    const hasHandle = (node: ExplicitConnection["first"]["node"]): boolean => (node.kind === "path" || node.kind === "spline" || node.kind === "sketch") && node.handle !== undefined;
+    const legacySource = sourceElement.type === "circle" || sourceElement.type === "arc";
+    if ((!supported(sourceElement) || (!legacy && !supported(targetElement)) || (legacy && !legacySource)) || hasHandle(source.node) || hasHandle(target.node)) return { success: false, error: "Unsupported positional connection anchor" };
+    const sourcePoint = connectableNode(sourceElement, source.node)?.point;
+    const targetPoint = connectableNode(targetElement, target.node)?.point;
+    if (!sourcePoint || !targetPoint) return { success: false, error: "Positional connection node not found" };
+    if ((legacy ? allConnectionMetadata(document) : document.positionalCoincidences ?? []).some((connection) => (JSON.stringify(connection.first) === JSON.stringify(source) && JSON.stringify(connection.second) === JSON.stringify(target)) || (JSON.stringify(connection.first) === JSON.stringify(target) && JSON.stringify(connection.second) === JSON.stringify(source)))) return { success: false, error: "Positional coincidence already exists" };
+    let moved: Element | undefined;
+    if (sourceElement.type === "arc" && source.node.kind === "named" && (source.node.name === "start" || source.node.name === "end")) {
+      const opposite = source.node.name === "start" ? "end" : "start";
+      const existing = allConnectionMetadata(document).find((connection) => {
+        const candidate = connection.first.elementId === sourceElement.id ? connection.first : connection.second.elementId === sourceElement.id ? connection.second : undefined;
+        return candidate?.node.kind === "named" && candidate.node.name === opposite;
+      });
+      const existingPoint = existing ? namedNodePoint(document, existing.first.elementId === sourceElement.id ? existing.second : existing.first) : undefined;
+      const geometry = existingPoint ? arcGeometryThroughEndpoints(sourceElement, source.node.name === "start" ? targetPoint : existingPoint, source.node.name === "start" ? existingPoint : targetPoint, sourceElement.radius) : undefined;
+      if (existingPoint && !geometry) return { success: false, error: "Arc radius is too small for both endpoint relations" };
+      moved = geometry ? { ...sourceElement, ...geometry } : translateRelationElement(sourceElement, { x: targetPoint.x - sourcePoint.x, y: targetPoint.y - sourcePoint.y });
+    } else moved = translateRelationElement(sourceElement, { x: targetPoint.x - sourcePoint.x, y: targetPoint.y - sourcePoint.y });
+    if (Math.hypot(targetPoint.x - sourcePoint.x, targetPoint.y - sourcePoint.y) > 1e-7 && translationWouldBreakFixedSketch(document, sourceElement)) return { success: false, error: "Positional coincidence cannot move constrained geometry" };
+    if (!moved || !preservesElementConnections(document, sourceElement, moved)) return { success: false, error: "Positional connection would break an existing connection" };
+    const proposed = document.elements.map((element) => element.id === sourceElement.id ? moved! : element);
+    const enforced = legacy ? proposed : enforcePositionalCoincidences(document, proposed);
+    if (typeof enforced === "string") return { success: false, error: enforced };
+    const id = `coincidence-${crypto.randomUUID()}`;
+    const relation: PositionalCoincidence = { id, first: source, second: target };
+    for (const candidate of [...(document.positionalCoincidences ?? []), relation]) {
+      const first = relationPoint(enforced, candidate.first); const second = relationPoint(enforced, candidate.second);
+      if (!first || !second || Math.hypot(first.x - second.x, first.y - second.y) > 1e-6) return { success: false, error: "Positional coincidence conflict" };
+    }
+    const connections = legacy ? [...(document.connections ?? []), { id, first: source, second: target }] : document.connections ?? [];
+    return result(withElements({ ...document, connections, ...(!legacy ? { positionalCoincidences: [...(document.positionalCoincidences ?? []), relation] } : {}) }, enforced));
+  },
+});
+export const addPositionalCoincidence = (source: ExplicitConnection["first"], target: ExplicitConnection["second"]): EditorCommand => makePositionalCoincidence(source, target, false);
+/** Backward-compatible command: retains the historical explicit connection metadata. */
+export const addPositionalConnection = (source: ExplicitConnection["first"], target: ExplicitConnection["second"]): EditorCommand => makePositionalCoincidence(source, target, true);
+export const deletePositionalCoincidence = (id: string): EditorCommand => ({
+  name: `positional-coincidence-delete:${id}`,
+  apply: (document) => {
+    const relation = (document.positionalCoincidences ?? []).find((candidate) => candidate.id === id);
+    if (!relation) return { success: false, error: `Positional coincidence not found: ${id}` };
+    const remaining = (document.positionalCoincidences ?? []).filter((candidate) => candidate.id !== id);
+    const legacyConnections = document.connections ?? [];
+    const checked = enforcePositionalCoincidences({ ...document, positionalCoincidences: remaining }, document.elements);
+    if (typeof checked === "string") return { success: false, error: checked };
+    return result(withElements({ ...document, connections: legacyConnections, positionalCoincidences: remaining }, checked));
+  },
 });
 
 const sketchNodeId = (): string => `sketch-node-${crypto.randomUUID()}`;
@@ -532,7 +729,7 @@ const connectedSide = (document: DocumentSnapshot, id: ElementId, axis: "x" | "y
     if (address.name === "s") return ["bottom"];
     return [];
   };
-  for (const connection of document.connections ?? []) for (const reference of [connection.first, connection.second]) if (reference.elementId === id) {
+  for (const connection of allConnectionMetadata(document)) for (const reference of [connection.first, connection.second]) if (reference.elementId === id) {
     for (const value of sides(reference.node)) {
       if (value === (axis === "x" ? "left" : "top")) result.leftOrTop = true;
       if (value === (axis === "x" ? "right" : "bottom")) result.rightOrBottom = true;
@@ -548,8 +745,7 @@ export const resizeElementToDimensions = (id: ElementId, field: "width" | "heigh
     if (!element || !Number.isFinite(value) || value <= 0) return { success: false, error: "Dimensions must be positive" };
     if (element.type === "arc") {
       if (field !== "radius") return { success: false, error: "Arc inspector only supports radius" };
-      if (value === element.radius) return { success: true, document };
-      return replaceElements(document, document.elements.map((candidate) => candidate.id === id && candidate.type === "arc" ? { ...candidate, radius: value } : candidate));
+      return updateArcRadius(document, element, value);
     }
     if (element.type === "circle") {
       const radius = field === "radius" ? value : value / 2;
@@ -560,7 +756,9 @@ export const resizeElementToDimensions = (id: ElementId, field: "width" | "heigh
         y: vertical.leftOrTop ? element.center.y - element.radius + radius : vertical.rightOrBottom ? element.center.y + element.radius - radius : element.center.y,
       };
       if (radius === element.radius && center.x === element.center.x && center.y === element.center.y) return { success: true, document };
-      return replaceElements(document, document.elements.map((candidate) => candidate.id === id && candidate.type === "circle" ? { ...candidate, center, radius } : candidate));
+      const updated = { ...element, center, radius };
+      if (!preservesElementConnections(document, element, updated)) return { success: false, error: "Circle resize would break an existing connection" };
+      return replaceElements(document, document.elements.map((candidate) => candidate.id === id && candidate.type === "circle" ? updated : candidate));
     }
     const target = aspectLock ? (field === "width" ? { width: value, height: value * element.size.height / element.size.width } : { width: value * element.size.width / element.size.height, height: value }) : { ...element.size, [field]: value };
     if (![target.width, target.height].every((candidate) => Number.isFinite(candidate) && candidate > 0)) return { success: false, error: "Dimensions must be positive" };
@@ -1946,8 +2144,7 @@ export const updateDimensionValue = (dimensionId: ElementId, value: number): Edi
       const nodeIds = [first, second].map((reference) => "nodeId" in reference ? reference.nodeId : undefined);
       if (first.elementId !== target.id || second.elementId !== target.id || !nodeIds.includes("center") || !nodeIds.some((nodeId) => nodeId === "start" || nodeId === "end")) return { success: false, error: "Arc radial dimensions require center and endpoint references" };
       const radius = dimension.kind === "diameter" ? value / 2 : value;
-      if (radius === target.radius) return { success: true, document };
-      return replaceElements(document, document.elements.map((element) => element.id === target.id && element.type === "arc" ? { ...element, radius } : element));
+      return updateArcRadius(document, target, radius);
     }
     if ((dimension.kind === "radius" || dimension.kind === "diameter") && dimension.driving !== true) return { success: false, error: "Only driving circular dimensions can change a circle" };
         if (dimension.kind === "radius" || dimension.kind === "diameter") {
@@ -1957,7 +2154,22 @@ export const updateDimensionValue = (dimensionId: ElementId, value: number): Edi
         const drivingConstraint = target.circleConstraints?.find((constraint) => constraint.id === dimension.constraintId);
         if (!drivingConstraint || drivingConstraint.kind !== dimension.kind || drivingConstraint.driving !== true) return { success: false, error: "Driving circular dimension constraint is missing or mismatched" };
         const radius = dimension.kind === "diameter" ? value / 2 : value;
-        const updated = { ...target, radius, circleConstraints: target.circleConstraints!.map((constraint) => constraint.id === dimension.constraintId ? { ...constraint, value } : constraint) };
+        const endpointConnection = allConnectionMetadata(document).find((connection) => {
+          const source = connection.first.elementId === target.id ? connection.first : connection.second.elementId === target.id ? connection.second : undefined;
+          return source?.node.kind === "named" && ["n", "e", "s", "w"].includes(source.node.name);
+        });
+        let center = target.center;
+        if (endpointConnection) {
+          const source = endpointConnection.first.elementId === target.id ? endpointConnection.first : endpointConnection.second;
+          const other = endpointConnection.first.elementId === target.id ? endpointConnection.second : endpointConnection.first;
+          const endpoint = namedNodePoint(document, source); const fixed = namedNodePoint(document, other);
+          if (!endpoint || !fixed) return { success: false, error: "Circle endpoint positional connection is invalid" };
+          const length = Math.hypot(endpoint.x - target.center.x, endpoint.y - target.center.y);
+          if (length <= 1e-9) return { success: false, error: "Circle endpoint positional connection has zero length" };
+          center = { x: fixed.x - (endpoint.x - target.center.x) / length * radius, y: fixed.y - (endpoint.y - target.center.y) / length * radius };
+        }
+        const updated = { ...target, center, radius, circleConstraints: target.circleConstraints!.map((constraint) => constraint.id === dimension.constraintId ? { ...constraint, value } : constraint) };
+        if (!preservesElementConnections(document, target, updated)) return { success: false, error: "Circle radius change would break an existing connection" };
         return replaceElements(document, document.elements.map((element) => element.id === target.id ? updated : element));
       }
       return { success: false, error: "Circular driving dimensions require a circle" };

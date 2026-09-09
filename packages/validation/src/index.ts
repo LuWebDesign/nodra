@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { CURRENT_SCHEMA_VERSION, hasBounds, type DocumentSnapshot, type Element, type PointMm, type ProjectSnapshot, type SizeMm } from "@nodra/domain";
+import { CURRENT_SCHEMA_VERSION, createDefaultPiece, hasBounds, type DocumentSnapshot, type Element, type PointMm, type ProjectSnapshot, type SizeMm } from "@nodra/domain";
 
 const finite = z.number().finite();
 const nonEmptyId = z.string().min(1);
@@ -38,6 +38,12 @@ const connectableAddress = z.union([
 ]);
 const connectionReference = z.object({ elementId: nonEmptyId, node: connectableAddress }).strict();
 const explicitConnection = z.object({ id: nonEmptyId, first: connectionReference, second: connectionReference }).strict();
+const positionalAddress = z.union([
+  z.object({ kind: z.literal("line"), name: z.enum(["start", "end", "center"]) }).strict(),
+  z.object({ kind: z.enum(["path", "sketch"]), nodeId: nonEmptyId }).strict(),
+  z.object({ kind: z.literal("named"), name: z.enum(["center", "n", "e", "s", "w", "start", "end"]) }).strict(),
+]);
+const positionalCoincidence = z.object({ id: nonEmptyId, first: z.object({ elementId: nonEmptyId, node: positionalAddress }).strict(), second: z.object({ elementId: nonEmptyId, node: positionalAddress }).strict() }).strict();
 const nodeReference = z.object({ kind: z.literal("node"), elementId: nonEmptyId, nodeIndex: finite.int().nonnegative(), nodeId: nonEmptyId.optional() }).strict();
 const lineReference = z.object({ kind: z.literal("line"), elementId: nonEmptyId, edgeId: nonEmptyId.optional(), edgeIndex: finite.int().nonnegative().optional() }).strict();
 const legacyNodeReference = z.object({ elementId: nonEmptyId, nodeIndex: finite.int().nonnegative(), nodeId: nonEmptyId.optional() }).strict().transform((reference) => ({ kind: "node" as const, ...reference }));
@@ -133,8 +139,33 @@ const glyph = z.object({ ...common, type: z.literal("glyph"), position: point, s
 });
 export const elementSchema = z.discriminatedUnion("type", [rectangle, circle, arc, ellipse, line, sketch, dimension, contour, path, splineElementSchema, textElement, glyph]);
 export const layerSchema = z.object({ id: nonEmptyId, name: z.string().min(1), visible: z.boolean(), order: finite.int().nonnegative() }).strict();
-const documentFields = { id: nonEmptyId, revision: finite.int().nonnegative(), origin: z.literal("top-left"), units: z.literal("mm"), page: size, layers: z.array(layerSchema), elements: z.array(elementSchema), constraints: z.array(sketchConstraint).optional(), connections: z.array(explicitConnection).default([]) };
-const validateConnections = (elements: readonly z.infer<typeof elementSchema>[], connections: readonly z.infer<typeof explicitConnection>[], ctx: z.RefinementCtx, path: (string | number)[] = []) => {
+const documentFields = { id: nonEmptyId, revision: finite.int().nonnegative(), origin: z.literal("top-left"), units: z.literal("mm"), page: size, layers: z.array(layerSchema), elements: z.array(elementSchema), constraints: z.array(sketchConstraint).optional(), connections: z.array(explicitConnection).default([]), positionalCoincidences: z.array(positionalCoincidence).optional() };
+const transformAnchor = (point: PointMm, center: PointMm, rotation: number, flipX = false, flipY = false): PointMm => {
+  const x = (point.x - center.x) * (flipX ? -1 : 1); const y = (point.y - center.y) * (flipY ? -1 : 1);
+  return { x: center.x + x * Math.cos(rotation) - y * Math.sin(rotation), y: center.y + x * Math.sin(rotation) + y * Math.cos(rotation) };
+};
+const positionalPoint = (element: z.infer<typeof elementSchema>, address: z.infer<typeof positionalAddress>): PointMm | undefined => {
+  if (element.type === "line" && address.kind === "line") {
+    const center = { x: (element.start.x + element.end.x) / 2, y: (element.start.y + element.end.y) / 2 };
+    const start = transformAnchor(element.start, center, element.rotation, element.flipX, element.flipY); const end = transformAnchor(element.end, center, element.rotation, element.flipX, element.flipY);
+    return address.name === "start" ? start : address.name === "end" ? end : center;
+  }
+  if (element.type === "sketch" && address.kind === "sketch") {
+    return element.nodes.find((candidate) => candidate.id === address.nodeId)?.point;
+  }
+  if (element.type === "path" && address.kind === "path") {
+    const node = element.nodes.find((candidate) => candidate.id === address.nodeId); if (!node) return undefined;
+    const xs = element.nodes.map((candidate) => candidate.anchor.x); const ys = element.nodes.map((candidate) => candidate.anchor.y);
+    return transformAnchor(node.anchor, { x: (Math.min(...xs) + Math.max(...xs)) / 2, y: (Math.min(...ys) + Math.max(...ys)) / 2 }, element.rotation ?? 0, element.flipX === true, element.flipY === true);
+  }
+  if (address.kind === "named" && element.type === "circle") return address.name === "center" ? element.center : address.name === "n" ? { x: element.center.x, y: element.center.y - element.radius } : address.name === "e" ? { x: element.center.x + element.radius, y: element.center.y } : address.name === "s" ? { x: element.center.x, y: element.center.y + element.radius } : address.name === "w" ? { x: element.center.x - element.radius, y: element.center.y } : undefined;
+  if (address.kind === "named" && element.type === "arc") {
+    if (address.name === "center") return element.center;
+    if (address.name === "start" || address.name === "end") { const angle = address.name === "start" ? element.startAngle : element.endAngle; return { x: element.center.x + element.radius * Math.cos(angle), y: element.center.y + element.radius * Math.sin(angle) }; }
+  }
+  return undefined;
+};
+const validateConnections = (elements: readonly z.infer<typeof elementSchema>[], connections: readonly z.infer<typeof explicitConnection>[], ctx: z.RefinementCtx, path: (string | number)[] = [], positional = false) => {
   const byId = new Map(elements.map((element) => [element.id, element]));
   const ids = new Set<string>();
   connections.forEach((connection, index) => {
@@ -149,7 +180,8 @@ const validateConnections = (elements: readonly z.infer<typeof elementSchema>[],
       const valid = element && (validNamed || (address.kind === "line" && element.type === "line") || (address.kind === "path" && element.type === "path") || (address.kind === "spline" && element.type === "spline") || (address.kind === "sketch" && element.type === "sketch"));
       if (!element) ctx.addIssue({ code: "custom", message: "Connection references an unknown element", path: [...path, index, referenceIndex === 0 ? "first" : "second", "elementId"] });
       else if (!valid) ctx.addIssue({ code: "custom", message: "Connection node address is invalid for its element", path: [...path, index, referenceIndex === 0 ? "first" : "second", "node"] });
-      if ((address.kind === "path" || address.kind === "spline" || address.kind === "sketch") && element) {
+      if (positional && element && positionalPoint(element, address as z.infer<typeof positionalAddress>) === undefined) ctx.addIssue({ code: "custom", message: "Positional coincidence reference is invalid for its element", path: [...path, index, referenceIndex === 0 ? "first" : "second", "node"] });
+      if ((address.kind === "path" || address.kind === "spline" || address.kind === "sketch") && element && !positional) {
         const nodes = element.type === "path" || element.type === "spline" ? element.nodes : element.type === "sketch" ? element.nodes : [];
         const node = nodes.find((candidate) => candidate.id === address.nodeId);
         if (!node) ctx.addIssue({ code: "custom", message: "Connection references an unknown node", path: [...path, index, referenceIndex === 0 ? "first" : "second", "node", "nodeId"] });
@@ -163,6 +195,12 @@ const validateConnections = (elements: readonly z.infer<typeof elementSchema>[],
         }
       }
     });
+    if (positional) {
+      const firstElement = byId.get(refs[0].elementId); const secondElement = byId.get(refs[1].elementId);
+      const firstPoint = firstElement ? positionalPoint(firstElement, refs[0].node as z.infer<typeof positionalAddress>) : undefined;
+      const secondPoint = secondElement ? positionalPoint(secondElement, refs[1].node as z.infer<typeof positionalAddress>) : undefined;
+      if (firstPoint && secondPoint && Math.hypot(firstPoint.x - secondPoint.x, firstPoint.y - secondPoint.y) > 1e-6) ctx.addIssue({ code: "custom", message: "Positional coincidence references must be geometrically coincident", path: [...path, index] });
+    }
   });
 };
 export const validateDocumentConstraints = (elements: readonly z.infer<typeof elementSchema>[], constraints: readonly z.infer<typeof sketchConstraint>[], ctx: z.RefinementCtx, path: readonly (string | number)[]) => {
@@ -265,15 +303,34 @@ const documentSchema = z.object({ schemaVersion: z.literal(CURRENT_SCHEMA_VERSIO
   }
   validateDocumentConstraints(value.elements, value.constraints ?? [], ctx, ["constraints"]);
   validateConnections(value.elements, value.connections, ctx, ["connections"]);
+  validateConnections(value.elements, value.positionalCoincidences ?? [], ctx, ["positionalCoincidences"], true);
 });
-const pageSchema = z.object({ id: nonEmptyId, page: size, layers: z.array(layerSchema), elements: z.array(elementSchema), constraints: z.array(sketchConstraint).optional(), connections: z.array(explicitConnection).default([]) }).strict();
+const pageSchema = z.object({ id: nonEmptyId, page: size, layers: z.array(layerSchema), elements: z.array(elementSchema), constraints: z.array(sketchConstraint).optional(), connections: z.array(explicitConnection).default([]), positionalCoincidences: z.array(positionalCoincidence).optional() }).strict();
 const projectPreferencesSchema = z.object({ lineGuidesEnabled: z.boolean().default(true), lineGuideAngle: z.union([z.literal(15), z.literal(45)]).default(45).transform(() => 45) }).strict().default({ lineGuidesEnabled: true, lineGuideAngle: 45 });
-export const projectSchema = z.object({ schemaVersion: z.literal(CURRENT_SCHEMA_VERSION), id: nonEmptyId, revision: finite.int().nonnegative(), origin: z.literal("top-left"), units: z.literal("mm"), capabilities: z.object({ spline: z.literal(1).optional() }).strict().optional(), preferences: projectPreferencesSchema, pages: z.array(pageSchema).min(1), activePageId: nonEmptyId }).strict().superRefine((value, ctx) => {
+const pieceSketchReferenceSchema = z.object({ pageId: nonEmptyId, sketchId: nonEmptyId }).strict();
+const pieceSchema = z.object({ id: nonEmptyId, name: z.string().trim().min(1), material: z.string().trim().min(1).optional(), thicknessMm: finite.gt(0).optional(), process: z.literal("cut"), state: z.enum(["design", "underdefined", "defined", "validated", "ready"]), sketches: z.array(pieceSketchReferenceSchema) }).strict();
+export const projectSchema = z.object({ schemaVersion: z.literal(CURRENT_SCHEMA_VERSION), id: nonEmptyId, revision: finite.int().nonnegative(), origin: z.literal("top-left"), units: z.literal("mm"), capabilities: z.object({ spline: z.literal(1).optional() }).strict().optional(), preferences: projectPreferencesSchema, pieces: z.array(pieceSchema).min(1), pages: z.array(pageSchema).min(1), activePageId: nonEmptyId }).strict().superRefine((value, ctx) => {
   if (!value.pages.some((page) => page.id === value.activePageId)) ctx.addIssue({ code: "custom", message: "Active page does not exist", path: ["activePageId"] });
   const pageIds = new Set(value.pages.map((page) => page.id));
   if (pageIds.size !== value.pages.length) ctx.addIssue({ code: "custom", message: "Page IDs must be unique", path: ["pages"] });
+  const pieceIds = new Set(value.pieces.map((piece) => piece.id));
+  if (pieceIds.size !== value.pieces.length) ctx.addIssue({ code: "custom", message: "Piece IDs must be unique", path: ["pieces"] });
+  const ownedSketches = new Set<string>();
+  value.pieces.forEach((piece, pieceIndex) => piece.sketches.forEach((reference, referenceIndex) => {
+    const page = value.pages.find((candidate) => candidate.id === reference.pageId);
+    const target = page?.elements.find((element) => element.id === reference.sketchId);
+    const key = `${reference.pageId}\u0000${reference.sketchId}`;
+    if (!page) ctx.addIssue({ code: "custom", message: "Piece sketch reference uses an unknown page", path: ["pieces", pieceIndex, "sketches", referenceIndex, "pageId"] });
+    else if (!target) ctx.addIssue({ code: "custom", message: "Piece sketch reference uses an unknown element", path: ["pieces", pieceIndex, "sketches", referenceIndex, "sketchId"] });
+    else if (target.type !== "sketch") ctx.addIssue({ code: "custom", message: "Piece sketch reference must identify a sketch", path: ["pieces", pieceIndex, "sketches", referenceIndex, "sketchId"] });
+    if (ownedSketches.has(key)) ctx.addIssue({ code: "custom", message: "A sketch may belong to only one piece", path: ["pieces", pieceIndex, "sketches", referenceIndex] });
+    ownedSketches.add(key);
+  }));
   value.pages.forEach((page, pageIndex) => {
-    const checked = documentSchema.safeParse({ schemaVersion: CURRENT_SCHEMA_VERSION, id: value.id, revision: value.revision, origin: value.origin, units: value.units, ...(value.capabilities ? { capabilities: value.capabilities } : {}), page: page.page, layers: page.layers, elements: page.elements, ...(page.constraints ? { constraints: page.constraints } : {}), connections: page.connections });
+    page.elements.forEach((element, elementIndex) => {
+      if (element.type === "sketch" && !ownedSketches.has(`${page.id}\u0000${element.id}`)) ctx.addIssue({ code: "custom", message: "Sketch elements must belong to a piece", path: ["pages", pageIndex, "elements", elementIndex, "id"] });
+    });
+    const checked = documentSchema.safeParse({ schemaVersion: CURRENT_SCHEMA_VERSION, id: value.id, revision: value.revision, origin: value.origin, units: value.units, ...(value.capabilities ? { capabilities: value.capabilities } : {}), page: page.page, layers: page.layers, elements: page.elements, ...(page.constraints ? { constraints: page.constraints } : {}), connections: page.connections, positionalCoincidences: page.positionalCoincidences });
     if (!checked.success) checked.error.issues.forEach((issue) => ctx.addIssue({ code: "custom", message: issue.message, path: ["pages", pageIndex, ...issue.path] }));
   });
 });
@@ -501,11 +558,24 @@ export function validateProject(input: unknown): { readonly success: true; reado
 export function migrateProject(input: unknown): unknown {
   if (typeof input !== "object" || input === null || Array.isArray(input)) return input;
   const candidate = input as Record<string, unknown>;
-  if (candidate.schemaVersion === 7) return { ...migrateSchema7CircleElements(candidate) as Record<string, unknown>, schemaVersion: CURRENT_SCHEMA_VERSION };
-  if (candidate.schemaVersion === 8) return { ...candidate, schemaVersion: CURRENT_SCHEMA_VERSION };
-  if (candidate.schemaVersion !== 1 && candidate.schemaVersion !== 2 && candidate.schemaVersion !== 3 && candidate.schemaVersion !== 4 && candidate.schemaVersion !== 5 && candidate.schemaVersion !== 6) return input;
-  const pages = migrateLegacyPages(candidate.pages);
-  return { ...migrateSchema7CircleElements({ ...candidate, pages }) as Record<string, unknown>, schemaVersion: CURRENT_SCHEMA_VERSION };
+  if (![1, 2, 3, 4, 5, 6, 7, 8, CURRENT_SCHEMA_VERSION].includes(candidate.schemaVersion as number)) return input;
+  let migrated: Record<string, unknown>;
+  if (candidate.schemaVersion === 7) migrated = { ...migrateSchema7CircleElements(candidate) as Record<string, unknown>, schemaVersion: CURRENT_SCHEMA_VERSION };
+  else if (candidate.schemaVersion === 8 || candidate.schemaVersion === CURRENT_SCHEMA_VERSION) migrated = { ...candidate, schemaVersion: CURRENT_SCHEMA_VERSION };
+  else {
+    const pages = migrateLegacyPages(candidate.pages);
+    migrated = { ...migrateSchema7CircleElements({ ...candidate, pages }) as Record<string, unknown>, schemaVersion: CURRENT_SCHEMA_VERSION };
+  }
+  if (migrated.pieces !== undefined) return migrated;
+  const sketches = Array.isArray(migrated.pages) ? migrated.pages.flatMap((page) => {
+    if (typeof page !== "object" || page === null || Array.isArray(page)) return [];
+    const currentPage = page as Record<string, unknown>;
+    if (typeof currentPage.id !== "string" || !Array.isArray(currentPage.elements)) return [];
+    return currentPage.elements.flatMap((element) => typeof element === "object" && element !== null && !Array.isArray(element) && (element as Record<string, unknown>).type === "sketch" && typeof (element as Record<string, unknown>).id === "string" ? [{ pageId: currentPage.id, sketchId: (element as Record<string, unknown>).id }] : []);
+  }) : [];
+  const projectId = typeof migrated.id === "string" ? migrated.id : "";
+  const piece = createDefaultPiece(projectId);
+  return { ...migrated, pieces: [{ ...piece, state: sketches.length > 0 ? "underdefined" : "design", sketches }] };
 }
 
 export function serializeDocument(document: DocumentSnapshot): string {

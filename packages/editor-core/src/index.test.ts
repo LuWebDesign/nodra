@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createDocument, elementId, layerId, type ArcElement, type DimensionElement, type Element, type EllipseElement, type CircleElement, type LineElement, type GlyphElement, type PathElement, type PointMm, type RectangleElement, type SketchElement, type SplineElement, type TextElement } from "@nodra/domain";
-import { addDocumentConstraint, deleteDocumentConstraint, addSketchConstraint, addSketchSegmentRelation, addToSelection, appendSketchEdge, appendSplineNode, beginGesture, cancelGesture, clearSelection, closePath, closeSplineElement, commitGesture, createEditor, createElement, createPathCubicNode, createSketchLine, cutContourSegment, cutLineAtPoint, cutPathSegment, cutSegment, cutSketchEdge, splitPathLineAt, deleteContourNodes, deleteElement, deleteElementNodes, deletePathNodes, deleteSketchConstraint, dispatch, duplicateElements, flipElements, insertContourNode, invalidDimensionIdsForShapeOperation, moveElement, moveElements, movePathNode, movePathHandle, openPath, previewGesture, previewGestureFromBase, redo, reversePath, removeFromSelection, reorderLayer, resizeElement, resizeElementToDimensions, resizeElements, resizeElementsToDimensions, rotateElementsAroundCenter, select, selectForPointerDown, setDimensionDriving, updateCircleConstraint, deleteCircleConstraint, solveCircle, setLayerVisibility, setPathJoin, shapeOperation, splitPathSegment, toggleSelection, topologyEditForPathSegmentReplacement, topologyReferenceKey, undo, updateContourNode, updateDimensionValue, updateElement, updateElementNode, updateElementStyles, updateSketchConstraint, updateDocumentConstraint, updateSplineHandle, updateSplineNode } from "./index.js";
+import { addDocumentConstraint, deleteDocumentConstraint, addSketchConstraint, addSketchSegmentRelation, addToSelection, appendSketchEdge, appendSplineNode, beginGesture, cancelGesture, clearSelection, closePath, closeSplineElement, commitGesture, createEditor, createElement, addPositionalConnection, addPositionalCoincidence, deletePositionalCoincidence, createPathCubicNode, createSketchLine, cutContourSegment, cutLineAtPoint, cutPathSegment, cutSegment, cutSketchEdge, splitPathLineAt, deleteContourNodes, deleteElement, deleteElementNodes, deletePathNodes, deleteSketchConstraint, dispatch, duplicateElements, flipElements, insertContourNode, invalidDimensionIdsForShapeOperation, moveElement, moveElements, movePathNode, movePathHandle, openPath, previewGesture, previewGestureFromBase, redo, reversePath, removeFromSelection, reorderLayer, resizeElement, resizeElementToDimensions, resizeElements, resizeElementsToDimensions, rotateElementsAroundCenter, select, selectForPointerDown, setDimensionDriving, updateCircleConstraint, deleteCircleConstraint, solveCircle, setLayerVisibility, setPathJoin, shapeOperation, splitPathSegment, toggleSelection, topologyEditForPathSegmentReplacement, topologyReferenceKey, undo, updateContourNode, updateDimensionValue, updateElement, updateElementNode, updateElementStyles, updateSketchConstraint, updateDocumentConstraint, updateSplineHandle, updateSplineNode } from "./index.js";
 import { boundsOfElements, realGeometryNodes } from "@nodra/geometry";
 import type { Direction } from "@nodra/geometry";
 import { appendLinePoint } from "./index.js";
@@ -1159,6 +1159,71 @@ it("converts a zero-radius rectangle to an open path when cutting one edge", () 
     expect(dispatch(initial, createElement(invalid))).toBe(initial);
   });
 
+  it("positions a native arc or circle center on another stable node", () => {
+    const target = createSketchLine(elementId("position-target"), layerId("default"), rectangle.style, { x: 40, y: 50 }, { x: 60, y: 50 });
+    const initial = createEditor({ ...document, elements: [arc, target] });
+    const source = { elementId: arc.id, node: { kind: "named" as const, name: "center" as const } };
+    const destination = { elementId: target.id, node: { kind: "sketch" as const, nodeId: target.nodes[0]!.id } };
+    const positioned = dispatch(initial, addPositionalConnection(source, destination));
+    expect((positioned.document.elements[0] as ArcElement).center).toEqual(target.nodes[0]!.point);
+    const endpointSource = { elementId: arc.id, node: { kind: "named" as const, name: "start" as const } };
+    const endpointPositioned = dispatch(initial, addPositionalConnection(endpointSource, destination));
+    expect((endpointPositioned.document.elements[0] as ArcElement).center).toEqual({ x: target.nodes[0]!.point.x + arc.center.x - (arc.center.x + arc.radius * Math.cos(arc.startAngle)), y: target.nodes[0]!.point.y + arc.center.y - (arc.center.y + arc.radius * Math.sin(arc.startAngle)) });
+    expect(endpointPositioned.document.connections).toHaveLength(1);
+    const endpointArc: ArcElement = { ...arc, id: elementId("two-endpoint-arc"), center: { x: 20, y: 20 }, radius: 10 };
+    const firstFixed = { ...rectangle, id: elementId("first-endpoint-node"), position: { x: 30, y: 20 }, size: { width: 4, height: 4 } };
+    const secondFixed = { ...rectangle, id: elementId("second-endpoint-node"), position: { x: 20, y: 30 }, size: { width: 4, height: 4 } };
+    const firstConnection = { id: "first-endpoint-fixed", first: { elementId: endpointArc.id, node: { kind: "named" as const, name: "start" as const } }, second: { elementId: firstFixed.id, node: { kind: "named" as const, name: "nw" as const } } };
+    const withFirstEndpoint = createEditor({ ...document, elements: [endpointArc, firstFixed, secondFixed], connections: [firstConnection] });
+    const withSecondEndpoint = dispatch(withFirstEndpoint, addPositionalConnection({ elementId: endpointArc.id, node: { kind: "named", name: "end" } }, { elementId: secondFixed.id, node: { kind: "named", name: "nw" } }));
+    expect(withSecondEndpoint.document.connections).toHaveLength(2);
+    expect((withSecondEndpoint.document.elements[0] as ArcElement).center).toEqual(endpointArc.center);
+    expect((withSecondEndpoint.document.elements[0] as ArcElement).radius).toBe(endpointArc.radius);
+    const radial: DimensionElement = { type: "dimension", id: elementId("two-endpoint-radius"), layerId: endpointArc.layerId, kind: "radius", references: [{ kind: "node", elementId: endpointArc.id, nodeIndex: 0, nodeId: "center" }, { kind: "node", elementId: endpointArc.id, nodeIndex: 1, nodeId: "start" }], offset: { x: 8, y: 0 }, precision: 2, units: "mm", rotation: 0, style: rectangle.style };
+    const resized = dispatch(createEditor({ ...withSecondEndpoint.document, elements: [...withSecondEndpoint.document.elements, radial] }), updateDimensionValue(radial.id, 12));
+    const resizedArc = resized.document.elements.find((element) => element.id === endpointArc.id) as ArcElement;
+    expect(resizedArc.radius).toBe(12);
+    expect(resizedArc.center.x + resizedArc.radius * Math.cos(resizedArc.startAngle)).toBeCloseTo(30);
+    expect(resizedArc.center.y + resizedArc.radius * Math.sin(resizedArc.startAngle)).toBeCloseTo(20);
+    expect(resizedArc.center.x + resizedArc.radius * Math.cos(resizedArc.endAngle)).toBeCloseTo(20);
+    expect(resizedArc.center.y + resizedArc.radius * Math.sin(resizedArc.endAngle)).toBeCloseTo(30);
+    expect(positioned.document.connections).toHaveLength(1);
+    expect(positioned.undo).toHaveLength(1);
+    expect(undo(positioned).document).toEqual(initial.document);
+    expect(dispatch(positioned, addPositionalConnection(source, destination))).toBe(positioned);
+  });
+
+  it("fits both endpoint attach orders canonically and rejects unsupported positional edits atomically", () => {
+    const rotatedTarget: RectangleElement = { ...rectangle, id: elementId("rotated-position-target"), position: { x: 12, y: 14 }, size: { width: 4, height: 4 }, rotation: 0.37 };
+    const start = { elementId: arc.id, node: { kind: "named" as const, name: "start" as const } };
+    const end = { elementId: arc.id, node: { kind: "named" as const, name: "end" as const } };
+    const targetNode = (name: "nw" | "se") => ({ elementId: rotatedTarget.id, node: { kind: "named" as const, name } });
+    const first = targetNode("nw"); const second = targetNode("se");
+    const initial = createEditor({ ...document, elements: [arc, rotatedTarget] });
+    const forward = dispatch(dispatch(initial, addPositionalConnection(start, first)), addPositionalConnection(end, second));
+    const forwardArc = forward.document.elements.find((element) => element.id === arc.id) as ArcElement;
+    expect(forwardArc.startAngle).toBeGreaterThanOrEqual(0);
+    expect(forwardArc.endAngle).toBeGreaterThanOrEqual(0);
+    expect(forwardArc.center.x + forwardArc.radius * Math.cos(forwardArc.startAngle)).toBeCloseTo(realGeometryNodes(rotatedTarget).find((node) => node.nodeId === "nw")!.point.x);
+    expect(forwardArc.center.y + forwardArc.radius * Math.sin(forwardArc.startAngle)).toBeCloseTo(realGeometryNodes(rotatedTarget).find((node) => node.nodeId === "nw")!.point.y);
+    const reverseInitial = createEditor({ ...document, elements: [arc, rotatedTarget] });
+    const reverse = dispatch(dispatch(reverseInitial, addPositionalConnection(end, second)), addPositionalConnection(start, first));
+    const reverseArc = reverse.document.elements.find((element) => element.id === arc.id) as ArcElement;
+    expect(reverseArc.startAngle).toBeGreaterThanOrEqual(0);
+    expect(reverseArc.endAngle).toBeGreaterThanOrEqual(0);
+    expect(reverseArc.center.x + reverseArc.radius * Math.cos(reverseArc.endAngle)).toBeCloseTo(realGeometryNodes(rotatedTarget).find((node) => node.nodeId === "se")!.point.x);
+    expect(reverseArc.center.y + reverseArc.radius * Math.sin(reverseArc.endAngle)).toBeCloseTo(realGeometryNodes(rotatedTarget).find((node) => node.nodeId === "se")!.point.y);
+    expect(redo(undo(reverse)).document).toEqual(reverse.document);
+
+    const impossibleTarget = createSketchLine(elementId("impossible-arc-target"), rectangle.layerId, rectangle.style, { x: 100, y: 100 }, { x: 130, y: 100 });
+    const impossible = dispatch(createEditor({ ...document, elements: [arc, impossibleTarget] }), addPositionalConnection(start, { elementId: impossibleTarget.id, node: { kind: "sketch", nodeId: impossibleTarget.nodes[0]!.id } }));
+    expect(dispatch(impossible, addPositionalConnection(end, { elementId: impossibleTarget.id, node: { kind: "sketch", nodeId: impossibleTarget.nodes[1]!.id } }))).toBe(impossible);
+    const centeredArc = { ...arc, center: { x: 14, y: 16 } };
+    const centerConnection = { id: "arc-center-existing", first: { elementId: centeredArc.id, node: { kind: "named" as const, name: "center" as const } }, second: { elementId: rotatedTarget.id, node: { kind: "named" as const, name: "center" as const } } };
+    const centered = createEditor({ ...document, elements: [centeredArc, rotatedTarget], connections: [centerConnection] });
+    expect(dispatch(centered, addPositionalConnection({ elementId: centeredArc.id, node: { kind: "named", name: "start" } }, first))).toBe(centered);
+  });
+
   it("edits native arc center, radius, and endpoint angles atomically", () => {
     const initial = createEditor({ ...document, elements: [arc] });
     const resized = dispatch(initial, resizeElementToDimensions(arc.id, "radius", 8));
@@ -1352,6 +1417,53 @@ it("converts a zero-radius rectangle to an open path when cutting one edge", () 
     const malformed: DimensionElement = { ...radius, id: elementId("malformed-arc-radius"), references: [{ kind: "node", elementId: target.id, nodeIndex: 1, nodeId: "start" }, { kind: "node", elementId: target.id, nodeIndex: 2, nodeId: "end" }] };
     const malformedInitial = createEditor({ ...document, elements: [target, malformed] });
     expect(dispatch(malformedInitial, updateDimensionValue(malformed.id, 15))).toBe(malformedInitial);
+  });
+
+  it("uses the same exact arc-radius geometry for inspector and radial dimension edits", () => {
+    const makeCase = (connectionCount: 0 | 1 | 2) => {
+      const target: ArcElement = { ...arc, id: elementId(`equivalent-arc-${connectionCount}`), center: { x: 10, y: 20 }, radius: 5 };
+      const startAnchor = { ...rectangle, id: elementId(`equivalent-start-${connectionCount}`), position: { x: 15, y: 20 } };
+      const endAnchor = { ...rectangle, id: elementId(`equivalent-end-${connectionCount}`), position: { x: 10, y: 25 } };
+      const connections = [
+        { id: `equivalent-start-connection-${connectionCount}`, first: { elementId: target.id, node: { kind: "named" as const, name: "start" as const } }, second: { elementId: startAnchor.id, node: { kind: "named" as const, name: "nw" as const } } },
+        { id: `equivalent-end-connection-${connectionCount}`, first: { elementId: target.id, node: { kind: "named" as const, name: "end" as const } }, second: { elementId: endAnchor.id, node: { kind: "named" as const, name: "nw" as const } } },
+      ].slice(0, connectionCount);
+      const radial: DimensionElement = { type: "dimension", id: elementId(`equivalent-radius-${connectionCount}`), layerId: target.layerId, kind: "radius", references: [{ kind: "node", elementId: target.id, nodeIndex: 0, nodeId: "center" }, { kind: "node", elementId: target.id, nodeIndex: 1, nodeId: "start" }], offset: { x: 8, y: 0 }, precision: 2, units: "mm", rotation: 0, style: rectangle.style };
+      const initial = createEditor({ ...document, elements: [target, startAnchor, endAnchor, radial], connections });
+      const inspector = dispatch(initial, resizeElementToDimensions(target.id, "radius", 8));
+      const dimensionEdit = dispatch(initial, updateDimensionValue(radial.id, 8));
+      expect(dimensionEdit.document.elements.find((element) => element.id === target.id)).toEqual(inspector.document.elements.find((element) => element.id === target.id));
+      return { initial, inspector, dimensionEdit };
+    };
+
+    for (const connectionCount of [0, 1, 2] as const) makeCase(connectionCount);
+    const impossible = makeCase(2);
+    expect(dispatch(impossible.initial, resizeElementToDimensions(impossible.initial.document.elements[0]!.id, "radius", 2))).toBe(impossible.initial);
+    expect(dispatch(impossible.initial, updateDimensionValue(impossible.initial.document.elements[3]!.id, 2))).toBe(impossible.initial);
+
+    const centeredTarget: ArcElement = { ...arc, id: elementId("center-connected-equivalent"), center: { x: 10, y: 20 }, radius: 5 };
+    const centeredAnchor = { ...rectangle, id: elementId("center-connected-anchor"), position: { x: 5, y: 15 } };
+    const centerConnection = { id: "center-connected", first: { elementId: centeredTarget.id, node: { kind: "named" as const, name: "center" as const } }, second: { elementId: centeredAnchor.id, node: { kind: "named" as const, name: "center" as const } } };
+    const centerRadial: DimensionElement = { type: "dimension", id: elementId("center-connected-radius"), layerId: centeredTarget.layerId, kind: "radius", references: [{ kind: "node", elementId: centeredTarget.id, nodeIndex: 0, nodeId: "center" }, { kind: "node", elementId: centeredTarget.id, nodeIndex: 1, nodeId: "start" }], offset: { x: 8, y: 0 }, precision: 2, units: "mm", rotation: 0, style: rectangle.style };
+    const centerInitial = createEditor({ ...document, elements: [centeredTarget, centeredAnchor, centerRadial], connections: [centerConnection] });
+    const centerResized = dispatch(centerInitial, resizeElementToDimensions(centeredTarget.id, "radius", 8));
+    const centerDimensionResized = dispatch(centerInitial, updateDimensionValue(centerRadial.id, 8));
+    expect(centerDimensionResized.document.elements.find((element) => element.id === centeredTarget.id)).toEqual(centerResized.document.elements.find((element) => element.id === centeredTarget.id));
+    expect((centerResized.document.elements[0] as ArcElement).center).toEqual(centeredTarget.center);
+    expect((centerResized.document.elements[0] as ArcElement).radius).toBe(8);
+  });
+
+  it("keeps a coincident arc endpoint fixed while changing its radius", () => {
+    const target: ArcElement = { ...arc, id: elementId("endpoint-dimension-arc"), center: { x: 20, y: 20 }, radius: 10 };
+    const fixed = { ...rectangle, id: elementId("endpoint-dimension-node"), position: { x: 30, y: 20 }, size: { width: 4, height: 4 } };
+    const connection = { id: "arc-endpoint-fixed", first: { elementId: target.id, node: { kind: "named" as const, name: "start" as const } }, second: { elementId: fixed.id, node: { kind: "named" as const, name: "nw" as const } } };
+    const radius: DimensionElement = { type: "dimension", id: elementId("endpoint-dimension"), layerId: target.layerId, kind: "radius", references: [{ kind: "node", elementId: target.id, nodeIndex: 0, nodeId: "center" }, { kind: "node", elementId: target.id, nodeIndex: 1, nodeId: "start" }], offset: { x: 8, y: 0 }, precision: 2, units: "mm", rotation: 0, style: rectangle.style };
+    const initial = createEditor({ ...document, elements: [target, fixed, radius], connections: [connection] });
+    const resized = dispatch(initial, updateDimensionValue(radius.id, 15));
+    const next = resized.document.elements[0] as ArcElement;
+    expect(next.radius).toBe(15);
+    expect(next.center.x + next.radius * Math.cos(next.startAngle)).toBeCloseTo(30);
+    expect(next.center.y + next.radius * Math.sin(next.startAngle)).toBeCloseTo(20);
   });
 
   it("rejects a driving circle dimension whose persisted constraint is missing", () => {
@@ -2074,6 +2186,81 @@ it("moves a dimension by changing only its placement offset and supports undo", 
     expect(undone.document.elements).toEqual([rectangle, line, contour]);
     expect(undone.selection).toEqual(state.selection);
     expect(redo(undone).selection).toHaveLength(6);
+  });
+
+  it("creates enforced positional coincidences for line, sketch, and path anchors only", () => {
+    const line: LineElement = { type: "line", id: elementId("coincidence-line"), layerId: rectangle.layerId, start: { x: 0, y: 0 }, end: { x: 5, y: 0 }, rotation: 0, style: rectangle.style };
+    const target: LineElement = { ...line, id: elementId("coincidence-target"), start: { x: 20, y: 10 }, end: { x: 25, y: 10 } };
+    const lineState = dispatch(createEditor({ ...document, elements: [line, target] }), addPositionalCoincidence({ elementId: line.id, node: { kind: "line", name: "start" } }, { elementId: target.id, node: { kind: "line", name: "end" } }));
+    expect(lineState.document.positionalCoincidences).toHaveLength(1);
+    expect(lineState.document.connections).toEqual([]);
+    const moved = dispatch(lineState, moveElement(target.id, { x: 3, y: 4 }));
+    expect((moved.document.elements.find((element) => element.id === line.id) as LineElement).start).toEqual({ x: 28, y: 14 });
+    const sketch = createSketchLine(elementId("coincidence-sketch"), line.layerId, line.style, { x: 0, y: 0 }, { x: 5, y: 0 });
+    const sketchTarget = { ...target, id: elementId("coincidence-sketch-target") };
+    expect(dispatch(createEditor({ ...document, elements: [sketch, sketchTarget] }), addPositionalCoincidence({ elementId: sketch.id, node: { kind: "sketch", nodeId: sketch.nodes[0]!.id } }, { elementId: sketchTarget.id, node: { kind: "line", name: "start" } })).document.positionalCoincidences).toHaveLength(1);
+    expect(dispatch(createEditor({ ...document, elements: [path, target] }), addPositionalCoincidence({ elementId: path.id, node: { kind: "path", nodeId: "a" } }, { elementId: target.id, node: { kind: "line", name: "start" } })).document.positionalCoincidences).toHaveLength(1);
+    expect(dispatch(lineState, deletePositionalCoincidence(lineState.document.positionalCoincidences![0]!.id)).document.positionalCoincidences).toEqual([]);
+  });
+
+  it("propagates enforced arc endpoint coincidences through two native lines or sketches", () => {
+    for (const targetType of ["line", "sketch"] as const) {
+      const targetOneId = elementId(`arc-propagation-${targetType}-one`);
+      const targetTwoId = elementId(`arc-propagation-${targetType}-two`);
+      const targetOne: LineElement | SketchElement = targetType === "line"
+        ? { type: "line", id: targetOneId, layerId: rectangle.layerId, start: { x: -10, y: 0 }, end: { x: -6, y: -2 }, rotation: 0, style: rectangle.style }
+        : { type: "sketch", id: targetOneId, layerId: rectangle.layerId, nodes: [{ id: "one-start", point: { x: -10, y: 0 } }, { id: "one-end", point: { x: -6, y: -2 } }], edges: [{ id: "one-edge", startNodeId: "one-start", endNodeId: "one-end" }], style: rectangle.style };
+      const targetTwo: LineElement | SketchElement = targetType === "line"
+        ? { type: "line", id: targetTwoId, layerId: rectangle.layerId, start: { x: 10, y: 0 }, end: { x: 14, y: 2 }, rotation: 0, style: rectangle.style }
+        : { type: "sketch", id: targetTwoId, layerId: rectangle.layerId, nodes: [{ id: "two-start", point: { x: 10, y: 0 } }, { id: "two-end", point: { x: 14, y: 2 } }], edges: [{ id: "two-edge", startNodeId: "two-start", endNodeId: "two-end" }], style: rectangle.style };
+      const endpoint = (element: LineElement | SketchElement, nodeIndex: 0 | 1) => element.type === "line"
+        ? { elementId: element.id, node: { kind: "line" as const, name: (nodeIndex === 0 ? "start" : "end") as "start" | "end" } }
+        : { elementId: element.id, node: { kind: "sketch" as const, nodeId: element.nodes[nodeIndex]!.id } };
+      const arcTarget: ArcElement = { ...arc, id: elementId(`arc-propagation-${targetType}`), center: { x: 0, y: 0 }, radius: 10, startAngle: Math.PI, endAngle: 0 };
+      const initial = createEditor({ ...document, elements: [arcTarget, targetOne, targetTwo] });
+      const linked = dispatch(
+        dispatch(initial, addPositionalCoincidence({ elementId: arcTarget.id, node: { kind: "named", name: "start" } }, endpoint(targetOne, 0))),
+        addPositionalCoincidence({ elementId: arcTarget.id, node: { kind: "named", name: "end" } }, endpoint(targetTwo, 0)),
+      );
+      const otherBefore = linked.document.elements.find((element) => element.id === targetTwo.id)!;
+      const moved = dispatch(linked, updateElementNode(targetOne.id, 0, { x: -8, y: 3 }));
+      const movedArc = moved.document.elements.find((element): element is ArcElement => element.id === arcTarget.id && element.type === "arc")!;
+      const movedTargetOne = moved.document.elements.find((element) => element.id === targetOne.id)!;
+      const movedTargetTwo = moved.document.elements.find((element) => element.id === targetTwo.id)!;
+      const point = (element: LineElement | SketchElement, index: 0 | 1) => element.type === "line" ? (index === 0 ? element.start : element.end) : element.nodes[index]!.point;
+      const start = point(movedTargetOne as LineElement | SketchElement, 0);
+      const end = point(movedTargetTwo as LineElement | SketchElement, 0);
+      expect(JSON.stringify(movedTargetTwo)).toBe(JSON.stringify(otherBefore));
+      expect(movedArc.radius).toBe(arcTarget.radius);
+      expect(movedArc.center.x + movedArc.radius * Math.cos(movedArc.startAngle)).toBeCloseTo(start.x, 10);
+      expect(movedArc.center.y + movedArc.radius * Math.sin(movedArc.startAngle)).toBeCloseTo(start.y, 10);
+      expect(movedArc.center.x + movedArc.radius * Math.cos(movedArc.endAngle)).toBeCloseTo(end.x, 10);
+      expect(movedArc.center.y + movedArc.radius * Math.sin(movedArc.endAngle)).toBeCloseTo(end.y, 10);
+      expect(moved.undo).toHaveLength(linked.undo.length + 1);
+      expect(undo(moved).document).toEqual(linked.document);
+      expect(redo(undo(moved)).document).toEqual(moved.document);
+
+      const impossible = dispatch(moved, updateElementNode(targetOne.id, 0, { x: 100, y: 0 }));
+      expect(impossible).toBe(moved);
+    }
+
+    const fixed = createSketchLine(elementId("arc-propagation-fixed-source"), rectangle.layerId, rectangle.style, { x: 0, y: 0 }, { x: 5, y: 0 });
+    const fixedSource: SketchElement = { ...fixed, constraints: [{ id: "fixed-source", kind: "fixed", references: [{ elementId: fixed.id, nodeId: fixed.nodes[0]!.id }] }] };
+    const destination: LineElement = { type: "line", id: elementId("arc-propagation-fixed-destination"), layerId: rectangle.layerId, start: { x: 20, y: 0 }, end: { x: 25, y: 0 }, rotation: 0, style: rectangle.style };
+    const fixedState = createEditor({ ...document, elements: [fixedSource, destination] });
+    expect(dispatch(fixedState, addPositionalCoincidence(
+      { elementId: fixedSource.id, node: { kind: "sketch", nodeId: fixedSource.nodes[0]!.id } },
+      { elementId: destination.id, node: { kind: "line", name: "start" } },
+    ))).toBe(fixedState);
+  });
+
+  it("rejects handle anchors and impossible propagation atomically, with undo/redo", () => {
+    const target: LineElement = { type: "line", id: elementId("coincidence-handle-target"), layerId: rectangle.layerId, start: { x: 20, y: 0 }, end: { x: 25, y: 0 }, rotation: 0, style: rectangle.style };
+    const state = createEditor({ ...document, elements: [path, target] });
+    const rejected = dispatch(state, addPositionalCoincidence({ elementId: path.id, node: { kind: "path", nodeId: "a", handle: "out" } }, { elementId: target.id, node: { kind: "line", name: "start" } }));
+    expect(rejected).toBe(state);
+    const linked = dispatch(state, addPositionalCoincidence({ elementId: path.id, node: { kind: "path", nodeId: "a" } }, { elementId: target.id, node: { kind: "line", name: "start" } }));
+    expect(redo(undo(linked)).document).toEqual(linked.document);
   });
 
   it("rejects invalid duplication input without mutation or history", () => {

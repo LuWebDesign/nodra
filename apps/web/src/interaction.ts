@@ -2,6 +2,14 @@ import type { DocumentSnapshot, Element, ElementId, LineElement, PathElement, Pa
 import { boundsOf, boundsOfElements, closestParameter, connectableNodeAddress, contourSegmentAt, contourVertexNodes, dimensionGeometry, elementCenter, elementSegmentAt, hitTest, pathGeometryNodes, pointAt, cuttableSegments, splitCuttableSegments, pathSegmentAt, realGeometryNodes, elementToCurves, intersectCurves, partitionCurveByInterval, selectSourcedCurveInterval, GEOMETRY_EPSILON, type Bounds, type ContourSegmentHit, type ContourVertexNode, type CurveFragment, type PathGeometryNode, type RealGeometryNode, type PathSegmentHit } from "@nodra/geometry";
 
 export interface DragGeometry { readonly position: PointMm; readonly size: { readonly width: number; readonly height: number } }
+
+/** Native circular centers shown as transient, non-document UI datums. */
+export function visibleNativeCircularCenters(document: DocumentSnapshot): readonly { readonly elementId: ElementId; readonly point: PointMm }[] {
+  const visibleLayers = new Set(document.layers.filter((layer) => layer.visible).map((layer) => layer.id));
+  return document.elements.flatMap((element) => element.type === "circle" || element.type === "arc"
+    ? visibleLayers.has(element.layerId) ? [{ elementId: element.id, point: element.center }] : []
+    : []);
+}
 export interface CircleGeometry { readonly position: PointMm; readonly size: { readonly width: number; readonly height: number }; readonly radius: number }
 export interface CreationGuide { readonly source: PointMm; readonly target: PointMm; readonly kind: "node" | "center" }
 export interface DirectionalGuide { readonly source: PointMm; readonly target: PointMm; readonly angle: number; readonly snappedPoint: PointMm }

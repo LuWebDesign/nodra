@@ -26,16 +26,31 @@ describe("DexieProjectRepository", () => {
     expect((await db.listProjects()).map((project) => project.id)).toEqual([metadata.id]);
   });
 
+  it("persists a metadata rename without changing the document revision", async () => {
+    db = await repository();
+    const source = createProject(document());
+    await db.saveProject(metadata, source);
+    const renamed = { ...metadata, name: "Renamed project", updatedAt: 5 };
+    expect((await db.saveProject(renamed, source)).ok).toBe(true);
+    expect(await db.listProjects()).toContainEqual(expect.objectContaining({ id: renamed.id, name: renamed.name }));
+    const recovered = await db.getProject(metadata.id);
+    expect(recovered.ok && recovered.revision.metadata).toEqual(expect.objectContaining({ id: renamed.id, name: renamed.name }));
+    expect(recovered.ok && recovered.revision.revision).toBe(source.revision);
+  });
+
   it("round-trips explicit connections through the repository", async () => {
     db = await repository();
     const base = document();
     const first = { type: "rectangle" as const, id: elementId("first"), layerId: layerId("layer-1"), position: { x: 0, y: 0 }, size: { width: 10, height: 10 }, cornerRadius: 0, rotation: 0, style: { stroke: "#000", strokeWidth: 1 } };
     const second = { ...first, id: elementId("second"), position: { x: 10, y: 0 } };
     const connection = { id: "join", first: { elementId: first.id, node: { kind: "named" as const, name: "e" as const } }, second: { elementId: second.id, node: { kind: "named" as const, name: "w" as const } } };
-    const saved = { ...base, elements: [first, second], connections: [connection], revision: revision(1) };
+    const firstCircle = { type: "circle" as const, id: elementId("first-circle"), layerId: layerId("layer-1"), center: { x: 20, y: 20 }, radius: 2, style: { stroke: "#000", strokeWidth: 1 } };
+    const secondCircle = { ...firstCircle, id: elementId("second-circle") };
+    const coincidence = { id: "coincidence", first: { elementId: firstCircle.id, node: { kind: "named" as const, name: "center" as const } }, second: { elementId: secondCircle.id, node: { kind: "named" as const, name: "center" as const } } };
+    const saved = { ...base, elements: [first, second, firstCircle, secondCircle], connections: [connection], positionalCoincidences: [coincidence], revision: revision(1) };
     expect((await db.saveProject(metadata, saved)).ok).toBe(true);
     const recovered = await db.getProject(metadata.id);
-    expect(recovered.ok && recovered.revision.document).toMatchObject({ connections: [connection] });
+    expect(recovered.ok && recovered.revision.document).toMatchObject({ connections: [connection], positionalCoincidences: [coincidence] });
   });
 
   it("does not let a stale write replace a newer revision", async () => {
@@ -104,6 +119,19 @@ describe("DexieProjectRepository", () => {
     await db.saveFont({ id: `${metadata.id}:Demo`, projectId: metadata.id, family: "Demo", blob: new Blob(["font"]), savedAt: 1 });
     await db.deleteProject(metadata.id);
     expect(await db.listFonts(metadata.id)).toEqual([]);
+  });
+
+  it("recovers schema-9 project payloads that predate persisted pieces", async () => {
+    db = await repository();
+    const base = createProject(document());
+    const legacy = { ...base } as Record<string, unknown>;
+    delete legacy.pieces;
+    const rawDb = (db as unknown as { db: { projects: { put: (value: unknown) => Promise<void> }; revisions: { put: (value: unknown) => Promise<void> } } }).db;
+    await rawDb.projects.put(metadata);
+    await rawDb.revisions.put({ key: `${metadata.id}:0`, recordVersion: 1, projectId: metadata.id, revision: 0, savedAt: 1, document: legacy });
+
+    const recovered = await db.getProject(metadata.id);
+    expect(recovered.ok && recovered.revision.document).toMatchObject({ pieces: [{ id: `${metadata.id}:piece-1`, name: "Pieza 1", state: "design", sketches: [] }] });
   });
 
   it("persists and recovers a multi-page project", async () => {
