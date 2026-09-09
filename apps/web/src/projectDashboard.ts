@@ -1,4 +1,4 @@
-import { nextRevision, pieceId, type PieceSnapshot, type ProjectSnapshot } from "@nodra/domain";
+import { nextRevision, pageId, pieceId, type PageId, type PieceSnapshot, type ProjectSnapshot } from "@nodra/domain";
 import type { ProjectMetadata } from "@nodra/persistence";
 
 export interface DashboardProject extends ProjectMetadata {
@@ -38,10 +38,20 @@ export const dashboardProjects = (projects: readonly DashboardProjectSource[]): 
 export interface ProjectDetail {
   readonly id: string;
   readonly name: string;
-  readonly pieces: readonly { readonly id: string; readonly name: string; readonly material: string | undefined; readonly thicknessMm: number | undefined; readonly state: string; readonly sketches: readonly { readonly pageId: string; readonly sketchId: string; readonly label: string }[] }[];
+  readonly pieces: readonly { readonly id: string; readonly name: string; readonly pageId: string; readonly material: string | undefined; readonly thicknessMm: number | undefined; readonly state: string; readonly sketches: readonly { readonly pageId: string; readonly sketchId: string; readonly label: string }[] }[];
   readonly pages: readonly { readonly id: string; readonly label: string; readonly sketchCount: number }[];
   readonly assemblies: readonly [];
 }
+
+export const piecePageId = (project: ProjectSnapshot, piece: PieceSnapshot): PageId => {
+  const referenced = piece.sketches.find((reference) => project.pages.some((page) => page.id === reference.pageId))?.pageId;
+  if (referenced) return referenced;
+  const dedicated = pageId(`${piece.id}:page`);
+  if (project.pages.some((page) => page.id === dedicated)) return dedicated;
+  return project.pages[project.pieces.findIndex((candidate) => candidate.id === piece.id)]?.id ?? project.pages[0]!.id;
+};
+
+export const selectPiecePage = (project: ProjectSnapshot, piece: PieceSnapshot): ProjectSnapshot => ({ ...project, activePageId: piecePageId(project, piece) });
 
 export const projectDetail = ({ metadata, project }: DashboardProjectSource): ProjectDetail => {
   const pageNumbers = new Map(project.pages.map((page, index) => [page.id, index + 1]));
@@ -51,6 +61,7 @@ export const projectDetail = ({ metadata, project }: DashboardProjectSource): Pr
     pieces: project.pieces.map((piece) => ({
       id: piece.id,
       name: piece.name,
+      pageId: piecePageId(project, piece),
       material: piece.material,
       thicknessMm: piece.thicknessMm,
       state: pieceStateLabels[piece.state],
@@ -60,6 +71,8 @@ export const projectDetail = ({ metadata, project }: DashboardProjectSource): Pr
     assemblies: [],
   };
 };
+
+export const projectTree = projectDetail;
 
 export const pieceDisplayLabel = (piece: PieceSnapshot): string => [
   piece.name,
@@ -85,7 +98,34 @@ export const addPiece = (project: ProjectSnapshot, input: NewPieceInput): Projec
     state: "design",
     sketches: [],
   };
-  return { ...project, revision: nextRevision(project.revision), pieces: [...project.pieces, piece] };
+  const template = project.pages.find((page) => page.id === project.activePageId) ?? project.pages[0]!;
+  const dedicatedPage = { ...template, id: pageId(`${piece.id}:page`), elements: [], constraints: [], connections: [], positionalCoincidences: [] };
+  return { ...project, revision: nextRevision(project.revision), pieces: [...project.pieces, piece], pages: [...project.pages, dedicatedPage], activePageId: dedicatedPage.id };
+};
+
+export const renameProjectMetadata = (metadata: ProjectMetadata, name: string, now = Date.now()): ProjectMetadata => newProjectMetadata(metadata.id, name, now);
+
+export const deletePiece = (project: ProjectSnapshot, piece: PieceSnapshot): ProjectSnapshot => {
+  if (project.pieces.length <= 1) throw new Error("Project must keep at least one piece");
+  if (!project.pieces.some((candidate) => candidate.id === piece.id)) throw new Error("Piece does not belong to project");
+  const remainingPieces = project.pieces.filter((candidate) => candidate.id !== piece.id);
+  const remainingReferences = new Set(remainingPieces.flatMap((candidate) => candidate.sketches.map((reference) => `${reference.pageId}:${reference.sketchId}`)));
+  const exclusivelyOwned = new Set(piece.sketches.filter((reference) => !remainingReferences.has(`${reference.pageId}:${reference.sketchId}`)).map((reference) => `${reference.pageId}:${reference.sketchId}`));
+  const dedicatedPageId = pageId(`${piece.id}:page`);
+  const dedicatedPageIsShared = remainingPieces.some((candidate) => candidate.sketches.some((reference) => reference.pageId === dedicatedPageId));
+  const pages = project.pages.filter((page) => page.id !== dedicatedPageId || dedicatedPageIsShared).map((page) => {
+    const removedIds = new Set(page.elements.filter((element) => exclusivelyOwned.has(`${page.id}:${element.id}`)).map((element) => element.id));
+    for (const element of page.elements) if (element.type === "dimension" && element.references.some((reference) => removedIds.has(reference.elementId))) removedIds.add(element.id);
+    return {
+      ...page,
+      elements: page.elements.filter((element) => !removedIds.has(element.id)),
+      ...(page.constraints ? { constraints: page.constraints.filter((constraint) => constraint.references.every((reference) => !removedIds.has(reference.elementId))) } : {}),
+      ...(page.connections ? { connections: page.connections.filter((connection) => !removedIds.has(connection.first.elementId) && !removedIds.has(connection.second.elementId)) } : {}),
+      ...(page.positionalCoincidences ? { positionalCoincidences: page.positionalCoincidences.filter((coincidence) => !removedIds.has(coincidence.first.elementId) && !removedIds.has(coincidence.second.elementId)) } : {}),
+    };
+  });
+  const partial = { ...project, revision: nextRevision(project.revision), pieces: remainingPieces, pages };
+  return selectPiecePage(partial, remainingPieces[0]!);
 };
 
 export const projectDisplayName = (project: ProjectMetadata): string => project.name.trim() || "Proyecto sin título";

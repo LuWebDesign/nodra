@@ -26,6 +26,18 @@ describe("DexieProjectRepository", () => {
     expect((await db.listProjects()).map((project) => project.id)).toEqual([metadata.id]);
   });
 
+  it("persists a metadata rename without changing the document revision", async () => {
+    db = await repository();
+    const source = createProject(document());
+    await db.saveProject(metadata, source);
+    const renamed = { ...metadata, name: "Renamed project", updatedAt: 5 };
+    expect((await db.saveProject(renamed, source)).ok).toBe(true);
+    expect(await db.listProjects()).toContainEqual(expect.objectContaining({ id: renamed.id, name: renamed.name }));
+    const recovered = await db.getProject(metadata.id);
+    expect(recovered.ok && recovered.revision.metadata).toEqual(expect.objectContaining({ id: renamed.id, name: renamed.name }));
+    expect(recovered.ok && recovered.revision.revision).toBe(source.revision);
+  });
+
   it("round-trips explicit connections through the repository", async () => {
     db = await repository();
     const base = document();
