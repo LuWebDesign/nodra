@@ -1629,6 +1629,7 @@ test("keeps native circle and arc center datums visible after deselect and tool 
   const bounds = await page.locator(".page").boundingBox();
   expect(bounds).not.toBeNull();
   const center = { x: bounds!.x + 180, y: bounds!.y + 180 };
+  const blankPoint = { x: bounds!.x + 40, y: bounds!.y + 40 };
 
   await page.getByRole("button", { name: "Círculo" }).click();
   await page.mouse.click(center.x, center.y);
@@ -1661,18 +1662,7 @@ test("keeps native circle and arc center datums visible after deselect and tool 
   };
 
   await page.getByRole("button", { name: "Seleccion" }).click();
-  const canvasBounds = await page.locator(".canvas").boundingBox();
-  const pageAfterDrawBounds = await page.locator(".page").boundingBox();
-  expect(canvasBounds).not.toBeNull();
-  expect(pageAfterDrawBounds).not.toBeNull();
-  const deselectPoint = [
-    { x: canvasBounds!.x + 8, y: canvasBounds!.y + 8 },
-    { x: canvasBounds!.x + canvasBounds!.width - 8, y: canvasBounds!.y + 8 },
-    { x: canvasBounds!.x + 8, y: canvasBounds!.y + canvasBounds!.height - 8 },
-    { x: canvasBounds!.x + canvasBounds!.width - 8, y: canvasBounds!.y + canvasBounds!.height - 8 },
-  ].find(({ x, y }) => x < pageAfterDrawBounds!.x || x > pageAfterDrawBounds!.x + pageAfterDrawBounds!.width || y < pageAfterDrawBounds!.y || y > pageAfterDrawBounds!.y + pageAfterDrawBounds!.height);
-  expect(deselectPoint).toBeDefined();
-  await page.mouse.click(deselectPoint!.x, deselectPoint!.y);
+  await page.mouse.click(blankPoint.x, blankPoint.y);
   await page.keyboard.press("Escape");
   await expect(page.locator("[data-native-center-datum]")).toHaveCount(3);
   await expect(page.locator("[data-native-center-datum]").first()).toHaveCSS("pointer-events", "none");
@@ -1680,9 +1670,9 @@ test("keeps native circle and arc center datums visible after deselect and tool 
 
   const datumBeforePan = await page.locator("[data-native-center-datum]").evaluateAll((nodes) => nodes.map((node) => { const box = node.getBoundingClientRect(); return { x: box.x + box.width / 2, y: box.y + box.height / 2 }; }));
   await page.getByRole("button", { name: "Desplazar" }).click();
-  await page.mouse.move(deselectPoint!.x, deselectPoint!.y);
+  await page.mouse.move(blankPoint.x, blankPoint.y);
   await page.mouse.down();
-  await page.mouse.move(deselectPoint!.x + 45, deselectPoint!.y + 30);
+  await page.mouse.move(blankPoint.x + 45, blankPoint.y + 30);
   await page.mouse.up();
   await expect.poll(() => page.locator("[data-native-center-datum]").count()).toBe(3);
   await assertNativeCircleDatumsAligned();
