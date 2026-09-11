@@ -330,7 +330,6 @@ export function projectFromDocument(project: ProjectSnapshot, document: Document
   const currentIds = new Set(document.elements.map((element) => element.id));
   const preserved = page.elements.filter((element) => element.pieceId !== activePiece.id && currentIds.has(element.id) === false);
   const owned = document.elements.map((element) => element.pieceId === activePiece.id ? element : { ...element, pieceId: activePiece.id });
-  const activeSketchIds = new Set(owned.filter((element) => element.type === "sketch").map((element) => element.id));
   const pieces = project.pieces.map((piece) => {
     const sketches = piece.id === activePiece.id ? [...piece.sketches.filter((reference) => reference.pageId !== page.id), ...owned.filter((element) => element.type === "sketch").map((element) => ({ pageId: page.id, sketchId: element.id }))] : piece.sketches;
     return { ...piece, state: sketches.length === 0 && piece.state === "underdefined" ? "design" as const : piece.state, sketches };

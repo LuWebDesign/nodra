@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createDocument, createProject, elementId, layerId, pageId, pieceId } from "@nodra/domain";
-import { addPage, addPiece, configureInitialProject, dashboardProjects, deletePiece, newProjectMetadata, nextPieceName, pieceDisplayLabel, piecePageId, projectDetail, projectDisplayName, projectTree, renamePage, renamePiece, renameProjectMetadata, selectPiecePage } from "./projectDashboard.js";
+import { addPage, addPiece, configureInitialProject, dashboardProjects, deletePiece, newProjectMetadata, nextPieceName, pieceDisplayLabel, piecePageId, projectDetail, projectDisplayName, projectTree, renameProjectMetadata, selectPiecePage } from "./projectDashboard.js";
 
 describe("project dashboard", () => {
   it("projects persisted pieces instead of synthesizing dashboard content", () => {
