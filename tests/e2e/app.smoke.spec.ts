@@ -1,4 +1,5 @@
-import { expect, test, type Locator, type Page } from "@playwright/test";
+import { expect, test } from "./editor.fixture.js";
+import type { Locator, Page } from "@playwright/test";
 
 async function drawRectangle(page: Page) {
   await page.getByRole("button", { name: "Rectángulo" }).click();
@@ -39,13 +40,17 @@ async function drawLine(page: Page, start: { x: number; y: number }, end: { x: n
 
 async function visibleBoundingBox(locator: Locator) {
   await expect(locator).toBeVisible();
-  const box = await locator.boundingBox();
-  expect(box).not.toBeNull();
-  return box!;
+  let box: { x: number; y: number; width: number; height: number } | null = null;
+  await expect.poll(async () => {
+    box = await locator.boundingBox();
+    return box !== null;
+  }).toBe(true);
+  if (!box) throw new Error("El elemento visible no recibió un layout medible.");
+  return box as { x: number; y: number; width: number; height: number };
 }
 
 test("loads the editor workspace", async ({ page }) => {
-  await page.goto("/");
+  await page.goto("/modelo");
 
   await expect(page).toHaveTitle("Nodra Editor");
   await expect(page.getByRole("region", { name: "Barra de propiedades" })).toBeVisible();
@@ -54,7 +59,7 @@ test("loads the editor workspace", async ({ page }) => {
 });
 
 test("creates an open spline with Spline and exposes its anchors", async ({ page }) => {
-  await page.goto("/");
+  await page.goto("/modelo");
   const pageBounds = await page.locator(".page").boundingBox();
   expect(pageBounds).not.toBeNull();
   await page.getByRole("button", { name: "Spline" }).click();
@@ -122,7 +127,7 @@ test("creates an open spline with Spline and exposes its anchors", async ({ page
 });
 
 test("selects and moves a Spline object like Pluma", async ({ page }) => {
-      await page.goto("/");
+      await page.goto("/modelo");
       const pageBounds = await page.locator(".page").boundingBox();
       expect(pageBounds).not.toBeNull();
       await page.getByRole("button", { name: "Spline" }).click();
@@ -163,7 +168,7 @@ test("selects and moves a Spline object like Pluma", async ({ page }) => {
     });
 
     test("Selection selects a closed Spline from its interior", async ({ page }) => {
-      await page.goto("/");
+      await page.goto("/modelo");
       const pageBounds = await page.locator(".page").boundingBox();
       expect(pageBounds).not.toBeNull();
       await page.getByRole("button", { name: "Spline" }).click();
@@ -187,7 +192,7 @@ test("selects and moves a Spline object like Pluma", async ({ page }) => {
     });
 
     test("double-clicking empty canvas clears native Spline node selection", async ({ page }) => {
-  await page.goto("/");
+  await page.goto("/modelo");
   const pageBounds = await page.locator(".page").boundingBox();
   expect(pageBounds).not.toBeNull();
   await page.getByRole("button", { name: "Spline" }).click();
@@ -207,7 +212,7 @@ test("selects and moves a Spline object like Pluma", async ({ page }) => {
 });
 
 test("closes a Pluma silhouette by clicking its first anchor and supports fill and undo", async ({ page }) => {
-  await page.goto("/");
+  await page.goto("/modelo");
   const pageBounds = await page.locator(".page").boundingBox();
   expect(pageBounds).not.toBeNull();
   await page.getByRole("button", { name: "Pluma" }).click();
@@ -240,7 +245,7 @@ test("closes a Pluma silhouette by clicking its first anchor and supports fill a
 });
 
 test("closes and reopens a selected path through contextual actions", async ({ page }) => {
-  await page.goto("/");
+  await page.goto("/modelo");
   const pageBounds = await page.locator(".page").boundingBox();
   expect(pageBounds).not.toBeNull();
   await page.getByRole("button", { name: "Pluma" }).click();
@@ -254,7 +259,7 @@ test("closes and reopens a selected path through contextual actions", async ({ p
 });
 
 test("deletes a selected Pluma anchor without deleting the path", async ({ page }) => {
-  await page.goto("/");
+  await page.goto("/modelo");
   const pageBounds = await page.locator(".page").boundingBox();
   expect(pageBounds).not.toBeNull();
   await page.getByRole("button", { name: "Pluma" }).click();
@@ -274,7 +279,7 @@ test("deletes a selected Pluma anchor without deleting the path", async ({ page 
 });
 
 test("splits a selected path segment from Forma and supports undo and redo", async ({ page }) => {
-  await page.goto("/");
+  await page.goto("/modelo");
   const pageBounds = await page.locator(".page").boundingBox();
   expect(pageBounds).not.toBeNull();
   await page.getByRole("button", { name: "Pluma" }).click();
@@ -294,7 +299,7 @@ test("splits a selected path segment from Forma and supports undo and redo", asy
 });
 
 test("creates a cubic segment when placing an anchor with a drag", async ({ page }) => {
-  await page.goto("/");
+  await page.goto("/modelo");
   const pageBounds = await page.locator(".page").boundingBox();
   expect(pageBounds).not.toBeNull();
   await page.getByRole("button", { name: "Pluma" }).click();
@@ -309,7 +314,7 @@ test("creates a cubic segment when placing an anchor with a drag", async ({ page
 });
 
 test("cuts a Pen cubic through a Line sketch and supports undo and redo", async ({ page }) => {
-  await page.goto("/");
+  await page.goto("/modelo");
   const pageBounds = await page.locator(".page").boundingBox();
   expect(pageBounds).not.toBeNull();
   const start = { x: pageBounds!.x + 80, y: pageBounds!.y + 120 };
@@ -359,7 +364,7 @@ test("cuts a Pen cubic through a Line sketch and supports undo and redo", async 
 });
 
 test("trims a native circle into one exact arc and restores it with undo", async ({ page }) => {
-  await page.goto("/");
+  await page.goto("/modelo");
   const pageBounds = await page.locator(".page").boundingBox();
   expect(pageBounds).not.toBeNull();
   const center = { x: pageBounds!.x + 180, y: pageBounds!.y + 180 };
@@ -397,7 +402,7 @@ test("trims a native circle into one exact arc and restores it with undo", async
 });
 
 test("edits rectangle dimensions around its center with proportional lock and undo", async ({ page }) => {
-  await page.goto("/");
+  await page.goto("/modelo");
   await drawRectangle(page);
 
   const rectangle = page.locator(".page-svg svg rect").first();
@@ -441,7 +446,7 @@ test("edits rectangle dimensions around its center with proportional lock and un
 });
 
 test("persists a confirmed node snap and anchors inspector width to the connected side", async ({ page }) => {
-  await page.goto("/");
+  await page.goto("/modelo");
   await drawRectangle(page);
   const original = await page.locator(".page-svg svg rect").first().boundingBox();
   expect(original).not.toBeNull();
@@ -459,7 +464,7 @@ test("persists a confirmed node snap and anchors inspector width to the connecte
 });
 
 test("does not create a connection from hover alone", async ({ page }) => {
-  await page.goto("/");
+  await page.goto("/modelo");
   await drawRectangle(page);
   const rectangle = page.locator(".page-svg svg rect").first();
   const bounds = await rectangle.boundingBox();
@@ -478,7 +483,7 @@ test("does not create a connection from hover alone", async ({ page }) => {
 });
 
 test("creates nested rectangle and circle objects with click gestures", async ({ page }) => {
-  await page.goto("/");
+  await page.goto("/modelo");
   const bounds = await page.locator(".page").boundingBox();
   expect(bounds).not.toBeNull();
   await page.getByRole("button", { name: "Rectángulo" }).click();
@@ -486,8 +491,7 @@ test("creates nested rectangle and circle objects with click gestures", async ({
   await page.mouse.click(bounds!.x + 260, bounds!.y + 220);
   const rectangle = page.locator('.page-svg svg rect[data-element-id]');
   await expect(rectangle).toHaveCount(1);
-  const rectangleBox = await rectangle.boundingBox();
-  expect(rectangleBox).not.toBeNull();
+  const rectangleBox = await visibleBoundingBox(rectangle);
   expect(rectangleBox!.x).toBeCloseTo(bounds!.x + 100, 0);
   expect(rectangleBox!.y).toBeCloseTo(bounds!.y + 100, 0);
   await page.getByRole("button", { name: "Círculo" }).click();
@@ -500,7 +504,7 @@ test("creates nested rectangle and circle objects with click gestures", async ({
 });
 
 test("continues a click line and closes a valid non-collinear path", async ({ page }) => {
-  await page.goto("/");
+  await page.goto("/modelo");
   const bounds = await page.locator(".page").boundingBox();
   expect(bounds).not.toBeNull();
   await page.getByRole("button", { name: "Línea" }).click();
@@ -520,7 +524,7 @@ test("continues a click line and closes a valid non-collinear path", async ({ pa
 });
 
 test("keeps a path selected after creating a dimension", async ({ page }) => {
-  await page.goto("/");
+  await page.goto("/modelo");
   const bounds = await page.locator(".page").boundingBox();
   expect(bounds).not.toBeNull();
   const start = { x: bounds!.x + 120, y: bounds!.y + 180 };
@@ -541,7 +545,7 @@ test("keeps a path selected after creating a dimension", async ({ page }) => {
 });
 
 test("cancels a sketch relationship preview without committing it", async ({ page }) => {
-  await page.goto("/");
+  await page.goto("/modelo");
   const bounds = await page.locator(".page").boundingBox();
   expect(bounds).not.toBeNull();
   const first = { x: bounds!.x + 120, y: bounds!.y + 120 };
@@ -561,7 +565,7 @@ test("cancels a sketch relationship preview without committing it", async ({ pag
   await expect(page.getByRole("button", { name: "Confirmar relación" })).toHaveCount(0);
 });
 test("edits an explicit sketch distance relationship", async ({ page }) => {
-  await page.goto("/");
+  await page.goto("/modelo");
   const bounds = await page.locator(".page").boundingBox();
   expect(bounds).not.toBeNull();
   const first = { x: bounds!.x + 120, y: bounds!.y + 120 };
@@ -587,7 +591,7 @@ test("edits an explicit sketch distance relationship", async ({ page }) => {
 });
 
 test("manages a cross-sketch distance relationship from the inspector", async ({ page }) => {
-  await page.goto("/");
+  await page.goto("/modelo");
   const bounds = await visibleBoundingBox(page.locator(".page"));
   const firstStart = { x: bounds!.x + 110, y: bounds!.y + 120 };
   const firstEnd = { x: firstStart.x + 90, y: firstStart.y + 40 };
@@ -644,7 +648,7 @@ test("manages a cross-sketch distance relationship from the inspector", async ({
 });
 
 test("creates an angle relationship between sketches", async ({ page }) => {
-  await page.goto("/");
+  await page.goto("/modelo");
   const bounds = await visibleBoundingBox(page.locator(".page"));
   const firstStart = { x: bounds.x + 110, y: bounds.y + 120 };
   const firstEnd = { x: firstStart.x + 90, y: firstStart.y + 30 };
@@ -691,7 +695,7 @@ for (const relation of [
   { button: "Igual longitud", label: "Igual" },
 ] as const) {
 test(`creates a ${relation.label.toLowerCase()} relationship between sketches`, async ({ page }) => {
-  await page.goto("/");
+  await page.goto("/modelo");
   const bounds = await visibleBoundingBox(page.locator(".page"));
   const firstStart = { x: bounds.x + 110, y: bounds.y + 120 };
   const firstEnd = { x: firstStart.x + 90, y: firstStart.y + 30 };
@@ -740,7 +744,7 @@ test(`creates a ${relation.label.toLowerCase()} relationship between sketches`, 
 }
 
 test("creates and confirms an explicit sketch relationship", async ({ page }) => {
-  await page.goto("/");
+  await page.goto("/modelo");
   const bounds = await page.locator(".page").boundingBox();
   expect(bounds).not.toBeNull();
   const first = { x: bounds!.x + 120, y: bounds!.y + 120 };
@@ -760,7 +764,7 @@ test("creates and confirms an explicit sketch relationship", async ({ page }) =>
   await expect(page.getByText("Horizontal", { exact: false }).last()).toBeVisible();
 });
 test("reuses an existing sketch node when continuing the same line", async ({ page }) => {
-  await page.goto("/");
+  await page.goto("/modelo");
   const bounds = await page.locator(".page").boundingBox();
   expect(bounds).not.toBeNull();
   await page.getByRole("button", { name: "Línea" }).click();
@@ -781,7 +785,7 @@ test("reuses an existing sketch node when continuing the same line", async ({ pa
 });
 
 test("continues drawing from a closed sketch", async ({ page }) => {
-  await page.goto("/");
+  await page.goto("/modelo");
   const bounds = await page.locator(".page").boundingBox();
   expect(bounds).not.toBeNull();
   await page.getByRole("button", { name: "Línea" }).click();
@@ -796,7 +800,7 @@ test("continues drawing from a closed sketch", async ({ page }) => {
 });
 
 test("recognizes and fills a closed sketch", async ({ page }) => {
-  await page.goto("/");
+  await page.goto("/modelo");
   const bounds = await page.locator(".page").boundingBox();
   expect(bounds).not.toBeNull();
   await page.getByRole("button", { name: "Línea" }).click();
@@ -808,7 +812,7 @@ test("recognizes and fills a closed sketch", async ({ page }) => {
 });
 
 test("shows node hover feedback while keeping the system cursor as an arrow", async ({ page }) => {
-  await page.goto("/");
+  await page.goto("/modelo");
   await drawRectangle(page);
   await page.getByRole("button", { name: "Seleccion" }).click();
   const rectangle = page.locator(".page-svg svg rect").first();
@@ -847,7 +851,7 @@ test("shows node hover feedback while keeping the system cursor as an arrow", as
 });
 
 test("keeps the tool cursor beside the pointer and shows node feedback for a drawing tool", async ({ page }) => {
-  await page.goto("/");
+  await page.goto("/modelo");
   await drawRectangle(page);
   await page.getByRole("button", { name: "Rectángulo" }).click();
   const rectangle = page.locator(".page-svg svg rect").first();
@@ -866,7 +870,7 @@ test("keeps the tool cursor beside the pointer and shows node feedback for a dra
 });
 
 test("moves text with Selection and edits it inline on double-click", async ({ page }) => {
-  await page.goto("/");
+  await page.goto("/modelo");
   const pageBounds = await page.locator(".page").boundingBox();
   expect(pageBounds).not.toBeNull();
 
@@ -927,7 +931,7 @@ test("moves text with Selection and edits it inline on double-click", async ({ p
 });
 
 test("edits an existing text with Texto without replacing the element", async ({ page }) => {
-  await page.goto("/");
+  await page.goto("/modelo");
   const pageBounds = await page.locator(".page").boundingBox();
   expect(pageBounds).not.toBeNull();
 
@@ -955,7 +959,7 @@ test("edits an existing text with Texto without replacing the element", async ({
 });
 
 test("opens an existing text with its rendered bounds and typography", async ({ page }) => {
-  await page.goto("/");
+  await page.goto("/modelo");
   const pageBounds = await page.locator(".page").boundingBox();
   expect(pageBounds).not.toBeNull();
 
@@ -995,7 +999,7 @@ test("opens an existing text with its rendered bounds and typography", async ({ 
 });
 
 test("commits a new text when clicking elsewhere without waiting for Enter", async ({ page }) => {
-  await page.goto("/");
+  await page.goto("/modelo");
   const pageBounds = await page.locator(".page").boundingBox();
   expect(pageBounds).not.toBeNull();
 
@@ -1013,7 +1017,7 @@ test("commits a new text when clicking elsewhere without waiting for Enter", asy
 });
 
 test("places the color palette in the status bar and duplicates directionally", async ({ page }) => {
-  await page.goto("/");
+  await page.goto("/modelo");
   await drawRectangle(page);
   const rectangle = page.locator(".page-svg svg rect").first();
   const rectangleBounds = await rectangle.boundingBox();
@@ -1032,7 +1036,7 @@ test("places the color palette in the status bar and duplicates directionally", 
 });
 
 test("draws a nested object from an existing object with a drawing tool", async ({ page }) => {
-  await page.goto("/");
+  await page.goto("/modelo");
   await drawRectangle(page);
 
   const rectangle = page.locator(".page-svg svg rect[data-element-id]").first();
@@ -1057,7 +1061,7 @@ test("draws a nested object from an existing object with a drawing tool", async 
 });
 
 test("creates a Cota with two nodes and a third placement click", async ({ page }) => {
-  await page.goto("/");
+  await page.goto("/modelo");
   await drawRectangle(page);
   const rectangles = page.locator(".page-svg svg rect");
   await expect(rectangles).toHaveCount(1);
@@ -1080,7 +1084,7 @@ test("creates a Cota with two nodes and a third placement click", async ({ page 
 });
 
 test("creates a radius Cota from the integrated Cota modes", async ({ page }) => {
-  await page.goto("/");
+  await page.goto("/modelo");
   const bounds = await page.locator(".page").boundingBox();
   expect(bounds).not.toBeNull();
   const start = { x: bounds!.x + 100, y: bounds!.y + 100 };
@@ -1106,9 +1110,9 @@ test("creates a radius Cota from the integrated Cota modes", async ({ page }) =>
       await page.getByRole("button", { name: "Confirmar", exact: true }).last().click();
       await expect.poll(async () => (await circle.boundingBox())?.width ?? 0).toBeGreaterThan(80);
     });
-    
+
     test("edits a driving diameter Cota with diameter semantics", async ({ page }) => {
-  await page.goto("/");
+  await page.goto("/modelo");
   const bounds = await page.locator(".page").boundingBox();
   expect(bounds).not.toBeNull();
   const start = { x: bounds!.x + 100, y: bounds!.y + 100 };
@@ -1140,7 +1144,7 @@ test("creates a radius Cota from the integrated Cota modes", async ({ page }) =>
 });
 
 test("creates a circular Cota from a direct contour click", async ({ page }) => {
-  await page.goto("/");
+  await page.goto("/modelo");
   const bounds = await page.locator(".page").boundingBox();
   expect(bounds).not.toBeNull();
   const center = { x: bounds!.x + 180, y: bounds!.y + 160 };
@@ -1172,7 +1176,7 @@ test("creates a circular Cota from a direct contour click", async ({ page }) => 
 });
 
 test("creates an aligned Cota for a diagonal line", async ({ page }) => {
-  await page.goto("/");
+  await page.goto("/modelo");
   const bounds = await page.locator(".page").boundingBox();
   expect(bounds).not.toBeNull();
   const start = { x: bounds!.x + 100, y: bounds!.y + 100 };
@@ -1186,7 +1190,7 @@ test("creates an aligned Cota for a diagonal line", async ({ page }) => {
 });
 
 test.skip("creates a 90 degree angular Cota from connected line bodies", async ({ page }) => {
-  await page.goto("/");
+  await page.goto("/modelo");
   const bounds = await page.locator(".page").boundingBox();
   expect(bounds).not.toBeNull();
   const vertex = { x: bounds!.x + 140, y: bounds!.y + 140 };
@@ -1200,7 +1204,7 @@ test.skip("creates a 90 degree angular Cota from connected line bodies", async (
 });
 
 test("renders created geometry as SVG", async ({ page }) => {
-  await page.goto("/");
+  await page.goto("/modelo");
   await drawRectangle(page);
 
   await expect(page.locator(".page-svg svg")).toHaveAttribute("viewBox", /.+/);
@@ -1208,7 +1212,7 @@ test("renders created geometry as SVG", async ({ page }) => {
 });
 
 test("shows millimetre coordinate rulers around the workspace", async ({ page }) => {
-  await page.goto("/");
+  await page.goto("/modelo");
 
   await expect(page.locator("[data-ruler-horizontal]")).toBeVisible();
   await expect(page.locator("[data-ruler-vertical]")).toBeVisible();
@@ -1217,7 +1221,7 @@ test("shows millimetre coordinate rulers around the workspace", async ({ page })
 });
 
 test("exposes real contour vertices in Forma and edits one vertex", async ({ page }) => {
-  await page.goto("/");
+  await page.goto("/modelo");
   await drawRectangle(page);
   const firstCreatedRectangle = page.locator(".page-svg svg rect[data-element-id]").first();
   await expect.poll(() => firstCreatedRectangle.boundingBox()).not.toBeNull();
@@ -1266,7 +1270,7 @@ test("exposes real contour vertices in Forma and edits one vertex", async ({ pag
 });
 
 test("recovers the latest local revision after reload", async ({ page }) => {
-  await page.goto("/");
+  await page.goto("/modelo");
   await drawRectangle(page);
   await page.waitForTimeout(1000);
   await page.reload();
@@ -1275,7 +1279,7 @@ test("recovers the latest local revision after reload", async ({ page }) => {
 });
 
 test("keeps a deleted object deleted after reload", async ({ page }) => {
-  await page.goto("/");
+  await page.goto("/modelo");
   await drawRectangle(page);
   await page.getByRole("button", { name: "Seleccion" }).click();
   const rect = await page.locator(".page-svg svg rect[data-element-id]").first().boundingBox();
@@ -1288,14 +1292,14 @@ test("keeps a deleted object deleted after reload", async ({ page }) => {
 });
 
 test("shows offline status while editing remains available", async ({ page, context }) => {
-  await page.goto("/");
+  await page.goto("/modelo");
   await context.setOffline(true);
 
   await expect(page.getByRole("button", { name: "Rectángulo" })).toBeEnabled();
 });
 
 test("refuses Prepare without hardware execution", async ({ page }) => {
-  await page.goto("/");
+  await page.goto("/modelo");
   await page.getByRole("button", { name: /Preparar/ }).click();
 
   await expect(page.getByRole("heading", { name: "Preparar aún no está disponible" })).toBeVisible();
@@ -1304,7 +1308,7 @@ test("refuses Prepare without hardware execution", async ({ page }) => {
 });
 
 test("crea un arco por tres puntos y solo persiste al confirmar", async ({ page }) => {
-  await page.goto("/");
+  await page.goto("/modelo");
   const bounds = await page.locator(".page").boundingBox();
   expect(bounds).not.toBeNull();
   await page.getByRole("button", { name: "Arco" }).click();
@@ -1349,7 +1353,7 @@ test("crea un arco por tres puntos y solo persiste al confirmar", async ({ page 
 });
 
 test("recorta un arco nativo en dos arcos exactos y conserva los cortadores", async ({ page }) => {
-  await page.goto("/");
+  await page.goto("/modelo");
   const pageBounds = await page.locator(".page").boundingBox();
   expect(pageBounds).not.toBeNull();
   const center = { x: pageBounds!.x + 260, y: pageBounds!.y + 240 };
@@ -1395,7 +1399,7 @@ test("recorta un arco nativo en dos arcos exactos y conserva los cortadores", as
 });
 
 test("edita el radio y los extremos de un arco nativo", async ({ page }) => {
-  await page.goto("/");
+  await page.goto("/modelo");
   const pageBounds = await page.locator(".page").boundingBox();
   expect(pageBounds).not.toBeNull();
   const center = { x: pageBounds!.x + 280, y: pageBounds!.y + 260 };
@@ -1421,15 +1425,12 @@ test("edita el radio y los extremos de un arco nativo", async ({ page }) => {
   await page.getByRole("button", { name: "Rehacer" }).click();
   await expect(arc).toHaveAttribute("d", resizedPath!);
 
-  await expect.poll(() => arc.boundingBox()).not.toBeNull();
-  const resizedBounds = await arc.boundingBox();
-  expect(resizedBounds).not.toBeNull();
+  const resizedBounds = await visibleBoundingBox(arc);
   await page.getByRole("button", { name: "Forma" }).click();
   await page.mouse.click(resizedBounds!.x + resizedBounds!.width / 2, resizedBounds!.y + 1);
   const nodes = page.getByRole("group", { name: "Nodos de forma" }).getByRole("button");
   await expect(nodes).toHaveCount(3);
-  const startNode = await nodes.nth(1).boundingBox();
-  expect(startNode).not.toBeNull();
+  const startNode = await visibleBoundingBox(nodes.nth(1));
   await page.mouse.move(startNode!.x + startNode!.width / 2, startNode!.y + startNode!.height / 2);
   await page.mouse.down();
   await page.mouse.move(startNode!.x + 45, startNode!.y + 45, { steps: 5 });
@@ -1440,7 +1441,7 @@ test("edita el radio y los extremos de un arco nativo", async ({ page }) => {
 });
 
 test("edita una cota radial de arco sin exigir un solver de círculo", async ({ page }) => {
-  await page.goto("/");
+  await page.goto("/modelo");
   const bounds = await page.locator(".page").boundingBox();
   expect(bounds).not.toBeNull();
   const center = { x: bounds!.x + 260, y: bounds!.y + 250 };
@@ -1454,8 +1455,7 @@ test("edita una cota radial de arco sin exigir un solver de círculo", async ({ 
   await page.mouse.click(through.x, through.y);
   const arc = page.locator('.page-svg svg path[data-element-id]').first();
   await expect(arc).toBeVisible();
-  const before = await arc.boundingBox();
-  expect(before).not.toBeNull();
+  const before = await visibleBoundingBox(arc);
 
   await page.getByRole("button", { name: "Cota" }).click();
   await page.getByRole("group", { name: "Modo de cota" }).getByRole("button", { name: "Radio" }).click();
@@ -1473,7 +1473,7 @@ test("edita una cota radial de arco sin exigir un solver de círculo", async ({ 
 });
 
 test("recorta un círculo con un rectángulo exacto sin modificar el rectángulo", async ({ page }) => {
-  await page.goto("/");
+  await page.goto("/modelo");
   const bounds = await page.locator(".page").boundingBox();
   expect(bounds).not.toBeNull();
   const center = { x: bounds!.x + 300, y: bounds!.y + 260 };
@@ -1506,7 +1506,7 @@ test("recorta un círculo con un rectángulo exacto sin modificar el rectángulo
 });
 
 test("añade relaciones a un croquis cerrado que ya tiene una cota", async ({ page }) => {
-  await page.goto("/");
+  await page.goto("/modelo");
   const bounds = await page.locator(".page").boundingBox();
   expect(bounds).not.toBeNull();
   const a = { x: bounds!.x + 180, y: bounds!.y + 180 };
@@ -1545,7 +1545,7 @@ test("añade relaciones a un croquis cerrado que ya tiene una cota", async ({ pa
 
 
 test("alinea el centro de un círculo con un nodo de croquis y conserva la coincidencia", async ({ page }) => {
-  await page.goto("/");
+  await page.goto("/modelo");
   const bounds = await visibleBoundingBox(page.locator(".page"));
   const circleCenter = { x: bounds.x + 170, y: bounds.y + 180 };
   const circleRadius = 45;
@@ -1624,7 +1624,7 @@ test("alinea el centro de un círculo con un nodo de croquis y conserva la coinc
 
 
 test("keeps native circle and arc center datums visible after deselect and tool changes", async ({ page }) => {
-  await page.goto("/");
+  await page.goto("/modelo");
   const bounds = await page.locator(".page").boundingBox();
   expect(bounds).not.toBeNull();
   const center = { x: bounds!.x + 180, y: bounds!.y + 180 };
@@ -1686,3 +1686,97 @@ test("keeps native circle and arc center datums visible after deselect and tool 
   await expect.poll(() => page.locator("[data-native-center-datum]").count()).toBe(3);
   await assertNativeCircleDatumsAligned();
 });
+
+test("keeps piece tabs in the footer, layers in the inspector, and typography contextual", async ({ page }) => {
+  await page.goto("/modelo");
+
+  const footer = page.locator(".statusbar");
+  await expect(footer.getByRole("tablist", { name: "Piezas" })).toBeVisible();
+  await expect(footer.getByRole("tab", { name: "Pieza E2E secundaria" })).toHaveAttribute("aria-selected", "true");
+   await expect(page.getByRole("img", { name: "Autosave activo" })).toBeVisible();
+   await expect(footer.getByText("Material por definir")).toHaveCount(0);
+   await expect(footer.getByText("Espesor por definir")).toHaveCount(0);
+   await expect(footer.getByText("En diseño")).toHaveCount(0);
+   await expect(footer.getByText("Proyecto guardado")).toHaveCount(0);
+  await expect(page.locator(".inspector").getByText("Capa de diseño")).toBeVisible();
+  await expect(page.locator(".inspector").getByText("Capa de diseño")).toHaveCount(1);
+  await expect(page.locator(".properties-bar").getByLabel("Tipografía del texto")).toHaveCount(0);
+
+  const pageBounds = await page.locator(".page").boundingBox();
+  expect(pageBounds).not.toBeNull();
+  await page.getByRole("button", { name: "Texto" }).click();
+  await page.mouse.click(pageBounds!.x + 120, pageBounds!.y + 120);
+  const editor = page.getByRole("textbox", { name: "Texto editable" });
+  await editor.fill("Texto UI");
+  await editor.press("Control+Enter");
+  const text = page.locator('.page-svg svg text[data-element-id]');
+  await expect(text).toHaveCount(1);
+
+  await page.getByRole("button", { name: "Seleccion" }).click();
+  const textBounds = await text.boundingBox();
+  expect(textBounds).not.toBeNull();
+  await page.mouse.click(textBounds!.x + textBounds!.width / 2, textBounds!.y + textBounds!.height / 2);
+  await page.getByRole("tab", { name: "Texto" }).click();
+  await expect(page.locator(".inspector").getByLabel("Tipografía")).toBeVisible();
+});
+
+test("creates geometry immediately after creating a second piece from Design", async ({ page }) => {
+      await page.goto("/modelo");
+    const secondPiece = "Pieza 2";
+    const footer = page.locator(".statusbar");
+    const pageCountBefore = await page.getByLabel("Página activa").locator("option").count();
+    await footer.getByRole("button", { name: "+ Nueva pieza" }).click();
+    const dialog = page.getByRole("dialog", { name: "Nueva pieza" });
+    await expect(dialog).toBeVisible();
+    await dialog.getByLabel("Nombre de la pieza").fill(secondPiece);
+    await dialog.getByRole("button", { name: "Crear pieza" }).click();
+    await expect(dialog).toHaveCount(0);
+    await expect(footer.getByRole("tab", { name: secondPiece })).toHaveAttribute("aria-selected", "true");
+    await expect(page.getByLabel("Página activa").locator("option")).toHaveCount(pageCountBefore);
+
+    const pageBounds = await page.locator(".page").boundingBox();
+    expect(pageBounds).not.toBeNull();
+    await page.getByRole("button", { name: "Rectángulo" }).click();
+    await page.mouse.click(pageBounds!.x + 120, pageBounds!.y + 120);
+    await page.mouse.click(pageBounds!.x + 260, pageBounds!.y + 220);
+    await expect(page.locator('.page-svg svg rect[data-element-id]')).toHaveCount(1);
+    });
+
+test("creates and restores geometry on a tree-created page", async ({ page }) => {
+  await page.goto("/modelo");
+  await expect(page.getByRole("button", { name: "Nueva página" })).toHaveAttribute("title", "Nueva página");
+  await expect(page.locator(".properties-bar").getByRole("button", { name: "Nueva página" })).toHaveCount(0);
+  const pageCount = await page.getByLabel("Página activa").locator("option").count();
+  await page.getByRole("button", { name: "Nueva página" }).click();
+  await expect(page.getByLabel("Página activa").locator("option")).toHaveCount(pageCount + 1);
+  const page2Value = await page.getByLabel("Página activa").locator("option").nth(1).getAttribute("value");
+  expect(page2Value).not.toBeNull();
+  await expect(page.getByLabel("Página activa")).toHaveValue(page2Value!);
+  const bounds = await page.locator(".page").boundingBox();
+  expect(bounds).not.toBeNull();
+  await page.getByRole("button", { name: "Rectángulo" }).click();
+  await page.mouse.click(bounds!.x + 120, bounds!.y + 120);
+  await page.mouse.click(bounds!.x + 240, bounds!.y + 200);
+  await expect(page.locator('.page-svg svg rect[data-element-id]')).toHaveCount(1);
+  await page.getByLabel("Página activa").selectOption({ index: 0 }, { force: true });
+  await expect(page.locator('.page-svg svg rect[data-element-id]')).toHaveCount(0);
+  await page.getByLabel("Página activa").selectOption({ index: 1 }, { force: true });
+  await expect(page.locator('.page-svg svg rect[data-element-id]')).toHaveCount(1);
+});
+
+test("navigates silently away from an unchanged active sketch session", async ({ page }) => {
+      await page.goto("/modelo");
+    const bounds = await page.locator(".page").boundingBox();
+    expect(bounds).not.toBeNull();
+    const start = { x: bounds!.x + 120, y: bounds!.y + 120 };
+    const end = { x: start.x + 90, y: start.y };
+    await page.getByRole("button", { name: "Línea" }).click();
+    await page.mouse.click(start.x, start.y);
+    await page.mouse.click(end.x, end.y);
+    await page.locator(".project-tree ul ul ul button").first().click();
+    await expect(page.getByRole("status").filter({ hasText: "Editando croquis" })).toBeVisible();
+
+    await page.getByRole("button", { name: "Proyectos" }).click();
+    await expect(page.getByRole("dialog", { name: "Cancelar croquis" })).toHaveCount(0);
+    await expect(page.getByRole("heading", { name: "¿Qué querés diseñar hoy?" })).toBeVisible();
+    });
