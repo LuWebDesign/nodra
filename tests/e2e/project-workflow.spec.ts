@@ -59,3 +59,45 @@ test("restores the last named project after reload", async ({ page }) => {
     await page.reload();
     await expect(page.locator(".project-detail h1")).toHaveText("Proyecto persistente");
 });
+test("persists deleted geometry after reloading a project", async ({ page }) => {
+  await page.goto("/proyectos");
+  await page.getByRole("button", { name: "+ Nuevo proyecto" }).click();
+  await page.getByLabel("Nombre del proyecto").fill("Proyecto persistencia");
+  await page.getByRole("button", { name: "Crear proyecto" }).click();
+  await page.getByRole("button", { name: "+ Nueva pieza" }).click();
+  const dialog = page.getByRole("dialog", { name: "Nueva pieza" });
+  await dialog.getByLabel("Nombre de la pieza").fill("Pieza persistente");
+  await dialog.getByRole("button", { name: "Crear pieza" }).click();
+
+  const pageBounds = await page.locator(".page").boundingBox();
+  expect(pageBounds).not.toBeNull();
+  await page.getByRole("button", { name: "Rectángulo" }).click();
+  await page.mouse.click(pageBounds!.x + 120, pageBounds!.y + 120);
+  await page.mouse.click(pageBounds!.x + 260, pageBounds!.y + 220);
+  const rectangle = page.locator('.page-svg svg rect[data-element-id]');
+  await expect(rectangle).toHaveCount(1);
+  const staleMirror = await page.evaluate(() => {
+    const last = localStorage.getItem("nodra:last-opened-project");
+    const projectId = last ? (JSON.parse(last) as { projectId: string }).projectId : undefined;
+    return projectId ? localStorage.getItem(`nodra:project-mirror:${projectId}`) : null;
+  });
+  expect(staleMirror).not.toBeNull();
+  await page.getByRole("button", { name: "Preparar" }).click();
+  await page.getByRole("button", { name: "Modelo", exact: true }).click();
+  await expect(page.getByRole("toolbar", { name: "Herramientas de diseño" })).toBeVisible();
+  const rectangleBounds = await rectangle.boundingBox();
+  expect(rectangleBounds).not.toBeNull();
+  await page.getByRole("button", { name: "Seleccion" }).click();
+  await page.mouse.click(rectangleBounds!.x + rectangleBounds!.width / 2, rectangleBounds!.y + rectangleBounds!.height / 2);
+  await page.keyboard.press("Delete");
+  await expect(rectangle).toHaveCount(0);
+  await page.evaluate((serializedMirror) => {
+    const last = localStorage.getItem("nodra:last-opened-project");
+    const projectId = last ? (JSON.parse(last) as { projectId: string }).projectId : undefined;
+    if (!projectId || !serializedMirror) throw new Error("Missing stale mirror fixture");
+    const legacyMirror = JSON.parse(serializedMirror) as { project: unknown };
+    localStorage.setItem(`nodra:project-mirror:${projectId}`, JSON.stringify(legacyMirror.project));
+  }, staleMirror);
+  await page.reload();
+  await expect(page.locator('.page-svg svg rect[data-element-id]')).toHaveCount(0);
+});
