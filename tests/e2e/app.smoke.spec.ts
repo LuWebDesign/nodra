@@ -40,10 +40,13 @@ async function drawLine(page: Page, start: { x: number; y: number }, end: { x: n
 
 async function visibleBoundingBox(locator: Locator) {
   await expect(locator).toBeVisible();
-  await expect.poll(() => locator.boundingBox()).not.toBeNull();
-  const box = await locator.boundingBox();
+  let box: { x: number; y: number; width: number; height: number } | null = null;
+  await expect.poll(async () => {
+    box = await locator.boundingBox();
+    return box !== null;
+  }).toBe(true);
   if (!box) throw new Error("El elemento visible no recibió un layout medible.");
-  return box;
+  return box as { x: number; y: number; width: number; height: number };
 }
 
 test("loads the editor workspace", async ({ page }) => {
@@ -1422,15 +1425,12 @@ test("edita el radio y los extremos de un arco nativo", async ({ page }) => {
   await page.getByRole("button", { name: "Rehacer" }).click();
   await expect(arc).toHaveAttribute("d", resizedPath!);
 
-  await expect.poll(() => arc.boundingBox()).not.toBeNull();
-  const resizedBounds = await arc.boundingBox();
-  expect(resizedBounds).not.toBeNull();
+  const resizedBounds = await visibleBoundingBox(arc);
   await page.getByRole("button", { name: "Forma" }).click();
   await page.mouse.click(resizedBounds!.x + resizedBounds!.width / 2, resizedBounds!.y + 1);
   const nodes = page.getByRole("group", { name: "Nodos de forma" }).getByRole("button");
   await expect(nodes).toHaveCount(3);
-  const startNode = await nodes.nth(1).boundingBox();
-  expect(startNode).not.toBeNull();
+  const startNode = await visibleBoundingBox(nodes.nth(1));
   await page.mouse.move(startNode!.x + startNode!.width / 2, startNode!.y + startNode!.height / 2);
   await page.mouse.down();
   await page.mouse.move(startNode!.x + 45, startNode!.y + 45, { steps: 5 });
