@@ -180,9 +180,13 @@ type InspectorTab = "properties" | "transform" | "text";
 const toolCursorIcons: Record<Tool, string> = { radius: "R", select: "↖", forma: "⌘", pen: "✒", spline: "✒", text: "T", rectangle: "□", circle: "○", line: "╱", arc: "⌒", cut: "✂", dimension: "⟷", pan: "✣" };
 const toolCursorLabels: Record<Tool, string> = { radius: "Radio", select: "Seleccion", forma: "Forma", pen: "Pluma", spline: "Spline", text: "Texto", rectangle: "Rectángulo", circle: "Círculo", line: "Línea", arc: "Arco", cut: "Cortar segmentos", dimension: "Cota", pan: "Desplazar" };
 
+type AppView = "dashboard" | "project" | "editor";
+const routeFromPath = (): { readonly view: AppView; readonly projectId?: string } => { const parts = window.location.pathname.split("/").filter(Boolean); if (parts[0] === "proyectos" && parts[1]) return { view: "project", projectId: decodeURIComponent(parts[1]) }; if (parts[0] === "modelo" || parts[0] === "preparar") return { view: "editor" }; return { view: "dashboard" }; };
+const pathForView = (view: AppView, projectId: string | undefined, mode: "design" | "prepare"): string => view === "project" && projectId ? `/proyectos/${encodeURIComponent(projectId)}` : view === "editor" ? mode === "prepare" ? "/preparar" : "/modelo" : "/proyectos";
+
 export function App() {
   const { mode, tool, setMode, setTool } = useUiStore();
-      const [view, setView] = useState<"dashboard" | "project" | "editor">("editor");
+      const [view, setView] = useState<AppView>(() => routeFromPath().view);
   const { editor, project, setEditor, commitNewSketch, setProject, setProjectPreferences } = useDocumentStore();
   const document = editor.document;
   const [activeProjectMetadata, setActiveProjectMetadata] = useState<ProjectMetadata>(() => ({ id: project.id, name: "Proyecto sin título", updatedAt: Date.now() }));
@@ -233,7 +237,7 @@ export function App() {
       const [collapsedPages, setCollapsedPages] = useState<Set<string>>(() => loadCollapsedPages(project.id));
           const collapsedPagesProjectRef = useRef<string | undefined>(undefined);
       const [dashboardSources, setDashboardSources] = useState<readonly DashboardProjectSource[]>([]);
-      const [detailProjectId, setDetailProjectId] = useState<string>();
+      const [detailProjectId, setDetailProjectId] = useState<string | undefined>(() => routeFromPath().projectId);
       const [pendingDetailSketchId, setPendingDetailSketchId] = useState<ElementId>();
       const [pieceFormProjectId, setPieceFormProjectId] = useState<string>();
       const [pieceName, setPieceName] = useState("");
@@ -304,6 +308,8 @@ export function App() {
   editorRef.current = editor;
   creationDraftRef.current = creationDraft;
   const activePiece = project.pieces.find((piece) => piece.id === resolveActivePieceId(project, activePieceId))!;
+  useEffect(() => { const onPopState = () => { const route = routeFromPath(); setView(route.view); if (route.projectId) setDetailProjectId(route.projectId); if (route.view === "editor") setMode(window.location.pathname === "/preparar" ? "prepare" : "design"); }; onPopState(); addEventListener("popstate", onPopState); return () => removeEventListener("popstate", onPopState); }, [setMode]);
+  useEffect(() => { history.replaceState(null, "", pathForView(view, detailProjectId, mode)); }, [view, detailProjectId, mode]);
 
   useEffect(() => {
     if (!project.pieces.some((piece) => piece.id === activePieceId)) setActivePieceId(resolveActivePieceId(project, activePieceId));
