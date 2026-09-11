@@ -2,6 +2,7 @@ import "fake-indexeddb/auto";
 import { afterEach, describe, expect, it } from "vitest";
 import { CURRENT_SCHEMA_VERSION, createDocument, createProject, elementId, layerId, revision } from "@nodra/domain";
 import { DebouncedAutosave, DexieProjectRepository, MigrationRegistry, type ProjectRepository } from "./index.js";
+import { validateProject } from "@nodra/validation";
 
 const metadata = { id: "project-1", name: "Offline project", updatedAt: 0 };
 const document = () => createDocument(metadata.id, [{ id: layerId("layer-1"), name: "Layer", visible: true, order: 0 }]);
@@ -143,7 +144,30 @@ describe("DexieProjectRepository", () => {
     expect(recovered.ok && recovered.revision.document).toMatchObject({ pages: [{ id: "page-1" }, { id: "page-2" }] });
   });
 
-  it("round-trips native arc elements through project persistence", async () => {
+  it("migrates schema 1 through 8 projects with sketches spread across pages", async () => {
+        const sketch = (id: string) => ({ type: "sketch" as const, id: elementId(id), layerId: layerId("layer-1"), nodes: [{ id: "a", point: { x: 0, y: 0 } }, { id: "b", point: { x: 1, y: 0 } }], edges: [{ id: `${id}-edge`, startNodeId: "a", endNodeId: "b" }], constraints: [], style: { stroke: "#000", strokeWidth: 1 } });
+        for (const version of [1, 2, 3, 4, 5, 6, 7, 8]) {
+          db = await repository();
+          const base = createProject(document());
+          const first = sketch(`legacy-${version}-first`);
+          const second = sketch(`legacy-${version}-second`);
+          const projectId = `${metadata.id}-${version}`;
+          const legacy = { ...base, id: projectId, schemaVersion: version, pages: [{ ...base.pages[0]!, elements: [first] }, { ...base.pages[0]!, id: `page-${version}-2` as never, elements: [second] }] } as Record<string, unknown>;
+          delete legacy.pieces;
+          const checked = validateProject(legacy);
+          expect(checked.success, checked.success ? undefined : `schema ${version}: ${checked.error}`).toBe(true);
+          const rawDb = (db as unknown as { db: { projects: { put: (value: unknown) => Promise<void> }; revisions: { put: (value: unknown) => Promise<void> } } }).db;
+          await rawDb.projects.put({ ...metadata, id: projectId });
+          await rawDb.revisions.put({ key: `${projectId}:0`, recordVersion: 1, projectId, revision: 0, savedAt: 1, document: legacy });
+          const recovered = await db.getProject(projectId);
+          expect(recovered.ok, `schema ${version}: ${recovered.ok ? "" : recovered.error}`).toBe(true);
+          if (recovered.ok) expect(recovered.revision.document).toMatchObject({ schemaVersion: CURRENT_SCHEMA_VERSION, pieces: [{ state: "underdefined", sketches: [{ pageId: "page-1", sketchId: `legacy-${version}-first` }, { pageId: `page-${version}-2`, sketchId: `legacy-${version}-second` }] }] });
+          await db.close();
+          db = undefined;
+        }
+      });
+
+      it("round-trips native arc elements through project persistence", async () => {
     db = await repository();
     const source = { ...document(), elements: [{ type: "arc" as const, id: elementId("arc-1"), layerId: layerId("layer-1"), center: { x: 20, y: 20 }, radius: 10, startAngle: 0, endAngle: Math.PI / 2, direction: "clockwise" as const, style: { stroke: "#000", strokeWidth: 1 } }] };
     expect((await db.saveProject(metadata, source)).ok).toBe(true);
