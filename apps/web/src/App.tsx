@@ -676,7 +676,7 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
           if (!result.ok) { persist.set("failed", result.error ?? "No se pudo crear la pieza"); return; }
           lastOfficialSave.current = { projectId: metadata.id, snapshot: JSON.stringify(nextProject) };
           setDashboardSources((current) => current.map((item) => item.metadata.id === source.metadata.id ? { metadata, project: nextProject } : item));
-          if (activeProjectMetadata.id === source.metadata.id) { setActiveProjectMetadata(metadata); setProject(nextProject); setActivePieceId(nextProject.pieces.at(-1)!.id); }
+          setActiveProjectMetadata(metadata); setProject(nextProject); setActivePieceId(nextProject.pieces.at(-1)!.id); setMode("design"); setView("editor"); setTool("select");
           saveProjectMirror(nextProject);
           setPieceFormProjectId(undefined); setPieceName(""); setPieceMaterial(""); setPieceThickness("");
           persist.set("saved", "Pieza creada");
