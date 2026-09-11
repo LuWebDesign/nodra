@@ -9,6 +9,7 @@ export type PieceId = string & { readonly __brand: "PieceId" };
 export type Revision = number & { readonly __brand: "Revision" };
 
 export interface PointMm { readonly x: number; readonly y: number }
+export interface ElementBase { readonly pieceId?: PieceId }
 export interface SizeMm { readonly width: number; readonly height: number }
 export interface Transform {
   readonly position: PointMm;
@@ -195,7 +196,7 @@ export interface TextElement { readonly type: "text"; readonly id: ElementId; re
 export interface GlyphContour { readonly nodes: readonly PathNode[]; readonly segments: readonly PathSegment[] }
 /** Editable outline for one laid-out font glyph; multiple contours preserve holes. */
 export interface GlyphElement { readonly type: "glyph"; readonly id: ElementId; readonly layerId: LayerId; readonly position: PointMm; readonly size: SizeMm; readonly glyph: string; readonly contours: readonly GlyphContour[]; readonly fillRule: "evenodd"; readonly rotation: number; readonly flipX?: boolean; readonly flipY?: boolean; readonly style: VisualStyle; readonly operation?: OperationMetadata }
-export type Element = RectangleElement | CircleElement | ArcElement | EllipseElement | LineElement | SketchElement | DimensionElement | ContourElement | PathElement | SplineElement | TextElement | GlyphElement;
+export type Element = (RectangleElement | CircleElement | ArcElement | EllipseElement | LineElement | SketchElement | DimensionElement | ContourElement | PathElement | SplineElement | TextElement | GlyphElement) & ElementBase;
 export type ConnectableNodeAddress =
   | { readonly kind: "named"; readonly name: "nw" | "n" | "ne" | "e" | "se" | "s" | "sw" | "w" | "center" | "start" | "end" }
   | { readonly kind: "line"; readonly name: "start" | "end" | "center" }
@@ -233,6 +234,7 @@ export interface DocumentCapabilities { readonly spline?: 1 }
 
 export interface PageSnapshot {
   readonly id: PageId;
+  readonly name: string;
   readonly page: SizeMm;
   readonly layers: readonly Layer[];
   readonly elements: readonly Element[];
@@ -259,6 +261,8 @@ export interface PieceSnapshot {
   readonly thicknessMm?: number;
   readonly process: PieceProcess;
   readonly state: PieceState;
+  /** Persisted page membership; absent on legacy projects and resolved from sketch references/fallback. */
+  readonly pageId?: PageId;
   readonly sketches: readonly PieceSketchReference[];
 }
 
@@ -273,6 +277,8 @@ export interface ProjectSnapshot {
   readonly pieces: readonly PieceSnapshot[];
   readonly pages: readonly PageSnapshot[];
   readonly activePageId: PageId;
+  /** Active piece context for projecting shared-page geometry; absent in legacy records. */
+  readonly activePieceId?: PieceId;
 }
 
 export const documentId = (value: string): DocumentId => value as DocumentId;
@@ -282,33 +288,53 @@ export const pageId = (value: string): PageId => value as PageId;
 export const pieceId = (value: string): PieceId => value as PieceId;
 export const revision = (value: number): Revision => value as Revision;
 export const defaultPieceId = (projectId: DocumentId | string): PieceId => pieceId(`${projectId}:piece-1`);
-export const createDefaultPiece = (projectId: DocumentId | string): PieceSnapshot => ({ id: defaultPieceId(projectId), name: "Pieza 1", process: "cut", state: "design", sketches: [] });
+export const createDefaultPiece = (projectId: DocumentId | string): PieceSnapshot => ({ id: defaultPieceId(projectId), name: "Pieza 1", process: "cut", state: "design", pageId: pageId("page-1"), sketches: [] });
 
 export function createDocument(id: string, layers: readonly Layer[] = []): DocumentSnapshot {
   return { schemaVersion: CURRENT_SCHEMA_VERSION, id: documentId(id), revision: revision(0), origin: "top-left", units: "mm", page: { width: 1200, height: 900 }, layers: [...layers], elements: [], connections: [] };
 }
 
 export function createProject(document: DocumentSnapshot): ProjectSnapshot {
-  const page = { id: pageId("page-1"), page: document.page, layers: document.layers, elements: document.elements, ...(document.constraints ? { constraints: document.constraints } : {}), connections: document.connections ?? [], ...(document.positionalCoincidences ? { positionalCoincidences: document.positionalCoincidences } : {}) };
-  return { schemaVersion: CURRENT_SCHEMA_VERSION, id: document.id, revision: document.revision, origin: document.origin, units: document.units, ...(document.capabilities ? { capabilities: document.capabilities } : {}), preferences: { lineGuidesEnabled: true, lineGuideAngle: 45 }, pieces: [createDefaultPiece(document.id)], pages: [page], activePageId: page.id };
+  const page = { id: pageId("page-1"), name: "Página 1", page: document.page, layers: document.layers, elements: document.elements, ...(document.constraints ? { constraints: document.constraints } : {}), connections: document.connections ?? [], ...(document.positionalCoincidences ? { positionalCoincidences: document.positionalCoincidences } : {}) };
+  return { schemaVersion: CURRENT_SCHEMA_VERSION, id: document.id, revision: document.revision, origin: document.origin, units: document.units, ...(document.capabilities ? { capabilities: document.capabilities } : {}), preferences: { lineGuidesEnabled: true, lineGuideAngle: 45 }, pieces: [{ ...createDefaultPiece(document.id), pageId: page.id }], pages: [page], activePageId: page.id, activePieceId: defaultPieceId(document.id) };
 }
 
 export function projectPage(project: ProjectSnapshot, pageIdValue = project.activePageId): PageSnapshot {
   return project.pages.find((page) => page.id === pageIdValue) ?? project.pages[0]!;
 }
 
+const pieceForPage = (project: ProjectSnapshot, page: PageSnapshot, pieceIdValue?: PieceId): PieceSnapshot => project.pieces.find((piece) => piece.id === pieceIdValue && (piece.pageId === page.id || !piece.pageId)) ?? project.pieces.find((piece) => piece.pageId === page.id) ?? project.pieces[0]!;
+
+/** Resolves legacy unowned geometry once: sketches use their existing piece reference, remaining elements use the first piece. */
+export function elementsForPiece(project: ProjectSnapshot, page: PageSnapshot, pieceIdValue: PieceId): readonly Element[] {
+  const first = pieceForPage(project, page).id;
+  const sketchOwners = new Map<ElementId, PieceId>();
+  for (const piece of project.pieces) for (const reference of piece.sketches) if (reference.pageId === page.id) sketchOwners.set(reference.sketchId, piece.id);
+  return page.elements.filter((element) => element.pieceId === pieceIdValue || (element.pieceId === undefined && (element.type === "sketch" ? (sketchOwners.get(element.id) ?? first) : first) === pieceIdValue));
+}
+
 export function documentFromProject(project: ProjectSnapshot, pageIdValue = project.activePageId): DocumentSnapshot {
   const page = projectPage(project, pageIdValue);
-  return { schemaVersion: project.schemaVersion, id: project.id, revision: project.revision, origin: project.origin, units: project.units, ...(project.capabilities ? { capabilities: project.capabilities } : {}), page: page.page, layers: page.layers, elements: page.elements, ...(page.constraints ? { constraints: page.constraints } : {}), connections: page.connections ?? [], ...(page.positionalCoincidences ? { positionalCoincidences: page.positionalCoincidences } : {}) };
+  const piece = pieceForPage(project, page, project.activePieceId);
+  const elements = elementsForPiece(project, page, piece.id);
+  const ids = new Set(elements.map((element) => element.id));
+  const constraints = page.constraints?.filter((constraint) => constraint.references.every((reference) => ids.has(reference.elementId)));
+  const connections = (page.connections ?? []).filter((connection) => ids.has(connection.first.elementId) && ids.has(connection.second.elementId));
+  const positionalCoincidences = page.positionalCoincidences?.filter((relation) => ids.has(relation.first.elementId) && ids.has(relation.second.elementId));
+  return { schemaVersion: project.schemaVersion, id: project.id, revision: project.revision, origin: project.origin, units: project.units, ...(project.capabilities ? { capabilities: project.capabilities } : {}), page: page.page, layers: page.layers, elements, ...(constraints ? { constraints } : {}), connections, ...(positionalCoincidences ? { positionalCoincidences } : {}) };
 }
 
 export function projectFromDocument(project: ProjectSnapshot, document: DocumentSnapshot): ProjectSnapshot {
-  const activeSketchIds = new Set(document.elements.filter((element) => element.type === "sketch").map((element) => element.id));
+  const page = projectPage(project);
+  const activePiece = pieceForPage(project, page, project.activePieceId);
+  const currentIds = new Set(document.elements.map((element) => element.id));
+  const preserved = page.elements.filter((element) => element.pieceId !== activePiece.id && currentIds.has(element.id) === false);
+  const owned = document.elements.map((element) => element.pieceId === activePiece.id ? element : { ...element, pieceId: activePiece.id });
   const pieces = project.pieces.map((piece) => {
-    const sketches = piece.sketches.filter((reference) => reference.pageId !== project.activePageId || activeSketchIds.has(reference.sketchId));
+    const sketches = piece.id === activePiece.id ? [...piece.sketches.filter((reference) => reference.pageId !== page.id), ...owned.filter((element) => element.type === "sketch").map((element) => ({ pageId: page.id, sketchId: element.id }))] : piece.sketches;
     return { ...piece, state: sketches.length === 0 && piece.state === "underdefined" ? "design" as const : piece.state, sketches };
   });
-  return { ...project, revision: document.revision, ...(document.capabilities ? { capabilities: document.capabilities } : {}), pieces, pages: project.pages.map((page) => page.id === project.activePageId ? { ...page, page: document.page, layers: document.layers, elements: document.elements, constraints: document.constraints ?? [], connections: document.connections ?? [], positionalCoincidences: document.positionalCoincidences ?? [] } : page) };
+  return { ...project, revision: document.revision, ...(document.capabilities ? { capabilities: document.capabilities } : {}), pieces, pages: project.pages.map((candidate) => candidate.id === page.id ? { ...candidate, page: document.page, layers: document.layers, elements: [...preserved, ...owned], constraints: [...(candidate.constraints ?? []).filter((constraint) => constraint.references.some((reference) => !currentIds.has(reference.elementId))), ...(document.constraints ?? [])], connections: [...(candidate.connections ?? []).filter((connection) => !currentIds.has(connection.first.elementId) || !currentIds.has(connection.second.elementId)), ...(document.connections ?? [])], positionalCoincidences: document.positionalCoincidences ?? [] } : candidate) };
 }
 
 export function nextRevision(value: Revision): Revision {

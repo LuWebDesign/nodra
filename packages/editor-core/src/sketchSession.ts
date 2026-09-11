@@ -69,6 +69,12 @@ export function createSketchSession(document: DocumentSnapshot, editorHistory: S
 
 export const isSketchSessionHistoryLocked = (state: SketchSessionState): boolean => state.status !== "idle";
 
+/** True when the session differs from its entry boundary, ignoring revision bookkeeping. */
+export const hasSketchSessionChanges = (state: Extract<SketchSessionState, { status: "active" | "confirming-cancel" }>): boolean => {
+  const withoutRevision = (document: DocumentSnapshot) => ({ ...document, revision: undefined });
+  return !same(withoutRevision(state.document), withoutRevision(state.entryDocument));
+};
+
 export function reduceSketchSession(state: SketchSessionState, event: SketchSessionEvent): SketchSessionState {
   if (state.status === "idle") {
     if (event.type !== "enter") return state;

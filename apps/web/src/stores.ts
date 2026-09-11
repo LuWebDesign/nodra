@@ -29,9 +29,19 @@ export const projectWithSketchAssociation = (project: ProjectSnapshot, document:
   const piece = project.pieces.find((candidate) => candidate.id === pieceId) ?? project.pieces[0];
   const sketch = document.elements.find((element) => element.id === sketchId && element.type === "sketch");
   if (!piece || !sketch) return project;
-  const synced = projectFromDocument(project, document);
   const reference = { pageId: project.activePageId, sketchId };
-  return { ...synced, pieces: synced.pieces.map((candidate) => candidate.id === piece.id ? { ...candidate, state: candidate.state === "design" ? "underdefined" as const : candidate.state, sketches: candidate.sketches.some((existing) => existing.pageId === reference.pageId && existing.sketchId === reference.sketchId) ? candidate.sketches : [...candidate.sketches, reference] } : candidate) };
+  const ownsRequestedSketch = piece.sketches.some((existing) => existing.pageId === reference.pageId && existing.sketchId === reference.sketchId);
+  if (piece.sketches.length > 0 && !ownsRequestedSketch) {
+    return { ...project, pages: project.pages.map((page) => ({ ...page, elements: page.elements.map((element) => element.id === sketchId ? { ...element, pieceId: piece.id } : element) })) };
+  }
+  const synced = projectFromDocument(project, document);
+  const existingReferences = piece.sketches.length > 0 ? piece.sketches : synced.pieces.find((candidate) => candidate.id === piece.id)?.sketches ?? [];
+  const targetReferences = ownsRequestedSketch ? existingReferences : existingReferences.length > 0 ? existingReferences : [reference];
+  return {
+    ...synced,
+    pages: synced.pages.map((page) => ({ ...page, elements: page.elements.map((element) => element.id === sketchId ? { ...element, pieceId: piece.id } : element) })),
+    pieces: synced.pieces.map((candidate) => candidate.id === piece.id ? { ...candidate, state: candidate.state === "design" ? "underdefined" as const : candidate.state, sketches: targetReferences } : candidate),
+  };
 };
 
 export const sessionForSketchEditor = (editor: EditorState, sketchId: ElementId): SketchSessionState => {

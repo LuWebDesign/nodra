@@ -12,19 +12,20 @@ const visualLineEndpoints = (line: { readonly start: PointMm; readonly end: Poin
   const rotate = (point: PointMm): PointMm => ({ x: center.x + (point.x - center.x) * Math.cos(line.rotation) - (point.y - center.y) * Math.sin(line.rotation), y: center.y + (point.x - center.x) * Math.sin(line.rotation) + (point.y - center.y) * Math.cos(line.rotation) });
   return [rotate(line.start), rotate(line.end)];
 };
-const common = { id: nonEmptyId, layerId: nonEmptyId, rotation: finite, flipX: z.boolean().default(false), flipY: z.boolean().default(false), style, operation: operation.optional() };
+const pieceOwnership = { pieceId: nonEmptyId.optional() };
+    const common = { id: nonEmptyId, layerId: nonEmptyId, ...pieceOwnership, rotation: finite, flipX: z.boolean().default(false), flipY: z.boolean().default(false), style, operation: operation.optional() };
 const cornerRadii = z.object({ topLeft: finite.min(0), topRight: finite.min(0), bottomRight: finite.min(0), bottomLeft: finite.min(0) }).strict();
 const rectangle = z.object({ ...common, type: z.literal("rectangle"), position: point, size, cornerRadius: finite.min(0).default(0), cornerRadii: cornerRadii.optional() }).strict();
 const circleConstraint = z.object({ id: nonEmptyId, kind: z.enum(["center-horizontal", "center-vertical", "radius", "diameter"]), value: finite, driving: z.boolean().optional() }).strict().superRefine((value, ctx) => {
   if ((value.kind === "radius" || value.kind === "diameter") && value.value <= 0) ctx.addIssue({ code: "custom", message: "Circle size constraints require a positive value", path: ["value"] });
 });
-const circle = z.object({ id: nonEmptyId, layerId: nonEmptyId, type: z.literal("circle"), center: point, radius: finite.gt(0), style, operation: operation.optional(), circleConstraints: z.array(circleConstraint).optional() }).strict().superRefine((value, ctx) => {
+const circle = z.object({ id: nonEmptyId, layerId: nonEmptyId, ...pieceOwnership, type: z.literal("circle"), center: point, radius: finite.gt(0), style, operation: operation.optional(), circleConstraints: z.array(circleConstraint).optional() }).strict().superRefine((value, ctx) => {
   const constraints = value.circleConstraints ?? [];
   const ids = constraints.map((constraint) => constraint.id);
   if (new Set(ids).size !== ids.length) ctx.addIssue({ code: "custom", message: "Circle constraint IDs must be unique", path: ["circleConstraints"] });
 });
 // Schema 9 adds arcs as a canonical open circular primitive; ellipse remains the legacy oval primitive.
-const arc = z.object({ id: nonEmptyId, layerId: nonEmptyId, type: z.literal("arc"), center: point, radius: finite.gt(0), startAngle: finite.min(0).lt(2 * Math.PI), endAngle: finite.min(0).lt(2 * Math.PI), direction: z.enum(["clockwise", "counterclockwise"]), style, operation: operation.optional() }).strict().superRefine((value, ctx) => {
+const arc = z.object({ id: nonEmptyId, layerId: nonEmptyId, ...pieceOwnership, type: z.literal("arc"), center: point, radius: finite.gt(0), startAngle: finite.min(0).lt(2 * Math.PI), endAngle: finite.min(0).lt(2 * Math.PI), direction: z.enum(["clockwise", "counterclockwise"]), style, operation: operation.optional() }).strict().superRefine((value, ctx) => {
   if (value.startAngle === value.endAngle) ctx.addIssue({ code: "custom", message: "Arc start and end angles must differ", path: ["endAngle"] });
 });
 const ellipse = z.object({ ...common, type: z.literal("ellipse"), position: point, size }).strict();
@@ -48,7 +49,7 @@ const nodeReference = z.object({ kind: z.literal("node"), elementId: nonEmptyId,
 const lineReference = z.object({ kind: z.literal("line"), elementId: nonEmptyId, edgeId: nonEmptyId.optional(), edgeIndex: finite.int().nonnegative().optional() }).strict();
 const legacyNodeReference = z.object({ elementId: nonEmptyId, nodeIndex: finite.int().nonnegative(), nodeId: nonEmptyId.optional() }).strict().transform((reference) => ({ kind: "node" as const, ...reference }));
 const dimensionReference = z.union([z.discriminatedUnion("kind", [nodeReference, lineReference]), legacyNodeReference]);
-const dimension = z.object({ id: nonEmptyId, layerId: nonEmptyId, type: z.literal("dimension"), kind: z.enum(["aligned", "horizontal", "vertical", "angular", "radius", "diameter"]), references: z.tuple([dimensionReference, dimensionReference]), offset: point, precision: finite.int().min(0).max(6), units: z.literal("mm"), rotation: z.literal(0), style, driving: z.boolean().optional(), constraintId: nonEmptyId.optional() }).strict().superRefine((value, ctx) => {
+const dimension = z.object({ id: nonEmptyId, layerId: nonEmptyId, ...pieceOwnership, type: z.literal("dimension"), kind: z.enum(["aligned", "horizontal", "vertical", "angular", "radius", "diameter"]), references: z.tuple([dimensionReference, dimensionReference]), offset: point, precision: finite.int().min(0).max(6), units: z.literal("mm"), rotation: z.literal(0), style, driving: z.boolean().optional(), constraintId: nonEmptyId.optional() }).strict().superRefine((value, ctx) => {
   const [first, second] = value.references;
   if (value.kind === "angular") {
     if (first.kind !== "line" || second.kind !== "line") ctx.addIssue({ code: "custom", message: "Angular dimensions require line references", path: ["references"] });
@@ -71,7 +72,7 @@ const sketchPointReference = z.object({ elementId: nonEmptyId, nodeId: nonEmptyI
 const sketchEdgeReference = z.object({ elementId: nonEmptyId, edgeId: nonEmptyId }).strict();
 const sketchConstraintReference = z.union([sketchPointReference, sketchEdgeReference]);
 const sketchConstraint = z.object({ id: nonEmptyId, kind: z.enum(["horizontal", "vertical", "coincident", "parallel", "perpendicular", "equal", "distance-horizontal", "distance-vertical", "distance", "angle", "fixed"]), references: z.array(sketchConstraintReference).min(1).max(4), value: finite.positive().optional() }).strict();
-const sketch = z.object({ id: nonEmptyId, layerId: nonEmptyId, type: z.literal("sketch"), nodes: z.array(sketchNode).min(2), edges: z.array(sketchEdge).min(1), constraints: z.array(sketchConstraint).optional(), style, operation: operation.optional() }).strict().superRefine((value, ctx) => {
+const sketch = z.object({ id: nonEmptyId, layerId: nonEmptyId, ...pieceOwnership, type: z.literal("sketch"), nodes: z.array(sketchNode).min(2), edges: z.array(sketchEdge).min(1), constraints: z.array(sketchConstraint).optional(), style, operation: operation.optional() }).strict().superRefine((value, ctx) => {
   const nodeIds = value.nodes.map((node) => node.id); const edgeIds = value.edges.map((edge) => edge.id);
   if (new Set(nodeIds).size !== nodeIds.length) ctx.addIssue({ code: "custom", message: "Sketch node IDs must be unique", path: ["nodes"] });
   if (new Set(edgeIds).size !== edgeIds.length) ctx.addIssue({ code: "custom", message: "Sketch edge IDs must be unique", path: ["edges"] });
@@ -100,7 +101,7 @@ const pathNode = z.object({ id: nonEmptyId, anchor: point, join: z.enum(["corner
 const pathLineSegment = z.object({ id: nonEmptyId, type: z.literal("line"), startNodeId: nonEmptyId, endNodeId: nonEmptyId }).strict();
 const pathCubicSegment = z.object({ id: nonEmptyId, type: z.literal("cubicBezier"), startNodeId: nonEmptyId, endNodeId: nonEmptyId, control1: point, control2: point }).strict();
 const pathSegment = z.discriminatedUnion("type", [pathLineSegment, pathCubicSegment]);
-const path = z.object({ id: nonEmptyId, layerId: nonEmptyId, type: z.literal("path"), nodes: z.array(pathNode).min(2), segments: z.array(pathSegment).min(1), closed: z.boolean(), rotation: finite.optional(), flipX: z.boolean().optional(), flipY: z.boolean().optional(), style, operation: operation.optional() }).strict().superRefine((value, ctx) => {
+const path = z.object({ id: nonEmptyId, layerId: nonEmptyId, ...pieceOwnership, type: z.literal("path"), nodes: z.array(pathNode).min(2), segments: z.array(pathSegment).min(1), closed: z.boolean(), rotation: finite.optional(), flipX: z.boolean().optional(), flipY: z.boolean().optional(), style, operation: operation.optional() }).strict().superRefine((value, ctx) => {
   const nodeIds = value.nodes.map((node) => node.id); const segmentIds = value.segments.map((segment) => segment.id);
   if (new Set(nodeIds).size !== nodeIds.length) ctx.addIssue({ code: "custom", message: "Path node IDs must be unique", path: ["nodes"] });
   if (new Set(segmentIds).size !== segmentIds.length) ctx.addIssue({ code: "custom", message: "Path segment IDs must be unique", path: ["segments"] });
@@ -115,7 +116,7 @@ const path = z.object({ id: nonEmptyId, layerId: nonEmptyId, type: z.literal("pa
   });
 });
 export const splineNodeSchema = z.object({ id: nonEmptyId, anchor: point, continuity: z.enum(["corner", "smooth", "symmetric"]), inHandle: z.object({ dx: finite, dy: finite }).strict().optional(), outHandle: z.object({ dx: finite, dy: finite }).strict().optional() }).strict();
-export const splineElementSchema = z.object({ id: nonEmptyId, layerId: nonEmptyId, type: z.literal("spline"), nodes: z.array(splineNodeSchema).min(2), closed: z.boolean(), style, operation: operation.optional() }).strict().superRefine((value, ctx) => {
+export const splineElementSchema = z.object({ id: nonEmptyId, layerId: nonEmptyId, ...pieceOwnership, type: z.literal("spline"), nodes: z.array(splineNodeSchema).min(2), closed: z.boolean(), style, operation: operation.optional() }).strict().superRefine((value, ctx) => {
   const nodeIds = value.nodes.map((node) => node.id);
   if (new Set(nodeIds).size !== nodeIds.length) ctx.addIssue({ code: "custom", message: "Spline node IDs must be unique", path: ["nodes"] });
 });
@@ -305,11 +306,11 @@ const documentSchema = z.object({ schemaVersion: z.literal(CURRENT_SCHEMA_VERSIO
   validateConnections(value.elements, value.connections, ctx, ["connections"]);
   validateConnections(value.elements, value.positionalCoincidences ?? [], ctx, ["positionalCoincidences"], true);
 });
-const pageSchema = z.object({ id: nonEmptyId, page: size, layers: z.array(layerSchema), elements: z.array(elementSchema), constraints: z.array(sketchConstraint).optional(), connections: z.array(explicitConnection).default([]), positionalCoincidences: z.array(positionalCoincidence).optional() }).strict();
+const pageSchema = z.object({ id: nonEmptyId, name: z.string().trim().min(1), page: size, layers: z.array(layerSchema), elements: z.array(elementSchema), constraints: z.array(sketchConstraint).optional(), connections: z.array(explicitConnection).default([]), positionalCoincidences: z.array(positionalCoincidence).optional() }).strict();
 const projectPreferencesSchema = z.object({ lineGuidesEnabled: z.boolean().default(true), lineGuideAngle: z.union([z.literal(15), z.literal(45)]).default(45).transform(() => 45) }).strict().default({ lineGuidesEnabled: true, lineGuideAngle: 45 });
 const pieceSketchReferenceSchema = z.object({ pageId: nonEmptyId, sketchId: nonEmptyId }).strict();
-const pieceSchema = z.object({ id: nonEmptyId, name: z.string().trim().min(1), material: z.string().trim().min(1).optional(), thicknessMm: finite.gt(0).optional(), process: z.literal("cut"), state: z.enum(["design", "underdefined", "defined", "validated", "ready"]), sketches: z.array(pieceSketchReferenceSchema) }).strict();
-export const projectSchema = z.object({ schemaVersion: z.literal(CURRENT_SCHEMA_VERSION), id: nonEmptyId, revision: finite.int().nonnegative(), origin: z.literal("top-left"), units: z.literal("mm"), capabilities: z.object({ spline: z.literal(1).optional() }).strict().optional(), preferences: projectPreferencesSchema, pieces: z.array(pieceSchema).min(1), pages: z.array(pageSchema).min(1), activePageId: nonEmptyId }).strict().superRefine((value, ctx) => {
+const pieceSchema = z.object({ id: nonEmptyId, name: z.string().trim().min(1), material: z.string().trim().min(1).optional(), thicknessMm: finite.gt(0).optional(), process: z.literal("cut"), state: z.enum(["design", "underdefined", "defined", "validated", "ready"]), pageId: nonEmptyId.optional(), sketches: z.array(pieceSketchReferenceSchema) }).strict();
+export const projectSchema = z.object({ schemaVersion: z.literal(CURRENT_SCHEMA_VERSION), id: nonEmptyId, revision: finite.int().nonnegative(), origin: z.literal("top-left"), units: z.literal("mm"), activePieceId: nonEmptyId.optional(), capabilities: z.object({ spline: z.literal(1).optional() }).strict().optional(), preferences: projectPreferencesSchema, pieces: z.array(pieceSchema).min(1), pages: z.array(pageSchema).min(1), activePageId: nonEmptyId }).strict().superRefine((value, ctx) => {
   if (!value.pages.some((page) => page.id === value.activePageId)) ctx.addIssue({ code: "custom", message: "Active page does not exist", path: ["activePageId"] });
   const pageIds = new Set(value.pages.map((page) => page.id));
   if (pageIds.size !== value.pages.length) ctx.addIssue({ code: "custom", message: "Page IDs must be unique", path: ["pages"] });
@@ -516,10 +517,10 @@ const migrateSchema7CircleElements = (input: unknown): unknown => {
   if (Array.isArray(candidate.pages)) return { ...candidate, pages: candidate.pages.map((page) => typeof page === "object" && page !== null && !Array.isArray(page) ? { ...(page as Record<string, unknown>), elements: migrateElements((page as Record<string, unknown>).elements) } : page) };
   return input;
 };
-const migrateLegacyPages = (pages: unknown): unknown => Array.isArray(pages) ? pages.map((page) => {
+const migrateLegacyPages = (pages: unknown): unknown => Array.isArray(pages) ? pages.map((page, index) => {
   if (typeof page !== "object" || page === null || Array.isArray(page)) return page;
   const candidate = page as Record<string, unknown>;
-  return { ...candidate, elements: migrateLegacyElements(candidate.elements), connections: candidate.connections ?? [] };
+  return { ...candidate, name: typeof candidate.name === "string" && candidate.name.trim() ? candidate.name.trim() : `Página ${index + 1}`, elements: migrateLegacyElements(candidate.elements), connections: candidate.connections ?? [] };
 }) : pages;
 export function migrateDocument(input: JsonValue): JsonValue {
   if (typeof input !== "object" || input === null || Array.isArray(input)) return input;
@@ -566,6 +567,11 @@ export function migrateProject(input: unknown): unknown {
     const pages = migrateLegacyPages(candidate.pages);
     migrated = { ...migrateSchema7CircleElements({ ...candidate, pages }) as Record<string, unknown>, schemaVersion: CURRENT_SCHEMA_VERSION };
   }
+  if (Array.isArray(migrated.pages)) migrated = { ...migrated, pages: migrated.pages.map((page, index) => {
+    if (typeof page !== "object" || page === null || Array.isArray(page)) return page;
+    const current = page as Record<string, unknown>;
+    return { ...current, name: typeof current.name === "string" && current.name.trim() ? current.name.trim() : `Página ${index + 1}` };
+  }) };
   if (migrated.pieces !== undefined) return migrated;
   const sketches = Array.isArray(migrated.pages) ? migrated.pages.flatMap((page) => {
     if (typeof page !== "object" || page === null || Array.isArray(page)) return [];

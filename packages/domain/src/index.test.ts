@@ -35,7 +35,7 @@ describe("domain contracts", () => {
     const source = createDocument("piece-project");
     const project = createProject(source);
 
-    expect(project.pieces).toEqual([{
+    expect(project.pieces).toEqual([{ pageId: "page-1",
       id: defaultPieceId(source.id),
       name: "Pieza 1",
       process: "cut",
