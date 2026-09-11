@@ -18,7 +18,21 @@ export default defineConfig({
   },
   projects: [
     {
+      name: "setup",
+      testMatch: "**/editor.setup.ts",
+      retries: 0,
+      use: { ...devices["Desktop Chrome"] },
+    },
+    {
       name: "chromium",
+      dependencies: ["setup"],
+      testMatch: "**/app.smoke.spec.ts",
+      use: { ...devices["Desktop Chrome"], storageState: "test-results/e2e-editor-state.json" },
+    },
+    {
+      name: "workflow-chromium",
+      dependencies: ["setup"],
+      testIgnore: ["**/editor.setup.ts", "**/app.smoke.spec.ts"],
       use: { ...devices["Desktop Chrome"] },
     },
   ],
