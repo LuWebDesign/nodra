@@ -6,6 +6,7 @@ import { arcThroughThreePoints, boundsOfElements, connectableNodeAddress, contou
 import { DexieProjectRepository, requestStoragePersistence, type FontRecord } from "@nodra/persistence";
 import { validateDesign } from "@nodra/validation";
 import { loadCollapsedPages, loadLastOpenedProject, loadProjectMirror, removeLastOpenedProject, removeProjectMirror, saveCollapsedPages, saveLastAppLocation, saveLastOpenedProject, saveProjectMirror } from "./appPersistence.js";
+import { selectRecoveredProject } from "./appRecovery.js";
 import { addSolvedDocumentConstraint, documentConstraintDiagnosticId, supportsGlobalConstraintKind, updateSolvedDocumentConstraint } from "./globalConstraintCommands.js";
 import { renderSvg } from "@nodra/renderer-svg";
 import { canActivateRotation, centerPageInCanvas, clientPointToCanvas, clientPointToPage, cubicPlacementControls, formaNodeKey, hoveredSelectionCenter, isDrawingTool, marqueeSelection, movementExceedsThreshold, normalizeBounds, normalizeDrag, pagePointToCanvas, pathGuides, pickDimensionTarget, pickElement, pickFormaElement, pickFormaNode, pickFormaSegment, pickHoverNode, pickCutIntervalPreview, pickCuttableSegment, pickNode, pickPathNode, pickPathSegment, pointerDownIntent, visibleEditablePathNodeIndexes, screenDeltaToMm, screenPointToMm, selectedNodeAnchor, selectedPathAnchorIds, alignmentGuides, snapCreationPoint, snapFormaNodePoint, snapMoveDelta, viewportPointToCanvas, zoomAtPoint, type AlignmentGuide, type ContourNodeHit, type CutIntervalPreview, type DimensionTarget, type FormaNodeHit, type HoverNode, type NodeHit, type PathNodeHit, type SnapGuide, type TransformMode, type CreationSnap } from "./interaction.js";
@@ -326,18 +327,17 @@ export function App() {
       if (!result.ok) { removeLastOpenedProject(); removeProjectMirror(requestedProjectId); setProject(createEmptyProject(document)); setActivePieceId(undefined); setActiveProjectMetadata({ id: "", name: "Proyecto sin título", updatedAt: Date.now() }); setView(initialRoute.view === "editor" ? "editor" : "dashboard"); return; }
       setActiveProjectMetadata(result.revision.metadata);
           const recovered = "pages" in result.revision.document ? result.revision.document : createProject(result.revision.document);
-          const mirrorWins = mirrored !== undefined && (mirrored.project.revision > recovered.revision || (mirrored.project.revision === recovered.revision && mirrored.savedAt > result.revision.savedAt));
-          const selectedRecovery = mirrorWins ? mirrored.project : recovered;
-          if (!mirrorWins) removeProjectMirror(requestedProjectId);
+          const selectedRecovery = selectRecoveredProject(recovered, result.revision.savedAt, mirrored);
+              if (!selectedRecovery.mirrorWins) removeProjectMirror(requestedProjectId);
           lastOfficialSave.current = { projectId: result.revision.metadata.id, snapshot: JSON.stringify(recovered) };
           if (initializationUserOverride.current) return;
-          const recoveredPiece = selectedRecovery.pieces.find((piece) => piece.id === remembered?.pieceId);
-          const recoveredContext = remembered?.pageId && selectedRecovery.pages.some((page) => page.id === remembered.pageId) ? { ...selectedRecovery, activePageId: remembered.pageId as never } : selectedRecovery;
+          const recoveredPiece = selectedRecovery.project.pieces.find((piece) => piece.id === remembered?.pieceId);
+          const recoveredContext = remembered?.pageId && selectedRecovery.project.pages.some((page) => page.id === remembered.pageId) ? { ...selectedRecovery.project, activePageId: remembered.pageId as never } : selectedRecovery.project;
           setProject(recoveredPiece ? { ...recoveredContext, activePieceId: recoveredPiece.id } : (() => { const withoutActivePiece = { ...recoveredContext }; delete withoutActivePiece.activePieceId; return withoutActivePiece; })());
           setActivePieceId(recoveredPiece?.id);
-          const recoveredView = initialRoute.view === "project" || initialRoute.view === "editor" ? initialRoute.view : remembered?.view ?? (selectedRecovery.pieces.length === 0 ? "project" : "editor");
+          const recoveredView = initialRoute.view === "project" || initialRoute.view === "editor" ? initialRoute.view : remembered?.view ?? (selectedRecovery.project.pieces.length === 0 ? "project" : "editor");
           if (initialRoute.view === "editor") setMode(window.location.pathname === "/preparar" ? "prepare" : "design"); else if (remembered?.mode) setMode(remembered.mode);
-          if (recoveredView === "project") setDetailProjectId(selectedRecovery.id);
+          if (recoveredView === "project") setDetailProjectId(selectedRecovery.project.id);
           setView(recoveredView);
           recoveredNotice.current = true;
     }).finally(() => setPersistenceReady(true));
