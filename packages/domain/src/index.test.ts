@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createDocument, createProject, defaultPieceId, documentFromProject, elementId, hasBounds, hasRotation, layerId, pageId, projectFromDocument, revision, withElements } from "./index.js";
+import { createDocument, createEmptyProject, createProject, defaultPieceId, documentFromProject, elementId, hasBounds, hasRotation, layerId, pageId, projectFromDocument, revision, withElements } from "./index.js";
 
 describe("domain contracts", () => {
   it("creates immutable-shaped versioned documents and increments revisions", () => {
@@ -31,6 +31,14 @@ describe("domain contracts", () => {
     const spline = { type: "spline" as const, id: elementId("spline-1"), layerId: layer.id, nodes: [{ id: "a", anchor: { x: 0, y: 0 }, continuity: "smooth" as const }, { id: "b", anchor: { x: 10, y: 0 }, continuity: "smooth" as const }], closed: false, style: { stroke: "#000", strokeWidth: 0.2 } };
     expect(withElements(createDocument("doc-1", [layer]), [spline]).elements).toEqual([spline]);
   });
+  it("creates an empty project with a page and no active piece", () => {
+    const project = createEmptyProject(createDocument("empty-project"));
+    expect(project.pieces).toEqual([]);
+    expect(project.activePieceId).toBeUndefined();
+    expect(documentFromProject(project).elements).toEqual([]);
+    expect(projectFromDocument(project, createDocument("empty-project")).pieces).toEqual([]);
+  });
+
   it("creates one deterministic persisted design piece and retains it across document bridges", () => {
     const source = createDocument("piece-project");
     const project = createProject(source);

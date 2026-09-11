@@ -1,8 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { CURRENT_SCHEMA_VERSION, createDocument, createProject, defaultPieceId, elementId, layerId } from "@nodra/domain";
+import { CURRENT_SCHEMA_VERSION, createDocument, createEmptyProject, createProject, defaultPieceId, elementId, layerId } from "@nodra/domain";
 import { migrateDocument, migrateProject, parseDocument, serializeDocument, validateDesign, validateDocument, validateProject } from "./index.js";
 
 describe("native document validation", () => {
+  it("accepts an empty project without requiring a piece", () => {
+    expect(validateProject(createEmptyProject(createDocument("empty-project"))).success).toBe(true);
+  });
   it("validates positional coincidence addresses and geometry without changing legacy connections", () => {
     const base = createDocument("coincidence", [{ id: layerId("layer-1"), name: "Design", visible: true, order: 0 }]);
     const style = { stroke: "#000", strokeWidth: 1 };
