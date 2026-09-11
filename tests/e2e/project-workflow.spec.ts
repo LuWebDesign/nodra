@@ -19,12 +19,11 @@ test("named project creation opens its project detail", async ({ page }) => {
   await page.getByRole("button", { name: "Proyectos" }).click();
   await page.getByRole("button", { name: "+ Nuevo proyecto" }).click();
   await page.getByLabel("Nombre del proyecto").fill("Proyecto de prueba");
-  await page.getByLabel("Nombre de la pieza inicial").fill("Pieza inicial");
   await page.getByRole("button", { name: "Crear proyecto" }).click();
 
   await expect(page.locator(".project-detail")).toBeVisible();
   await expect(page.locator(".project-detail h1")).toHaveText("Proyecto de prueba");
-  await expect(page.locator(".project-detail")).toContainText("Pieza inicial");
+  await expect(page.locator(".project-detail")).toContainText("Todavía no hay piezas");
 });
 
 test("opens the editor immediately after creating a piece from project detail", async ({ page }) => {
@@ -32,7 +31,6 @@ test("opens the editor immediately after creating a piece from project detail", 
   await page.getByRole("button", { name: "Proyectos" }).click();
   await page.getByRole("button", { name: "+ Nuevo proyecto" }).click();
   await page.getByLabel("Nombre del proyecto").fill("Proyecto con pieza nueva");
-  await page.getByLabel("Nombre de la pieza inicial").fill("Pieza inicial");
   await page.getByRole("button", { name: "Crear proyecto" }).click();
 
   await page.getByRole("button", { name: "+ Nueva pieza" }).click();
@@ -56,13 +54,8 @@ test("restores the last named project after reload", async ({ page }) => {
   await page.getByRole("button", { name: "Proyectos" }).click();
   await page.getByRole("button", { name: "+ Nuevo proyecto" }).click();
   await page.getByLabel("Nombre del proyecto").fill("Proyecto persistente");
-  await page.getByLabel("Nombre de la pieza inicial").fill("Pieza persistente");
   await page.getByRole("button", { name: "Crear proyecto" }).click();
-  await page.getByRole("button", { name: "Abrir en Diseño" }).click();
-  await expect(page.locator(".project-name")).toHaveText("Proyecto persistente");
-  await expect(page.getByRole("tab", { name: "Pieza persistente" })).toHaveAttribute("aria-selected", "true");
-
-  await page.reload();
-  await expect(page.locator(".project-name")).toHaveText("Proyecto persistente");
-  await expect(page.getByRole("tab", { name: "Pieza persistente" })).toHaveAttribute("aria-selected", "true");
+    await expect(page.locator(".project-detail h1")).toHaveText("Proyecto persistente");
+    await page.reload();
+    await expect(page.locator(".project-detail h1")).toHaveText("Proyecto persistente");
 });

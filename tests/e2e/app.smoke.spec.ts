@@ -1304,7 +1304,7 @@ test("refuses Prepare without hardware execution", async ({ page }) => {
 
   await expect(page.getByRole("heading", { name: "Preparar aún no está disponible" })).toBeVisible();
   await expect(page.getByText("No hay hardware conectado, controlado ni listo.")).toBeVisible();
-  await expect(page.getByRole("button", { name: "Volver a Diseño" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Volver a Modelo" })).toBeVisible();
 });
 
 test("crea un arco por tres puntos y solo persiste al confirmar", async ({ page }) => {
@@ -1692,7 +1692,7 @@ test("keeps piece tabs in the footer, layers in the inspector, and typography co
 
   const footer = page.locator(".statusbar");
   await expect(footer.getByRole("tablist", { name: "Piezas" })).toBeVisible();
-  await expect(footer.getByRole("tab", { name: "Pieza E2E secundaria" })).toHaveAttribute("aria-selected", "true");
+  await expect(footer.getByRole("tab", { selected: true })).toHaveCount(1);
    await expect(page.getByRole("img", { name: "Autosave activo" })).toBeVisible();
    await expect(footer.getByText("Material por definir")).toHaveCount(0);
    await expect(footer.getByText("Espesor por definir")).toHaveCount(0);
@@ -1732,7 +1732,7 @@ test("creates geometry immediately after creating a second piece from Design", a
     await dialog.getByRole("button", { name: "Crear pieza" }).click();
     await expect(dialog).toHaveCount(0);
     await expect(footer.getByRole("tab", { name: secondPiece })).toHaveAttribute("aria-selected", "true");
-    await expect(page.getByLabel("Página activa").locator("option")).toHaveCount(pageCountBefore);
+    await expect(page.getByLabel("Página activa").locator("option")).toHaveCount(Math.max(1, pageCountBefore));
 
     const pageBounds = await page.locator(".page").boundingBox();
     expect(pageBounds).not.toBeNull();

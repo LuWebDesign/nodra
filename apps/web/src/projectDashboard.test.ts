@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createDocument, createProject, elementId, layerId, pageId, pieceId } from "@nodra/domain";
+import { createDocument, createEmptyProject, createProject, elementId, layerId, pageId, pieceId } from "@nodra/domain";
 import { addPage, addPiece, configureInitialProject, dashboardProjects, deletePiece, newProjectMetadata, nextPieceName, pieceDisplayLabel, piecePageId, projectDetail, projectDisplayName, projectTree, renameProjectMetadata, selectPiecePage } from "./projectDashboard.js";
 
 describe("project dashboard", () => {
@@ -88,14 +88,14 @@ describe("project dashboard", () => {
 
     expect(JSON.stringify(tree)).not.toContain("elements");
   });
-  it("configures named project metadata and the initial persisted piece without adding a revision", () => {
-    const project = createProject(createDocument("p2"));
-    const configured = configureInitialProject(project, { projectName: " Mesa ", pieceName: " Tapa ", material: "MDF", thicknessMm: 6 }, 42);
+  it("configures named project metadata without creating an initial piece", () => {
+    const project = createEmptyProject(createDocument("p2"));
+    const configured = configureInitialProject(project, { projectName: " Mesa " }, 42);
 
     expect(configured.metadata).toEqual({ id: "p2", name: "Mesa", updatedAt: 42 });
-    expect(configured.project.revision).toBe(1);
-    expect(configured.project.pieces).toEqual([{ id: "p2:piece-1", name: "Tapa", material: "MDF", thicknessMm: 6, process: "cut", state: "design", pageId: "page-1", sketches: [] }]);
-    expect(() => configureInitialProject(project, { projectName: " ", pieceName: "Tapa" }, 42)).toThrow("Project name is required");
+    expect(configured.project.revision).toBe(0);
+    expect(configured.project.pieces).toEqual([]);
+    expect(() => configureInitialProject(project, { projectName: " " }, 42)).toThrow("Project name is required");
   });
   it("uses safe display names and rejects empty metadata names", () => {
     expect(projectDisplayName({ id: "p1", name: " ", updatedAt: 10 })).toBe("Proyecto sin título");

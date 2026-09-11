@@ -294,20 +294,30 @@ export function createDocument(id: string, layers: readonly Layer[] = []): Docum
   return { schemaVersion: CURRENT_SCHEMA_VERSION, id: documentId(id), revision: revision(0), origin: "top-left", units: "mm", page: { width: 1200, height: 900 }, layers: [...layers], elements: [], connections: [] };
 }
 
+const projectPageFromDocument = (document: DocumentSnapshot): PageSnapshot => ({ id: pageId("page-1"), name: "Página 1", page: document.page, layers: document.layers, elements: document.elements, ...(document.constraints ? { constraints: document.constraints } : {}), connections: document.connections ?? [], ...(document.positionalCoincidences ? { positionalCoincidences: document.positionalCoincidences } : {}) });
+
+/** Creates a project with the historical default piece for document-to-project compatibility. */
 export function createProject(document: DocumentSnapshot): ProjectSnapshot {
-  const page = { id: pageId("page-1"), name: "Página 1", page: document.page, layers: document.layers, elements: document.elements, ...(document.constraints ? { constraints: document.constraints } : {}), connections: document.connections ?? [], ...(document.positionalCoincidences ? { positionalCoincidences: document.positionalCoincidences } : {}) };
+  const page = projectPageFromDocument(document);
   return { schemaVersion: CURRENT_SCHEMA_VERSION, id: document.id, revision: document.revision, origin: document.origin, units: document.units, ...(document.capabilities ? { capabilities: document.capabilities } : {}), preferences: { lineGuidesEnabled: true, lineGuideAngle: 45 }, pieces: [{ ...createDefaultPiece(document.id), pageId: page.id }], pages: [page], activePageId: page.id, activePieceId: defaultPieceId(document.id) };
+}
+
+/** Creates the initial persisted project: one empty page and no pieces. */
+export function createEmptyProject(document: DocumentSnapshot): ProjectSnapshot {
+  return { schemaVersion: CURRENT_SCHEMA_VERSION, id: document.id, revision: document.revision, origin: document.origin, units: document.units, ...(document.capabilities ? { capabilities: document.capabilities } : {}), preferences: { lineGuidesEnabled: true, lineGuideAngle: 45 }, pieces: [], pages: [projectPageFromDocument(document)], activePageId: pageId("page-1") };
 }
 
 export function projectPage(project: ProjectSnapshot, pageIdValue = project.activePageId): PageSnapshot {
   return project.pages.find((page) => page.id === pageIdValue) ?? project.pages[0]!;
 }
 
-const pieceForPage = (project: ProjectSnapshot, page: PageSnapshot, pieceIdValue?: PieceId): PieceSnapshot => project.pieces.find((piece) => piece.id === pieceIdValue && (piece.pageId === page.id || !piece.pageId)) ?? project.pieces.find((piece) => piece.pageId === page.id) ?? project.pieces[0]!;
+const pieceForPage = (project: ProjectSnapshot, page: PageSnapshot, pieceIdValue?: PieceId): PieceSnapshot | undefined => project.pieces.find((piece) => piece.id === pieceIdValue && (piece.pageId === page.id || !piece.pageId)) ?? project.pieces.find((piece) => piece.pageId === page.id) ?? project.pieces[0];
 
 /** Resolves legacy unowned geometry once: sketches use their existing piece reference, remaining elements use the first piece. */
-export function elementsForPiece(project: ProjectSnapshot, page: PageSnapshot, pieceIdValue: PieceId): readonly Element[] {
-  const first = pieceForPage(project, page).id;
+export function elementsForPiece(project: ProjectSnapshot, page: PageSnapshot, pieceIdValue?: PieceId): readonly Element[] {
+  const piece = pieceForPage(project, page, pieceIdValue);
+  if (!piece) return page.elements;
+  const first = piece.id;
   const sketchOwners = new Map<ElementId, PieceId>();
   for (const piece of project.pieces) for (const reference of piece.sketches) if (reference.pageId === page.id) sketchOwners.set(reference.sketchId, piece.id);
   return page.elements.filter((element) => element.pieceId === pieceIdValue || (element.pieceId === undefined && (element.type === "sketch" ? (sketchOwners.get(element.id) ?? first) : first) === pieceIdValue));
@@ -316,7 +326,7 @@ export function elementsForPiece(project: ProjectSnapshot, page: PageSnapshot, p
 export function documentFromProject(project: ProjectSnapshot, pageIdValue = project.activePageId): DocumentSnapshot {
   const page = projectPage(project, pageIdValue);
   const piece = pieceForPage(project, page, project.activePieceId);
-  const elements = elementsForPiece(project, page, piece.id);
+  const elements = piece ? elementsForPiece(project, page, piece.id) : page.elements;
   const ids = new Set(elements.map((element) => element.id));
   const constraints = page.constraints?.filter((constraint) => constraint.references.every((reference) => ids.has(reference.elementId)));
   const connections = (page.connections ?? []).filter((connection) => ids.has(connection.first.elementId) && ids.has(connection.second.elementId));
@@ -326,12 +336,12 @@ export function documentFromProject(project: ProjectSnapshot, pageIdValue = proj
 
 export function projectFromDocument(project: ProjectSnapshot, document: DocumentSnapshot): ProjectSnapshot {
   const page = projectPage(project);
-  const activePiece = pieceForPage(project, page, project.activePieceId);
+  const activePiece = project.pieces.length > 0 ? pieceForPage(project, page, project.activePieceId) : undefined;
   const currentIds = new Set(document.elements.map((element) => element.id));
-  const preserved = page.elements.filter((element) => element.pieceId !== activePiece.id && currentIds.has(element.id) === false);
-  const owned = document.elements.map((element) => element.pieceId === activePiece.id ? element : { ...element, pieceId: activePiece.id });
+  const preserved = page.elements.filter((element) => !activePiece || (element.pieceId !== activePiece.id && currentIds.has(element.id) === false));
+  const owned = activePiece ? document.elements.map((element) => element.pieceId === activePiece.id ? element : { ...element, pieceId: activePiece.id }) : document.elements;
   const pieces = project.pieces.map((piece) => {
-    const sketches = piece.id === activePiece.id ? [...piece.sketches.filter((reference) => reference.pageId !== page.id), ...owned.filter((element) => element.type === "sketch").map((element) => ({ pageId: page.id, sketchId: element.id }))] : piece.sketches;
+    const sketches = activePiece && piece.id === activePiece.id ? [...piece.sketches.filter((reference) => reference.pageId !== page.id), ...owned.filter((element) => element.type === "sketch").map((element) => ({ pageId: page.id, sketchId: element.id }))] : piece.sketches;
     return { ...piece, state: sketches.length === 0 && piece.state === "underdefined" ? "design" as const : piece.state, sketches };
   });
   return { ...project, revision: document.revision, ...(document.capabilities ? { capabilities: document.capabilities } : {}), pieces, pages: project.pages.map((candidate) => candidate.id === page.id ? { ...candidate, page: document.page, layers: document.layers, elements: [...preserved, ...owned], constraints: [...(candidate.constraints ?? []).filter((constraint) => constraint.references.some((reference) => !currentIds.has(reference.elementId))), ...(document.constraints ?? [])], connections: [...(candidate.connections ?? []).filter((connection) => !currentIds.has(connection.first.elementId) || !currentIds.has(connection.second.elementId)), ...(document.connections ?? [])], positionalCoincidences: document.positionalCoincidences ?? [] } : candidate) };
