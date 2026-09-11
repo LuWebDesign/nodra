@@ -4,7 +4,8 @@ import { deleteDocumentConstraint, addPositionalCoincidence, deletePositionalCoi
 import { constraintComponentStatesForDocument, constraintResidualsForDocument, type ConstraintState } from "@nodra/constraints";
 import { arcThroughThreePoints, boundsOfElements, connectableNodeAddress, contourVertexNodes, dimensionKindForPlacement, dimensionOffsetForAlignedPlacement, dimensionOffsetForPlacement, elementCenter, editableGeometryNodes, glyphGeometryNodes, groupCenter, groupHandlePoints, pathGeometryNodes, pointMidpoint, dimensionGeometry, realGeometryNodes, solveSketchConstraints, resizeHandle, rotatedResizeHandles, rotationFromDrag, rotationHandlePoints, visibleBezierHandleGuides, type CurveFragment, type Direction, type GroupHandle, type ResizeHandle } from "@nodra/geometry";
 import { DexieProjectRepository, requestStoragePersistence, type FontRecord } from "@nodra/persistence";
-import { validateDesign, validateProject } from "@nodra/validation";
+import { validateDesign } from "@nodra/validation";
+import { loadCollapsedPages, loadLastOpenedProject, loadProjectMirror, removeLastOpenedProject, removeProjectMirror, saveCollapsedPages, saveLastAppLocation, saveLastOpenedProject, saveProjectMirror } from "./appPersistence.js";
 import { addSolvedDocumentConstraint, documentConstraintDiagnosticId, supportsGlobalConstraintKind, updateSolvedDocumentConstraint } from "./globalConstraintCommands.js";
 import { renderSvg } from "@nodra/renderer-svg";
 import { canActivateRotation, centerPageInCanvas, clientPointToCanvas, clientPointToPage, cubicPlacementControls, formaNodeKey, hoveredSelectionCenter, isDrawingTool, marqueeSelection, movementExceedsThreshold, normalizeBounds, normalizeDrag, pagePointToCanvas, pathGuides, pickDimensionTarget, pickElement, pickFormaElement, pickFormaNode, pickFormaSegment, pickHoverNode, pickCutIntervalPreview, pickCuttableSegment, pickNode, pickPathNode, pickPathSegment, pointerDownIntent, visibleEditablePathNodeIndexes, screenDeltaToMm, screenPointToMm, selectedNodeAnchor, selectedPathAnchorIds, alignmentGuides, snapCreationPoint, snapFormaNodePoint, snapMoveDelta, viewportPointToCanvas, zoomAtPoint, type AlignmentGuide, type ContourNodeHit, type CutIntervalPreview, type DimensionTarget, type FormaNodeHit, type HoverNode, type NodeHit, type PathNodeHit, type SnapGuide, type TransformMode, type CreationSnap } from "./interaction.js";
@@ -18,6 +19,7 @@ import { textSizeFor } from "./textMetrics.js";
 import { extractTextGlyphOutlines, fontFamilyFromFileName, FontOutlineError } from "./fontOutline.js";
 import { circleGeometry, creationGuides, cursorNodeGuides, directionalGuide, lineAngleDegrees, nodeAlignmentGuides, visibleNativeCircularCenters, type CreationGuide } from "./interaction.js";
 import { positionalConnectionPair, type PositionalConnectionPair, type PositionalNodeReference } from "./positionalSelection.js";
+import { pathForView, routeFromPath, type AppView } from "./appLocation.js";
 const defaultFonts = ["Arial", "Helvetica", "Times New Roman", "Courier New", "Inter"] as const;
 type DesktopFileBridge = {
   openProject: () => Promise<{ readonly path: string; readonly project: ProjectSnapshot } | undefined>;
@@ -29,62 +31,10 @@ const desktopFileBridge = (): DesktopFileBridge | undefined => {
   const candidate = (globalThis as typeof globalThis & { __KOND_DESKTOP__?: DesktopFileBridge }).__KOND_DESKTOP__;
   return candidate;
 };
-const projectMirrorKey = (projectId: string) => `nodra:project-mirror:${projectId}`;
-const PROJECT_MIRROR_FORMAT = 2 as const;
-type ProjectMirror = { readonly format: typeof PROJECT_MIRROR_FORMAT; readonly project: ProjectSnapshot; readonly savedAt: number };
-const collapsedPagesKey = (projectId: string) => `nodra:project-tree-collapsed:${projectId}`;
-const loadCollapsedPages = (projectId: string): Set<string> => {
-  try {
-    const raw = localStorage.getItem(collapsedPagesKey(projectId));
-    const value = raw ? JSON.parse(raw) : [];
-    return new Set(Array.isArray(value) ? value.filter((id): id is string => typeof id === "string") : []);
-  } catch { return new Set(); }
-};
-const saveCollapsedPages = (projectId: string, pages: Set<string>): void => {
-  try { localStorage.setItem(collapsedPagesKey(projectId), JSON.stringify([...pages])); } catch { /* best-effort UI preference */ }
-};
-    const lastOpenedProjectKey = "nodra:last-opened-project";
-        const lastAppLocationKey = "nodra:last-app-location";
-        type AppLocation = { readonly view: "project" | "editor" | "dashboard"; readonly mode: "design" | "prepare" };
-        const saveLastAppLocation = (location: AppLocation): void => { try { localStorage.setItem(lastAppLocationKey, JSON.stringify(location)); } catch { /* best-effort UI location */ } };
-    type LastOpenedProjectContext = { readonly projectId: string; readonly pieceId?: string; readonly pageId?: string; readonly view?: "project" | "editor" | "dashboard"; readonly mode?: "design" | "prepare" };
-    const loadLastOpenedProject = (): LastOpenedProjectContext | undefined => {
-      try {
-        const raw = localStorage.getItem(lastOpenedProjectKey);
-        if (!raw) return undefined;
-        const value = JSON.parse(raw) as Partial<LastOpenedProjectContext>;
-        return typeof value.projectId === "string" && value.projectId.length > 0 ? {
-          projectId: value.projectId,
-          ...(typeof value.pieceId === "string" ? { pieceId: value.pieceId } : {}),
-          ...(typeof value.pageId === "string" ? { pageId: value.pageId } : {}),
-              ...(value.view === "project" || value.view === "editor" || value.view === "dashboard" ? { view: value.view } : {}),
-              ...(value.mode === "design" || value.mode === "prepare" ? { mode: value.mode } : {}),
-        } : undefined;
-      } catch { return undefined; }
-    };
-    const saveLastOpenedProject = (context: LastOpenedProjectContext): void => {
-      try { localStorage.setItem(lastOpenedProjectKey, JSON.stringify(context)); } catch { /* best-effort session context */ }
-    };
-    const removeLastOpenedProject = (): void => {
-      try { localStorage.removeItem(lastOpenedProjectKey); } catch { /* best-effort cleanup */ }
-    };
-const loadProjectMirror = (projectId: string): ProjectMirror | undefined => {
-  try {
-    const raw = localStorage.getItem(projectMirrorKey(projectId));
-    if (!raw) return undefined;
-    const value = JSON.parse(raw) as Partial<ProjectMirror>;
-    if (value.format !== PROJECT_MIRROR_FORMAT || typeof value.savedAt !== "number") return undefined;
-    const checked = validateProject(value.project);
-    return checked.success && checked.data.id === projectId ? { format: PROJECT_MIRROR_FORMAT, project: checked.data, savedAt: value.savedAt } : undefined;
-  } catch { return undefined; }
-};
-const saveProjectMirror = (project: ProjectSnapshot): void => {
-  try { localStorage.setItem(projectMirrorKey(project.id), JSON.stringify({ format: PROJECT_MIRROR_FORMAT, project, savedAt: Date.now() } satisfies ProjectMirror)); } catch { /* best-effort reload mirror */ }
-};
-const removeProjectMirror = (projectId: string): void => {
-  try { localStorage.removeItem(projectMirrorKey(projectId)); } catch { /* best-effort mirror cleanup */ }
-};
-const defaultStyle = { stroke: "#000000", strokeWidth: 1 };
+
+
+
+    const defaultStyle = { stroke: "#000000", strokeWidth: 1 };
 const pointAlignedToNodeGuides = (point: PointMm, guides: readonly CreationGuide[]): PointMm => guides.reduce((current, guide) => guide.target.y === guide.source.y ? { x: guide.target.x, y: current.y } : { x: current.x, y: guide.target.y }, point);
 const defaultClosedFill = "rgba(101,217,255,0.22)";
 const isPropertyElement = (element: Element): element is Exclude<PropertyElement, ArcElement> => element.type === "rectangle" || element.type === "ellipse" || element.type === "circle";
@@ -189,13 +139,10 @@ type InspectorTab = "properties" | "transform" | "text";
 const toolCursorIcons: Record<Tool, string> = { radius: "R", select: "↖", forma: "⌘", pen: "✒", spline: "✒", text: "T", rectangle: "□", circle: "○", line: "╱", arc: "⌒", cut: "✂", dimension: "⟷", pan: "✣" };
 const toolCursorLabels: Record<Tool, string> = { radius: "Radio", select: "Seleccion", forma: "Forma", pen: "Pluma", spline: "Spline", text: "Texto", rectangle: "Rectángulo", circle: "Círculo", line: "Línea", arc: "Arco", cut: "Cortar segmentos", dimension: "Cota", pan: "Desplazar" };
 
-type AppView = "dashboard" | "project" | "editor";
-const routeFromPath = (): { readonly view: AppView; readonly projectId?: string } => { const parts = window.location.pathname.split("/").filter(Boolean); if (parts[0] === "proyectos" && parts[1]) return { view: "project", projectId: decodeURIComponent(parts[1]) }; if (parts[0] === "modelo") return { view: "editor" }; if (parts[0] === "preparar") return { view: "editor" }; return { view: "dashboard" }; };
-const pathForView = (view: AppView, projectId: string | undefined, mode: "design" | "prepare"): string => view === "project" && projectId ? `/proyectos/${encodeURIComponent(projectId)}` : view === "editor" ? mode === "prepare" ? "/preparar" : "/modelo" : "/proyectos";
 
 export function App() {
   const { mode, tool, setMode, setTool } = useUiStore();
-      const [view, setView] = useState<AppView>(() => routeFromPath().view);
+      const [view, setView] = useState<AppView>(() => routeFromPath(window.location.pathname).view);
   const { editor, project, setEditor, commitNewSketch, setProject, setProjectPreferences } = useDocumentStore();
   const document = editor.document;
   const [activeProjectMetadata, setActiveProjectMetadata] = useState<ProjectMetadata>(() => ({ id: "", name: "Proyecto sin título", updatedAt: Date.now() }));
@@ -246,7 +193,7 @@ export function App() {
       const [collapsedPages, setCollapsedPages] = useState<Set<string>>(() => loadCollapsedPages(project.id));
           const collapsedPagesProjectRef = useRef<string | undefined>(undefined);
       const [dashboardSources, setDashboardSources] = useState<readonly DashboardProjectSource[]>([]);
-      const [detailProjectId, setDetailProjectId] = useState<string | undefined>(() => routeFromPath().projectId);
+      const [detailProjectId, setDetailProjectId] = useState<string | undefined>(() => routeFromPath(window.location.pathname).projectId);
       const [pendingDetailSketchId, setPendingDetailSketchId] = useState<ElementId>();
       const [pieceFormProjectId, setPieceFormProjectId] = useState<string>();
       const [pieceName, setPieceName] = useState("");
@@ -325,7 +272,7 @@ export function App() {
   const activePiece = activePieceId === undefined ? undefined : project.pieces.find((piece) => piece.id === resolveActivePieceId(project, activePieceId));
       const initializationUserOverride = useRef(false);
 
-        useEffect(() => { const route = routeFromPath(); if (route.view === "editor" && window.location.pathname === "/preparar") setMode("prepare"); const onPopState = () => { const next = routeFromPath(); setView(next.view); if (next.projectId) setDetailProjectId(next.projectId); if (next.view === "editor") setMode(window.location.pathname === "/preparar" ? "prepare" : "design"); }; addEventListener("popstate", onPopState); return () => removeEventListener("popstate", onPopState); }, [setMode]);
+        useEffect(() => { const route = routeFromPath(window.location.pathname); if (route.view === "editor" && window.location.pathname === "/preparar") setMode("prepare"); const onPopState = () => { const next = routeFromPath(window.location.pathname); setView(next.view); if (next.projectId) setDetailProjectId(next.projectId); if (next.view === "editor") setMode(window.location.pathname === "/preparar" ? "prepare" : "design"); }; addEventListener("popstate", onPopState); return () => removeEventListener("popstate", onPopState); }, [setMode]);
       useEffect(() => { history.replaceState(null, "", pathForView(view, detailProjectId, mode)); }, [view, detailProjectId, mode]);
       useEffect(() => {
         if (project.pieces.length === 0) { if (activePieceId !== undefined) setActivePieceId(undefined); } else if (!project.pieces.some((piece) => piece.id === activePieceId)) setActivePieceId(resolveActivePieceId(project, activePieceId ?? project.pieces[0]!.id));
@@ -362,7 +309,7 @@ export function App() {
     addEventListener("offline", off);
     void requestStoragePersistence();
     const remembered = loadLastOpenedProject();
-        const initialRoute = routeFromPath();
+        const initialRoute = routeFromPath(window.location.pathname);
         const requestedProjectId = initialRoute.projectId ?? remembered?.projectId ?? document.id;
         const mirrored = loadProjectMirror(requestedProjectId);
     void repository.getProject(requestedProjectId).then((result) => {
