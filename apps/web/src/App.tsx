@@ -4,7 +4,7 @@ import { deleteDocumentConstraint, addPositionalCoincidence, deletePositionalCoi
 import { constraintComponentStatesForDocument, constraintResidualsForDocument, type ConstraintState } from "@nodra/constraints";
 import { arcThroughThreePoints, boundsOfElements, connectableNodeAddress, contourVertexNodes, dimensionKindForPlacement, dimensionOffsetForAlignedPlacement, dimensionOffsetForPlacement, elementCenter, editableGeometryNodes, glyphGeometryNodes, groupCenter, groupHandlePoints, pathGeometryNodes, pointMidpoint, dimensionGeometry, realGeometryNodes, solveSketchConstraints, resizeHandle, rotatedResizeHandles, rotationFromDrag, rotationHandlePoints, visibleBezierHandleGuides, type CurveFragment, type Direction, type GroupHandle, type ResizeHandle } from "@nodra/geometry";
 import { DexieProjectRepository, requestStoragePersistence, type FontRecord } from "@nodra/persistence";
-import { validateDesign } from "@nodra/validation";
+import { validateDesign, validateProject } from "@nodra/validation";
 import { addSolvedDocumentConstraint, documentConstraintDiagnosticId, supportsGlobalConstraintKind, updateSolvedDocumentConstraint } from "./globalConstraintCommands.js";
 import { renderSvg } from "@nodra/renderer-svg";
 import { canActivateRotation, centerPageInCanvas, clientPointToCanvas, clientPointToPage, cubicPlacementControls, formaNodeKey, hoveredSelectionCenter, isDrawingTool, marqueeSelection, movementExceedsThreshold, normalizeBounds, normalizeDrag, pagePointToCanvas, pathGuides, pickDimensionTarget, pickElement, pickFormaElement, pickFormaNode, pickFormaSegment, pickHoverNode, pickCutIntervalPreview, pickCuttableSegment, pickNode, pickPathNode, pickPathSegment, pointerDownIntent, visibleEditablePathNodeIndexes, screenDeltaToMm, screenPointToMm, selectedNodeAnchor, selectedPathAnchorIds, alignmentGuides, snapCreationPoint, snapFormaNodePoint, snapMoveDelta, viewportPointToCanvas, zoomAtPoint, type AlignmentGuide, type ContourNodeHit, type CutIntervalPreview, type DimensionTarget, type FormaNodeHit, type HoverNode, type NodeHit, type PathNodeHit, type SnapGuide, type TransformMode, type CreationSnap } from "./interaction.js";
@@ -30,6 +30,8 @@ const desktopFileBridge = (): DesktopFileBridge | undefined => {
   return candidate;
 };
 const projectMirrorKey = (projectId: string) => `nodra:project-mirror:${projectId}`;
+const PROJECT_MIRROR_FORMAT = 2 as const;
+type ProjectMirror = { readonly format: typeof PROJECT_MIRROR_FORMAT; readonly project: ProjectSnapshot; readonly savedAt: number };
 const collapsedPagesKey = (projectId: string) => `nodra:project-tree-collapsed:${projectId}`;
 const loadCollapsedPages = (projectId: string): Set<string> => {
   try {
@@ -42,10 +44,10 @@ const saveCollapsedPages = (projectId: string, pages: Set<string>): void => {
   try { localStorage.setItem(collapsedPagesKey(projectId), JSON.stringify([...pages])); } catch { /* best-effort UI preference */ }
 };
     const lastOpenedProjectKey = "nodra:last-opened-project";
-    const lastAppLocationKey = "nodra:last-app-location";
-            type AppLocation = { readonly view: "project" | "editor" | "dashboard"; readonly mode: "design" | "prepare" };
-            const saveLastAppLocation = (location: AppLocation): void => { try { localStorage.setItem(lastAppLocationKey, JSON.stringify(location)); } catch { /* best-effort UI location */ } };
-        type LastOpenedProjectContext = { readonly projectId: string; readonly pieceId?: string; readonly pageId?: string; readonly view?: "project" | "editor" | "dashboard"; readonly mode?: "design" | "prepare" };
+        const lastAppLocationKey = "nodra:last-app-location";
+        type AppLocation = { readonly view: "project" | "editor" | "dashboard"; readonly mode: "design" | "prepare" };
+        const saveLastAppLocation = (location: AppLocation): void => { try { localStorage.setItem(lastAppLocationKey, JSON.stringify(location)); } catch { /* best-effort UI location */ } };
+    type LastOpenedProjectContext = { readonly projectId: string; readonly pieceId?: string; readonly pageId?: string; readonly view?: "project" | "editor" | "dashboard"; readonly mode?: "design" | "prepare" };
     const loadLastOpenedProject = (): LastOpenedProjectContext | undefined => {
       try {
         const raw = localStorage.getItem(lastOpenedProjectKey);
@@ -55,6 +57,8 @@ const saveCollapsedPages = (projectId: string, pages: Set<string>): void => {
           projectId: value.projectId,
           ...(typeof value.pieceId === "string" ? { pieceId: value.pieceId } : {}),
           ...(typeof value.pageId === "string" ? { pageId: value.pageId } : {}),
+              ...(value.view === "project" || value.view === "editor" || value.view === "dashboard" ? { view: value.view } : {}),
+              ...(value.mode === "design" || value.mode === "prepare" ? { mode: value.mode } : {}),
         } : undefined;
       } catch { return undefined; }
     };
@@ -64,8 +68,18 @@ const saveCollapsedPages = (projectId: string, pages: Set<string>): void => {
     const removeLastOpenedProject = (): void => {
       try { localStorage.removeItem(lastOpenedProjectKey); } catch { /* best-effort cleanup */ }
     };
+const loadProjectMirror = (projectId: string): ProjectMirror | undefined => {
+  try {
+    const raw = localStorage.getItem(projectMirrorKey(projectId));
+    if (!raw) return undefined;
+    const value = JSON.parse(raw) as Partial<ProjectMirror>;
+    if (value.format !== PROJECT_MIRROR_FORMAT || typeof value.savedAt !== "number") return undefined;
+    const checked = validateProject(value.project);
+    return checked.success && checked.data.id === projectId ? { format: PROJECT_MIRROR_FORMAT, project: checked.data, savedAt: value.savedAt } : undefined;
+  } catch { return undefined; }
+};
 const saveProjectMirror = (project: ProjectSnapshot): void => {
-  try { localStorage.setItem(projectMirrorKey(project.id), JSON.stringify(project)); } catch { /* best-effort reload mirror */ }
+  try { localStorage.setItem(projectMirrorKey(project.id), JSON.stringify({ format: PROJECT_MIRROR_FORMAT, project, savedAt: Date.now() } satisfies ProjectMirror)); } catch { /* best-effort reload mirror */ }
 };
 const removeProjectMirror = (projectId: string): void => {
   try { localStorage.removeItem(projectMirrorKey(projectId)); } catch { /* best-effort mirror cleanup */ }
@@ -303,11 +317,13 @@ export function App() {
   const centeredViewport = useRef<string | undefined>(undefined);
   const recoveredNotice = useRef(false);
   const lastOfficialSave = useRef<{ readonly projectId: string; readonly snapshot: string } | undefined>(undefined);
+      const browserSaveQueue = useRef<Promise<void>>(Promise.resolve());
   const restoredFontIds = useRef(new Set<string>());
   const directionTooltipTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   editorRef.current = editor;
   creationDraftRef.current = creationDraft;
   const activePiece = activePieceId === undefined ? undefined : project.pieces.find((piece) => piece.id === resolveActivePieceId(project, activePieceId));
+      const initializationUserOverride = useRef(false);
 
         useEffect(() => { const route = routeFromPath(); if (route.view === "editor" && window.location.pathname === "/preparar") setMode("prepare"); const onPopState = () => { const next = routeFromPath(); setView(next.view); if (next.projectId) setDetailProjectId(next.projectId); if (next.view === "editor") setMode(window.location.pathname === "/preparar" ? "prepare" : "design"); }; addEventListener("popstate", onPopState); return () => removeEventListener("popstate", onPopState); }, [setMode]);
       useEffect(() => { history.replaceState(null, "", pathForView(view, detailProjectId, mode)); }, [view, detailProjectId, mode]);
@@ -348,17 +364,33 @@ export function App() {
     const remembered = loadLastOpenedProject();
         const initialRoute = routeFromPath();
         const requestedProjectId = initialRoute.projectId ?? remembered?.projectId ?? document.id;
+        const mirrored = loadProjectMirror(requestedProjectId);
     void repository.getProject(requestedProjectId).then((result) => {
+      if (!result.ok && requestedProjectId !== document.id && remembered?.projectId === requestedProjectId && mirrored && !initializationUserOverride.current) {
+        const mirroredProject = mirrored.project;
+            const mirroredPiece = mirroredProject.pieces.find((piece) => piece.id === remembered?.pieceId);
+            const mirroredContext = remembered?.pageId && mirroredProject.pages.some((page) => page.id === remembered.pageId) ? { ...mirroredProject, activePageId: remembered.pageId as never } : mirroredProject;
+            setProject(mirroredPiece ? { ...mirroredContext, activePieceId: mirroredPiece.id } : mirroredContext);
+            setActivePieceId(mirroredPiece?.id);
+            setActiveProjectMetadata({ id: mirroredProject.id, name: "Proyecto recuperado", updatedAt: Date.now() });
+        recoveredNotice.current = true;
+        return;
+      }
       if (!result.ok) { removeLastOpenedProject(); removeProjectMirror(requestedProjectId); setProject(createEmptyProject(document)); setActivePieceId(undefined); setActiveProjectMetadata({ id: "", name: "Proyecto sin título", updatedAt: Date.now() }); setView(initialRoute.view === "editor" ? "editor" : "dashboard"); return; }
       setActiveProjectMetadata(result.revision.metadata);
           const recovered = "pages" in result.revision.document ? result.revision.document : createProject(result.revision.document);
-          const recoveredPiece = recovered.pieces.find((piece) => piece.id === remembered?.pieceId);
-          const recoveredContext = remembered?.pageId && recovered.pages.some((page) => page.id === remembered.pageId) ? { ...recovered, activePageId: remembered.pageId as never } : recovered;
+          const mirrorWins = mirrored !== undefined && (mirrored.project.revision > recovered.revision || (mirrored.project.revision === recovered.revision && mirrored.savedAt > result.revision.savedAt));
+          const selectedRecovery = mirrorWins ? mirrored.project : recovered;
+          if (!mirrorWins) removeProjectMirror(requestedProjectId);
+          lastOfficialSave.current = { projectId: result.revision.metadata.id, snapshot: JSON.stringify(recovered) };
+          if (initializationUserOverride.current) return;
+          const recoveredPiece = selectedRecovery.pieces.find((piece) => piece.id === remembered?.pieceId);
+          const recoveredContext = remembered?.pageId && selectedRecovery.pages.some((page) => page.id === remembered.pageId) ? { ...selectedRecovery, activePageId: remembered.pageId as never } : selectedRecovery;
           setProject(recoveredPiece ? { ...recoveredContext, activePieceId: recoveredPiece.id } : (() => { const withoutActivePiece = { ...recoveredContext }; delete withoutActivePiece.activePieceId; return withoutActivePiece; })());
           setActivePieceId(recoveredPiece?.id);
-          const recoveredView = initialRoute.view === "project" || initialRoute.view === "editor" ? initialRoute.view : remembered?.view ?? (recovered.pieces.length === 0 ? "project" : "editor");
+          const recoveredView = initialRoute.view === "project" || initialRoute.view === "editor" ? initialRoute.view : remembered?.view ?? (selectedRecovery.pieces.length === 0 ? "project" : "editor");
           if (initialRoute.view === "editor") setMode(window.location.pathname === "/preparar" ? "prepare" : "design"); else if (remembered?.mode) setMode(remembered.mode);
-          if (recoveredView === "project") setDetailProjectId(recovered.id);
+          if (recoveredView === "project") setDetailProjectId(selectedRecovery.id);
           setView(recoveredView);
           recoveredNotice.current = true;
     }).finally(() => setPersistenceReady(true));
@@ -899,18 +931,21 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
       persist.set("failed", error instanceof Error ? error.message : "No se pudo abrir el proyecto");
     }
   };
-  const saveBrowserProject = async (snapshot: ProjectSnapshot, metadata: ProjectMetadata): Promise<void> => {
-         if (metadata.id !== snapshot.id) { persist.set("failed", "La identidad del proyecto activo no coincide"); return; }
-         persist.set("saving", "Guardando proyecto");
-         const result = await repository.saveProject(metadata, snapshot);
-         if (!result.ok) { persist.set("failed", result.error ?? "No se pudo guardar el proyecto"); return; }
-         lastOfficialSave.current = { projectId: metadata.id, snapshot: JSON.stringify(snapshot) };
-         setActiveProjectMetadata(metadata);
-         setDashboardSources((current) => current.some((source) => source.metadata.id === metadata.id) ? current.map((source) => source.metadata.id === metadata.id ? { metadata, project: snapshot } : source) : [{ metadata, project: snapshot }, ...current]);
-         saveProjectMirror(snapshot);
-         persist.set("saved", "Proyecto guardado");
-       };
-       useEffect(() => {
+  const saveBrowserProject = (snapshot: ProjectSnapshot, metadata: ProjectMetadata): Promise<void> => {
+      browserSaveQueue.current = browserSaveQueue.current.catch(() => undefined).then(async () => {
+        if (metadata.id !== snapshot.id) { persist.set("failed", "La identidad del proyecto activo no coincide"); return; }
+        persist.set("saving", "Guardando proyecto");
+        const result = await repository.saveProject(metadata, snapshot);
+        if (!result.ok) { persist.set("failed", result.error ?? "No se pudo guardar el proyecto"); return; }
+        lastOfficialSave.current = { projectId: metadata.id, snapshot: JSON.stringify(snapshot) };
+        setActiveProjectMetadata(metadata);
+        setDashboardSources((current) => current.some((source) => source.metadata.id === metadata.id) ? current.map((source) => source.metadata.id === metadata.id ? { metadata, project: snapshot } : source) : [{ metadata, project: snapshot }, ...current]);
+        saveProjectMirror(snapshot);
+        persist.set("saved", "Proyecto guardado");
+      });
+      return browserSaveQueue.current;
+    };
+    useEffect(() => {
       if (!persistenceReady || desktopFileBridge() || savePolicy.mode !== "prompted-autosave") return;
       if (!shouldAutosaveProject(savePolicy.mode, sketchSessionRef.current.status, project, lastOfficialSave.current)) return;
       const committedProject = projectFromDocument(project, editorRef.current.document);
