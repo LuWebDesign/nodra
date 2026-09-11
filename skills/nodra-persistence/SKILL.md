@@ -13,7 +13,8 @@ Load for local storage, save/recovery, migrations, autosave, revisions, or persi
 ## Hard Rules
 - Persist validated `DocumentSnapshot` or `ProjectSnapshot`, never transient gesture preview.
 - Use the repository boundary; editor tools do not call IndexedDB.
-- Preserve schema/record migrations, identity checks, revisions, stale-write protection, and recovery behavior.
+- Preserve schema/record migrations, identity checks, revisions, stale-write protection, and package recovery behavior.
+- Treat web localStorage mirrors as best-effort app recovery, not durable history; preserve mirror validation, format rejection, project identity, and cleanup semantics.
 - Treat write failure as observable state; do not silently claim saved.
 
 ## Decision Gates
@@ -23,11 +24,12 @@ Load for local storage, save/recovery, migrations, autosave, revisions, or persi
 | IndexedDB implementation | concrete `DexieProjectRepository` |
 | Delayed save | `DebouncedAutosave` |
 | Schema evolution | registered migration then validation |
+| Web recovery mirror | `appPersistence.ts` + `appRecovery.ts`; keep outside package persistence |
 
 ## Execution Steps
 1. Validate before writing and after migration.
 2. Preserve newest valid revision and count skipped corrupt rows.
-3. Check debounce/retry performance and edge cases; test fake-indexeddb, stale writes, cancellation, and missing/corrupt data.
+3. Check debounce/retry performance and edge cases; test fake-indexeddb repository behavior plus mirror validation, rejected formats, project identity, best-effort failures, revision/timestamp precedence, stale cleanup, cancellation, and missing/corrupt data.
 
 ## Output Contract
 Return contract changes, revision/recovery semantics, failure behavior, and focused evidence.
