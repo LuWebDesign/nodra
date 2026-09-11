@@ -347,7 +347,6 @@ export function App() {
           setProject(mirroredContext);
           setActivePieceId(mirroredPiece.id);
       recoveredNotice.current = true;
-      persist.set("recovered", "Revisión local recuperada");
     }
     void repository.getProject(requestedProjectId).then((result) => {
           if (!result.ok && remembered) {
@@ -366,7 +365,6 @@ export function App() {
           setProject(recoveredContext);
           setActivePieceId(recoveredPiece.id);
       recoveredNotice.current = true;
-      persist.set("recovered", "Revisión local recuperada");
     }).finally(() => setPersistenceReady(true));
     return () => {
       removeEventListener("online", on);
@@ -789,7 +787,6 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
         lastOfficialSave.current = { projectId: result.revision.metadata.id, snapshot: JSON.stringify(loaded) };
         const firstPiece = loaded.pieces[0]!;
         setProject(selectPiecePage(loaded, firstPiece)); setActivePieceId(firstPiece.id); setDetailProjectId(loaded.id); useSelectionStore.getState().setSelected(undefined); setView("project");
-        persist.set("recovered", `Proyecto abierto: ${projectDisplayName(metadata)}`);
       };
       const createPersistedPiece = async (source: DashboardProjectSource) => {
         const thicknessMm = pieceThickness.trim() ? Number(pieceThickness) : undefined;
@@ -2391,7 +2388,7 @@ return <main className={`app-shell${persistenceReady ? "" : " hydrating"}`}>
          <section className="inspector-lower-card design-validation-card"><div className="panel-title">VALIDACIÓN DEL DISEÑO</div><div className={designValidation.ready ? "validation-status ok" : "validation-status warning"}><span aria-hidden="true">{designValidation.ready ? "●" : "▲"}</span><span>{designValidation.ready ? "Todo listo para procesar" : "Revisar antes de procesar"}</span></div><div className={`validation-check ${designValidation.openCurveCount ? "warning" : "ok"}`}><span aria-hidden="true">{designValidation.openCurveCount ? "▲" : "●"}</span><span>{designValidation.openCurveCount ? `${designValidation.openCurveCount} ${designValidation.openCurveCount === 1 ? "curva abierta" : "curvas abiertas"}` : "No hay curvas abiertas"}</span></div><div className={`validation-check ${designValidation.duplicateLineCount ? "warning" : "ok"}`}><span aria-hidden="true">{designValidation.duplicateLineCount ? "▲" : "●"}</span><span>{designValidation.duplicateLineCount ? `${designValidation.duplicateLineCount} ${designValidation.duplicateLineCount === 1 ? "línea duplicada" : "líneas duplicadas"}` : "No hay líneas duplicadas"}</span></div><div className={`validation-check ${designValidation.outsideElementCount ? "warning" : "ok"}`}><span aria-hidden="true">{designValidation.outsideElementCount ? "▲" : "●"}</span><span>{designValidation.outsideElementCount ? `${designValidation.outsideElementCount} objetos fuera del área` : "Todos los objetos dentro del área"}</span></div></section>
        </aside>
     </div>}
-     <footer className="statusbar"><div className="status-message"><span className={`status-dot ${persist.state}`} />{persist.message}</div>{view === "editor" && mode === "design" && <div className="piece-context" aria-label="Contexto de pieza activa"><div className="piece-tabs" role="tablist" aria-label="Piezas">{project.pieces.filter((piece) => piecePageId(project, piece) === project.activePageId).map((piece) => <button type="button" role="tab" aria-selected={piece.id === activePiece.id} className={piece.id === activePiece.id ? "active" : ""} key={piece.id} onClick={() => activatePiece(piece.id)}>{piece.name}</button>)}<button type="button" onClick={() => guardedNavigation(() => { setPieceFormProjectId(activeProjectMetadata.id); setPieceName(nextPieceName(project)); setPieceMaterial(""); setPieceThickness(""); })}>+ Nueva pieza</button></div></div>}{view === "editor" && mode === "design" && paletteControls()}</footer>
+     <footer className="statusbar">{view === "editor" && mode === "design" && <div className="piece-context" aria-label="Contexto de pieza activa"><div className="piece-tabs" role="tablist" aria-label="Piezas">{project.pieces.filter((piece) => piecePageId(project, piece) === project.activePageId).map((piece) => <button type="button" role="tab" aria-selected={piece.id === activePiece.id} className={piece.id === activePiece.id ? "active" : ""} key={piece.id} onClick={() => activatePiece(piece.id)}>{piece.name}</button>)}<button type="button" onClick={() => guardedNavigation(() => { setPieceFormProjectId(activeProjectMetadata.id); setPieceName(nextPieceName(project)); setPieceMaterial(""); setPieceThickness(""); })}>+ Nueva pieza</button></div></div>}{view === "editor" && mode === "design" && paletteControls()}</footer>
   </main>;
 }
 

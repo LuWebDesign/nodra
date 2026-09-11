@@ -1272,7 +1272,6 @@ test("recovers the latest local revision after reload", async ({ page }) => {
   await page.reload();
 
   await expect(page.locator(".page-svg svg rect[data-element-id]")).toHaveCount(1);
-  await expect(page.getByText("Revisión local recuperada")).toBeVisible();
 });
 
 test("keeps a deleted object deleted after reload", async ({ page }) => {
@@ -1292,7 +1291,6 @@ test("shows offline status while editing remains available", async ({ page, cont
   await page.goto("/");
   await context.setOffline(true);
 
-  await expect(page.getByText("Sin conexión — la edición permanece local")).toBeVisible();
   await expect(page.getByRole("button", { name: "Rectángulo" })).toBeEnabled();
 });
 
