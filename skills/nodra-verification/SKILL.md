@@ -14,10 +14,11 @@ Load for test planning, CI evidence, docs audits, or release checks. Read root s
 - Treat manifests, source, configs, and CI as authoritative; stale OpenSpec metadata is not evidence.
 - Use the CI order: lint, typecheck, test, test:e2e, build.
 - Do not edit generated `.build` or `apps/web/dist`.
-- E2E `--pass-with-no-tests` is not product coverage; no real E2E files currently exist.
+- E2E `--pass-with-no-tests` is not product coverage; current real E2E coverage is a smoke test, not comprehensive behavior coverage.
 - Test persisted committed state, not transient preview; preserve Spanish UI copy in UI assertions.
 - Record exact commands and their results separately from environment/tooling failures. A filtered package build is not evidence that the root build succeeded.
 - For renderer classification, test both invalid documents with supported schema versions and unsupported schema versions/features; use the repository's schema constant rather than hardcoding the current number.
+- For web recovery, require `appRecovery.test.ts` precedence cases (no mirror, higher revision, equal/newer timestamp, equal/older timestamp) and `appPersistence.test.ts` mirror validation and failure cases.
 
 ## Decision Gates
 | Change | Minimum evidence |
@@ -25,7 +26,7 @@ Load for test planning, CI evidence, docs audits, or release checks. Read root s
 | Pure docs | links, frontmatter, file existence |
 | Package logic | focused Vitest + typecheck/lint |
 | UI behavior | unit tests plus real E2E when available |
-| persistence | fake-indexeddb recovery/revision tests |
+| persistence | fake-indexeddb recovery/revision tests plus `appPersistence.test.ts` mirror cases and `appRecovery.test.ts` precedence cases |
 
 ## Execution Steps
 1. Select the smallest honest matrix.

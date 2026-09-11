@@ -12,7 +12,8 @@ Load for architecture reviews, cross-package changes, composition-root work, or 
 
 ## Hard Rules
 - Keep domain, geometry, validation, editor-core, renderer-svg, and persistence independent of web.
-- Treat `App.tsx` as a composition hotspot, not proof that application code belongs in web.
+- Treat `App.tsx` as the web composition/orchestration boundary, not proof that application code belongs in a package.
+- Keep web recovery wiring in `apps/web`: `appPersistence.ts` owns best-effort localStorage mirrors and `appRecovery.ts` owns pure arbitration; neither is package durable persistence.
 - Keep domain != renderer/UI; preserve Spanish UI copy.
 - Do not edit `.build` or `apps/web/dist`.
 
@@ -23,12 +24,13 @@ Load for architecture reviews, cross-package changes, composition-root work, or 
 | Coordinates/hit testing | geometry |
 | User operation/history | editor-core |
 | SVG projection | renderer-svg |
-| IndexedDB/recovery | persistence |
+| IndexedDB/package durable persistence | persistence |
+| Web localStorage recovery wiring/arbitration | web (`appPersistence.ts`, `appRecovery.ts`) |
 | Wiring/UI/session | web or stateless ui contracts |
 
 ## Execution Steps
 1. Map imports and identify the owning boundary.
-2. Verify the change against current source and manifests, not stale OpenSpec metadata.
+2. Verify the change against current source and manifests, not stale OpenSpec metadata; distinguish package durable persistence from web recovery wiring.
 3. Check edge cases, performance impact, and focused tests; reject new abstraction layers unless evidence requires them.
 
 ## Output Contract

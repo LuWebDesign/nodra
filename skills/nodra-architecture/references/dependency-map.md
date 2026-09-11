@@ -1,6 +1,8 @@
 # Nodra dependency map
 
-The repository is a pnpm `apps/*` and `packages/*` workspace. `apps/web/src/main.tsx` mounts React; `App.tsx` composes editor-core, domain/project state, geometry and hit testing, renderer-svg, Dexie persistence/autosave, and Zustand UI/session stores.
+The repository is a pnpm `apps/*` and `packages/*` workspace. `apps/web/src/main.tsx` mounts React; `App.tsx` is the web composition/orchestration boundary for editor-core, domain/project state, geometry and hit testing, renderer-svg, Dexie persistence/autosave, localStorage recovery wiring, and Zustand UI/session stores. `apps/web/src/appPersistence.ts` owns best-effort app-level localStorage state, including format-2 `ProjectMirror` records validated with `validateProject`, project-ID matching, and `savedAt`; this is distinct from package persistence and Dexie IndexedDB.
+
+`apps/web/src/appRecovery.ts` provides pure `selectRecoveredProject(official, officialSavedAt, mirror)` arbitration. The mirror wins only when its project revision is higher, or when revisions are equal and its `savedAt` is newer than the official result's `revision.savedAt`; otherwise `App.tsx` removes the mirror and keeps official data. `App.tsx` loads mirrors, invokes the selector, performs cleanup, and manages UI recovery state. Failed project lookup removes both the last-opened context and the requested mirror. Keep this recovery wiring in web; do not move it into a package or describe localStorage as durable history.
 
 ```text
 web -> domain, geometry, editor-core, persistence, renderer-svg
