@@ -1,6 +1,6 @@
 import type { CircleElement, DocumentSnapshot, ElementId, PointMm, SketchElement } from "@nodra/domain";
 import { solveConstraintComponents, type ConstraintDiagnostic } from "@nodra/constraints";
-import { classifyCutGraph, cuttableSegments, solveCircleConstraints, splitCuttableSegments } from "@nodra/geometry";
+import { sketchProfileResult, solveCircleConstraints } from "@nodra/geometry";
 import { validateDocument } from "@nodra/validation";
 
 /**
@@ -77,18 +77,15 @@ const topologyForSketch = (sketch: SketchElement): {
   readonly valid: boolean;
   readonly profileReady: boolean;
 } => {
-  const segments = cuttableSegments(sketch);
-  const invalidGeometry = segments.length !== sketch.edges.length || segments.some((segment) => segment.start.x === segment.end.x && segment.start.y === segment.end.y);
-  if (invalidGeometry) return { diagnostics: [{ code: "invalid-topology", sketchId: sketch.id, message: "Sketch topology contains a missing or degenerate line segment" }], contours: [], valid: false, profileReady: false };
-
-  const graph = classifyCutGraph(splitCuttableSegments(segments));
-  const contours = graph.cycles.map((cycle) => [...cycle.points, cycle.points[0]!]);
-  const hasOpenPieces = graph.openPieces.length > 0;
-  const diagnostics: SketchTopologyDiagnostic[] = contours.length && !hasOpenPieces
-    ? [{ code: "closed-profile", sketchId: sketch.id, message: `${contours.length} closed profile${contours.length === 1 ? "" : "s"} detected` }]
-    : [{ code: "open-profile", sketchId: sketch.id, message: "Sketch contains an open or incomplete profile" }];
-  // Open pieces are valid editable topology, but a profile is ready only when every piece belongs to a face.
-  return { diagnostics, contours, valid: true, profileReady: contours.length > 0 && !hasOpenPieces };
+  const profile = sketchProfileResult(sketch);
+  const contours = [...profile.outerRegions, ...profile.holes];
+  const invalid = profile.status === "invalid" || profile.status === "degenerate" || profile.status === "ambiguous";
+  const diagnostics: SketchTopologyDiagnostic[] = invalid
+    ? [{ code: "invalid-topology", sketchId: sketch.id, message: profile.diagnostics.map((diagnostic) => diagnostic.message).join("; ") }]
+    : profile.status === "valid-closed"
+      ? [{ code: "closed-profile", sketchId: sketch.id, message: `${contours.length} closed profile${contours.length === 1 ? "" : "s"} detected` }]
+      : [{ code: "open-profile", sketchId: sketch.id, message: "Sketch contains an open or incomplete profile" }];
+  return { diagnostics, contours, valid: !invalid, profileReady: profile.status === "valid-closed" };
 };
 
 /** Recomputes a validated immutable sketch document without changing its revision. */

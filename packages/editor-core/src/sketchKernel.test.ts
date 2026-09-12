@@ -68,7 +68,18 @@ describe("sketch kernel", () => {
     expect(result.topologyDiagnostics.map((diagnostic) => diagnostic.code)).toContain("open-profile");
   });
 
-  it("keeps closed faces editable when the sketch also has an open piece", () => {
+  it("keeps collinear overlapping segments out of profile-ready topology", () => {
+        const input = documentFor({
+          ...square(),
+          nodes: [...square().nodes, { id: "e", point: { x: 5, y: 0 } }, { id: "f", point: { x: 15, y: 0 } }],
+          edges: [...square().edges, { id: "ef", startNodeId: "e", endNodeId: "f" }],
+        });
+        const result = recomputeSketchKernel(input);
+        expect(result.profileReady).toBe(false);
+        expect(result.topologyDiagnostics[0]?.code).toBe("invalid-topology");
+      });
+
+      it("keeps closed faces editable when the sketch also has an open piece", () => {
     const input = documentFor({
       ...square(),
       nodes: [...square().nodes, { id: "e", point: { x: 20, y: 0 } }],
