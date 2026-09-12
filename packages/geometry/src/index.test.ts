@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { angularDimensionGeometry, bezierHandlePoint, boundsOf, boundsOfElements, boundsOutsidePage, connectableNode, connectableNodeAddress, closedElementToPolygon, cubicBezierBounds, cubicBezierLineIntersections, cuttableSegments, cubicBezierDerivative, degreesToRadians, dimensionGeometry, dimensionKindForNodes, dimensionKindForPlacement, dimensionOffsetForAlignedPlacement, dimensionOffsetForPlacement, editableGeometryNodes, elementCenter, elementSegmentAt, elementToContour, evaluateCubicBezier, ELLIPSE_APPROXIMATION_SEGMENTS, groupCenter, groupHandlePoints, hitTest, mirrorHandleOffset, mmToScreen, pointMidpoint, radiansToDegrees, realGeometryNodes, resizeGroup, resizeHandle, rotatedLineEndpoints, rotateElements, rotationFromDrag, solveSketchConstraints, solveCircleConstraints, rotationHandlePoints, screenToMm, shapeResultContours, sketchClosedContours, sketchEdgeAtAddress, sketchEdgeIndexAtAddress, splitCubicBezier, splitCubicBezierAtParameters, splitCuttableSegments, validateSize, visibleBezierHandleGuides } from "./index.js";
-import { elementId, layerId, type ArcElement } from "@nodra/domain";
+import { angularDimensionGeometry, bezierHandlePoint, boundsOf, boundsOfElements, boundsOutsidePage, connectableNode, connectableNodeAddress, closedElementToPolygon, cubicBezierBounds, cubicBezierLineIntersections, cuttableSegments, cubicBezierDerivative, degreesToRadians, dimensionGeometry, dimensionKindForNodes, dimensionKindForPlacement, dimensionOffsetForAlignedPlacement, dimensionOffsetForPlacement, editableGeometryNodes, elementCenter, elementSegmentAt, elementToContour, evaluateCubicBezier, ELLIPSE_APPROXIMATION_SEGMENTS, groupCenter, groupHandlePoints, hitTest, mirrorHandleOffset, mmToScreen, pointMidpoint, radiansToDegrees, realGeometryNodes, resizeGroup, resizeHandle, rotatedLineEndpoints, rotateElements, rotationFromDrag, sketchProfileResult, solveSketchConstraints, solveCircleConstraints, rotationHandlePoints, screenToMm, shapeResultContours, sketchClosedContours, sketchEdgeAtAddress, sketchEdgeIndexAtAddress, splitCubicBezier, splitCubicBezierAtParameters, splitCuttableSegments, validateSize, visibleBezierHandleGuides } from "./index.js";
+import { elementId, layerId, type ArcElement, type SketchElement } from "@nodra/domain";
 
 const style = { stroke: "#000", strokeWidth: 0.2 };
 const rectangle = { type: "rectangle" as const, id: elementId("r"), layerId: layerId("l"), position: { x: 10, y: 20 }, size: { width: 20, height: 10 }, cornerRadius: 0, rotation: 0, style };
@@ -79,6 +79,57 @@ describe("canonical millimetre geometry", () => {
     expect(sketchClosedContours(square)).toHaveLength(1);
     expect(sketchClosedContours({ ...square, id: elementId("diagonal"), edges: [...square.edges, { id: "ac", startNodeId: "a", endNodeId: "c" }] })).toHaveLength(2);
     expect(sketchClosedContours({ ...square, id: elementId("open"), edges: square.edges.slice(0, 2) })).toHaveLength(0);
+  });
+  it("classifies explicit sketch profile results across bounded topology cases", () => {
+    const makeSketch = (id: string, nodes: SketchElement["nodes"], edges: SketchElement["edges"]): SketchElement => ({ type: "sketch", id: elementId(id), layerId: layerId("l"), nodes, edges, style });
+    const squareNodes = [{ id: "a", point: { x: 0, y: 0 } }, { id: "b", point: { x: 10, y: 0 } }, { id: "c", point: { x: 10, y: 10 } }, { id: "d", point: { x: 0, y: 10 } }];
+    const squareEdges = [{ id: "ab", startNodeId: "a", endNodeId: "b" }, { id: "bc", startNodeId: "b", endNodeId: "c" }, { id: "cd", startNodeId: "c", endNodeId: "d" }, { id: "da", startNodeId: "d", endNodeId: "a" }];
+    const open = sketchProfileResult(makeSketch("profile-open", squareNodes.slice(0, 3), squareEdges.slice(0, 2)));
+    expect(open.status).toBe("open");
+    expect(open.openChains).toHaveLength(2);
+    expect(open.diagnostics.map(({ code }) => code)).toContain("open-chain");
+
+    const closedWithBranch = sketchProfileResult(makeSketch("profile-branch", [...squareNodes, { id: "e", point: { x: 15, y: 10 } }], [...squareEdges, { id: "ce", startNodeId: "c", endNodeId: "e" }]));
+    expect(closedWithBranch.status).toBe("open");
+    expect(closedWithBranch.outerRegions).toHaveLength(1);
+    expect(closedWithBranch.openChains).toEqual([[{ x: 10, y: 10 }, { x: 15, y: 10 }]]);
+
+    const degenerate = sketchProfileResult(makeSketch("profile-degenerate", [{ id: "a", point: { x: 0, y: 0 } }, { id: "b", point: { x: 0, y: 0 } }], [{ id: "aa", startNodeId: "a", endNodeId: "b" }]));
+    expect(degenerate.status).toBe("degenerate");
+    expect(degenerate.diagnostics.map(({ code }) => code)).toContain("degenerate-segment");
+
+    const crossing = sketchProfileResult(makeSketch("profile-crossing", [{ id: "a", point: { x: 0, y: 0 } }, { id: "b", point: { x: 10, y: 10 } }, { id: "c", point: { x: 0, y: 10 } }, { id: "d", point: { x: 10, y: 0 } }], [{ id: "ab", startNodeId: "a", endNodeId: "b" }, { id: "cd", startNodeId: "c", endNodeId: "d" }]));
+    expect(crossing.status).toBe("ambiguous");
+    expect(crossing.invalidIntersections).toEqual([{ x: 5, y: 5 }]);
+    expect(crossing.diagnostics.map(({ code }) => code)).toContain("invalid-intersection");
+
+    const missingNode = sketchProfileResult(makeSketch("profile-missing", [{ id: "a", point: { x: 0, y: 0 } }], [{ id: "missing", startNodeId: "a", endNodeId: "not-present" }]));
+    expect(missingNode.status).toBe("invalid");
+    expect(missingNode.diagnostics.map(({ code }) => code)).toContain("unsupported-geometry");
+
+    const duplicate = sketchProfileResult(makeSketch("profile-duplicate", [{ id: "a", point: { x: 0, y: 0 } }, { id: "b", point: { x: 10, y: 0 } }], [{ id: "ab", startNodeId: "a", endNodeId: "b" }, { id: "ba", startNodeId: "b", endNodeId: "a" }]));
+    expect(duplicate.status).toBe("ambiguous");
+    expect(duplicate.diagnostics.map(({ code }) => code)).toContain("invalid-intersection");
+    const overlap = sketchProfileResult(makeSketch("profile-overlap", [{ id: "a", point: { x: 0, y: 0 } }, { id: "b", point: { x: 10, y: 0 } }, { id: "c", point: { x: 5, y: 0 } }, { id: "d", point: { x: 15, y: 0 } }], [{ id: "ab", startNodeId: "a", endNodeId: "b" }, { id: "cd", startNodeId: "c", endNodeId: "d" }]));
+    expect(overlap.status).toBe("ambiguous");
+    expect(overlap.outerRegions).toHaveLength(0);
+    expect(overlap.openChains).toHaveLength(2);
+    expect(overlap.diagnostics.map(({ code }) => code)).toContain("invalid-intersection");
+  });
+  it("preserves holes in sketch contours and boolean polygons", () => {
+    const sketch = { type: "sketch" as const, id: elementId("profile-hole"), layerId: layerId("l"), nodes: [
+      { id: "a", point: { x: 0, y: 0 } }, { id: "b", point: { x: 20, y: 0 } }, { id: "c", point: { x: 20, y: 20 } }, { id: "d", point: { x: 0, y: 20 } },
+      { id: "e", point: { x: 5, y: 5 } }, { id: "f", point: { x: 15, y: 5 } }, { id: "g", point: { x: 15, y: 15 } }, { id: "h", point: { x: 5, y: 15 } },
+    ], edges: [
+      { id: "ab", startNodeId: "a", endNodeId: "b" }, { id: "bc", startNodeId: "b", endNodeId: "c" }, { id: "cd", startNodeId: "c", endNodeId: "d" }, { id: "da", startNodeId: "d", endNodeId: "a" },
+      { id: "ef", startNodeId: "e", endNodeId: "f" }, { id: "fg", startNodeId: "f", endNodeId: "g" }, { id: "gh", startNodeId: "g", endNodeId: "h" }, { id: "he", startNodeId: "h", endNodeId: "e" },
+    ], style };
+    const profile = sketchProfileResult(sketch);
+    expect(profile.status).toBe("valid-closed");
+    expect(profile.outerRegions).toHaveLength(1);
+    expect(profile.holes).toHaveLength(1);
+    expect(sketchClosedContours(sketch)).toHaveLength(2);
+    expect(closedElementToPolygon(sketch)[0]).toHaveLength(2);
   });
   it("provides shared directional Bézier handle primitives", () => {
     const anchor = { x: 10, y: 20 };
@@ -577,5 +628,12 @@ describe("canonical millimetre geometry", () => {
       expect(rotated.nodes[0]?.outHandle?.dx).toBeCloseTo(0);
       expect(rotated.nodes[0]?.outHandle?.dy).toBeCloseTo(2);
     }
+  });
+  it("derives explicit profile status and nested holes deterministically", () => {
+    const nodes = ["a:0,0", "b:20,0", "c:20,20", "d:0,20", "e:5,5", "f:15,5", "g:15,15", "h:5,15"].map((value) => { const [id, point] = value.split(":"); const [x, y] = point!.split(","); return { id: id!, point: { x: Number(x), y: Number(y) } }; });
+    const edges = [["a", "b"], ["b", "c"], ["c", "d"], ["d", "a"], ["e", "f"], ["f", "g"], ["g", "h"], ["h", "e"]].map(([startNodeId, endNodeId], index) => ({ id: `e${index}`, startNodeId: startNodeId!, endNodeId: endNodeId! }));
+    const sketch = { type: "sketch" as const, id: elementId("profile"), layerId: layerId("l"), nodes, edges, style };
+    const result = sketchProfileResult(sketch);
+    expect(result.status).toBe("valid-closed"); expect(result.outerRegions).toHaveLength(1); expect(result.holes).toHaveLength(1); expect(result).toEqual(sketchProfileResult(sketch));
   });
 });

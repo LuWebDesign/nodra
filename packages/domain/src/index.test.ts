@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createDocument, createEmptyProject, createProject, defaultPieceId, documentFromProject, elementId, hasBounds, hasRotation, layerId, pageId, projectFromDocument, revision, withElements } from "./index.js";
+import { createDocument, createEmptyProject, createProject, defaultPieceId, documentFromProject, elementId, hasBounds, hasRotation, layerId, pageId, pieceId, projectFromDocument, revision, withElements } from "./index.js";
 
 describe("domain contracts", () => {
   it("creates immutable-shaped versioned documents and increments revisions", () => {
@@ -77,7 +77,41 @@ describe("domain contracts", () => {
     expect(synced.pieces[1]?.sketches).toEqual([{ pageId: pageId("page-2"), sketchId: secondSketch.id }]);
   });
 
-  it("clears positional coincidences when importing a document that omits them", () => {
+  it("does not resurrect an unowned element deleted from the active piece document", () => {
+        const source = createDocument("deleted-unowned");
+        const deleted = { type: "line" as const, id: elementId("deleted"), layerId: layerId("design"), start: { x: 0, y: 0 }, end: { x: 10, y: 0 }, rotation: 0, style: { stroke: "#000", strokeWidth: 0.2 } };
+        const project = createProject({ ...source, elements: [deleted] });
+
+        const synced = projectFromDocument(project, source);
+
+        expect(synced.pages[0]?.elements).toEqual([]);
+      });
+
+      it("does not preserve page elements when there is no active piece", () => {
+        const source = createDocument("deleted-without-piece");
+        const deleted = { type: "line" as const, id: elementId("deleted"), layerId: layerId("design"), start: { x: 0, y: 0 }, end: { x: 10, y: 0 }, rotation: 0, style: { stroke: "#000", strokeWidth: 0.2 } };
+        const project = createEmptyProject({ ...source, elements: [deleted] });
+
+        const synced = projectFromDocument(project, source);
+
+        expect(synced.pages[0]?.elements).toEqual([]);
+      });
+
+      it("preserves elements explicitly owned by other pieces", () => {
+        const source = createDocument("preserve-other-piece");
+        const otherPieceElement = { type: "line" as const, id: elementId("other-piece-line"), layerId: layerId("design"), start: { x: 0, y: 0 }, end: { x: 10, y: 0 }, rotation: 0, pieceId: pieceId("piece-2"), style: { stroke: "#000", strokeWidth: 0.2 } };
+        const project = createProject({ ...source, elements: [otherPieceElement] });
+        const withOtherPiece = {
+          ...project,
+          pieces: [...project.pieces, { ...project.pieces[0]!, id: pieceId("piece-2"), name: "Pieza 2" }],
+        };
+
+        const synced = projectFromDocument(withOtherPiece, source);
+
+        expect(synced.pages[0]?.elements).toEqual([otherPieceElement]);
+      });
+
+      it("clears positional coincidences when importing a document that omits them", () => {
     const layer = { id: layerId("design"), name: "Design", visible: true, order: 0 } as const;
     const source = createDocument("doc-1", [layer]);
     const project = createProject({ ...source, positionalCoincidences: [{ id: "old", first: { elementId: elementId("a"), node: { kind: "line", name: "start" } }, second: { elementId: elementId("b"), node: { kind: "line", name: "start" } } }] });

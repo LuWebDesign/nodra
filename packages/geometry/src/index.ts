@@ -3,7 +3,11 @@ import { hasBounds } from "@nodra/domain";
 import { arcElementToCurve, lineElementToCurve } from "./curve2d-adapters.js";
 import { closestParameter, curveBounds, pointAt } from "./curve2d.js";
 import { intersectCurves } from "./intersection-engine.js";
-    import type { CircleElement, ConnectableNodeAddress, ContourElement, DimensionElement, Element, ElementId, EllipseElement, GlyphElement, HandleOffset, LineElement, PathCubicSegment, PathElement, PointMm, RectangleElement, SizeMm, SketchConstraint, SketchElement, SketchPointReference, SplineElement, SplineNode } from "@nodra/domain";
+
+import { sketchProfileResult } from "./profile.js";
+import type { CircleElement, ConnectableNodeAddress, ContourElement, DimensionElement, Element, ElementId, EllipseElement, GlyphElement, HandleOffset, LineElement, PathCubicSegment, PathElement, PointMm, RectangleElement, SizeMm, SketchConstraint, SketchElement, SketchPointReference, SplineElement, SplineNode } from "@nodra/domain";
+
+export type { SketchProfileClassification, SketchProfileDiagnostic, SketchProfileResult } from "./profile.js";
 
 export interface Bounds { readonly x: number; readonly y: number; readonly width: number; readonly height: number }
 export interface Viewport { readonly zoom: number; readonly panMm: PointMm }
@@ -537,13 +541,11 @@ const glyphPath = (glyph: GlyphElement, contour: GlyphElement["contours"][number
 const sketchNodeMap = (sketch: SketchElement): ReadonlyMap<string, PointMm> => new Map(sketch.nodes.map((node) => [node.id, node.point]));
 const sketchSegments = (sketch: SketchElement): readonly [PointMm, PointMm][] => { const nodes = sketchNodeMap(sketch); return sketch.edges.flatMap((edge) => { const start = nodes.get(edge.startNodeId); const end = nodes.get(edge.endNodeId); return start && end ? [[start, end] as [PointMm, PointMm]] : []; }); };
 export function sketchClosedContours(sketch: SketchElement): readonly (readonly PointMm[])[] {
-  const pieces = sketch.edges.flatMap((edge, segmentIndex) => {
-    const nodes = sketchNodeMap(sketch);
-    const start = nodes.get(edge.startNodeId); const end = nodes.get(edge.endNodeId);
-    return start && end ? [{ elementId: sketch.id, segmentIndex, start, end }] : [];
-  });
-  return closedCuttableCycles(pieces).map((cycle) => [...cycle.points, cycle.points[0]!]);
+  const profile = sketchProfileResult(sketch);
+  if (profile.status === "invalid" || profile.status === "degenerate" || profile.status === "ambiguous") return [];
+  return [...profile.outerRegions, ...profile.holes];
 }
+export { sketchProfileResult } from "./profile.js";
 export function glyphBounds(glyph: GlyphElement): Bounds {
   const values = glyph.contours.map((contour) => pathBounds(glyphPath(glyph, contour)));
   const x = Math.min(...values.map((value) => value.x)); const y = Math.min(...values.map((value) => value.y));
@@ -758,7 +760,7 @@ function primitivePolygon(element: RectangleElement | EllipseElement): [number, 
 
 export function closedElementToPolygon(element: Element): MultiPolygon {
   if (element.type === "line" || element.type === "arc" || element.type === "dimension" || element.type === "text") throw new Error("Shape operations require closed objects");
-  if (element.type === "sketch") { const contours = sketchClosedContours(element); if (!contours.length) throw new Error("Shape operations require closed objects"); return [contours.map((contour) => contour.map((point) => [point.x, point.y] as [number, number]))]; }
+  if (element.type === "sketch") { const profile = sketchProfileResult(element); if (profile.status === "invalid" || profile.status === "degenerate" || profile.status === "ambiguous" || !profile.outerRegions.length) throw new Error("Shape operations require closed objects"); const contours = [...profile.outerRegions, ...profile.holes]; return [contours.map((contour) => contour.map((point) => [point.x, point.y] as [number, number]))]; }
   if (element.type === "path") { if (!element.closed) throw new Error("Shape operations require closed objects"); return [[flattenPath(element, 0.01).map((point) => [point.x, point.y] as [number, number])]]; }
   if (element.type === "circle") return [[primitiveCirclePolygon(element)]];
   if (element.type === "spline") { if (!element.closed) throw new Error("Shape operations require closed objects"); return [[splinePoints(element, 0.01).map((point) => [point.x, point.y] as [number, number])]]; }
