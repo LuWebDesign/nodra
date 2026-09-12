@@ -414,7 +414,11 @@ describe("editor core", () => {
     const contour = { type: "contour" as const, id: elementId("contour-crossed"), layerId: layerId("default"), position: { x: 0, y: 0 }, size: { width: 20, height: 20 }, contours: [{ points: [{ x: 0, y: 0 }, { x: 20, y: 0 }, { x: 20, y: 20 }, { x: 0, y: 20 }, { x: 0, y: 0 }] }], fillRule: "evenodd" as const, rotation: 0, style: rectangle.style };
     const crossing = createSketchLine(elementId("external-open-line"), layerId("default"), rectangle.style, { x: 10, y: -10 }, { x: 10, y: 10 });
     const initial = createEditor({ ...document, elements: [contour, crossing] });
-    const cut = dispatch(initial, cutSegment(contour.id, 0, { x: 10, y: 0 }));
+    const command = cutSegment(contour.id, 0, { x: 10, y: 0 });
+        const applied = command.apply(initial.document);
+        expect(applied.success).toBe(true);
+        expect(applied.success ? applied.topology?.referenceMap.get(`${crossing.id}:edge:${crossing.edges[0]!.id}`) : undefined).toMatchObject({ kind: "replaced" });
+        const cut = dispatch(initial, command);
     const result = cut.document.elements.find((element) => element.id === crossing.id);
     expect(cut.document.elements.find((element) => element.id === contour.id && element.type === "path")).toBeDefined();
     expect(result?.type === "sketch" ? result.edges : []).toHaveLength(2);
@@ -790,6 +794,30 @@ describe("editor core", () => {
     expect(undo(cut).document).toEqual(initial.document);
   });
 
+  it("recomputes sketch topology atomically while preserving surviving constraints and metadata", () => {
+    const sketch: SketchElement = { type: "sketch", id: elementId("kernel-cut-preservation"), layerId: layerId("default"), style: rectangle.style, operation: { operation: "cut", order: 7 }, nodes: [{ id: "a", point: { x: 0, y: 0 } }, { id: "b", point: { x: 20, y: 0 } }, { id: "c", point: { x: 30, y: 0 } }, { id: "d", point: { x: 30, y: 10 } }], edges: [{ id: "ab", startNodeId: "a", endNodeId: "b" }, { id: "cd", startNodeId: "c", endNodeId: "d" }], constraints: [{ id: "surviving-vertical", kind: "vertical", references: [{ elementId: elementId("kernel-cut-preservation"), nodeId: "c" }, { elementId: elementId("kernel-cut-preservation"), nodeId: "d" }] }] };
+    const initial = createEditor({ ...document, elements: [sketch] });
+    const cut = dispatch(initial, cutSketchEdge(sketch.id, 0, { x: 8, y: 0 }));
+    const resultSketch = cut.document.elements[0] as SketchElement;
+
+    expect(resultSketch).toMatchObject({ id: sketch.id, layerId: sketch.layerId, style: sketch.style, operation: sketch.operation });
+    expect(resultSketch.constraints).toEqual(sketch.constraints);
+    expect(cut.document.revision).toBe(initial.document.revision + 1);
+    expect(undo(cut).document).toEqual(initial.document);
+  });
+
+  it("rolls back a sketch topology cut when recomputation finds a constraint conflict", () => {
+    const target = createSketchLine(elementId("kernel-conflict-target"), layerId("default"), rectangle.style, { x: 0, y: 0 }, { x: 20, y: 0 });
+    const conflicting: SketchElement = { type: "sketch", id: elementId("kernel-conflict-source"), layerId: layerId("default"), style: rectangle.style, nodes: [{ id: "left", point: { x: 40, y: 0 } }, { id: "right", point: { x: 50, y: 0 } }], edges: [{ id: "conflict-edge", startNodeId: "left", endNodeId: "right" }], constraints: [{ id: "conflict-horizontal", kind: "horizontal", references: [{ elementId: elementId("kernel-conflict-source"), nodeId: "left" }, { elementId: elementId("kernel-conflict-source"), nodeId: "right" }] }, { id: "conflict-vertical", kind: "vertical", references: [{ elementId: elementId("kernel-conflict-source"), nodeId: "left" }, { elementId: elementId("kernel-conflict-source"), nodeId: "right" }] }] };
+    const initial = createEditor({ ...document, elements: [target, conflicting] });
+    const rejected = dispatch(initial, cutSketchEdge(target.id, 0, { x: 8, y: 0 }));
+
+    expect(rejected).toBe(initial);
+    expect(rejected.document.revision).toBe(initial.document.revision);
+    expect(rejected.undo).toHaveLength(0);
+    expect(rejected.redo).toHaveLength(0);
+  });
+
   it("splits a sketch segment at the cut point without deleting the whole line", () => {
      const sketch = createSketchLine(elementId("split-sketch"), layerId("default"), rectangle.style, { x: 0, y: 0 }, { x: 20, y: 0 });
      const state = dispatch(createEditor({ ...document, elements: [sketch] }), cutSketchEdge(sketch.id, 0, { x: 8, y: 0 }));
@@ -1159,7 +1187,52 @@ it("converts a zero-radius rectangle to an open path when cutting one edge", () 
     expect(dispatch(initial, createElement(invalid))).toBe(initial);
   });
 
-  it("positions a native arc or circle center on another stable node", () => {
+  it("creates a valid sketch through the kernel with preview, commit, and cancel", () => {
+        const sketch = createSketchLine(elementId("created-sketch"), layerId("default"), rectangle.style, { x: 0, y: 0 }, { x: 10, y: 0 });
+        const initial = createEditor(document);
+        const preview = previewGesture(beginGesture(initial), createElement(sketch));
+        expect(preview.document.elements).toEqual([sketch]);
+        expect(preview.undo).toHaveLength(0);
+        expect(cancelGesture(preview).document).toEqual(initial.document);
+        const committed = commitGesture(preview);
+        expect(committed.document.elements).toHaveLength(1);
+        expect(committed.document.elements[0]?.type).toBe("sketch");
+        expect(committed.undo).toHaveLength(1);
+      });
+
+      it("rolls back invalid sketch creation with structured topology diagnostics", () => {
+        const sketch = createSketchLine(elementId("invalid-created-sketch"), layerId("default"), rectangle.style, { x: 0, y: 0 }, { x: 0, y: 0 });
+        const initial = createEditor(document);
+        const applied = createElement(sketch).apply(initial.document);
+        expect(applied.success).toBe(false);
+        expect(applied.diagnostics).toEqual(expect.arrayContaining([{ kind: "topology", code: "invalid-topology", message: expect.any(String) }]));
+        expect(dispatch(initial, createElement(sketch))).toBe(initial);
+      });
+
+      it("solves constraints when creating a sketch", () => {
+        const base = createSketchLine(elementId("constrained-created-sketch"), layerId("default"), rectangle.style, { x: 0, y: 0 }, { x: 10, y: 4 });
+        const first = base.nodes[0]!;
+        const second = base.nodes[1]!;
+        const constraint = { id: "created-horizontal", kind: "horizontal" as const, references: [{ elementId: base.id, nodeId: first.id }, { elementId: base.id, nodeId: second.id }] as const };
+        const created = dispatch(createEditor(document), createElement({ ...base, constraints: [constraint] }));
+        const sketch = created.document.elements[0];
+        expect(sketch?.type).toBe("sketch");
+        expect(sketch?.type === "sketch" ? sketch.nodes[1]?.point.y : undefined).toBe(0);
+        expect(created.undo).toHaveLength(1);
+      });
+
+      it("creates sketches as one undoable history entry and supports redo", () => {
+        const sketch = createSketchLine(elementId("history-created-sketch"), layerId("default"), rectangle.style, { x: 0, y: 0 }, { x: 10, y: 0 });
+        const initial = createEditor(document);
+        const created = dispatch(initial, createElement(sketch));
+        const undone = undo(created);
+        expect(undone.document).toEqual(initial.document);
+        expect(undone.undo).toHaveLength(0);
+        expect(redo(undone).document).toEqual(created.document);
+        expect(created.document.revision).toBe(1);
+      });
+
+      it("positions a native arc or circle center on another stable node", () => {
     const target = createSketchLine(elementId("position-target"), layerId("default"), rectangle.style, { x: 40, y: 50 }, { x: 60, y: 50 });
     const initial = createEditor({ ...document, elements: [arc, target] });
     const source = { elementId: arc.id, node: { kind: "named" as const, name: "center" as const } };
@@ -1974,7 +2047,56 @@ it("moves a dimension by changing only its placement offset and supports undo", 
     expect(undo(state).document.elements).toEqual([rectangle, second]);
   });
 
-  it("recomputes pointer previews from the gesture base without cumulative drift", () => {
+  it("resizes constrained sketches through the kernel as one atomic transaction", () => {
+        const sketch = createSketchLine(elementId("resize-sketch"), rectangle.layerId, rectangle.style, { x: 0, y: 0 }, { x: 10, y: 0 });
+        const initial = createEditor({ ...document, elements: [sketch, rectangle] });
+        const resized = dispatch(initial, resizeElements([sketch.id, rectangle.id], "se", { x: 20, y: 10 }));
+        expect(resized.undo).toHaveLength(1);
+        expect(resized.document.elements.map((element) => element.id)).toEqual([sketch.id, rectangle.id]);
+        expect((resized.document.elements[0] as SketchElement).constraints).toEqual(sketch.constraints);
+        expect((resized.document.elements[0] as SketchElement).nodes.map((node) => node.id)).toEqual(sketch.nodes.map((node) => node.id));
+        expect(undo(resized).document).toEqual(initial.document);
+        expect(redo(undo(resized)).document).toEqual(resized.document);
+        expect(dispatch(initial, resizeElementsToDimensions([sketch.id], { width: 0, height: 10 }))).toBe(initial);
+        expect(dispatch(initial, resizeElement(sketch.id, { x: 0, y: 0 }, { width: 0, height: 10 }))).toBe(initial);
+      });
+
+      it("routes unconstrained sketch rotate and flip through the kernel", () => {
+        const sketch: SketchElement = { type: "sketch", id: elementId("transform-unconstrained"), layerId: rectangle.layerId, nodes: [{ id: "a", point: { x: 0, y: 0 } }, { id: "b", point: { x: 6, y: 3 } }], edges: [{ id: "ab", startNodeId: "a", endNodeId: "b" }], style: rectangle.style };
+        const initial = createEditor({ ...document, elements: [sketch] });
+        const rotated = dispatch(initial, rotateElementsAroundCenter([sketch.id], Math.PI / 2));
+        expect(rotated.document.elements[0]).not.toEqual(sketch);
+        expect(rotated.undo).toHaveLength(1);
+        const flipped = dispatch(initial, flipElements([sketch.id], "horizontal"));
+        expect(flipped.document.elements[0]).not.toEqual(sketch);
+        expect(flipped.undo).toHaveLength(1);
+      });
+
+      it("rolls back constrained sketch rotate and flip atomically with kernel diagnostics", () => {
+        const sketch: SketchElement = { type: "sketch", id: elementId("transform-fixed"), layerId: rectangle.layerId, nodes: [{ id: "a", point: { x: 0, y: 0 } }, { id: "b", point: { x: 6, y: 3 } }], edges: [{ id: "ab", startNodeId: "a", endNodeId: "b" }], constraints: [{ id: "fixed-a", kind: "fixed", references: [{ elementId: elementId("transform-fixed"), nodeId: "a" }] }], style: rectangle.style };
+        const initial = createEditor({ ...document, elements: [sketch] });
+        for (const command of [rotateElementsAroundCenter([sketch.id], Math.PI / 2), flipElements([sketch.id], "horizontal")]) {
+          const applied = command.apply(initial.document);
+          expect(applied.success).toBe(false);
+          if (applied.success) throw new Error("Expected constrained transform to fail");
+          expect(applied.diagnostics).toEqual(expect.arrayContaining([expect.objectContaining({ kind: "kernel" })]));
+          expect(dispatch(initial, command)).toBe(initial);
+        }
+      });
+
+      it("commits mixed sketch/native rotate and flip as one history entry with undo and redo", () => {
+        const sketch: SketchElement = { type: "sketch", id: elementId("transform-mixed-sketch"), layerId: rectangle.layerId, nodes: [{ id: "a", point: { x: 0, y: 0 } }, { id: "b", point: { x: 6, y: 3 } }], edges: [{ id: "ab", startNodeId: "a", endNodeId: "b" }], style: rectangle.style };
+        const initial = createEditor({ ...document, elements: [sketch, rectangle] });
+        for (const command of [rotateElementsAroundCenter([sketch.id, rectangle.id], Math.PI / 2), flipElements([sketch.id, rectangle.id], "vertical")]) {
+          const transformed = dispatch(initial, command);
+          expect(transformed.document).not.toEqual(initial.document);
+          expect(transformed.undo).toHaveLength(1);
+          expect(undo(transformed).document).toEqual(initial.document);
+          expect(redo(undo(transformed)).document).toEqual(transformed.document);
+        }
+      });
+
+      it("recomputes pointer previews from the gesture base without cumulative drift", () => {
     let state = beginGesture(createEditor({ ...document, elements: [rectangle] }));
     state = previewGestureFromBase(state, moveElement(rectangle.id, { x: 4, y: 0 }));
     state = previewGestureFromBase(state, moveElement(rectangle.id, { x: 2, y: 0 }));
@@ -2123,7 +2245,17 @@ it("moves a dimension by changing only its placement offset and supports undo", 
     expect(result.undo).toHaveLength(1);
   });
 
-  it("removes invalid dimensions and preserves unrelated annotations", () => {
+  it("rejects sketch shape consumption with a kernel diagnostic and no history", () => {
+        const sketch = createSketchLine(elementId("shape-sketch-rejected"), layerId("default"), rectangle.style, { x: 0, y: 0 }, { x: 10, y: 0 });
+        const initial = createEditor({ ...document, elements: [sketch] });
+        const command = shapeOperation([sketch.id], "weld");
+        const applied = command.apply(initial.document);
+        expect(applied).toEqual(expect.objectContaining({ success: false, error: "Shape operations do not support sketch consumption" }));
+        expect(applied.success ? [] : applied.diagnostics).toEqual(expect.arrayContaining([expect.objectContaining({ code: "unsupported-sketch-shape-operation" })]));
+        expect(dispatch(initial, command)).toBe(initial);
+      });
+
+      it("removes invalid dimensions and preserves unrelated annotations", () => {
     const second = { ...rectangle, id: elementId("shape-invalid"), position: { x: 6, y: 2 } };
     const unrelated = { ...rectangle, id: elementId("shape-unrelated"), position: { x: 40, y: 2 } };
     const invalid = { ...dimension, id: elementId("invalid-dimension"), references: [{ kind: "node" as const, elementId: second.id, nodeIndex: 0 }, { kind: "node" as const, elementId: second.id, nodeIndex: 1 }] as const };
@@ -2170,7 +2302,56 @@ it("moves a dimension by changing only its placement offset and supports undo", 
     }
   });
 
-  it("duplicates multiple geometry types, counts copies, and undoes atomically", () => {
+  it("deep-duplicates constrained sketches with fresh topology and remapped constraints", () => {
+    const sketch = createSketchLine(elementId("duplicate-constrained"), layerId("default"), rectangle.style, { x: 0, y: 0 }, { x: 10, y: 0 });
+    const constrained = dispatch(createEditor({ ...document, elements: [sketch] }), addSketchConstraint(sketch.id, { id: "duplicate-horizontal", kind: "horizontal", references: [{ elementId: sketch.id, nodeId: sketch.nodes[0]!.id }, { elementId: sketch.id, nodeId: sketch.nodes[1]!.id }] }));
+    const duplicated = dispatch(constrained, duplicateElements([sketch.id], "east", 1, 1));
+    const copy = duplicated.document.elements[1];
+    expect(copy?.type).toBe("sketch");
+    if (copy?.type !== "sketch") return;
+    expect(copy.id).not.toBe(sketch.id);
+    expect(copy.nodes.map((node) => node.id)).not.toEqual(sketch.nodes.map((node) => node.id));
+    expect(copy.edges.map((edge) => edge.id)).not.toEqual(sketch.edges.map((edge) => edge.id));
+    expect(copy.constraints?.[0]?.id).not.toBe("duplicate-horizontal");
+    expect(copy.constraints?.[0]?.references.every((reference) => reference.elementId === copy.id && ("nodeId" in reference ? copy.nodes.some((node) => node.id === reference.nodeId) : copy.edges.some((edge) => edge.id === reference.edgeId)))).toBe(true);
+    expect(undo(duplicated).document).toEqual(constrained.document);
+    expect(redo(undo(duplicated)).document).toEqual(duplicated.document);
+  });
+
+  it("remaps local and internal document constraint IDs across copied dimensions and preserves undo/redo", () => {
+        const first = createSketchLine(elementId("duplicate-internal-first"), layerId("default"), rectangle.style, { x: 0, y: 0 }, { x: 10, y: 0 });
+        const second = createSketchLine(elementId("duplicate-internal-second"), layerId("default"), rectangle.style, { x: 10, y: 0 }, { x: 20, y: 0 });
+        const localConstraint = { id: "duplicate-local-distance", kind: "distance" as const, references: [{ elementId: first.id, nodeId: first.nodes[0]!.id }, { elementId: first.id, nodeId: first.nodes[1]!.id }] as const, value: 10 };
+        const internalConstraint = { id: "duplicate-document-coincident", kind: "coincident" as const, references: [{ elementId: first.id, nodeId: first.nodes[1]!.id }, { elementId: second.id, nodeId: second.nodes[0]!.id }] as const };
+        const localDimension: DimensionElement = { type: "dimension", id: elementId("duplicate-local-dimension"), layerId: first.layerId, kind: "aligned", driving: true, constraintId: localConstraint.id, references: [{ kind: "node", elementId: first.id, nodeIndex: 0, nodeId: first.nodes[0]!.id }, { kind: "node", elementId: first.id, nodeIndex: 1, nodeId: first.nodes[1]!.id }], offset: { x: 0, y: -5 }, precision: 2, units: "mm", rotation: 0, style: rectangle.style };
+        const internalDimension: DimensionElement = { ...localDimension, id: elementId("duplicate-document-dimension"), driving: false, constraintId: internalConstraint.id, references: [{ kind: "node", elementId: second.id, nodeIndex: 0, nodeId: second.nodes[0]!.id }, { kind: "node", elementId: second.id, nodeIndex: 1, nodeId: second.nodes[1]!.id }] };
+        const initial = createEditor({ ...document, elements: [{ ...first, constraints: [localConstraint] }, second, localDimension, internalDimension], constraints: [internalConstraint] });
+        const duplicated = dispatch(initial, duplicateElements([first.id, second.id, localDimension.id, internalDimension.id], "east", 1, 1));
+        expect(duplicated.document.elements).toHaveLength(initial.document.elements.length + 4);
+        const copiedFirst = duplicated.document.elements.find((element) => element.type === "sketch" && element.id !== first.id) as SketchElement;
+ const copiedDimensions = duplicated.document.elements.filter((element): element is DimensionElement => element.type === "dimension" && element.id !== localDimension.id && element.id !== internalDimension.id);
+        expect(copiedFirst.nodes.map((node) => node.id)).not.toEqual(first.nodes.map((node) => node.id));
+        expect(copiedFirst.edges.map((edge) => edge.id)).not.toEqual(first.edges.map((edge) => edge.id));
+        const copiedDocumentConstraint = duplicated.document.constraints?.find((constraint) => constraint.id !== internalConstraint.id);
+            const copiedLocalConstraintId = copiedDimensions.find((dimension) => dimension.constraintId !== internalConstraint.id)?.constraintId;
+        expect(copiedLocalConstraintId).toBeDefined();
+            expect(copiedLocalConstraintId).not.toBe(localConstraint.id);
+        expect(copiedDocumentConstraint?.id).toBeDefined();
+        expect(copiedDimensions.map((dimension) => dimension.constraintId)).toEqual(expect.arrayContaining([copiedLocalConstraintId, copiedDocumentConstraint?.id]));
+        expect(copiedDimensions.every((dimension) => dimension.references.every((reference) => ![first.id, second.id].includes(reference.elementId)))).toBe(true);
+        expect(undo(duplicated).document).toEqual(initial.document);
+        expect(redo(undo(duplicated)).document).toEqual(duplicated.document);
+      });
+
+      it("rejects copied dimensions with external references without changing the transaction", () => {
+        const sketch = createSketchLine(elementId("duplicate-external-sketch"), layerId("default"), rectangle.style, { x: 0, y: 0 }, { x: 10, y: 0 });
+        const external = { type: "line" as const, id: elementId("duplicate-external-line"), layerId: sketch.layerId, start: { x: 20, y: 0 }, end: { x: 20, y: 10 }, rotation: 0, style: rectangle.style };
+        const dimension: DimensionElement = { type: "dimension", id: elementId("duplicate-external-dimension"), layerId: sketch.layerId, kind: "aligned", references: [{ kind: "node", elementId: sketch.id, nodeIndex: 0, nodeId: sketch.nodes[0]!.id }, { kind: "line", elementId: external.id, edgeId: "line" }], offset: { x: 0, y: -5 }, precision: 2, units: "mm", rotation: 0, style: rectangle.style };
+        const initial = createEditor({ ...document, elements: [sketch, external, dimension] });
+        expect(dispatch(initial, duplicateElements([sketch.id, dimension.id], "east", 1, 1))).toBe(initial);
+      });
+
+      it("duplicates multiple geometry types, counts copies, and undoes atomically", () => {
     const line = { type: "line" as const, id: elementId("duplicate-line"), layerId: rectangle.layerId, start: { x: 1, y: 2 }, end: { x: 4, y: 6 }, rotation: 0, style: rectangle.style };
     const contour = { type: "contour" as const, id: elementId("duplicate-contour"), layerId: rectangle.layerId, position: { x: 20, y: 2 }, size: { width: 4, height: 3 }, contours: [{ points: [{ x: 20, y: 2 }, { x: 24, y: 2 }, { x: 24, y: 5 }, { x: 20, y: 2 }] }], fillRule: "evenodd" as const, rotation: 0, style: rectangle.style };
     const state = select(createEditor({ ...document, elements: [rectangle, line, contour] }), [rectangle.id, line.id, contour.id]);
@@ -2263,10 +2444,109 @@ it("moves a dimension by changing only its placement offset and supports undo", 
     expect(redo(undo(linked)).document).toEqual(linked.document);
   });
 
-  it("rejects invalid duplication input without mutation or history", () => {
+  it("rolls back a conflicting sketch edit without revision or history", () => {
+        const sketch = createSketchLine(elementId("kernel-conflict-sketch"), layerId("default"), rectangle.style, { x: 0, y: 0 }, { x: 10, y: 0 });
+        const nodeId = sketch.nodes[0]!.id;
+        const initial = createEditor({ ...document, elements: [sketch] });
+        const first = dispatch(initial, addSketchConstraint(sketch.id, { id: "fixed-a", kind: "fixed", references: [{ elementId: sketch.id, nodeId }] }));
+        const rejected = dispatch(first, addSketchConstraint(sketch.id, { id: "fixed-b", kind: "fixed", references: [{ elementId: sketch.id, nodeId }] }));
+        expect(rejected).toBe(first);
+        expect(rejected.document.revision).toBe(first.document.revision);
+        expect(rejected.undo).toHaveLength(1);
+      });
+
+      it("rejects invalid duplication input without mutation or history", () => {
     const state = select(createEditor({ ...document, elements: [rectangle] }), [rectangle.id]);
     expect(dispatch(state, duplicateElements(state.selection, "east", -1, 1))).toBe(state);
     expect(dispatch(state, duplicateElements(state.selection, "east", 1, 0))).toBe(state);
     expect(dispatch(state, duplicateElements(state.selection, "east", 1, 1.5))).toBe(state);
+  });
+
+  it("exposes kernel diagnostics while keeping failed dispatch atomic", () => {
+    const sketch = createSketchLine(elementId("diagnostic-sketch"), layerId("default"), rectangle.style, { x: 0, y: 0 }, { x: 10, y: 0 });
+    const nodeId = sketch.nodes[0]!.id;
+    const initial = createEditor({ ...document, elements: [sketch] });
+    const constrained = dispatch(initial, addSketchConstraint(sketch.id, { id: "diagnostic-fixed", kind: "fixed", references: [{ elementId: sketch.id, nodeId }] }));
+    const command = addSketchConstraint(sketch.id, { id: "diagnostic-conflict", kind: "fixed", references: [{ elementId: sketch.id, nodeId }] });
+    const applied = command.apply(constrained.document);
+    expect(applied.success).toBe(false);
+    if (applied.success) throw new Error("Expected kernel command to fail");
+    expect(applied.diagnostics).toEqual(expect.arrayContaining([expect.objectContaining({ kind: "kernel" })]));
+    expect(dispatch(constrained, command)).toBe(constrained);
+  });
+
+  it("keeps previews out of revision and history", () => {
+    const initial = createEditor({ ...document, elements: [rectangle] });
+    const preview = previewGestureFromBase(beginGesture(initial), moveElement(rectangle.id, { x: 5, y: 0 }));
+    const repeated = previewGestureFromBase(preview, moveElement(rectangle.id, { x: 5, y: 0 }));
+    expect(repeated.document.revision).toBe(initial.document.revision);
+    expect(repeated.undo).toEqual([]);
+    expect(repeated.redo).toEqual([]);
+    expect(commitGesture(repeated).undo).toHaveLength(1);
+  });
+
+  it("returns topology metadata without storing it in snapshot-only transactions", () => {
+    const linePath: PathElement = { ...path, id: elementId("topology-contract-path"), nodes: [{ id: "a", anchor: { x: 0, y: 0 }, join: "corner" }, { id: "b", anchor: { x: 10, y: 0 }, join: "corner" }], segments: [{ id: "stable-original", type: "line", startNodeId: "a", endNodeId: "b" }] };
+    const initial = createEditor({ ...document, elements: [linePath] });
+    const command = splitPathLineAt(linePath.id, 0, 0.5, "stable-middle");
+    const applied = command.apply(initial.document);
+    expect(applied.success).toBe(true);
+    if (!applied.success || !applied.topology) throw new Error("Expected topology metadata");
+    expect(applied.topology.referenceMap.get(`${linePath.id}:segment:stable-original`)).toMatchObject({ kind: "replaced", references: [{ kind: "path-segment" }, { kind: "path-segment" }] });
+    const next = dispatch(initial, command);
+    expect(next.undo[0]).toEqual(expect.objectContaining({ command: command.name, before: initial.document, after: next.document }));
+    expect(next.undo[0]).not.toHaveProperty("topology");
+  });
+
+  it("undoes and redoes complete document snapshots", () => {
+    const initial = createEditor({ ...document, elements: [rectangle] });
+    const changed = dispatch(initial, moveElement(rectangle.id, { x: 4, y: -2 }));
+    const undone = undo(changed);
+    expect(undone.document).toEqual(initial.document);
+    expect(redo(undone).document).toEqual(changed.document);
+  });
+
+  it("routes a constrained sketch move through the kernel as one history revision", () => {
+    const sketch = createSketchLine(elementId("closure-constrained-move"), layerId("default"), rectangle.style, { x: 0, y: 0 }, { x: 10, y: 4 });
+    const constrained: SketchElement = { ...sketch, constraints: [{ id: "horizontal", kind: "horizontal", references: [{ elementId: sketch.id, nodeId: sketch.nodes[0]!.id }, { elementId: sketch.id, nodeId: sketch.nodes[1]!.id }] }] };
+    const initial = createEditor({ ...document, elements: [constrained] });
+    const moved = dispatch(initial, moveElement(constrained.id, { x: 5, y: 7 }));
+    const result = moved.document.elements[0] as SketchElement;
+
+    expect(result.nodes.map((node) => node.point)).toEqual([{ x: 5, y: 7 }, { x: 15, y: 7 }]);
+    expect(moved.document.revision).toBe(initial.document.revision + 1);
+    expect(moved.undo).toHaveLength(1);
+    expect(undo(moved).document).toEqual(initial.document);
+    expect(redo(undo(moved)).document).toEqual(moved.document);
+  });
+
+  it("reports driving-dimension conflicts without mutating the document", () => {
+    const sketch = createSketchLine(elementId("closure-driving-conflict"), layerId("default"), rectangle.style, { x: 0, y: 0 }, { x: 10, y: 0 });
+    const conflicting: SketchElement = { ...sketch, constraints: [
+      { id: "horizontal", kind: "horizontal", references: [{ elementId: sketch.id, nodeId: sketch.nodes[0]!.id }, { elementId: sketch.id, nodeId: sketch.nodes[1]!.id }] },
+      { id: "vertical", kind: "vertical", references: [{ elementId: sketch.id, nodeId: sketch.nodes[0]!.id }, { elementId: sketch.id, nodeId: sketch.nodes[1]!.id }] },
+    ] };
+    const drivingDimension: DimensionElement = { ...dimension, id: elementId("closure-conflicting-dimension"), layerId: sketch.layerId, kind: "aligned", references: [{ kind: "node", elementId: sketch.id, nodeIndex: 0, nodeId: sketch.nodes[0]!.id }, { kind: "node", elementId: sketch.id, nodeIndex: 1, nodeId: sketch.nodes[1]!.id }] };
+    const initial = createEditor({ ...document, elements: [conflicting, drivingDimension] });
+    const applied = setDimensionDriving(drivingDimension.id, true).apply(initial.document);
+
+    expect(applied.success).toBe(false);
+    expect(applied.success ? [] : applied.diagnostics).toEqual(expect.arrayContaining([expect.objectContaining({ kind: "kernel" })]));
+    expect(dispatch(initial, setDimensionDriving(drivingDimension.id, true))).toBe(initial);
+    expect(initial.document).toEqual(createEditor({ ...document, elements: [conflicting, drivingDimension] }).document);
+  });
+
+  it("moves mixed sketch and native selections while preserving native behavior", () => {
+    const sketch = createSketchLine(elementId("closure-mixed-sketch"), layerId("default"), rectangle.style, { x: 0, y: 0 }, { x: 10, y: 4 });
+    const constrained: SketchElement = { ...sketch, constraints: [{ id: "horizontal", kind: "horizontal", references: [{ elementId: sketch.id, nodeId: sketch.nodes[0]!.id }, { elementId: sketch.id, nodeId: sketch.nodes[1]!.id }] }] };
+    const native = { ...rectangle, id: elementId("closure-mixed-native") };
+    const initial = createEditor({ ...document, elements: [constrained, native] });
+    const moved = dispatch(initial, moveElements([constrained.id, native.id], { x: 3, y: 6 }));
+
+    expect(moved.document.elements[1]).toMatchObject({ ...native, position: { x: 4, y: 8 } });
+    expect((moved.document.elements[0] as SketchElement).nodes.map((node) => node.point)).toEqual([{ x: 3, y: 6 }, { x: 13, y: 6 }]);
+    expect(moved.undo).toHaveLength(1);
+    expect(undo(moved).document).toEqual(initial.document);
+    expect(redo(undo(moved)).document).toEqual(moved.document);
   });
 });

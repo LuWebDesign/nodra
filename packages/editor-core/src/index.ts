@@ -5,8 +5,9 @@ import {
   type DimensionElement,
   type CircleConstraint,
   type ArcElement,
+      type ArcDirection,
   type DocumentConstraint,
-      type SketchConstraint,
+  type SketchConstraint,
   type Layer,
   type LayerId,
   type LineElement,
@@ -31,13 +32,15 @@ import {
   isCircleElement,
 } from "@nodra/domain";
 import { validateDocument } from "@nodra/validation";
-import { boundsOf, boundsOfElements, connectableNodeAddress, contourWithPoints, directionVector, elementCenter, elementToContour, dimensionGeometry, elementToCurves, glyphGeometryNodes, groupCenter, intersectCurves, lineElementToCurve, circleElementToCurve, arcElementToCurve, mirrorHandleOffset, partitionCurveByInterval, selectRemovableCurveInterval, selectSourcedCurveInterval, realGeometryNodes, resizeGroup, rotateElements, shapeResultContours, tangentAt, transformPoint, connectableNode, splitCuttableSegments, classifyCutGraph, cuttableSegments, lineSegmentIntersection, rotatedLineEndpoints, sketchEdgeAtAddress, sketchEdgeIndexAtAddress, solveSketchConstraints, solveCircleConstraints, cubicBezierLineIntersections, splitCubicBezierAtParameters, flattenCubicBezier, GEOMETRY_EPSILON, type CubicBezier, type Direction, type LineCurve2D, type SourcedCurve2D } from "@nodra/geometry";
+import { boundsOf, boundsOfElements, connectableNodeAddress, contourWithPoints, directionVector, elementCenter, elementToContour, dimensionGeometry, elementToCurves, glyphGeometryNodes, groupCenter, intersectCurves, lineElementToCurve, circleElementToCurve, arcElementToCurve, mirrorHandleOffset, partitionCurveByInterval, selectRemovableCurveInterval, selectSourcedCurveInterval, realGeometryNodes, resizeGroup, rotateElements, shapeResultContours, tangentAt, transformPoint, connectableNode, splitCuttableSegments, classifyCutGraph, cuttableSegments, lineSegmentIntersection, rotatedLineEndpoints, sketchEdgeAtAddress, sketchEdgeIndexAtAddress, solveSketchConstraints, cubicBezierLineIntersections, splitCubicBezierAtParameters, flattenCubicBezier, GEOMETRY_EPSILON, type CubicBezier, type Direction, type LineCurve2D, type SourcedCurve2D } from "@nodra/geometry";
 import { insertSplineNode, moveSplineHandle as moveSplineHandleData, moveSplineNode as moveSplineNodeData } from "./spline.js";
 import { topologyReferenceKey, type ReferenceResolution, type TopologyEditResult, type TopologyReference } from "./topology.js";
+import { recomputeSketchKernel } from "./sketchKernel.js";
 
 export * from "./spline.js";
 export * from "./topology.js";
 export * from "./sketchSession.js";
+export * from "./sketchKernel.js";
 
 export type ElementPatch = { readonly position?: PointMm; readonly size?: SizeMm; readonly center?: PointMm; readonly radius?: number; readonly rotation?: number; readonly cornerRadius?: number; readonly cornerRadii?: { readonly topLeft: number; readonly topRight: number; readonly bottomRight: number; readonly bottomLeft: number }; readonly style?: VisualStyle; readonly operation?: OperationMetadata; readonly start?: PointMm; readonly end?: PointMm; readonly text?: string; readonly fontFamily?: string; readonly fontSize?: number; readonly fontWeight?: "normal" | "bold"; readonly fontStyle?: "normal" | "italic"; readonly textAlign?: "left" | "center" | "right"; readonly lineHeight?: number; readonly scaleX?: number; readonly scaleY?: number };
 export interface ContourNodeAddress { readonly ringIndex: number; readonly pointIndex: number }
@@ -45,7 +48,13 @@ export interface ContourSegmentAddress { readonly ringIndex: number; readonly se
 export type StylePatch = { readonly stroke?: string; readonly fill?: string | null; readonly strokeWidth?: number };
 export type GlyphOutlineData = Pick<GlyphElement, "glyph" | "position" | "size" | "contours">;
 export type EditorCommand = { readonly name: string; readonly apply: (document: DocumentSnapshot) => CommandResult };
-export type CommandResult = { readonly success: true; readonly document: DocumentSnapshot; readonly topology?: TopologyEditResult } | { readonly success: false; readonly error: string };
+/** Structured, additive diagnostics emitted by command validation and kernel adapters. */
+export interface CommandDiagnostic {
+  readonly kind: "kernel" | "topology" | "validation";
+  readonly code: string;
+  readonly message: string;
+}
+export type CommandResult = { readonly success: true; readonly document: DocumentSnapshot; readonly topology?: TopologyEditResult; readonly diagnostics?: readonly CommandDiagnostic[] } | { readonly success: false; readonly error: string; readonly diagnostics?: readonly CommandDiagnostic[] };
 export interface Transaction { readonly command: string; readonly before: DocumentSnapshot; readonly after: DocumentSnapshot; readonly selectionBefore: readonly ElementId[]; readonly selectionAfter: readonly ElementId[] }
 export interface EditorState {
   readonly document: DocumentSnapshot;
@@ -57,8 +66,15 @@ export interface EditorState {
 
 const result = (document: DocumentSnapshot): CommandResult => {
   const checked = validateDocument(document);
-  return checked.success ? { success: true, document: checked.data } : { success: false, error: checked.error };
+  return checked.success
+        ? { success: true, document: checked.data }
+        : { success: false, error: checked.error, diagnostics: [{ kind: "validation", code: "invalid-document", message: checked.error }] };
 };
+const kernelDiagnostics = (recomputed: ReturnType<typeof recomputeSketchKernel>): readonly CommandDiagnostic[] => [
+  ...recomputed.constraintDiagnostics.map((diagnostic) => ({ kind: "kernel" as const, code: diagnostic.code, message: diagnostic.message })),
+  ...recomputed.circleConstraintDiagnostics.map((diagnostic) => ({ kind: "kernel" as const, code: diagnostic.code, message: diagnostic.message })),
+  ...recomputed.topologyDiagnostics.map((diagnostic) => ({ kind: "topology" as const, code: diagnostic.code, message: diagnostic.message })),
+];
 const withoutDanglingDocumentConstraints = (document: DocumentSnapshot, elements: readonly Element[]): DocumentSnapshot => {
   if (!document.constraints?.length) return document;
   const sketches = new Map(elements.filter((element): element is SketchElement => element.type === "sketch").map((sketch) => [sketch.id, sketch]));
@@ -128,15 +144,56 @@ const enforcePositionalCoincidences = (document: DocumentSnapshot, proposed: rea
   }
   return "Positional coincidence cycle could not be solved";
 };
+/**
+ * Native replacement remains the intentional path for non-sketch edits.
+ * Remaining sketch-affecting bypasses: resize, rotate, flip, duplicate, and
+ * generic transforms are not part of this bounded closure slice yet.
+ */
 const replaceElements = (document: DocumentSnapshot, elements: readonly Element[]): CommandResult => {
   const enforced = enforcePositionalCoincidences(document, elements);
   if (typeof enforced === "string") return { success: false, error: enforced };
   return result(withElements(withoutDanglingDocumentConstraints(document, enforced), enforced));
 };
+
+const fixedSketchTransformDiagnostics = (document: DocumentSnapshot, proposed: readonly Element[]): readonly CommandDiagnostic[] => {
+      const diagnostics: CommandDiagnostic[] = [];
+      for (const original of document.elements) {
+        if (original.type !== "sketch") continue;
+        const next = proposed.find((element): element is SketchElement => element.id === original.id && element.type === "sketch");
+        if (!next) continue;
+        const fixed = [...(original.constraints ?? []), ...(document.constraints ?? [])].filter((constraint) => constraint.kind === "fixed");
+        for (const constraint of fixed) for (const reference of constraint.references) if (reference.elementId === original.id && "nodeId" in reference) {
+          const before = original.nodes.find((node) => node.id === reference.nodeId)?.point;
+          const after = next.nodes.find((node) => node.id === reference.nodeId)?.point;
+          if (before && after && Math.hypot(before.x - after.x, before.y - after.y) > 1e-9) diagnostics.push({ kind: "kernel", code: "fixed-coordinate-conflict", message: `Fixed sketch node ${reference.nodeId} cannot move during a transform` });
+        }
+      }
+      return diagnostics;
+    };
+    /** Applies a sketch mutation through the kernel, then lets withElements own the revision. */
+const replaceSketchElements = (document: DocumentSnapshot, elements: readonly Element[]): CommandResult => {
+  const enforced = enforcePositionalCoincidences(document, elements);
+  if (typeof enforced === "string") return { success: false, error: enforced };
+  const cleaned = withoutDanglingDocumentConstraints(document, enforced);
+  const recomputed = recomputeSketchKernel({ ...cleaned, elements: enforced });
+  if (!recomputed.committed) return { success: false, error: "Sketch constraints are in conflict", diagnostics: kernelDiagnostics(recomputed) };
+  const checked = result(withElements(recomputed.document, recomputed.document.elements));
+  return checked.success ? { ...checked, diagnostics: kernelDiagnostics(recomputed) } : checked;
+};
 const replaceTopology = (document: DocumentSnapshot, edit: TopologyEditResult): CommandResult => {
   const enforced = enforcePositionalCoincidences(document, edit.elements);
   if (typeof enforced === "string") return { success: false, error: enforced };
   const checked = result(withElements(withoutDanglingDocumentConstraints(document, enforced), enforced));
+  return checked.success ? { ...checked, topology: { ...edit, elements: checked.document.elements } } : checked;
+};
+/** Applies sketch topology edits through the kernel without changing the generic topology path. */
+const replaceSketchTopology = (document: DocumentSnapshot, edit: TopologyEditResult): CommandResult => {
+  const enforced = enforcePositionalCoincidences(document, edit.elements);
+  if (typeof enforced === "string") return { success: false, error: enforced };
+  const cleaned = withoutDanglingDocumentConstraints(document, enforced);
+  const recomputed = recomputeSketchKernel({ ...cleaned, elements: enforced });
+  if (!recomputed.committed) return { success: false, error: "Sketch constraints are in conflict", diagnostics: kernelDiagnostics(recomputed) };
+  const checked = result(withElements(recomputed.document, recomputed.document.elements));
   return checked.success ? { ...checked, topology: { ...edit, elements: checked.document.elements } } : checked;
 };
 const removeConnectionsFor = (document: DocumentSnapshot, ids: ReadonlySet<ElementId>): DocumentSnapshot => ({ ...document, connections: (document.connections ?? []).filter((connection) => !ids.has(connection.first.elementId) && !ids.has(connection.second.elementId)), positionalCoincidences: (document.positionalCoincidences ?? []).filter((relation) => !ids.has(relation.first.elementId) && !ids.has(relation.second.elementId)) });
@@ -221,7 +278,9 @@ export const createElement = (element: Element, connections: readonly ExplicitCo
   name: `create:${element.type}`,
   apply: (document) => document.elements.some((current) => current.id === element.id)
     ? { success: false, error: `Element already exists: ${element.id}` }
-     : replaceElements({ ...document, connections: [...(document.connections ?? []), ...connections] }, [...document.elements, { ...element }]),
+     : element.type === "sketch"
+           ? replaceSketchElements({ ...document, connections: [...(document.connections ?? []), ...connections] }, [...document.elements, { ...element }])
+           : replaceElements({ ...document, connections: [...(document.connections ?? []), ...connections] }, [...document.elements, { ...element }]),
 });
 
 /** Creates only an enforced positional coincidence; legacy connections are untouched. */
@@ -369,7 +428,7 @@ export const appendSketchEdge = (sketchId: ElementId, fromNodeId: string, point:
     const perpendicular = !axisRelationsAlreadyPerpendicular && previous && previousEnd && previousStart && Math.hypot(previousDx, previousDy) > 1e-9 && Math.hypot(currentDx, currentDy) > 1e-9 && Math.abs(previousDx * currentDx + previousDy * currentDy) <= Math.hypot(previousDx, previousDy) * Math.hypot(currentDx, currentDy) * 0.1 ? { id: `auto:${edgeId}:perpendicular`, kind: "perpendicular" as const, references: [{ elementId: sketch.id, nodeId: previous.startNodeId }, { elementId: sketch.id, nodeId: previous.endNodeId }, { elementId: sketch.id, nodeId: fromNodeId }, { elementId: sketch.id, nodeId: endNodeId }] as const } : undefined;
     const autoRelations = [relation, perpendicular].filter((candidate): candidate is SketchConstraint => candidate !== undefined);
     const next: SketchElement = { ...sketch, nodes: existingTarget ? sketch.nodes : [...sketch.nodes, { id: endNodeId, point }], edges: [...sketch.edges, { id: edgeId, startNodeId: fromNodeId, endNodeId }], ...(autoRelations.length ? { constraints: [...(sketch.constraints ?? []), ...autoRelations] } : {}) };
-    return replaceElements(document, document.elements.map((element) => element.id === sketchId ? next : element));
+    return replaceSketchElements(document, document.elements.map((element) => element.id === sketchId ? next : element));
   },
 });
 const remapSketchEdgeDimensionReferences = (edit: TopologyEditResult, sketchId: ElementId, beforeEdges: SketchElement["edges"], afterEdges: SketchElement["edges"]): readonly Element[] => edit.elements.flatMap<Element>((element) => {
@@ -458,13 +517,13 @@ export const cutSketchEdge = (sketchId: ElementId, segmentIndex: number, cutPoin
       }
       const edit: TopologyEditResult = { elements: document.elements.map((element) => replacements.get(element.id) ?? element), referenceMap, diagnostics: [] };
       const elements = [...replacements.entries()].reduce((current, [id, replacement]) => remapSketchEdgeDimensionReferences({ ...edit, elements: current }, id, document.elements.find((element): element is SketchElement => element.id === id)!.edges, replacement.edges), edit.elements);
-      return replaceTopology(cutDocument, { ...edit, elements });
+      return replaceSketchTopology(cutDocument, { ...edit, elements });
     }
     const edges = sketch.edges.filter((_, index) => index !== segmentIndex);
     if (edges.length === 0) {
       const originalReference = sketchEdgeReference(sketchId, edge.id); const referenceKey = topologyReferenceKey(originalReference);
       const edit: TopologyEditResult = { elements: document.elements.filter((element) => element.id !== sketchId && !(element.type === "dimension" && element.references.some((reference) => reference.elementId === sketchId))), referenceMap: new Map([[referenceKey, { kind: "removed", reason: "Sketch edge was deleted" }]]), diagnostics: [{ code: "reference-removed", referenceKey, message: "Sketch edge was deleted" }] };
-      return replaceTopology(baseDocument, edit);
+      return replaceSketchTopology(baseDocument, edit);
     }
     const usedNodeIds = new Set(edges.flatMap((edge) => [edge.startNodeId, edge.endNodeId]));
     const nodes = sketch.nodes.filter((node) => usedNodeIds.has(node.id));
@@ -486,7 +545,7 @@ export const cutSketchEdge = (sketchId: ElementId, segmentIndex: number, cutPoin
     const referenceMap = new Map<string, ReferenceResolution>([[referenceKey, { kind: "removed", reason: "Sketch edge was deleted" }]]);
     const edit: TopologyEditResult = { elements: withoutRemovedNodeDimensions.map((element) => element.id === sketchId ? nextSketch : element), referenceMap, diagnostics: [{ code: "reference-removed", referenceKey, message: "Sketch edge was deleted" }] };
     const elements = remapSketchEdgeDimensionReferences(edit, sketchId, sketch.edges, edges);
-    return replaceTopology(baseDocument, { ...edit, elements });
+    return replaceSketchTopology(baseDocument, { ...edit, elements });
   },
 });
 
@@ -568,13 +627,13 @@ const cutSketchEdgeDestructive = (sketchId: ElementId, segmentIndex: number, cut
       const clickedReferenceKey = topologyReferenceKey(sketchEdgeReference(sketch.id, edge.id));
       const edit: TopologyEditResult = { elements: editedElements, referenceMap, diagnostics: [{ code: "reference-removed", referenceKey: clickedReferenceKey, message: "Sketch edge was deleted" }] };
       const elements = [...replacements.entries()].reduce((current, [id, replacement]) => remapSketchEdgeDimensionReferences({ ...edit, elements: current }, id, document.elements.find((element): element is SketchElement => element.id === id)!.edges, replacement.edges), edit.elements);
-      return replaceTopology(cutDocument, { ...edit, elements });
+      return replaceSketchTopology(cutDocument, { ...edit, elements });
     }
     const edges = sketch.edges.filter((_, index) => index !== segmentIndex);
     if (edges.length === 0) {
       const originalReference = sketchEdgeReference(sketchId, edge.id); const referenceKey = topologyReferenceKey(originalReference);
       const edit: TopologyEditResult = { elements: document.elements.filter((element) => element.id !== sketchId && !(element.type === "dimension" && element.references.some((reference) => reference.elementId === sketchId))), referenceMap: new Map([[referenceKey, { kind: "removed", reason: "Sketch edge was deleted" }]]), diagnostics: [{ code: "reference-removed", referenceKey, message: "Sketch edge was deleted" }] };
-      return replaceTopology(baseDocument, edit);
+      return replaceSketchTopology(baseDocument, edit);
     }
     const usedNodeIds = new Set(edges.flatMap((edge) => [edge.startNodeId, edge.endNodeId]));
     const nodes = sketch.nodes.filter((node) => usedNodeIds.has(node.id));
@@ -596,7 +655,7 @@ const cutSketchEdgeDestructive = (sketchId: ElementId, segmentIndex: number, cut
     const referenceMap = new Map<string, ReferenceResolution>([[referenceKey, { kind: "removed", reason: "Sketch edge was deleted" }]]);
     const edit: TopologyEditResult = { elements: withoutRemovedNodeDimensions.map((element) => element.id === sketchId ? nextSketch : element), referenceMap, diagnostics: [{ code: "reference-removed", referenceKey, message: "Sketch edge was deleted" }] };
     const elements = remapSketchEdgeDimensionReferences(edit, sketchId, sketch.edges, edges);
-    return replaceTopology(baseDocument, { ...edit, elements });
+    return replaceSketchTopology(baseDocument, { ...edit, elements });
   },
 });
 
@@ -640,9 +699,16 @@ export const convertTextToGlyphs = (textId: ElementId, outlines: readonly GlyphO
 
 export const deleteElement = (id: ElementId): EditorCommand => ({
   name: `delete:${id}`,
-  apply: (document) => document.elements.some((element) => element.id === id)
-    ? replaceElements(removeConnectionsFor(document, new Set([id])), document.elements.filter((element) => element.id !== id && !(element.type === "dimension" && element.references.some((reference) => reference.elementId === id))))
-    : { success: false, error: `Element not found: ${id}` },
+  apply: (document) => {
+    const target = document.elements.find((element) => element.id === id);
+    if (!target) return { success: false, error: `Element not found: ${id}` };
+    const elements = document.elements.filter((element) => element.id !== id && !(element.type === "dimension" && element.references.some((reference) => reference.elementId === id)));
+    const candidate = removeConnectionsFor(document, new Set([id]));
+    // Deletion is not geometry creation, but removing a sketch is still a
+    // kernel-boundary operation: validate the resulting sketch document before
+    // the generic history commit can observe it.
+    return target.type === "sketch" ? replaceSketchElements(candidate, elements) : replaceElements(candidate, elements);
+  },
 });
 
 export const updateElement = (id: ElementId, patch: ElementPatch): EditorCommand => ({
@@ -652,7 +718,9 @@ export const updateElement = (id: ElementId, patch: ElementPatch): EditorCommand
     if (index < 0) return { success: false, error: `Element not found: ${id}` };
     const elements = [...document.elements];
     elements[index] = { ...elements[index], ...patch } as Element;
-    return replaceElements(document, elements);
+    return elements[index]?.type === "sketch"
+          ? replaceSketchElements(document, elements)
+          : replaceElements(document, elements);
   },
 });
 
@@ -668,7 +736,7 @@ export const moveElement = (id: ElementId, delta: PointMm): EditorCommand => ({
     if (element.type === "glyph") return replaceElements(document, document.elements.map((current) => current.id === id && current.type === "glyph" ? translateGlyph(current, delta) : current));
     if (element.type === "text") return replaceElements(document, document.elements.map((current) => current.id === id && current.type === "text" ? { ...current, position: { x: current.position.x + delta.x, y: current.position.y + delta.y } } : current));
     if (element.type === "spline") return replaceElements(document, document.elements.map((current) => current.id === id && current.type === "spline" ? { ...current, nodes: current.nodes.map((node) => ({ ...node, anchor: { x: node.anchor.x + delta.x, y: node.anchor.y + delta.y } })) } : current));
-    if (element.type === "sketch") return replaceElements(document, document.elements.map((current) => current.id === id && current.type === "sketch" ? { ...current, nodes: current.nodes.map((node) => ({ ...node, point: { x: node.point.x + delta.x, y: node.point.y + delta.y } })) } : current));
+    if (element.type === "sketch") return replaceSketchElements(document, document.elements.map((current) => current.id === id && current.type === "sketch" ? { ...current, nodes: current.nodes.map((node) => ({ ...node, point: { x: node.point.x + delta.x, y: node.point.y + delta.y } })) } : current));
     if (element.type === "circle") return replaceElements(document, document.elements.map((current) => current.id === id && current.type === "circle" ? { ...current, center: { x: current.center.x + delta.x, y: current.center.y + delta.y } } : current));
     if (isArcElement(element)) return replaceElements(document, document.elements.map((current) => current.id === id && isArcElement(current) ? translateArc(current, delta) : current));
     return replaceElements(document, document.elements.map((current) => current.id === id && (current.type === "rectangle" || current.type === "ellipse") ? { ...current, position: { x: current.position.x + delta.x, y: current.position.y + delta.y } } : current));
@@ -680,9 +748,10 @@ export const moveElements = (ids: readonly ElementId[], delta: PointMm): EditorC
   apply: (document) => {
     const selected = new Set(ids);
     const known = document.elements.filter((element) => selected.has(element.id));
+    const hasSketch = known.some((element) => element.type === "sketch");
     if (known.length !== selected.size) return { success: false, error: "One or more elements were not found" };
     if (known.length === 0) return { success: false, error: "No elements selected" };
-    return replaceElements(document, document.elements.map((element) => {
+    const candidate = document.elements.map((element) => {
        if (!selected.has(element.id)) return element;
        if (element.type === "dimension") return { ...element, offset: { x: element.offset.x + delta.x, y: element.offset.y + delta.y } };
        if (element.type === "line") return { ...element, start: { x: element.start.x + delta.x, y: element.start.y + delta.y }, end: { x: element.end.x + delta.x, y: element.end.y + delta.y } };
@@ -696,10 +765,14 @@ export const moveElements = (ids: readonly ElementId[], delta: PointMm): EditorC
       if (isArcElement(element)) return translateArc(element, delta);
       if (element.type === "rectangle" || element.type === "ellipse") return { ...element, position: { x: element.position.x + delta.x, y: element.position.y + delta.y } };
       return element;
-    }));
+    });
+    return hasSketch ? replaceSketchElements(document, candidate) : replaceElements(document, candidate);
   },
 });
-export const resizeElements = (ids: readonly ElementId[], handle: "nw" | "n" | "ne" | "e" | "se" | "s" | "sw" | "w", pointer: PointMm, aspectLock = false): EditorCommand => ({ name: `resize-group:${ids.join(",")}`, apply: (document) => { const selected = new Set(ids); const elements = document.elements.filter((e) => selected.has(e.id)); if (!elements.length || elements.length !== selected.size) return { success: false, error: "Invalid group selection" }; const next = resizeGroup(elements, handle, pointer, 1, aspectLock); return replaceElements(document, document.elements.map((e) => next.find((n) => n.id === e.id) ?? e)); } });
+/** Sketch candidates must be solved before commit; native-only resize remains unchanged. */
+    const replaceResizeElements = (document: DocumentSnapshot, elements: readonly Element[]): CommandResult =>
+      document.elements.some((original, index) => original.type === "sketch" && elements[index] !== original) ? replaceSketchElements(document, elements) : replaceElements(document, elements);
+    export const resizeElements = (ids: readonly ElementId[], handle: "nw" | "n" | "ne" | "e" | "se" | "s" | "sw" | "w", pointer: PointMm, aspectLock = false): EditorCommand => ({ name: `resize-group:${ids.join(",")}`, apply: (document) => { const selected = new Set(ids); const elements = document.elements.filter((e) => selected.has(e.id)); if (!elements.length || elements.length !== selected.size) return { success: false, error: "Invalid group selection" }; const next = resizeGroup(elements, handle, pointer, 1, aspectLock); return replaceResizeElements(document, document.elements.map((e) => next.find((n) => n.id === e.id) ?? e)); } });
 export const resizeElementsToDimensions = (ids: readonly ElementId[], size: SizeMm, aspectLock = false): EditorCommand => ({ name: `resize-group-centered:${ids.join(",")}`, apply: (document) => {
   const selected = new Set(ids);
   const elements = document.elements.filter((element) => selected.has(element.id));
@@ -710,11 +783,11 @@ export const resizeElementsToDimensions = (ids: readonly ElementId[], size: Size
     : size;
   if (![target.width, target.height].every(Number.isFinite) || target.width <= 0 || target.height <= 0) return { success: false, error: "Group dimensions must be positive" };
   const next = resizeGroup(elements, "se", { x: bounds.x + target.width, y: bounds.y + target.height }, 1, false, true);
-  return replaceElements(document, document.elements.map((element) => next.find((candidate) => candidate.id === element.id) ?? element));
+  return replaceResizeElements(document, document.elements.map((element) => next.find((candidate) => candidate.id === element.id) ?? element));
 } });
-export const rotateElementsAroundCenter = (ids: readonly ElementId[], delta: number): EditorCommand => ({ name: `rotate-group:${ids.join(",")}`, apply: (document) => { const selected = new Set(ids); const elements = document.elements.filter((e) => selected.has(e.id)); if (!elements.length || elements.length !== selected.size) return { success: false, error: "Invalid group selection" }; const next = rotateElements(elements, groupCenter(boundsOfElements(elements)), delta); return replaceElements(document, document.elements.map((e) => next.find((n) => n.id === e.id) ?? e)); } });
+export const rotateElementsAroundCenter = (ids: readonly ElementId[], delta: number): EditorCommand => ({ name: `rotate-group:${ids.join(",")}`, apply: (document) => { const selected = new Set(ids); const elements = document.elements.filter((e) => selected.has(e.id)); if (!elements.length || elements.length !== selected.size) return { success: false, error: "Invalid group selection" }; const next = rotateElements(elements, groupCenter(boundsOfElements(elements)), delta); const candidate = document.elements.map((element) => next.find((rotated) => rotated.id === element.id) ?? element); if (elements.some((element) => element.type === "sketch")) { const diagnostics = fixedSketchTransformDiagnostics(document, candidate); if (diagnostics.length) return { success: false, error: "Sketch fixed coordinates cannot change during a transform", diagnostics }; return replaceSketchElements(document, candidate); } return replaceElements(document, candidate); } });
 
-export const resizeElement = (id: ElementId, position: PointMm, size: SizeMm): EditorCommand => ({ name: `resize:${id}`, apply: (document) => { const current = document.elements.find((element) => element.id === id); if (current?.type === "circle") return updateElement(id, { center: { x: position.x + size.width / 2, y: position.y + size.height / 2 }, radius: size.width / 2 }).apply(document); return updateElement(id, { position, size }).apply(document); } });
+export const resizeElement = (id: ElementId, position: PointMm, size: SizeMm): EditorCommand => ({ name: `resize:${id}`, apply: (document) => { const current = document.elements.find((element) => element.id === id); if (current?.type === "circle") return updateElement(id, { center: { x: position.x + size.width / 2, y: position.y + size.height / 2 }, radius: size.width / 2 }).apply(document); if (current?.type === "sketch") { if (![position.x, position.y, size.width, size.height].every(Number.isFinite) || size.width <= 0 || size.height <= 0) return { success: false, error: "Sketch dimensions must be positive" }; const next = resizeGroup([current], "se", { x: position.x + size.width, y: position.y + size.height }, 1, false); return replaceResizeElements(document, document.elements.map((element) => next.find((candidate) => candidate.id === element.id) ?? element)); } return updateElement(id, { position, size }).apply(document); } });
 const connectedSide = (document: DocumentSnapshot, id: ElementId, axis: "x" | "y"): { leftOrTop: boolean; rightOrBottom: boolean } => {
   const result = { leftOrTop: false, rightOrBottom: false };
   const sides = (address: ConnectableNodeAddress): readonly ("left" | "right" | "top" | "bottom")[] => {
@@ -741,7 +814,18 @@ const connectedSide = (document: DocumentSnapshot, id: ElementId, axis: "x" | "y
 export const resizeElementToDimensions = (id: ElementId, field: "width" | "height" | "radius", value: number, aspectLock = false): EditorCommand => ({
   name: `resize-property:${id}:${field}`,
   apply: (document) => {
-    const element = document.elements.find((candidate): candidate is Extract<Element, { type: "rectangle" | "ellipse" | "circle" | "arc" }> => candidate.id === id && (candidate.type === "rectangle" || candidate.type === "ellipse" || candidate.type === "circle" || candidate.type === "arc"));
+    const sketch = document.elements.find((candidate): candidate is SketchElement => candidate.id === id && candidate.type === "sketch");
+        if (sketch) {
+          if (field === "radius" || !Number.isFinite(value) || value <= 0) return { success: false, error: "Sketch inspector supports positive width or height" };
+          const bounds = boundsOf(sketch);
+          const target = aspectLock
+            ? (field === "width" ? { width: value, height: value * bounds.height / bounds.width } : { width: value * bounds.width / bounds.height, height: value })
+            : { width: field === "width" ? value : bounds.width, height: field === "height" ? value : bounds.height };
+          if (![bounds.width, bounds.height, target.width, target.height].every((candidate) => Number.isFinite(candidate) && candidate > 0)) return { success: false, error: "Sketch dimensions must be positive" };
+          const next = resizeGroup([sketch], "se", { x: bounds.x + target.width, y: bounds.y + target.height }, 1, false, true);
+          return replaceResizeElements(document, document.elements.map((candidate) => next.find((resized) => resized.id === candidate.id) ?? candidate));
+        }
+        const element = document.elements.find((candidate): candidate is Extract<Element, { type: "rectangle" | "ellipse" | "circle" | "arc" }> => candidate.id === id && (candidate.type === "rectangle" || candidate.type === "ellipse" || candidate.type === "circle" || candidate.type === "arc"));
     if (!element || !Number.isFinite(value) || value <= 0) return { success: false, error: "Dimensions must be positive" };
     if (element.type === "arc") {
       if (field !== "radius") return { success: false, error: "Arc inspector only supports radius" };
@@ -777,7 +861,11 @@ export const rotateElement = (id: ElementId, rotation: number): EditorCommand =>
   if (!current) return { success: false, error: `Element not found: ${id}` };
    if (current.type === "glyph") return replaceElements(document, document.elements.map((element) => element.id === id && element.type === "glyph" ? rotateElements([element], elementCenter(element), rotation - element.rotation)[0]! : element));
    if (current.type === "arc" || current.type === "dimension" || current.type === "path" || current.type === "spline") return { success: false, error: "Element rotation is not supported" };
-   if (current.type !== "contour") return updateElement(id, { rotation }).apply(document);
+   if (current.type === "sketch") {
+         const candidate = rotateElements([current], elementCenter(current), rotation);
+         return replaceSketchElements(document, document.elements.map((element) => element.id === id ? candidate[0]! : element));
+       }
+       if (current.type !== "contour") return updateElement(id, { rotation }).apply(document);
   const center = elementCenter(current);
   return replaceElements(document, document.elements.map((element) => element.id === id && element.type === "contour" ? contourWithPoints(element, element.contours.map((contour) => contour.points.map((point) => transformPoint({ x: point.x - center.x, y: point.y - center.y }, center, rotation - current.rotation)))) : element));
 } });
@@ -945,7 +1033,8 @@ export const shapeOperation = (ids: readonly ElementId[], operation: ShapeOperat
     const selected = ids.map((id) => document.elements.find((element) => element.id === id));
     const known = selected.filter((element): element is Element => Boolean(element));
     if (known.length !== selected.length || !known.length) return { success: false, error: "No valid objects selected" };
-    const geometry = operation === "weld" || operation === "subtract" ? known.filter((element) => element.type !== "dimension") : known;
+    if (known.some((element) => element.type === "sketch")) return { success: false, error: "Shape operations do not support sketch consumption", diagnostics: [{ kind: "kernel", code: "unsupported-sketch-shape-operation", message: "Sketch geometry must be committed through the sketch kernel before shape operations" }] };
+        const geometry = operation === "weld" || operation === "subtract" ? known.filter((element) => element.type !== "dimension") : known;
     if (geometry.some((element) => !isClosedShape(element))) return { success: false, error: "Shape operations require closed objects" };
     if (geometry.length === 0) return { success: false, error: "No closed objects selected" };
     if (operation === "subtract" && geometry.length < 2) return { success: false, error: "Recortar requires at least two objects" };
@@ -1496,6 +1585,7 @@ export const cutContourSegment = (contourId: ElementId, ringIndex: number, segme
     const boundaryStart = vertices[segmentIndex]!;
     const boundaryEnd = vertices[(segmentIndex + 1) % vertices.length]!;
     const externalNodeId = (elementId: ElementId) => `${elementId}:contour-cut:${ringIndex}:${segmentIndex}`;
+        const sketchReferenceMap = new Map<string, ReferenceResolution>();
     const splitExternal = (element: Element): Element => {
       if (element.type === "line") {
         const [start, end] = rotatedLineEndpoints(element);
@@ -1506,16 +1596,20 @@ export const cutContourSegment = (contourId: ElementId, ringIndex: number, segme
       }
       if (element.type !== "sketch") return element;
       const nodes = [...element.nodes];
+          const affected = new Set<string>();
       const edges = element.edges.flatMap((edge) => {
         const start = nodes.find((node) => node.id === edge.startNodeId)?.point; const end = nodes.find((node) => node.id === edge.endNodeId)?.point;
         if (!start || !end) return [edge];
         const hit = lineSegmentIntersection(boundaryStart, boundaryEnd, start, end, 1e-7);
         if (!hit || hit.secondT <= 1e-7 || hit.secondT >= 1 - 1e-7) return [edge];
         const nodeId = externalNodeId(element.id); nodes.push({ id: nodeId, point: hit.point });
-        return [{ id: `${edge.id}:a`, startNodeId: edge.startNodeId, endNodeId: nodeId }, { id: `${edge.id}:b`, startNodeId: nodeId, endNodeId: edge.endNodeId }];
+        const first = { id: `${edge.id}:a`, startNodeId: edge.startNodeId, endNodeId: nodeId };
+            const second = { id: `${edge.id}:b`, startNodeId: nodeId, endNodeId: edge.endNodeId };
+            affected.add(edge.id);
+            sketchReferenceMap.set(topologyReferenceKey(sketchEdgeReference(element.id, edge.id)), { kind: "replaced", references: [sketchEdgeReference(element.id, first.id), sketchEdgeReference(element.id, second.id)] });
+            return [first, second];
       });
-      if (edges.length === element.edges.length) return element;
-      const affected = new Set(element.edges.filter((edge) => !edges.includes(edge)).map((edge) => edge.id));
+      if (affected.size === 0) return element;
       const constraints = element.constraints?.filter((constraint) => ![...affected].some((edgeId) => constraint.references.some((reference) => "edgeId" in reference && reference.edgeId === edgeId)));
       return { ...element, nodes, edges, ...(constraints ? { constraints } : {}) };
     };
@@ -1541,7 +1635,14 @@ export const cutContourSegment = (contourId: ElementId, ringIndex: number, segme
       return element.type === "sketch" && before?.type === "sketch" && element.edges !== before.edges ? [element.id] : [];
     }));
     const constraints = document.constraints?.filter((constraint) => !constraint.references.some((reference) => crossedSketchIds.has(reference.elementId) && "edgeId" in reference));
-    return replaceElements(constraints ? { ...document, constraints } : document, elements);
+    const candidate = constraints ? { ...document, constraints } : document;
+        if (crossedSketchIds.size === 0) return replaceElements(candidate, elements);
+        const remapped = [...crossedSketchIds].reduce<readonly Element[]>((current, sketchId) => {
+          const before = document.elements.find((element): element is SketchElement => element.id === sketchId);
+          const after = current.find((element): element is SketchElement => element.id === sketchId);
+          return before && after ? remapSketchEdgeDimensionReferences({ elements: current, referenceMap: sketchReferenceMap, diagnostics: [] }, sketchId, before.edges, after.edges) : current;
+        }, elements);
+        return replaceSketchTopology(candidate, { elements: remapped, referenceMap: sketchReferenceMap, diagnostics: [] });
   },
 });
 
@@ -2296,7 +2397,7 @@ export const updateDimensionValue = (dimensionId: ElementId, value: number): Edi
           return solved.status === "conflict" || solved.status === "overdefined" ? undefined : solved.sketch;
         });
         if (solvedElements.some((element) => element === undefined)) return { success: false, error: "Sketch constraints are in conflict" };
-        return replaceElements(document, solvedElements as Element[]);
+        return replaceSketchElements(document, solvedElements as Element[]);
       }
       if (dimension.driving && dimension.constraintId) {
         const nextConstraint = sketchConstraintForDimension(dimension, target, document.elements, value);
@@ -2308,7 +2409,7 @@ export const updateDimensionValue = (dimensionId: ElementId, value: number): Edi
         if (!matches) return { success: false, error: "Driving dimension constraint does not match its references" };
         const solved = solveSketchConstraints({ ...target, constraints: target.constraints!.map((candidate) => candidate.id === constraint.id ? nextConstraint : candidate) });
         if (solved.status === "conflict" || solved.status === "overdefined") return { success: false, error: `Sketch constraints are ${solved.status}` };
-        return replaceElements(document, document.elements.map((element) => element.id === target.id ? solved.sketch : element));
+        return replaceSketchElements(document, document.elements.map((element) => element.id === target.id ? solved.sketch : element));
       }
       const first = dimension.references[0]; const second = dimension.references[1];
       if (!("kind" in first) || !("kind" in second) || first.kind !== "node" || second.kind !== "node" || !first.nodeId || !second.nodeId) return { success: false, error: "Sketch driving dimensions require node references" };
@@ -2320,7 +2421,8 @@ export const updateDimensionValue = (dimensionId: ElementId, value: number): Edi
       const direction = dimension.kind === "horizontal" ? Math.sign(dx || 1) : dimension.kind === "vertical" ? Math.sign(dy || 1) : 1;
       const point = dimension.kind === "aligned" ? { x: firstNode.point.x + dx * value / currentLength, y: firstNode.point.y + dy * value / currentLength } : dimension.kind === "horizontal" ? { x: firstNode.point.x + direction * value, y: secondNode.point.y } : { x: secondNode.point.x, y: firstNode.point.y + direction * value };
       const secondNodeIndex = target.nodes.findIndex((node) => node.id === secondNode.id);
-      return updateElementNode(target.id, secondNodeIndex, point).apply(document);
+      const nextSketch = { ...target, nodes: target.nodes.map((node, index) => index === secondNodeIndex ? { ...node, point } : node) };
+          return replaceSketchElements(document, document.elements.map((element) => element.id === target.id ? nextSketch : element));
     }
     if (!target || target.type !== "rectangle" || target.rotation !== 0) return { success: false, error: "Driving dimensions currently require an unrotated rectangle" };
     const center = { x: target.position.x + target.size.width / 2, y: target.position.y + target.size.height / 2 };
@@ -2354,8 +2456,12 @@ const solveSketchCandidate = (document: DocumentSnapshot, sketch: SketchElement,
   const validationError = constraints.map((constraint) => validateSketchConstraint(sketch, constraint)).find((error): error is string => error !== undefined);
   if (validationError) return { success: false, error: validationError };
   const solved = solveSketchConstraints({ ...sketch, constraints });
-  if (solved.status === "conflict" || solved.status === "overdefined") return { success: false, error: `Sketch constraints are ${solved.status}` };
-  return replaceElements(document, document.elements.map((element) => element.id === sketch.id ? solved.sketch : element));
+  if (solved.status === "conflict" || solved.status === "overdefined") return {
+    success: false,
+    error: `Sketch constraints are ${solved.status}`,
+    diagnostics: [{ kind: "kernel", code: "constraint-conflict", message: `Sketch constraints are ${solved.status}` }],
+  };
+  return replaceSketchElements(document, document.elements.map((element) => element.id === sketch.id ? solved.sketch : element));
 };
 
 export const addSketchSegmentRelation = (constraint: SketchConstraint): EditorCommand => ({
@@ -2434,9 +2540,17 @@ export const solveSketch = (sketchId: ElementId): EditorCommand => ({
     if (!sketch) return { success: false, error: "Sketch not found" };
     const result = solveSketchConstraints(sketch);
     if (result.status === "conflict" || result.status === "overdefined") return { success: false, error: `Sketch constraints are ${result.status}` };
-    return replaceElements(document, document.elements.map((element) => element.id === sketchId ? result.sketch : element));
+    return replaceSketchElements(document, document.elements.map((element) => element.id === sketchId ? result.sketch : element));
   },
 });
+
+/** Applies native circle mutations through the kernel, then lets withElements own the revision. */
+const replaceCircleElements = (document: DocumentSnapshot, elements: readonly Element[]): CommandResult => {
+  const recomputed = recomputeSketchKernel({ ...document, elements });
+  if (!recomputed.committed) return { success: false, error: recomputed.circleConstraintDiagnostics.length ? "Circle constraints are in conflict" : "Sketch constraints are in conflict", diagnostics: kernelDiagnostics(recomputed) };
+  const checked = result(withElements(recomputed.document, recomputed.document.elements));
+  return checked.success ? { ...checked, diagnostics: kernelDiagnostics(recomputed) } : checked;
+};
 
 export const addCircleConstraint = (circleId: ElementId, constraint: CircleConstraint): EditorCommand => ({
   name: `circle-constraint-add:${circleId}:${constraint.id}`,
@@ -2444,9 +2558,7 @@ export const addCircleConstraint = (circleId: ElementId, constraint: CircleConst
     const circle = document.elements.find((element): element is Extract<Element, { type: "circle" }> => element.id === circleId && isCircleElement(element));
     if (!circle) return { success: false, error: "Circle not found or is not circular" };
     if (!constraint.id || circle.circleConstraints?.some((candidate) => candidate.id === constraint.id) || constraint.kind.endsWith("horizontal") && constraint.value === undefined || constraint.kind.endsWith("vertical") && constraint.value === undefined || (constraint.kind === "radius" || constraint.kind === "diameter") && (!Number.isFinite(constraint.value) || constraint.value === undefined || constraint.value <= 0)) return { success: false, error: "Invalid circle constraint" };
-    const result = solveCircleConstraints({ ...circle, circleConstraints: [...(circle.circleConstraints ?? []), constraint] });
-    if (result.status === "conflict") return { success: false, error: "Circle constraints are in conflict" };
-    return replaceElements(document, document.elements.map((element) => element.id === circleId ? result.circle : element));
+    return replaceCircleElements(document, document.elements.map((element) => element.id === circleId ? { ...circle, circleConstraints: [...(circle.circleConstraints ?? []), constraint] } : element));
   },
 });
 
@@ -2458,9 +2570,7 @@ export const updateCircleConstraint = (circleId: ElementId, constraintId: string
     if (constraint.id !== constraintId || constraint.value === undefined || !Number.isFinite(constraint.value) || (constraint.kind === "radius" || constraint.kind === "diameter") && constraint.value <= 0) return { success: false, error: "Invalid circle constraint" };
     if (!circle.circleConstraints?.some((candidate) => candidate.id === constraintId)) return { success: false, error: "Circle constraint not found" };
     const constraints = circle.circleConstraints.map((candidate) => candidate.id === constraintId ? constraint : candidate);
-    const result = solveCircleConstraints({ ...circle, circleConstraints: constraints });
-    if (result.status === "conflict") return { success: false, error: "Circle constraints are in conflict" };
-    return replaceElements(document, document.elements.map((element) => element.id === circleId ? result.circle : element));
+    return replaceCircleElements(document, document.elements.map((element) => element.id === circleId ? { ...circle, circleConstraints: constraints } : element));
   },
 });
 
@@ -2469,8 +2579,7 @@ export const deleteCircleConstraint = (circleId: ElementId, constraintId: string
   apply: (document) => {
     const circle = document.elements.find((element): element is Extract<Element, { type: "circle" }> => element.id === circleId && isCircleElement(element));
     if (!circle || !circle.circleConstraints?.some((candidate) => candidate.id === constraintId)) return { success: false, error: "Circle constraint not found" };
-    const result = solveCircleConstraints({ ...circle, circleConstraints: circle.circleConstraints.filter((candidate) => candidate.id !== constraintId) });
-    return replaceElements(document, document.elements.map((element) => element.id === circleId ? result.circle : element));
+    return replaceCircleElements(document, document.elements.map((element) => element.id === circleId ? { ...circle, circleConstraints: circle.circleConstraints!.filter((candidate) => candidate.id !== constraintId) } : element));
   },
 });
 
@@ -2489,9 +2598,8 @@ export const setDimensionDriving = (dimensionId: ElementId, driving: boolean): E
       const value = dimensionGeometry(dimension, document.elements)?.value;
       if (driving && (!value || !Number.isFinite(value) || value <= 0)) return { success: false, error: "Circular dimension has no valid value" };
       const constraints = driving ? [...existing.filter((candidate) => candidate.id !== constraintId), { id: constraintId, kind: dimension.kind, value: value as number, driving: true }] : existing.filter((candidate) => candidate.id !== constraintId);
-      const solved = solveCircleConstraints({ ...target, circleConstraints: constraints });
-      if (solved.status === "conflict") return { success: false, error: "Circle constraints are in conflict" };
-      return replaceElements(document, document.elements.map((element) => element.id === dimension.id ? updatedDimension : element.id === target.id ? solved.circle : element));
+      return replaceCircleElements(document, document.elements.map((element) => element.id === dimension.id ? updatedDimension : element.id === target.id ? { ...target, circleConstraints: constraints } : element));
+
     }
     const target = document.elements.find((element): element is SketchElement => element.id === targetId && element.type === "sketch");
     if (!target) return { success: false, error: "Only sketch or circular dimensions can be driving" };
@@ -2499,9 +2607,8 @@ export const setDimensionDriving = (dimensionId: ElementId, driving: boolean): E
     const constraint = sketchConstraintForDimension({ ...dimension, constraintId }, target, document.elements);
     if (driving && !constraint) return { success: false, error: "Sketch dimension cannot create a driving constraint" };
     const constraints = driving ? [...existing.filter((candidate) => candidate.id !== constraintId), constraint!] : existing.filter((candidate) => candidate.id !== constraintId);
-    const solved = solveSketchConstraints({ ...target, constraints });
-    if (solved.status === "conflict" || solved.status === "overdefined") return { success: false, error: `Sketch constraints are ${solved.status}` };
-    return replaceElements(document, document.elements.map((element) => element.id === dimension.id ? updatedDimension : element.id === target.id ? solved.sketch : element));
+    return replaceSketchElements(document, document.elements.map((element) => element.id === dimension.id ? updatedDimension : element.id === target.id ? { ...target, constraints } : element));
+
   },
 });
 
@@ -2510,9 +2617,7 @@ export const solveCircle = (circleId: ElementId): EditorCommand => ({
   apply: (document) => {
     const circle = document.elements.find((element): element is Extract<Element, { type: "circle" }> => element.id === circleId && isCircleElement(element));
     if (!circle) return { success: false, error: "Circle not found or is not circular" };
-    const result = solveCircleConstraints(circle);
-    if (result.status === "conflict") return { success: false, error: "Circle constraints are in conflict" };
-    return replaceElements(document, document.elements.map((element) => element.id === circleId ? result.circle : element));
+    return replaceCircleElements(document, document.elements);
   },
 });
 
@@ -2540,7 +2645,7 @@ export const updateElementNode = (id: ElementId, nodeIndex: number, point: Point
       const candidate = { ...current, nodes: current.nodes.map((sketchNode) => sketchNode.id === node.nodeId ? { ...sketchNode, point } : sketchNode) };
           const solved = solveSketchConstraints(candidate);
           if (solved.status === "conflict" || solved.status === "overdefined") return { success: false, error: `Sketch constraints are ${solved.status}` };
-          return replaceElements(document, document.elements.map((element) => element.id === id ? solved.sketch : element));
+          return replaceSketchElements(document, document.elements.map((element) => element.id === id ? solved.sketch : element));
     }
     if (current.type === "path") {
       if (!node.nodeId) return { success: false, error: "Path node not found" };
@@ -2625,7 +2730,37 @@ export const deleteElementNodes = (id: ElementId, nodeIndexes: readonly number[]
       const keptEdgeIds = new Set(keptEdges.map((edge) => edge.id));
       const constraints = current.constraints?.filter((constraint) => constraint.references.every((reference) => "nodeId" in reference ? !nodeIds.has(reference.nodeId) : keptEdgeIds.has(reference.edgeId)));
       const next = { ...current, nodes: keptNodes, edges: keptEdges, ...(constraints ? { constraints } : {}) };
-      return replaceElements(document, document.elements.map((element) => element.id === id ? next : element));
+      const remapDimensionReference = (reference: DimensionElement["references"][number]): DimensionElement["references"][number] | undefined => {
+        if (reference.elementId !== id) return reference;
+        if (!("kind" in reference) || reference.kind === "node") {
+          const oldNode = reference.nodeId ? current.nodes.find((node) => node.id === reference.nodeId) : current.nodes[reference.nodeIndex];
+          if (!oldNode || nodeIds.has(oldNode.id)) return undefined;
+          const nodeIndex = keptNodes.findIndex((node) => node.id === oldNode.id);
+          return nodeIndex < 0 ? undefined : { ...reference, nodeId: oldNode.id, nodeIndex };
+        }
+        if (reference.kind === "line") {
+          const oldEdge = reference.edgeId ? current.edges.find((edge) => edge.id === reference.edgeId) : current.edges[reference.edgeIndex ?? 0];
+          if (!oldEdge || !keptEdgeIds.has(oldEdge.id)) return undefined;
+          const edgeIndex = keptEdges.findIndex((edge) => edge.id === oldEdge.id);
+          return edgeIndex < 0 ? undefined : { ...reference, edgeId: oldEdge.id, edgeIndex };
+        }
+        return reference;
+      };
+      const remappedElements = document.elements.flatMap<Element>((element) => {
+        if (element.type !== "dimension") return [element];
+        const first = remapDimensionReference(element.references[0]);
+        const second = remapDimensionReference(element.references[1]);
+        return first && second ? [{ ...element, references: [first, second] as [typeof first, typeof second] }] : [];
+      }).map((element) => element.id === id ? next : element);
+      const referencesDeletedNode = (reference: ExplicitConnection["first"]): boolean => reference.elementId === id && reference.node.kind === "sketch" && nodeIds.has(reference.node.nodeId);
+      const cleanedDocument = {
+        ...document,
+        connections: (document.connections ?? []).filter((connection) => !referencesDeletedNode(connection.first) && !referencesDeletedNode(connection.second)),
+        positionalCoincidences: (document.positionalCoincidences ?? []).filter((relation) => !referencesDeletedNode(relation.first) && !referencesDeletedNode(relation.second)),
+      };
+      const removedReferences = current.edges.filter((edge) => !keptEdgeIds.has(edge.id)).map((edge) => sketchEdgeReference(id, edge.id));
+      const topology = topologyEditForReferenceDestinations(remappedElements, removedReferences, new Map(), "Sketch edge was removed");
+      return replaceSketchTopology(cleanedDocument, { ...topology, elements: remappedElements });
     }
     if (current.type === "glyph") {
       const glyph = deleteGlyphAnchorNodes(current, indexes);
@@ -2677,6 +2812,48 @@ const translateElement = (element: Element, delta: PointMm, id: ElementId): Elem
   return { ...element, id, position: { x: element.position.x + delta.x, y: element.position.y + delta.y } };
 };
 
+type DuplicateMaps = { readonly elements: ReadonlyMap<ElementId, ElementId>; readonly sketches: ReadonlyMap<ElementId, { readonly nodes: ReadonlyMap<string, string>; readonly edges: ReadonlyMap<string, string> }> };
+const duplicateIdAllocator = (used: Set<string>) => (base: string): string => { let value = base; let suffix = 1; while (used.has(value)) value = `${base}:${suffix++}`; used.add(value); return value; };
+const duplicateConstraintReference = (reference: SketchConstraint["references"][number], maps: DuplicateMaps): SketchConstraint["references"][number] | undefined => {
+  const elementId = maps.elements.get(reference.elementId); if (!elementId) return undefined; const sketch = maps.sketches.get(reference.elementId);
+  if ("nodeId" in reference) { const nodeId = sketch?.nodes.get(reference.nodeId); return nodeId ? { elementId, nodeId } : sketch ? undefined : { elementId, nodeId: reference.nodeId }; }
+  const edgeId = sketch?.edges.get(reference.edgeId); return edgeId ? { elementId, edgeId } : sketch ? undefined : { elementId, edgeId: reference.edgeId };
+};
+const duplicateDimensionReference = (reference: DimensionElement["references"][number], maps: DuplicateMaps): DimensionElement["references"][number] | undefined => {
+  const elementId = maps.elements.get(reference.elementId); if (!elementId) return undefined; const sketch = maps.sketches.get(reference.elementId);
+  if ("kind" in reference && reference.kind === "line" && sketch && reference.edgeId !== undefined) { const edgeId = sketch.edges.get(reference.edgeId); return edgeId ? { kind: "line", elementId, edgeId } : undefined; }
+  if (sketch && "nodeId" in reference && reference.nodeId !== undefined) { const nodeId = sketch.nodes.get(reference.nodeId); return nodeId ? { kind: "node", elementId, nodeId, nodeIndex: reference.nodeIndex } : undefined; }
+  return { ...reference, elementId };
+};
+const duplicateConnectionReference = (reference: ExplicitConnection["first"], maps: DuplicateMaps): ExplicitConnection["first"] | undefined => {
+  const elementId = maps.elements.get(reference.elementId); if (!elementId) return undefined;
+  if (reference.node.kind !== "sketch") return { ...reference, elementId }; const nodeId = maps.sketches.get(reference.elementId)?.nodes.get(reference.node.nodeId);
+  return nodeId ? { ...reference, elementId, node: { ...reference.node, nodeId } } : undefined;
+};
+const duplicateSketchAware = (document: DocumentSnapshot, selected: readonly Element[], direction: Direction, distance: number, count: number): CommandResult => {
+  const vector = directionVector(direction), bounds = boundsOfElements(selected); const step = { x: vector.x * (vector.x === 0 ? 0 : bounds.width + distance), y: vector.y * (vector.y === 0 ? 0 : bounds.height + distance) }, selectedIds = new Set(selected.map((element) => element.id));
+  const elements = duplicateIdAllocator(new Set(document.elements.map((element) => element.id))), nodes = duplicateIdAllocator(new Set(document.elements.flatMap((element) => element.type === "sketch" ? element.nodes.map((node) => node.id) : []))), edges = duplicateIdAllocator(new Set(document.elements.flatMap((element) => element.type === "sketch" ? element.edges.map((edge) => edge.id) : []))), constraints = duplicateIdAllocator(new Set([...document.elements.flatMap((element) => element.type === "sketch" ? (element.constraints ?? []).map((constraint) => constraint.id) : []), ...(document.constraints ?? []).map((constraint) => constraint.id)])), relations = duplicateIdAllocator(new Set([...(document.connections ?? []).map((connection) => connection.id), ...(document.positionalCoincidences ?? []).map((relation) => relation.id)]));
+  const copies: Element[] = [], copiedConstraints: DocumentConstraint[] = [], copiedConnections: ExplicitConnection[] = [], copiedCoincidences: PositionalCoincidence[] = [];
+  for (let copyIndex = 0; copyIndex < count; copyIndex++) {
+    const map = new Map<ElementId, ElementId>(), sketchMaps = new Map<ElementId, { nodes: Map<string, string>; edges: Map<string, string> }>(), constraintMaps = new Map<string, string>();
+    for (const source of selected) { const id = elements(`element:${source.id}:copy:${copyIndex + 1}`) as ElementId; map.set(source.id, id); if (source.type === "sketch") { sketchMaps.set(source.id, { nodes: new Map(source.nodes.map((node) => [node.id, nodes(`${id}:node:${node.id}`)])), edges: new Map(source.edges.map((edge) => [edge.id, edges(`${id}:edge:${edge.id}`)])) }); for (const constraint of source.constraints ?? []) constraintMaps.set(constraint.id, constraints(`${id}:constraint:${constraint.id}`)); } }
+    // Dimensions may point at either a local sketch constraint or a document constraint.
+        // Reserve both kinds before copying dimensions so no copied reference can retain an original ID.
+        for (const constraint of document.constraints ?? []) if (constraint.references.every((reference) => selectedIds.has(reference.elementId))) constraintMaps.set(constraint.id, constraints(`constraint:copy:${constraint.id}:${copyIndex + 1}`));
+        const maps: DuplicateMaps = { elements: map, sketches: sketchMaps }, delta = { x: step.x * (copyIndex + 1), y: step.y * (copyIndex + 1) };
+    for (const source of selected) { const id = map.get(source.id)!; if (source.type !== "sketch") { if (source.type !== "dimension") copies.push(translateElement(source, delta, id)); else { const refs = source.references.map((reference) => duplicateDimensionReference(reference, maps)); if (refs.some((reference) => !reference)) return { success: false, error: "Cannot duplicate a dimension with external references" }; const constraintId = source.constraintId ? constraintMaps.get(source.constraintId) : undefined;
+                if (source.constraintId && !constraintId) return { success: false, error: "Cannot duplicate a dimension with an external constraint reference" };
+            copies.push({ ...(translateElement(source, delta, id) as DimensionElement), references: refs as unknown as DimensionElement["references"], ...(constraintId ? { constraintId } : {}) }); } continue; }
+      const sketchMap = sketchMaps.get(source.id)!; const local = (source.constraints ?? []).map((constraint) => { const refs = constraint.references.map((reference) => duplicateConstraintReference(reference, maps)); return refs.some((reference) => !reference) ? undefined : { ...constraint, id: constraintMaps.get(constraint.id)!, references: refs as unknown as SketchConstraint["references"] }; }); if (local.some((constraint) => !constraint)) return { success: false, error: "Cannot duplicate a sketch with external constraint references" };
+      copies.push({ ...translateElement(source, delta, id), nodes: source.nodes.map((node) => ({ ...node, id: sketchMap.nodes.get(node.id)!, point: { x: node.point.x + delta.x, y: node.point.y + delta.y } })), edges: source.edges.map((edge) => ({ ...edge, id: sketchMap.edges.get(edge.id)!, startNodeId: sketchMap.nodes.get(edge.startNodeId)!, endNodeId: sketchMap.nodes.get(edge.endNodeId)! })), ...(local.length ? { constraints: local } : {}) } as SketchElement);
+    }
+    for (const source of document.constraints ?? []) if (source.references.every((reference) => selectedIds.has(reference.elementId))) { const refs = source.references.map((reference) => duplicateConstraintReference(reference, maps)); const id = constraintMaps.get(source.id); if (id && refs.every((reference) => reference)) copiedConstraints.push({ ...source, id, references: refs as unknown as DocumentConstraint["references"] }); }
+    const relationship = (source: ExplicitConnection | PositionalCoincidence): ExplicitConnection | PositionalCoincidence | undefined => { if (!selectedIds.has(source.first.elementId) || !selectedIds.has(source.second.elementId)) return undefined; const first = duplicateConnectionReference(source.first, maps), second = duplicateConnectionReference(source.second, maps); return first && second ? { ...source, id: relations(`relationship:copy:${source.id}:${copyIndex + 1}`), first, second } : undefined; };
+    for (const source of document.connections ?? []) { const copy = relationship(source); if (copy) copiedConnections.push(copy as ExplicitConnection); } for (const source of document.positionalCoincidences ?? []) { const copy = relationship(source); if (copy) copiedCoincidences.push(copy as PositionalCoincidence); }
+  }
+  const candidate = [...document.elements, ...copies], related = { ...document, elements: candidate, constraints: [...(document.constraints ?? []), ...copiedConstraints], connections: [...(document.connections ?? []), ...copiedConnections], positionalCoincidences: [...(document.positionalCoincidences ?? []), ...copiedCoincidences] };
+  return selected.some((element) => element.type === "sketch") ? replaceSketchElements(related, candidate) : replaceElements(related, candidate);
+};
 export const duplicateElements = (ids: readonly ElementId[], direction: Direction, distance: number, count: number): EditorCommand => ({
   name: `duplicate:${direction}:${count}`,
   apply: (document) => {
@@ -2685,7 +2862,8 @@ export const duplicateElements = (ids: readonly ElementId[], direction: Directio
     const uniqueIds = [...new Set(ids)];
     const selected = document.elements.filter((element) => uniqueIds.includes(element.id));
     if (!selected.length || selected.length !== uniqueIds.length) return { success: false, error: "One or more elements were not found" };
-    const vector = directionVector(direction);
+    if (selected.some((element) => element.type === "sketch" || element.type === "dimension")) return duplicateSketchAware(document, selected, direction, distance, count);
+        const vector = directionVector(direction);
     const bounds = boundsOfElements(selected);
     const step = { x: vector.x * (vector.x === 0 ? 0 : bounds.width + distance), y: vector.y * (vector.y === 0 ? 0 : bounds.height + distance) };
     const copies = Array.from({ length: count }, (_, copyIndex) => selected.map((element) => translateElement(element, { x: step.x * (copyIndex + 1), y: step.y * (copyIndex + 1) }, elementId(`element-${crypto.randomUUID()}`)))).flat();
@@ -2703,7 +2881,7 @@ export const flipElements = (ids: readonly ElementId[], axis: FlipAxis): EditorC
     if (known.length === 0) return { success: false, error: "No elements selected" };
     const center = groupCenter(boundsOfElements(known));
     const horizontal = axis === "horizontal";
-    return replaceElements(document, document.elements.map((element) => {
+        const candidate = document.elements.map((element) => {
        if (!selected.has(element.id)) return element;
        if (element.type === "dimension") return element;
       const currentCenter = elementCenter(element);
@@ -2723,7 +2901,8 @@ export const flipElements = (ids: readonly ElementId[], axis: FlipAxis): EditorC
       if (element.type === "sketch") return { ...element, nodes: element.nodes.map((node) => ({ ...node, point: horizontal ? { x: center.x * 2 - node.point.x, y: node.point.y } : { x: node.point.x, y: center.y * 2 - node.point.y } })) };
       if (element.type === "arc") {
         const reflectAngle = (angle: number): number => normalizeArcAngle(horizontal ? Math.PI - angle : -angle);
-        return { ...element, center: horizontal ? { x: center.x * 2 - element.center.x, y: element.center.y } : { x: element.center.x, y: center.y * 2 - element.center.y }, startAngle: reflectAngle(element.startAngle), endAngle: reflectAngle(element.endAngle), direction: element.direction === "clockwise" ? "counterclockwise" : "clockwise" };
+            const direction: ArcDirection = element.direction === "clockwise" ? "counterclockwise" : "clockwise";
+        return { ...element, center: horizontal ? { x: center.x * 2 - element.center.x, y: element.center.y } : { x: element.center.x, y: center.y * 2 - element.center.y }, startAngle: reflectAngle(element.startAngle), endAngle: reflectAngle(element.endAngle), direction };
       }
       if (element.type === "text") return { ...element, position: horizontal ? { x: center.x * 2 - element.position.x - element.size.width, y: element.position.y } : { x: element.position.x, y: center.y * 2 - element.position.y - element.size.height }, rotation: -element.rotation };
       if (element.type === "circle") return { ...element, center: horizontal ? { x: center.x * 2 - element.center.x, y: element.center.y } : { x: element.center.x, y: center.y * 2 - element.center.y } };
@@ -2732,7 +2911,8 @@ export const flipElements = (ids: readonly ElementId[], axis: FlipAxis): EditorC
         : { ...element, position: { x: element.position.x + delta.x, y: element.position.y + delta.y } };
       if (element.type === "contour") return contourWithPoints(element, element.contours.map((contour) => contour.points.map((point) => horizontal ? { x: center.x * 2 - point.x, y: point.y } : { x: point.x, y: center.y * 2 - point.y })));
       return { ...moved, rotation: -element.rotation, [horizontal ? "flipX" : "flipY"]: !(horizontal ? element.flipX : element.flipY) };
-    }));
+    });
+    if (known.some((element) => element.type === "sketch")) { const diagnostics = fixedSketchTransformDiagnostics(document, candidate); if (diagnostics.length) return { success: false, error: "Sketch fixed coordinates cannot change during a transform", diagnostics }; return replaceSketchElements(document, candidate); } return replaceElements(document, candidate);
   },
 });
 
@@ -2834,13 +3014,17 @@ export function beginGesture(state: EditorState): EditorState {
 export function previewGesture(state: EditorState, command: EditorCommand): EditorState {
   if (!state.gesture) return state;
   const applied = command.apply(state.gesture.preview);
-  return applied.success ? { ...state, document: applied.document, gesture: { ...state.gesture, preview: applied.document } } : state;
+  if (!applied.success) return state;
+  const preview = { ...applied.document, revision: state.gesture.base.revision };
+  return { ...state, document: preview, gesture: { ...state.gesture, preview } };
 }
 /** Recomputes a preview from the gesture base, so pointer-derived corrections never accumulate. */
 export function previewGestureFromBase(state: EditorState, command: EditorCommand): EditorState {
   if (!state.gesture) return state;
   const applied = command.apply(state.gesture.base);
-  return applied.success ? { ...state, document: applied.document, gesture: { ...state.gesture, preview: applied.document } } : state;
+  if (!applied.success) return state;
+  const preview = { ...applied.document, revision: state.gesture.base.revision };
+  return { ...state, document: preview, gesture: { ...state.gesture, preview } };
 }
 export function commitGesture(state: EditorState): EditorState {
   if (!state.gesture) return state;

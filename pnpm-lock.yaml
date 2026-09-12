@@ -162,6 +162,9 @@ importers:
 
   packages/editor-core:
     dependencies:
+      '@nodra/constraints':
+        specifier: workspace:*
+        version: link:../constraints
       '@nodra/domain':
         specifier: workspace:*
         version: link:../domain
