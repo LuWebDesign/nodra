@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createDocument, elementId, layerId, type CircleElement, type Element, type SketchConstraint, type SketchElement } from "@nodra/domain";
+import { createDocument, elementId, layerId, type ArcElement, type CircleElement, type Element, type SketchConstraint, type SketchElement } from "@nodra/domain";
 import { validateDocument } from "@nodra/validation";
 import { recomputeSketchKernel } from "./sketchKernel.js";
 
@@ -52,6 +52,44 @@ describe("sketch kernel", () => {
             expect(result.derivedMixedTopology.diagnostics.map((diagnostic) => diagnostic.code)).toContain("overlap");
             expect(result.document).toEqual(input);
           });
+
+      it("exposes an exact mixed line/arc loop as deterministic derived graph metadata", () => {
+        const arc: ArcElement = { type: "arc", id: elementId("semicircle"), layerId: layer.id, center: { x: 0, y: 0 }, radius: 5, startAngle: 0, endAngle: Math.PI, direction: "clockwise", style };
+        const diameter: Element = { type: "line", id: elementId("diameter"), layerId: layer.id, start: { x: -5, y: 0 }, end: { x: 5, y: 0 }, rotation: 0, style };
+        const input = documentFor(arc, diameter);
+        const before = JSON.stringify(input);
+        const graph = recomputeSketchKernel(input).derivedMixedTopology.graph;
+
+        expect(graph.closedLoops).toHaveLength(1);
+        expect(graph.openChains).toHaveLength(0);
+        expect(graph.fragments.map((fragment) => fragment.curve.type).sort()).toEqual(["arc", "line"]);
+        expect(graph.fragments.map((fragment) => fragment.source)).toEqual(expect.arrayContaining([
+          expect.objectContaining({ kind: "arc-element", elementId: arc.id }),
+          expect.objectContaining({ kind: "line-element", elementId: diameter.id }),
+        ]));
+        expect(graph.fragments.every((fragment) => fragment.id.startsWith("fragment:") && fragment.sourcePieceId.startsWith("piece:"))).toBe(true);
+        expect(graph.diagnostics).toEqual([]);
+        expect(recomputeSketchKernel(input).derivedMixedTopology.graph).toEqual(graph);
+        expect(JSON.stringify(input)).toBe(before);
+      });
+
+      it("exposes open mixed topology and graph diagnostics without persisting it", () => {
+        const openLine: Element = { type: "line", id: elementId("open-line"), layerId: layer.id, start: { x: 20, y: 0 }, end: { x: 25, y: 0 }, rotation: 0, style };
+        const input = documentFor(circle(), openLine);
+        const before = JSON.stringify(input);
+        const result = recomputeSketchKernel(input);
+
+        expect(result.derivedMixedTopology.graph.closedLoops).toHaveLength(1);
+        expect(result.derivedMixedTopology.graph.openChains).toHaveLength(1);
+        expect(result.derivedMixedTopology.graph.openChains[0]?.fragmentIds).toEqual([
+          expect.stringMatching(/^fragment:/),
+        ]);
+        expect(result.derivedMixedTopology.graph.diagnostics).toEqual([
+          expect.objectContaining({ code: "disconnected", severity: "info" }),
+        ]);
+        expect(JSON.stringify(input)).toBe(before);
+        expect("graph" in result.document).toBe(false);
+      });
 
       it("recomputes constrained native circles without treating them as sketch topology", () => {
         const input = documentFor(circle([{ id: "cx", kind: "center-horizontal", value: 10 }, { id: "diameter", kind: "diameter", value: 8 }]));

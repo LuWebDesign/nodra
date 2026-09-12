@@ -1,6 +1,6 @@
 import "fake-indexeddb/auto";
 import { afterEach, describe, expect, it } from "vitest";
-import { CURRENT_SCHEMA_VERSION, createDocument, createProject, elementId, layerId, revision } from "@nodra/domain";
+import { CURRENT_SCHEMA_VERSION, createDocument, createProject, elementId, featureId, layerId, revision } from "@nodra/domain";
 import { DebouncedAutosave, DexieProjectRepository, MigrationRegistry, type ProjectRepository } from "./index.js";
 import { validateProject } from "@nodra/validation";
 
@@ -37,6 +37,20 @@ describe("DexieProjectRepository", () => {
     const recovered = await db.getProject(metadata.id);
     expect(recovered.ok && recovered.revision.metadata).toEqual(expect.objectContaining({ id: renamed.id, name: renamed.name }));
     expect(recovered.ok && recovered.revision.revision).toBe(source.revision);
+  });
+
+  it("round-trips page-scoped intersect features through the repository", async () => {
+    db = await repository();
+    const base = document();
+    const source = { type: "rectangle" as const, id: elementId("source"), layerId: layerId("layer-1"), position: { x: 0, y: 0 }, size: { width: 10, height: 10 }, cornerRadius: 0, rotation: 0, style: { stroke: "#000", strokeWidth: 1 } };
+    const second = { ...source, id: elementId("second"), position: { x: 5, y: 0 } };
+    const output = { type: "contour" as const, id: elementId("feature-1:output"), layerId: source.layerId, position: { x: 5, y: 0 }, size: { width: 5, height: 10 }, contours: [{ points: [{ x: 5, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }, { x: 5, y: 10 }, { x: 5, y: 0 }] }], fillRule: "evenodd" as const, rotation: 0, style: source.style };
+    const featureTree = { version: 1 as const, features: [{ id: featureId("feature-1"), operation: "intersect" as const, sources: [{ elementId: source.id }, { elementId: second.id }], outputs: [{ elementId: output.id }], status: "up-to-date" as const }] };
+    const saved = { ...base, elements: [source, second, output], featureTree, revision: revision(1) };
+
+    expect((await db.saveProject(metadata, saved)).ok).toBe(true);
+    const recovered = await db.getProject(metadata.id);
+    expect(recovered.ok && recovered.revision.document).toMatchObject({ featureTree });
   });
 
   it("round-trips explicit connections through the repository", async () => {

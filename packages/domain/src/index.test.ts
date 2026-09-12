@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createDocument, createEmptyProject, createProject, defaultPieceId, documentFromProject, elementId, hasBounds, hasRotation, layerId, pageId, pieceId, projectFromDocument, revision, withElements } from "./index.js";
+import { createDocument, createEmptyProject, createProject, defaultPieceId, documentFromProject, elementId, featureId, hasBounds, hasRotation, layerId, pageId, pieceId, projectFromDocument, revision, withElements } from "./index.js";
 
 describe("domain contracts", () => {
   it("creates immutable-shaped versioned documents and increments revisions", () => {
@@ -31,6 +31,21 @@ describe("domain contracts", () => {
     const spline = { type: "spline" as const, id: elementId("spline-1"), layerId: layer.id, nodes: [{ id: "a", anchor: { x: 0, y: 0 }, continuity: "smooth" as const }, { id: "b", anchor: { x: 10, y: 0 }, continuity: "smooth" as const }], closed: false, style: { stroke: "#000", strokeWidth: 0.2 } };
     expect(withElements(createDocument("doc-1", [layer]), [spline]).elements).toEqual([spline]);
   });
+  it("preserves page-scoped feature trees across document and project conversions", () => {
+    const layer = { id: layerId("design"), name: "Design", visible: true, order: 0 } as const;
+    const source = { type: "line" as const, id: elementId("source"), layerId: layer.id, start: { x: 0, y: 0 }, end: { x: 10, y: 0 }, rotation: 0, style: { stroke: "#000", strokeWidth: 0.2 } };
+    const output = { ...source, id: elementId("output"), start: { x: 0, y: 2 }, end: { x: 10, y: 2 } };
+    const featureTree = { version: 1 as const, features: [{ id: featureId("feature-1"), operation: "outline" as const, sources: [{ elementId: source.id }], outputs: [{ elementId: output.id }], status: "up-to-date" as const }] };
+    const document = { ...createDocument("feature-project", [layer]), elements: [source, output], featureTree };
+
+    const project = createProject(document);
+    expect(project.pages[0]?.featureTree).toEqual(featureTree);
+    expect(documentFromProject(project).featureTree).toEqual(featureTree);
+    expect(projectFromDocument(project, document).pages[0]?.featureTree).toEqual(featureTree);
+    expect(projectFromDocument(project, { ...createDocument("feature-project", [layer]), elements: [source, output] }).pages[0]).not.toHaveProperty("featureTree");
+    expect(createProject(createDocument("legacy-project")).pages[0]).not.toHaveProperty("featureTree");
+  });
+
   it("creates an empty project with a page and no active piece", () => {
     const project = createEmptyProject(createDocument("empty-project"));
     expect(project.pieces).toEqual([]);

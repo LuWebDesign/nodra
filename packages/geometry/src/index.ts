@@ -778,11 +778,15 @@ export function contoursFromMultiPolygon(polygons: MultiPolygon): ContourElement
   return polygons.flatMap((polygon) => polygon.map((ring) => ({ points: ring.map(([x, y]) => ({ x, y })) })));
 }
 
-export type ShapeOperation = "union" | "difference";
+export type ShapeOperation = "union" | "difference" | "intersection";
 export function shapeResultContours(operation: ShapeOperation, elements: readonly Element[]): ContourElement["contours"] {
   if (!elements.length || elements.some((element) => element.type === "line" || element.type === "dimension" || element.type === "text" || (element.type === "sketch" && sketchClosedContours(element).length === 0))) throw new Error("Shape operations require closed objects");
   const polygons = elements.map(closedElementToPolygon);
-  const result = operation === "difference" ? polygonClipping.difference(polygons[0]!, ...polygons.slice(1)) : polygonClipping.union(polygons[0]!, ...polygons.slice(1));
+  const result = operation === "difference"
+    ? polygonClipping.difference(polygons[0]!, ...polygons.slice(1))
+    : operation === "intersection"
+      ? polygonClipping.intersection(polygons[0]!, ...polygons.slice(1))
+      : polygonClipping.union(polygons[0]!, ...polygons.slice(1));
   return contoursFromMultiPolygon(result);
 }
 

@@ -4,6 +4,7 @@ export type SchemaVersion = typeof CURRENT_SCHEMA_VERSION;
 export type DocumentId = string & { readonly __brand: "DocumentId" };
 export type LayerId = string & { readonly __brand: "LayerId" };
 export type ElementId = string & { readonly __brand: "ElementId" };
+export type FeatureId = string & { readonly __brand: "FeatureId" };
 export type PageId = string & { readonly __brand: "PageId" };
 export type PieceId = string & { readonly __brand: "PieceId" };
 export type Revision = number & { readonly __brand: "Revision" };
@@ -197,6 +198,18 @@ export interface GlyphContour { readonly nodes: readonly PathNode[]; readonly se
 /** Editable outline for one laid-out font glyph; multiple contours preserve holes. */
 export interface GlyphElement { readonly type: "glyph"; readonly id: ElementId; readonly layerId: LayerId; readonly position: PointMm; readonly size: SizeMm; readonly glyph: string; readonly contours: readonly GlyphContour[]; readonly fillRule: "evenodd"; readonly rotation: number; readonly flipX?: boolean; readonly flipY?: boolean; readonly style: VisualStyle; readonly operation?: OperationMetadata }
 export type Element = (RectangleElement | CircleElement | ArcElement | EllipseElement | LineElement | SketchElement | DimensionElement | ContourElement | PathElement | SplineElement | TextElement | GlyphElement) & ElementBase;
+export interface ParametricFeature {
+  readonly id: FeatureId;
+  readonly operation: "weld" | "subtract" | "outline" | "intersect";
+  readonly sources: readonly { readonly elementId: ElementId }[];
+  readonly outputs: readonly { readonly elementId: ElementId }[];
+  readonly status: "up-to-date" | "needs-rebuild" | "error";
+  readonly error?: string;
+}
+export interface ParametricFeatureTree {
+  readonly version: 1;
+  readonly features: readonly ParametricFeature[];
+}
 export type ConnectableNodeAddress =
   | { readonly kind: "named"; readonly name: "nw" | "n" | "ne" | "e" | "se" | "s" | "sw" | "w" | "center" | "start" | "end" }
   | { readonly kind: "line"; readonly name: "start" | "end" | "center" }
@@ -227,6 +240,7 @@ export interface DocumentCapabilities { readonly spline?: 1 }
   readonly page: SizeMm;
   readonly layers: readonly Layer[];
   readonly elements: readonly Element[];
+  readonly featureTree?: ParametricFeatureTree;
   readonly constraints?: readonly DocumentConstraint[];
   readonly connections?: readonly ExplicitConnection[];
   readonly positionalCoincidences?: readonly PositionalCoincidence[];
@@ -238,6 +252,7 @@ export interface PageSnapshot {
   readonly page: SizeMm;
   readonly layers: readonly Layer[];
   readonly elements: readonly Element[];
+  readonly featureTree?: ParametricFeatureTree;
   readonly constraints?: readonly DocumentConstraint[];
   readonly connections?: readonly ExplicitConnection[];
   readonly positionalCoincidences?: readonly PositionalCoincidence[];
@@ -284,6 +299,7 @@ export interface ProjectSnapshot {
 export const documentId = (value: string): DocumentId => value as DocumentId;
 export const layerId = (value: string): LayerId => value as LayerId;
 export const elementId = (value: string): ElementId => value as ElementId;
+export const featureId = (value: string): FeatureId => value as FeatureId;
 export const pageId = (value: string): PageId => value as PageId;
 export const pieceId = (value: string): PieceId => value as PieceId;
 export const revision = (value: number): Revision => value as Revision;
@@ -294,7 +310,7 @@ export function createDocument(id: string, layers: readonly Layer[] = []): Docum
   return { schemaVersion: CURRENT_SCHEMA_VERSION, id: documentId(id), revision: revision(0), origin: "top-left", units: "mm", page: { width: 1200, height: 900 }, layers: [...layers], elements: [], connections: [] };
 }
 
-const projectPageFromDocument = (document: DocumentSnapshot): PageSnapshot => ({ id: pageId("page-1"), name: "Página 1", page: document.page, layers: document.layers, elements: document.elements, ...(document.constraints ? { constraints: document.constraints } : {}), connections: document.connections ?? [], ...(document.positionalCoincidences ? { positionalCoincidences: document.positionalCoincidences } : {}) });
+const projectPageFromDocument = (document: DocumentSnapshot): PageSnapshot => ({ id: pageId("page-1"), name: "Página 1", page: document.page, layers: document.layers, elements: document.elements, ...(document.featureTree ? { featureTree: document.featureTree } : {}), ...(document.constraints ? { constraints: document.constraints } : {}), connections: document.connections ?? [], ...(document.positionalCoincidences ? { positionalCoincidences: document.positionalCoincidences } : {}) });
 
 /** Creates a project with the historical default piece for document-to-project compatibility. */
 export function createProject(document: DocumentSnapshot): ProjectSnapshot {
@@ -331,7 +347,8 @@ export function documentFromProject(project: ProjectSnapshot, pageIdValue = proj
   const constraints = page.constraints?.filter((constraint) => constraint.references.every((reference) => ids.has(reference.elementId)));
   const connections = (page.connections ?? []).filter((connection) => ids.has(connection.first.elementId) && ids.has(connection.second.elementId));
   const positionalCoincidences = page.positionalCoincidences?.filter((relation) => ids.has(relation.first.elementId) && ids.has(relation.second.elementId));
-  return { schemaVersion: project.schemaVersion, id: project.id, revision: project.revision, origin: project.origin, units: project.units, ...(project.capabilities ? { capabilities: project.capabilities } : {}), page: page.page, layers: page.layers, elements, ...(constraints ? { constraints } : {}), connections, ...(positionalCoincidences ? { positionalCoincidences } : {}) };
+  const featureTree = page.featureTree === undefined ? undefined : { ...page.featureTree, features: page.featureTree.features.filter((feature) => [...feature.sources, ...feature.outputs].every((reference) => ids.has(reference.elementId))) };
+  return { schemaVersion: project.schemaVersion, id: project.id, revision: project.revision, origin: project.origin, units: project.units, ...(project.capabilities ? { capabilities: project.capabilities } : {}), page: page.page, layers: page.layers, elements, ...(featureTree ? { featureTree } : {}), ...(constraints ? { constraints } : {}), connections, ...(positionalCoincidences ? { positionalCoincidences } : {}) };
 }
 
 export function projectFromDocument(project: ProjectSnapshot, document: DocumentSnapshot): ProjectSnapshot {
@@ -339,12 +356,23 @@ export function projectFromDocument(project: ProjectSnapshot, document: Document
   const activePiece = project.pieces.length > 0 ? pieceForPage(project, page, project.activePieceId) : undefined;
   const currentIds = new Set(document.elements.map((element) => element.id));
   const preserved = activePiece ? page.elements.filter((element) => element.pieceId !== undefined && element.pieceId !== activePiece.id && currentIds.has(element.id) === false) : [];
+  const preservedIds = new Set(preserved.map((element) => element.id));
+  const incomingFeatureIds = new Set(document.featureTree?.features.map((feature) => feature.id) ?? []);
+  const preservedFeatures = page.featureTree?.features.filter((feature) => !incomingFeatureIds.has(feature.id) && [...feature.sources, ...feature.outputs].every((reference) => preservedIds.has(reference.elementId))) ?? [];
+  const featureTree = document.featureTree === undefined && preservedFeatures.length === 0 ? undefined : { version: 1 as const, features: [...preservedFeatures, ...(document.featureTree?.features ?? [])] };
   const owned = activePiece ? document.elements.map((element) => element.pieceId === activePiece.id ? element : { ...element, pieceId: activePiece.id }) : document.elements;
   const pieces = project.pieces.map((piece) => {
     const sketches = activePiece && piece.id === activePiece.id ? [...piece.sketches.filter((reference) => reference.pageId !== page.id), ...owned.filter((element) => element.type === "sketch").map((element) => ({ pageId: page.id, sketchId: element.id }))] : piece.sketches;
     return { ...piece, state: sketches.length === 0 && piece.state === "underdefined" ? "design" as const : piece.state, sketches };
   });
-  return { ...project, revision: document.revision, ...(document.capabilities ? { capabilities: document.capabilities } : {}), pieces, pages: project.pages.map((candidate) => candidate.id === page.id ? { ...candidate, page: document.page, layers: document.layers, elements: [...preserved, ...owned], constraints: [...(candidate.constraints ?? []).filter((constraint) => constraint.references.some((reference) => !currentIds.has(reference.elementId))), ...(document.constraints ?? [])], connections: [...(candidate.connections ?? []).filter((connection) => !currentIds.has(connection.first.elementId) || !currentIds.has(connection.second.elementId)), ...(document.connections ?? [])], positionalCoincidences: document.positionalCoincidences ?? [] } : candidate) };
+  const pages = project.pages.map((candidate): PageSnapshot => {
+    if (candidate.id !== page.id) return candidate;
+    const updated = { ...candidate, page: document.page, layers: document.layers, elements: [...preserved, ...owned], constraints: [...(candidate.constraints ?? []).filter((constraint) => constraint.references.some((reference) => !currentIds.has(reference.elementId))), ...(document.constraints ?? [])], connections: [...(candidate.connections ?? []).filter((connection) => !currentIds.has(connection.first.elementId) || !currentIds.has(connection.second.elementId)), ...(document.connections ?? [])], positionalCoincidences: document.positionalCoincidences ?? [] };
+    if (featureTree) return { ...updated, featureTree };
+    delete updated.featureTree;
+    return updated;
+  });
+  return { ...project, revision: document.revision, ...(document.capabilities ? { capabilities: document.capabilities } : {}), pieces, pages };
 }
 
 export function nextRevision(value: Revision): Revision {

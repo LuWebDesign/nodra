@@ -112,8 +112,47 @@ describe("native document validation", () => {
 
   it("migrates schema 8 documents and projects explicitly to schema 9", () => {
     const base = createDocument("schema-8", []);
-    expect(migrateDocument({ ...base, schemaVersion: 8 })).toMatchObject({ schemaVersion: 9 });
-    expect(migrateProject({ schemaVersion: 8, id: "p", revision: 0, origin: "top-left", units: "mm", preferences: { lineGuidesEnabled: true, lineGuideAngle: 45 }, pages: [{ id: "page-1", page: base.page, layers: [], elements: [] }], activePageId: "page-1" })).toMatchObject({ schemaVersion: 9 });
+    const migratedDocument = migrateDocument({ ...base, schemaVersion: 8 });
+    const migratedProject = migrateProject({ schemaVersion: 8, id: "p", revision: 0, origin: "top-left", units: "mm", preferences: { lineGuidesEnabled: true, lineGuideAngle: 45 }, pages: [{ id: "page-1", page: base.page, layers: [], elements: [] }], activePageId: "page-1" });
+    expect(migratedDocument).toMatchObject({ schemaVersion: 9 });
+    expect(migratedProject).toMatchObject({ schemaVersion: 9 });
+    expect(migratedDocument).not.toHaveProperty("featureTree");
+    expect((migratedProject as { pages?: readonly unknown[] }).pages?.[0]).not.toHaveProperty("featureTree");
+  });
+
+  it("validates page-scoped feature trees and their element references strictly", () => {
+    const base = createDocument("feature-tree", [{ id: layerId("layer-1"), name: "Design", visible: true, order: 0 }]);
+    const source = { type: "rectangle", id: "source", layerId: "layer-1", position: { x: 0, y: 0 }, size: { width: 10, height: 10 }, cornerRadius: 0, rotation: 0, style: { stroke: "#000", strokeWidth: 1 } };
+    const output = { ...source, id: "output", position: { x: 20, y: 0 } };
+    const feature = { id: "feature-1", operation: "weld", sources: [{ elementId: "source" }], outputs: [{ elementId: "output" }], status: "up-to-date" };
+    const valid = validateDocument({ ...base, elements: [source, output], featureTree: { version: 1, features: [feature] } });
+    expect(valid.success).toBe(true);
+    if (valid.success) expect(valid.data.featureTree).toEqual({ version: 1, features: [feature] });
+
+    const second = { ...source, id: "second", position: { x: 5, y: 0 } };
+    const contourOutput = { type: "contour", id: "feature-1:output", layerId: "layer-1", position: { x: 5, y: 0 }, size: { width: 5, height: 10 }, contours: [{ points: [{ x: 5, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }, { x: 5, y: 10 }, { x: 5, y: 0 }] }], fillRule: "evenodd", rotation: 0, style: source.style };
+    const intersect = { id: "intersect-1", operation: "intersect", sources: [{ elementId: "source" }, { elementId: "second" }], outputs: [{ elementId: "feature-1:output" }], status: "up-to-date" };
+    expect(validateDocument({ ...base, elements: [source, second, contourOutput], featureTree: { version: 1, features: [intersect] } }).success).toBe(true);
+    expect(validateDocument({ ...base, elements: [source, contourOutput], featureTree: { version: 1, features: [{ ...intersect, sources: [{ elementId: "source" }] }] } }).success).toBe(false);
+    expect(validateDocument({ ...base, elements: [source, second, contourOutput], featureTree: { version: 1, features: [{ ...intersect, sources: [{ elementId: "source" }, { elementId: "source" }] }] } }).success).toBe(false);
+    expect(validateDocument({ ...base, elements: [source, second, output], featureTree: { version: 1, features: [{ ...intersect, outputs: [{ elementId: "output" }] }] } }).success).toBe(false);
+    expect(validateDocument({ ...base, elements: [source, second, contourOutput], featureTree: { version: 1, features: [{ ...intersect, outputs: [{ elementId: "feature-1:output" }, { elementId: "second" }] }] } }).success).toBe(false);
+    expect(validateDocument({ ...base, elements: [source, second, contourOutput], featureTree: { version: 1, features: [{ ...intersect, sources: [{ elementId: "source" }, { elementId: "feature-1:output" }] }] } }).success).toBe(false);
+    const arc = { type: "arc", id: "arc", layerId: "layer-1", center: { x: 5, y: 5 }, radius: 5, startAngle: 0, endAngle: Math.PI, direction: "clockwise", style: source.style };
+    expect(validateDocument({ ...base, elements: [source, arc, contourOutput], featureTree: { version: 1, features: [{ ...intersect, sources: [{ elementId: "source" }, { elementId: "arc" }] }] } }).success).toBe(false);
+    expect(validateDocument({ ...base, elements: [source, second, output, contourOutput], featureTree: { version: 1, features: [feature, { ...intersect, sources: [{ elementId: "output" }, { elementId: "second" }] }] } }).success).toBe(false);
+    expect(validateDocument({ ...base, elements: [source, output], featureTree: { version: 1, features: [{ ...feature, extra: true }] } }).success).toBe(false);
+    expect(validateDocument({ ...base, elements: [source, output], featureTree: { version: 1, features: [{ ...feature, sources: [{ elementId: "missing" }] }] } }).success).toBe(false);
+    expect(validateDocument({ ...base, elements: [source, output], featureTree: { version: 1, features: [{ ...feature, sources: [] }] } }).success).toBe(false);
+    expect(validateDocument({ ...base, elements: [source, output], featureTree: { version: 1, features: [{ ...feature, outputs: [] }] } }).success).toBe(false);
+    expect(validateDocument({ ...base, elements: [source, output], featureTree: { version: 1, features: [{ ...feature, status: "error" }] } }).success).toBe(false);
+    expect(validateDocument({ ...base, elements: [source, output], featureTree: { version: 1, features: [{ ...feature, error: "unexpected" }] } }).success).toBe(false);
+    expect(validateDocument({ ...base, elements: [source, output], featureTree: { version: 1, features: [{ ...feature, status: "error", error: "Boolean operation failed" }] } }).success).toBe(true);
+    expect(validateDocument({ ...base, elements: [source, output], featureTree: { version: 1, features: [{ ...feature, outputs: [{ elementId: "source" }] }] } }).success).toBe(false);
+
+    const project = createProject(base);
+    expect(validateProject({ ...project, pages: [{ ...project.pages[0], elements: [source, output], featureTree: { version: 1, features: [feature] } }] }).success).toBe(true);
+    expect(validateProject({ ...project, pages: [{ ...project.pages[0], elements: [source, output], featureTree: { version: 1, features: [{ ...feature, outputs: [{ elementId: "missing" }] }] } }] }).success).toBe(false);
   });
 
   it("round-trips valid records", () => {

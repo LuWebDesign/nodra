@@ -18,6 +18,21 @@ describe("derived curve topology", () => {
     expect(graph.fragments.every((fragment) => fragment.curve.type !== "cubicBezier")).toBe(true);
   });
 
+  it("preserves provenance and stable IDs for an exact mixed loop plus an open chain", () => {
+    const arc = piece({ type: "arc", center: { x: 0, y: 0 }, radius: 2, startAngle: 0, endAngle: Math.PI, direction: "clockwise" }, "arc");
+    const diameter = piece(line({ x: -2, y: 0 }, { x: 2, y: 0 }), "diameter");
+    const open = piece(line({ x: 5, y: 0 }, { x: 6, y: 0 }), "open");
+    const graph = topology([arc, diameter, open]);
+
+    expect(graph.closedLoops).toHaveLength(1);
+    expect(graph.openChains).toHaveLength(1);
+    expect(graph.fragments.map((fragment) => fragment.source)).toEqual(expect.arrayContaining([arc.source, diameter.source, open.source]));
+    expect(graph.pieces.every((candidate) => candidate.id.startsWith("piece:") && candidate.fragmentIds.length > 0)).toBe(true);
+    expect(graph.fragments.every((fragment) => fragment.id.startsWith("fragment:") && fragment.sourcePieceId.startsWith("piece:"))).toBe(true);
+    expect(graph.diagnostics).toEqual([expect.objectContaining({ code: "disconnected", severity: "info" })]);
+    expect(topology([arc, diameter, open])).toEqual(graph);
+  });
+
   it("keeps an unsplit circle native and creates two arcs when cut", () => {
     const circle = piece({ type: "circle", center: { x: 0, y: 0 }, radius: 1 }, "circle");
     expect(buildCurveTopology([circle]).fragments[0]?.curve.type).toBe("circle");
