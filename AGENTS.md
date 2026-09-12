@@ -31,3 +31,4 @@
 
 - Before changing a subsystem, load the smallest matching skill: architecture (`skills/nodra-architecture/SKILL.md`), editor workflow (`skills/nodra-editor-workflow/SKILL.md`), domain/geometry (`skills/nodra-domain-geometry/SKILL.md`), persistence (`skills/nodra-persistence/SKILL.md`), rendering (`skills/nodra-rendering-performance/SKILL.md`), or verification (`skills/nodra-verification/SKILL.md`).
 - For editor tool gestures or runtime contracts, also load `skills/nodra-editor-tools-contract/SKILL.md`.
+    - New geometric sketch tools must enter through the Sketch Kernel/editor-core command path; never mutate geometry directly or bypass validation, topology, or history.

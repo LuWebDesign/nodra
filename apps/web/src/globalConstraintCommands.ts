@@ -2,12 +2,12 @@ import {
   constraintComponentStatesForDocument,
   constraintComponentsForDocument,
   constraintResidualsForDocument,
-  solveConstraintComponents,
   supportsDocumentConstraintKind,
 } from "@nodra/constraints";
 import type { DocumentConstraint, DocumentSnapshot, SketchConstraintKind } from "@nodra/domain";
 import {
   addDocumentConstraint,
+  recomputeSketchKernel,
   updateDocumentConstraint,
   type EditorCommand,
 } from "@nodra/editor-core";
@@ -24,10 +24,22 @@ const solveConstraintComponent = (document: DocumentSnapshot, constraint: Docume
   if (!component) return undefined;
 
   const affectedNodeKeys = new Set(component.nodeKeys);
-  const solveResult = solveConstraintComponents(document);
-  if (solveResult.nonConvergedComponents.some((nodeKeys) => nodeKeys.some((key) => affectedNodeKeys.has(key)))) return undefined;
-  const globallySolved = solveResult.document;
-  const solvedById = new Map(globallySolved.elements.map((element) => [element.id, element]));
+  const componentConstraintIds = new Set(component.constraintIds);
+  const componentElements = document.elements
+    .filter((element) => element.type !== "sketch" || element.nodes.some((node) => affectedNodeKeys.has(constraintNodeKey(element.id, node.id))))
+    .map((element) => element.type !== "sketch" ? element : {
+      ...element,
+      constraints: (element.constraints ?? []).filter((candidate) => componentConstraintIds.has(JSON.stringify(["local", element.id, candidate.id]))),
+    });
+  const componentDocument: DocumentSnapshot = {
+    ...document,
+    elements: componentElements,
+    ...(document.constraints ? { constraints: document.constraints.filter((candidate) => componentConstraintIds.has(documentConstraintDiagnosticId(candidate.id))) } : {}),
+  };
+  const recomputed = recomputeSketchKernel(componentDocument);
+  if (!recomputed.committed) return undefined;
+
+  const solvedById = new Map(recomputed.document.elements.map((element) => [element.id, element]));
   const elements = document.elements.map((element) => {
     if (element.type !== "sketch") return element;
     const solved = solvedById.get(element.id);

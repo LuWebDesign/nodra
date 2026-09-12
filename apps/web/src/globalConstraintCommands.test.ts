@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createDocument, elementId, layerId, type DocumentConstraint, type SketchElement } from "@nodra/domain";
-import { createEditor, dispatch, undo } from "@nodra/editor-core";
+import { createEditor, dispatch, redo, undo } from "@nodra/editor-core";
+import { constraintResidualsForDocument } from "@nodra/constraints";
 import {
   addSolvedDocumentConstraint,
   documentConstraintDiagnosticId,
@@ -213,7 +214,18 @@ describe("global constraint commands", () => {
     expect(committed.document.constraints).toEqual([angle]);
   });
 
-  it("exposes supported kinds and normalized diagnostic identities", () => {
+      it("keeps diagnostics, references, and redo state valid after a kernel commit", () => {
+        const first = sketch("first", 0);
+        const second = sketch("second", 20);
+        const initial = createEditor({ ...createDocument("global", [layer]), elements: [first, second] });
+        const constraint = distanceConstraint(first, second, 40);
+        const committed = dispatch(initial, addSolvedDocumentConstraint(constraint));
+
+        expect(constraintResidualsForDocument(committed.document)).toEqual([{ constraintId: '["document",null,"global-distance"]', residual: 0, satisfied: true, supported: true }]);
+        expect(redo(undo(committed)).document).toEqual(committed.document);
+      });
+
+      it("exposes supported kinds and normalized diagnostic identities", () => {
     expect(supportsGlobalConstraintKind("distance")).toBe(true);
     expect(supportsGlobalConstraintKind("parallel")).toBe(true);
     expect(supportsGlobalConstraintKind("perpendicular")).toBe(true);
