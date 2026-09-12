@@ -743,15 +743,18 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
           interaction.current = undefined;
         }
       };
-      const openProjectInDesign = (source: DashboardProjectSource, pieceId: PieceId, pageIdValue?: string, sketchId?: ElementId) => guardedNavigation(() => {
-        const piece = source.project.pieces.find((candidate) => candidate.id === pieceId) ?? source.project.pieces[0]!;
-        const nextProject = pageIdValue ? { ...source.project, activePageId: pageIdValue as never, activePieceId: piece.id } : selectPiecePage(source.project, piece);
+      const currentProjectForSource = (source: DashboardProjectSource): ProjectSnapshot => source.metadata.id === activeProjectMetadata.id ? projectFromDocument(project, editorRef.current.document) : source.project;
+          const openProjectInDesign = (source: DashboardProjectSource, pieceId: PieceId, pageIdValue?: string, sketchId?: ElementId) => guardedNavigation(() => {
+        const currentProject = currentProjectForSource(source);
+            const piece = currentProject.pieces.find((candidate) => candidate.id === pieceId) ?? currentProject.pieces[0]!;
+        const nextProject = pageIdValue ? { ...currentProject, activePageId: pageIdValue as never, activePieceId: piece.id } : selectPiecePage(currentProject, piece);
         resetCreationGesture();
         draftProjectRef.current = undefined;
         setActiveProjectMetadata(source.metadata); setProject(nextProject); setActivePieceId(piece.id); setPendingDetailSketchId(sketchId); setCreationPending(undefined); setMode("design"); setView("editor");
       });
       const startNewSketchOnPage = (source: DashboardProjectSource, pageIdValue: string) => guardedNavigation(() => {
-        const baseline = { ...source.project, activePageId: pageId(pageIdValue) };
+        const currentProject = currentProjectForSource(source);
+            const baseline = { ...currentProject, activePageId: pageId(pageIdValue) };
         const draft = addPiece(baseline, { name: nextPieceName(baseline, pageId(pageIdValue)) });
         resetCreationGesture();
         draftProjectRef.current = baseline;
@@ -767,17 +770,20 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
         setProject(loaded); setActivePieceId(loaded.activePieceId); setDetailProjectId(loaded.id); useSelectionStore.getState().setSelected(undefined); setView("project"); saveLastOpenedProject({ projectId: loaded.id, pageId: loaded.activePageId, view: "project", mode });
       };
       const openNewPieceForm = (source: DashboardProjectSource) => {
-         setEditingPieceId(undefined); setPieceFormProjectId(source.metadata.id); setPieceName(nextPieceName(source.project)); setPieceMaterial(""); setPieceThickness("");
+             const currentProject = currentProjectForSource(source);
+         setEditingPieceId(undefined); setPieceFormProjectId(source.metadata.id); setPieceName(nextPieceName(currentProject)); setPieceMaterial(""); setPieceThickness("");
        };
        const openEditPieceForm = (source: DashboardProjectSource, pieceIdValue: PieceId) => {
-         const piece = source.project.pieces.find((candidate) => candidate.id === pieceIdValue);
+         const currentProject = currentProjectForSource(source);
+             const piece = currentProject.pieces.find((candidate) => candidate.id === pieceIdValue);
          if (!piece) return;
          setEditingPieceId(piece.id); setPieceFormProjectId(source.metadata.id); setPieceName(piece.name); setPieceMaterial(piece.material ?? ""); setPieceThickness(piece.thicknessMm?.toString() ?? "");
        };
        const createPersistedPiece = async (source: DashboardProjectSource) => {
         const thicknessMm = pieceThickness.trim() ? Number(pieceThickness) : undefined;
         try {
-          const nextProject = addPiece(source.project, { name: pieceName, material: pieceMaterial, ...(thicknessMm === undefined ? {} : { thicknessMm }) });
+          const currentProject = currentProjectForSource(source);
+              const nextProject = addPiece(currentProject, { name: pieceName, material: pieceMaterial, ...(thicknessMm === undefined ? {} : { thicknessMm }) });
               setPieceFormProjectId(undefined); setActiveProjectMetadata({ ...source.metadata, updatedAt: Date.now() }); setProject(nextProject); setActivePieceId(nextProject.activePieceId ?? nextProject.pieces[0]?.id); setMode("design"); setView("editor"); setTool("select");
           const metadata = { ...source.metadata, updatedAt: Date.now() };
           const result = await repository.saveProject(metadata, nextProject);
@@ -793,7 +799,8 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
       const editPersistedPiece = async (source: DashboardProjectSource, pieceIdValue: PieceId) => {
          const thicknessMm = pieceThickness.trim() ? Number(pieceThickness) : undefined;
          try {
-           const renamedProject = renamePiece(source.project, pieceIdValue, pieceName);
+           const currentProject = currentProjectForSource(source);
+               const renamedProject = renamePiece(currentProject, pieceIdValue, pieceName);
            const material = pieceMaterial.trim();
            const nextProject = {
              ...renamedProject,
@@ -834,10 +841,11 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
           const renamePersistedProject = async (source: DashboardProjectSource) => {
         if (renameDraft === undefined) return;
         try {
-          const metadata = renameProjectMetadata(source.metadata, renameDraft);
-          const result = await repository.saveProject(metadata, source.project);
+          const currentProject = currentProjectForSource(source);
+              const metadata = renameProjectMetadata(source.metadata, renameDraft);
+          const result = await repository.saveProject(metadata, currentProject);
           if (!result.ok) { persist.set("failed", result.error ?? "No se pudo renombrar el proyecto"); return; }
-          setDashboardSources((current) => current.map((item) => item.metadata.id === metadata.id ? { metadata, project: source.project } : item));
+          setDashboardSources((current) => current.map((item) => item.metadata.id === metadata.id ? { metadata, project: currentProject } : item));
           if (activeProjectMetadata.id === metadata.id) setActiveProjectMetadata(metadata);
           setRenameDraft(undefined);
           persist.set("saved", "Proyecto renombrado");
@@ -845,7 +853,8 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
       };
       const renamePersistedEntity = async (source: DashboardProjectSource, entity: { type: "piece" | "page"; id: string; value: string }) => {
             try {
-              const nextProject = entity.type === "piece" ? renamePiece(source.project, entity.id, entity.value) : renamePage(source.project, entity.id, entity.value);
+              const currentProject = currentProjectForSource(source);
+                  const nextProject = entity.type === "piece" ? renamePiece(currentProject, entity.id, entity.value) : renamePage(currentProject, entity.id, entity.value);
               const metadata = { ...source.metadata, updatedAt: Date.now() };
               setPieceFormProjectId(undefined); setActiveProjectMetadata(metadata); setProject(nextProject); setActivePieceId(nextProject.activePieceId ?? nextProject.pieces[0]?.id); setMode("design"); setView("editor"); setTool("select");
               const result = await repository.saveProject(metadata, nextProject);
@@ -857,10 +866,11 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
             } catch (error) { persist.set("failed", error instanceof Error ? error.message : "No se pudo renombrar"); }
           };
           const deletePersistedPiece = async (source: DashboardProjectSource) => {
-        const piece = source.project.pieces.find((candidate) => candidate.id === deletePieceId);
+        const currentProject = currentProjectForSource(source);
+            const piece = currentProject.pieces.find((candidate) => candidate.id === deletePieceId);
         if (!piece) { setDeletePieceId(undefined); return; }
         try {
-          const nextProject = deletePiece(source.project, piece);
+          const nextProject = deletePiece(currentProject, piece);
           const metadata = { ...source.metadata, updatedAt: Date.now() };
           const result = await repository.saveProject(metadata, nextProject);
           if (!result.ok) { persist.set("failed", result.error ?? "No se pudo eliminar la pieza"); return; }
@@ -2400,7 +2410,7 @@ return <main className={`app-shell${persistenceReady ? "" : " hydrating"}`}>
      {pieceFormProjectId && (() => { const source = activeProjectMetadata.id === pieceFormProjectId ? { metadata: activeProjectMetadata, project } : dashboardSources.find((candidate) => candidate.metadata.id === pieceFormProjectId); const isEditing = editingPieceId !== undefined; return source ? <div className="nodra-modal-backdrop" role="presentation"><form className="nodra-modal piece-form" role="dialog" aria-modal="true" aria-labelledby="piece-form-title" onSubmit={(event) => { event.preventDefault(); if (editingPieceId) void editPersistedPiece(source, editingPieceId); else void createPersistedPiece(source); }}><div className="piece-modal-heading"><div className="piece-modal-icon">◇</div><div><p className="piece-modal-eyebrow">PIEZA DE DISEÑO</p><h2 id="piece-form-title">{isEditing ? "Editar pieza" : "Nueva pieza"}</h2><p className="piece-modal-description">Definí los datos básicos para comenzar a trabajar.</p></div></div><div className="piece-form-fields"><label>Nombre<input aria-label="Nombre de la pieza" autoFocus required value={pieceName} onChange={(event) => setPieceName(event.target.value)} /></label><label>Material (opcional)<input aria-label="Material de la pieza" value={pieceMaterial} onChange={(event) => setPieceMaterial(event.target.value)} /></label><label>Espesor mm (opcional)<input aria-label="Espesor de la pieza" type="number" min="0.01" step="0.01" value={pieceThickness} onChange={(event) => setPieceThickness(event.target.value)} /></label></div><div className="nodra-modal-actions"><button type="button" onClick={() => { setEditingPieceId(undefined); setPieceFormProjectId(undefined); }}>Cancelar</button><button type="submit" className="nodra-modal-primary">{isEditing ? "Continuar editando" : "Crear pieza"}</button></div></form></div> : null; })()}
     {newProjectDraft && <div className="nodra-modal-backdrop" role="presentation"><form className="nodra-modal project-create-form" role="dialog" aria-modal="true" aria-labelledby="new-project-title" onSubmit={(event) => { event.preventDefault(); void createPersistedProject(); }}><div className="piece-modal-heading"><div className="piece-modal-icon">◇</div><div><p className="piece-modal-eyebrow">ESPACIO DE TRABAJO</p><h2 id="new-project-title">Nuevo proyecto</h2><p className="piece-modal-description">Creá un proyecto vacío para empezar a diseñar.</p></div></div><label>Nombre del proyecto<input aria-label="Nombre del proyecto" autoFocus required value={newProjectDraft.projectName} onChange={(event) => setNewProjectDraft((current) => current ? { ...current, projectName: event.target.value } : current)} /></label><p className="project-create-hint">El proyecto comienza con una página vacía. Podés crear la primera pieza desde Modelo.</p><div className="nodra-modal-actions"><button type="button" onClick={() => setNewProjectDraft(undefined)}>Cancelar</button><button type="submit" className="nodra-modal-primary">Crear proyecto</button></div></form></div>}
     {deleteProjectId && <div className="nodra-modal-backdrop" role="presentation"><section className="nodra-modal" role="dialog" aria-modal="true" aria-labelledby="delete-project-title"><h2 id="delete-project-title">Eliminar proyecto</h2><p>Esta acción elimina permanentemente el proyecto{activeProjectMetadata.id === deleteProjectId ? " activo" : ""} y su recuperación local. No se puede deshacer.</p><div className="nodra-modal-actions"><button type="button" onClick={() => setDeleteProjectId(undefined)}>Cancelar</button><button type="button" className="nodra-modal-primary" onClick={() => void deletePersistedProject()}>Eliminar proyecto</button></div></section></div>}
-    {deletePieceId && (() => { const source = dashboardSources.find((candidate) => candidate.metadata.id === detailProjectId); const piece = source?.project.pieces.find((candidate) => candidate.id === deletePieceId); return source && piece ? <div className="nodra-modal-backdrop" role="presentation"><section className="nodra-modal" role="dialog" aria-modal="true" aria-labelledby="delete-piece-title"><h2 id="delete-piece-title">Eliminar pieza</h2><p>Se eliminarán permanentemente “{piece.name}”, sus croquis propios y su página independiente. No se eliminará geometría de otras piezas.</p><div className="nodra-modal-actions"><button type="button" onClick={() => setDeletePieceId(undefined)}>Cancelar</button><button type="button" className="nodra-modal-primary" onClick={() => void deletePersistedPiece(source)}>Eliminar pieza</button></div></section></div> : null; })()}
+    {deletePieceId && (() => { const source = dashboardSources.find((candidate) => candidate.metadata.id === detailProjectId); const currentProject = source ? currentProjectForSource(source) : undefined; const piece = currentProject?.pieces.find((candidate) => candidate.id === deletePieceId); return source && piece ? <div className="nodra-modal-backdrop" role="presentation"><section className="nodra-modal" role="dialog" aria-modal="true" aria-labelledby="delete-piece-title"><h2 id="delete-piece-title">Eliminar pieza</h2><p>Se eliminarán permanentemente “{piece.name}”, sus croquis propios y su página independiente. No se eliminará geometría de otras piezas.</p><div className="nodra-modal-actions"><button type="button" onClick={() => setDeletePieceId(undefined)}>Cancelar</button><button type="button" className="nodra-modal-primary" onClick={() => void deletePersistedPiece(source)}>Eliminar pieza</button></div></section></div> : null; })()}
     {sketchSession.status === "confirming-cancel" && <div className="nodra-modal-backdrop" role="presentation"><section className="nodra-modal" role="dialog" aria-modal="true" aria-labelledby="sketch-cancel-title"><h2 id="sketch-cancel-title">Cancelar croquis</h2><p>Se perderán los cambios realizados en este croquis. ¿Querés continuar?</p><div className="nodra-modal-actions"><button type="button" autoFocus onClick={() => { pendingNavigationRef.current = undefined; setSketchSession((current) => reduceSketchSession(current, { type: "decline-cancel" })); }}>Seguir editando</button><button type="button" className="nodra-modal-primary" onClick={confirmCancelSketchSession}>Cancelar croquis</button></div></section></div>}
         {pendingSketchAcceptance && <div className="nodra-modal-backdrop" role="presentation"><form className="nodra-modal" role="dialog" aria-modal="true" aria-labelledby="sketch-accept-title" onSubmit={(event) => { event.preventDefault(); confirmSketchAcceptance(); }}><h2 id="sketch-accept-title">Guardar croquis</h2><p>El croquis se convertirá en una pieza persistida. Podés ajustar su nombre y definir el material después.</p><label>Nombre de la pieza<input autoFocus required aria-label="Nombre de la pieza" value={newSketchName} onChange={(event) => setNewSketchName(event.target.value)} /></label><div className="nodra-modal-actions"><button type="button" onClick={() => setPendingSketchAcceptance(false)}>Seguir editando</button><button type="submit" className="nodra-modal-primary">Guardar</button></div></form></div>}
         {pendingShapeOperation && <div className="nodra-modal-backdrop" role="presentation"><section className="nodra-modal" role="dialog" aria-modal="true" aria-labelledby="shape-operation-confirmation-title"><h2 id="shape-operation-confirmation-title">Confirmar operación</h2><p>Esta operación eliminará {pendingShapeOperation.invalidDimensionCount} cotas porque sus referencias dejarán de existir. ¿Continuar?</p><div className="nodra-modal-actions"><button type="button" onClick={() => setPendingShapeOperation(undefined)}>Cancelar</button><button type="button" className="nodra-modal-primary" onClick={confirmPendingShapeOperation}>Continuar</button></div></section></div>}
