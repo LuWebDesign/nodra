@@ -16,7 +16,8 @@ describe("project dashboard", () => {
     const project = { ...base, pages: [{ ...base.pages[0]!, elements: [sketch] }, { ...base.pages[0]!, id: pageId("page-2"), name: "Página 2", elements: [] }], pieces: [{ ...base.pieces[0]!, state: "underdefined" as const, sketches: [{ pageId: pageId("page-1"), sketchId: sketch.id }] }] };
 
     expect(projectDetail({ metadata: { id: "detail", name: "Mesa", updatedAt: 10 }, project })).toEqual({
-      id: "detail", name: "Mesa",
+      id: "detail", name: "Mesa", updatedAt: 10, revision: 0, units: "mm", status: "Subdefinida", materials: [],
+      metrics: { pieceCount: 1, pageCount: 2, sketchCount: 1, elementCount: 1 },
       pieces: [{ id: base.pieces[0]!.id, name: "Pieza 1", pageId: "page-1", material: undefined, thicknessMm: undefined, state: "Subdefinida", sketches: [{ pageId: "page-1", sketchId: "sketch-1", label: "Croquis 1 · Página 1" }] }],
       pages: [{ id: "page-1", label: "Página 1", sketchCount: 1, pieces: [{ id: base.pieces[0]!.id, name: "Pieza 1", pageId: "page-1", material: undefined, thicknessMm: undefined, state: "Subdefinida", sketches: [{ pageId: "page-1", sketchId: "sketch-1", label: "Croquis 1 · Página 1" }] }] }, { id: "page-2", label: "Página 2", sketchCount: 0, pieces: [] }],
       assemblies: [],

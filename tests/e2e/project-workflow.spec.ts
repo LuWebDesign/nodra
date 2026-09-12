@@ -33,7 +33,7 @@ test("opens the editor immediately after creating a piece from project detail", 
   await page.getByLabel("Nombre del proyecto").fill("Proyecto con pieza nueva");
   await page.getByRole("button", { name: "Crear proyecto" }).click();
 
-  await page.getByRole("button", { name: "+ Nueva pieza" }).click();
+  await page.getByRole("region", { name: "Piezas" }).getByRole("button", { name: "+ Nueva pieza" }).click();
   const dialog = page.getByRole("dialog", { name: "Nueva pieza" });
   await expect(dialog).toBeVisible();
   await dialog.getByLabel("Nombre de la pieza").fill("Pieza inmediata");
@@ -64,7 +64,7 @@ test("persists deleted geometry after reloading a project", async ({ page }) => 
   await page.getByRole("button", { name: "+ Nuevo proyecto" }).click();
   await page.getByLabel("Nombre del proyecto").fill("Proyecto persistencia");
   await page.getByRole("button", { name: "Crear proyecto" }).click();
-  await page.getByRole("button", { name: "+ Nueva pieza" }).click();
+  await page.getByRole("region", { name: "Piezas" }).getByRole("button", { name: "+ Nueva pieza" }).click();
   const dialog = page.getByRole("dialog", { name: "Nueva pieza" });
   await dialog.getByLabel("Nombre de la pieza").fill("Pieza persistente");
   await dialog.getByRole("button", { name: "Crear pieza" }).click();

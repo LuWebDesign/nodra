@@ -9,7 +9,7 @@ test("prepares an isolated editor seed", async ({ page }) => {
   await page.getByLabel("Nombre del proyecto").fill("Editor E2E");
   await page.getByRole("button", { name: "Crear proyecto" }).click();
   await expect(page.locator(".project-detail")).toBeVisible();
-  await page.getByRole("button", { name: "+ Nueva pieza" }).click();
+  await page.getByRole("region", { name: "Piezas" }).getByRole("button", { name: "+ Nueva pieza" }).click();
   const pieceDialog = page.getByRole("dialog", { name: "Nueva pieza" });
   await pieceDialog.getByLabel("Nombre de la pieza").fill("Pieza E2E");
   await pieceDialog.getByRole("button", { name: "Crear pieza" }).click();

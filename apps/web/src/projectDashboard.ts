@@ -48,7 +48,18 @@ export interface ProjectDetailPiece {
     export interface ProjectDetail {
   readonly id: string;
   readonly name: string;
-  readonly pieces: readonly { readonly id: string; readonly name: string; readonly pageId: string; readonly material: string | undefined; readonly thicknessMm: number | undefined; readonly state: string; readonly sketches: readonly { readonly pageId: string; readonly sketchId: string; readonly label: string }[] }[];
+  readonly updatedAt: number;
+  readonly revision: number;
+  readonly units: "mm";
+  readonly status: string;
+  readonly materials: readonly string[];
+  readonly metrics: {
+    readonly pieceCount: number;
+    readonly pageCount: number;
+    readonly sketchCount: number;
+    readonly elementCount: number;
+  };
+  readonly pieces: readonly ProjectDetailPiece[];
   readonly pages: readonly { readonly id: string; readonly label: string; readonly sketchCount: number; readonly pieces: readonly ProjectDetailPiece[] }[];
   readonly assemblies: readonly [];
 }
@@ -82,9 +93,22 @@ export const selectPiecePage = (project: ProjectSnapshot, piece: PieceSnapshot):
 
 export const projectDetail = ({ metadata, project }: DashboardProjectSource): ProjectDetail => {
   const pageNumbers = new Map(project.pages.map((page, index) => [page.id, index + 1]));
+  const pieceStates = new Set(project.pieces.map((piece) => pieceStateLabels[piece.state]));
+  const sketches = new Set(project.pages.flatMap((page) => page.elements.flatMap((element) => element.type === "sketch" ? [`${page.id}:${element.id}`] : [])));
   return {
     id: metadata.id,
     name: projectDisplayName(metadata),
+    updatedAt: metadata.updatedAt,
+    revision: project.revision,
+    units: project.units,
+    status: project.pieces.length === 0 ? "Sin piezas" : pieceStates.size === 1 ? [...pieceStates][0]! : "Estados mixtos",
+    materials: [...new Set(project.pieces.flatMap((piece) => piece.material ? [piece.material] : []))],
+    metrics: {
+      pieceCount: project.pieces.length,
+      pageCount: project.pages.length,
+      sketchCount: sketches.size,
+      elementCount: project.pages.reduce((count, page) => count + page.elements.length, 0),
+    },
     pieces: project.pieces.map((piece) => ({
       id: piece.id,
       name: piece.name,
