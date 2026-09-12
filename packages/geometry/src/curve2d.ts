@@ -12,6 +12,14 @@ export type ArcDirection = "clockwise" | "counterclockwise";
 export interface ArcCurve2D { readonly type: "arc"; readonly center: PointMm; readonly radius: number; readonly startAngle: number; readonly endAngle: number; readonly direction: ArcDirection; readonly fullTurn?: boolean }
 export type Curve2D = LineCurve2D | CubicBezierCurve2D | CircleCurve2D | ArcCurve2D;
 export interface CurveFragment { readonly curve: Curve2D; readonly sourceInterval: { readonly t0: number; readonly t1: number } }
+/** A native parametric piece derived from one sourced curve. Identity is carried by `source`, never by array position. */
+export interface CurvePiece2D<TCurve extends Curve2D = Curve2D> {
+  readonly curve: TCurve;
+  readonly sourceInterval: { readonly t0: number; readonly t1: number };
+  readonly orientation: "forward" | "reverse";
+  readonly source: import("./curve2d-adapters.js").Curve2DSource;
+  readonly endpointIdentity?: { readonly startNodeId: string; readonly endNodeId: string };
+}
 export interface CurveBounds { readonly x: number; readonly y: number; readonly width: number; readonly height: number }
 
 const TAU = Math.PI * 2;

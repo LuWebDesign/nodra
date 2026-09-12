@@ -1,5 +1,5 @@
 import type { ArcElement, CircleElement, Element, ElementId, EllipseElement, LineElement, PathElement, PointMm, RectangleElement, SketchElement, SplineElement } from "@nodra/domain";
-import type { ArcCurve2D, CircleCurve2D, CubicBezierCurve2D, Curve2D, LineCurve2D } from "./curve2d.js";
+import { pointAt, type ArcCurve2D, type CircleCurve2D, type CubicBezierCurve2D, type Curve2D, type CurvePiece2D, type LineCurve2D } from "./curve2d.js";
 
 export type Curve2DSource =
   | { readonly kind: "line-element"; readonly elementId: ElementId }
@@ -16,6 +16,26 @@ export interface SourcedCurve2D<TCurve extends Curve2D = Curve2D> {
   readonly source: Curve2DSource;
   /** Transient source-array position; never use as persistent identity. */
   readonly sourceIndex: number;
+}
+
+/** Derives one deterministic, full-domain native piece per sourced adapter. */
+export function deriveCurvePieces(sourcedCurves: readonly SourcedCurve2D[]): readonly CurvePiece2D[] {
+  return sourcedCurves.map((sourced) => {
+    if (!Number.isInteger(sourced.sourceIndex) || sourced.sourceIndex < 0) throw new Error("source index must be a non-negative integer");
+    // Evaluate the native curve so malformed or unsupported geometry cannot become an authoritative piece.
+    pointAt(sourced.curve, 0); pointAt(sourced.curve, 1);
+    const source = sourced.source;
+    const endpointIdentity = "startNodeId" in source && "endNodeId" in source
+      ? { startNodeId: source.startNodeId, endNodeId: source.endNodeId }
+      : undefined;
+    return {
+      curve: sourced.curve,
+      sourceInterval: { t0: 0, t1: 1 },
+      orientation: "forward" as const,
+      source,
+      ...(endpointIdentity ? { endpointIdentity } : {}),
+    };
+  });
 }
 
 function finitePoint(point: PointMm, label: string): PointMm {
