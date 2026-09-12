@@ -1,6 +1,6 @@
 import type { CircleElement, DocumentSnapshot, ElementId, PointMm, SketchElement } from "@nodra/domain";
 import { solveConstraintComponents, type ConstraintDiagnostic } from "@nodra/constraints";
-import { collectMixedIntersections, deriveCurvePieces, elementToCurves, sketchProfileResult, solveCircleConstraints, type CurvePiece2D, type MixedIntersectionPair } from "@nodra/geometry";
+import { buildCurveTopology, collectMixedIntersections, deriveCurvePieces, elementToCurves, sketchProfileResult, solveCircleConstraints, type CurvePiece2D, type CurveTopologyGraph, type MixedIntersectionPair } from "@nodra/geometry";
 import { validateDocument } from "@nodra/validation";
 
 /**
@@ -48,10 +48,11 @@ export type SketchMixedTopologyDiagnosticCode = "unsupported" | "overlap" | "mal
       readonly secondElementId?: ElementId;
     }
 
-    /** Derived-only native curve pieces and pair interactions; never persisted. */
+    /** Derived-only native curve pieces, interactions, and exact topology graph; never persisted. */
     export interface SketchMixedTopologyResult {
       readonly pieces: readonly CurvePiece2D[];
       readonly intersections: readonly MixedIntersectionPair[];
+      readonly graph: CurveTopologyGraph;
       readonly diagnostics: readonly SketchMixedTopologyDiagnostic[];
     }
 
@@ -120,7 +121,9 @@ const sourceElementId = (piece: CurvePiece2D): ElementId => piece.source.element
         try { pieces.push(...deriveCurvePieces([curve])); }
         catch (error) { malformed.push({ code: "malformed", message: error instanceof Error ? error.message : "Malformed native curve metadata", severity: "warning", firstElementId: curve.source.elementId }); }
       });
-      const intersections = collectMixedIntersections(pieces).pairs;
+      const intersectionCollection = collectMixedIntersections(pieces);
+      const intersections = intersectionCollection.pairs;
+      const graph = buildCurveTopology(pieces, intersectionCollection);
       const diagnostics = [...malformed, ...intersections.flatMap((pair) => {
         const pairDiagnostics = pair.diagnostics.flatMap((diagnostic) => {
           const code = diagnostic.code === "unsupported-pair" ? "unsupported" : diagnostic.code === "malformed-piece" ? "malformed" : "overlap";
@@ -129,7 +132,7 @@ const sourceElementId = (piece: CurvePiece2D): ElementId => piece.source.element
         const ambiguous = pair.points.some((point, index) => pair.points.slice(index + 1).some((other) => Math.hypot(point.point.x - other.point.x, point.point.y - other.point.y) <= 1e-9));
         return ambiguous ? [...pairDiagnostics, mixedDiagnostic(pair, "ambiguous", "Multiple intersection results resolve to the same geometric point; topology is ambiguous.", "warning")] : pairDiagnostics;
       })].sort((first, second) => byStableText(`${first.code}:${first.firstElementId ?? ""}:${first.secondElementId ?? ""}:${first.message}`, `${second.code}:${second.firstElementId ?? ""}:${second.secondElementId ?? ""}:${second.message}`));
-      return { pieces, intersections, diagnostics };
+      return { pieces, intersections, graph, diagnostics };
     };
 
     /** Recomputes a validated immutable sketch document without changing its revision. */
@@ -147,7 +150,7 @@ export function recomputeSketchKernel(input: unknown): SketchKernelRecomputeResu
       constraintDiagnostics: [],
           circleConstraintDiagnostics: [],
       topologyDiagnostics: [{ code: "invalid-input", message: checked.error }],
-          derivedMixedTopology: { pieces: [], intersections: [], diagnostics: [] },
+          derivedMixedTopology: { pieces: [], intersections: [], graph: buildCurveTopology([]), diagnostics: [] },
       profileReady: false,
       contours: [],
     };
