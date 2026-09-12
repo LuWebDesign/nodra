@@ -1,6 +1,6 @@
 import type { CircleElement, DocumentSnapshot, ElementId, PointMm, SketchElement } from "@nodra/domain";
 import { solveConstraintComponents, type ConstraintDiagnostic } from "@nodra/constraints";
-import { sketchProfileResult, solveCircleConstraints } from "@nodra/geometry";
+import { collectMixedIntersections, deriveCurvePieces, elementToCurves, sketchProfileResult, solveCircleConstraints, type CurvePiece2D, type MixedIntersectionPair } from "@nodra/geometry";
 import { validateDocument } from "@nodra/validation";
 
 /**
@@ -39,7 +39,23 @@ export interface CircleConstraintDiagnostic {
   readonly message: string;
 }
 
-export interface SketchKernelRecomputeResult {
+export type SketchMixedTopologyDiagnosticCode = "unsupported" | "overlap" | "malformed" | "ambiguous";
+    export interface SketchMixedTopologyDiagnostic {
+      readonly code: SketchMixedTopologyDiagnosticCode;
+      readonly message: string;
+      readonly severity: "info" | "warning";
+      readonly firstElementId?: ElementId;
+      readonly secondElementId?: ElementId;
+    }
+
+    /** Derived-only native curve pieces and pair interactions; never persisted. */
+    export interface SketchMixedTopologyResult {
+      readonly pieces: readonly CurvePiece2D[];
+      readonly intersections: readonly MixedIntersectionPair[];
+      readonly diagnostics: readonly SketchMixedTopologyDiagnostic[];
+    }
+
+    export interface SketchKernelRecomputeResult {
   readonly document: DocumentSnapshot;
   readonly changed: boolean;
   readonly committed: boolean;
@@ -49,6 +65,7 @@ export interface SketchKernelRecomputeResult {
   readonly constraintDiagnostics: readonly ConstraintDiagnostic[];
   readonly circleConstraintDiagnostics: readonly CircleConstraintDiagnostic[];
   readonly topologyDiagnostics: readonly SketchTopologyDiagnostic[];
+      readonly derivedMixedTopology: SketchMixedTopologyResult;
   readonly profileReady: boolean;
   readonly contours: readonly (readonly PointMm[])[];
 }
@@ -88,7 +105,34 @@ const topologyForSketch = (sketch: SketchElement): {
   return { diagnostics, contours, valid: !invalid, profileReady: profile.status === "valid-closed" };
 };
 
-/** Recomputes a validated immutable sketch document without changing its revision. */
+const sourceElementId = (piece: CurvePiece2D): ElementId => piece.source.elementId;
+    const mixedDiagnostic = (pair: MixedIntersectionPair, code: SketchMixedTopologyDiagnosticCode, message: string, severity: "info" | "warning"): SketchMixedTopologyDiagnostic => ({ code, message, severity, firstElementId: sourceElementId(pair.firstPiece), secondElementId: sourceElementId(pair.secondPiece) });
+
+    /** Derives native mixed interactions after validation, without changing document state. */
+    const deriveMixedTopology = (document: DocumentSnapshot): SketchMixedTopologyResult => {
+      const malformed: SketchMixedTopologyDiagnostic[] = [];
+      const sourced = document.elements.slice().sort((first, second) => byStableText(first.id, second.id)).flatMap((element) => {
+        try { return elementToCurves(element); }
+        catch (error) { malformed.push({ code: "malformed", message: error instanceof Error ? error.message : "Malformed element geometry", severity: "warning", firstElementId: element.id }); return []; }
+      });
+      const pieces: CurvePiece2D[] = [];
+      sourced.forEach((curve) => {
+        try { pieces.push(...deriveCurvePieces([curve])); }
+        catch (error) { malformed.push({ code: "malformed", message: error instanceof Error ? error.message : "Malformed native curve metadata", severity: "warning", firstElementId: curve.source.elementId }); }
+      });
+      const intersections = collectMixedIntersections(pieces).pairs;
+      const diagnostics = [...malformed, ...intersections.flatMap((pair) => {
+        const pairDiagnostics = pair.diagnostics.flatMap((diagnostic) => {
+          const code = diagnostic.code === "unsupported-pair" ? "unsupported" : diagnostic.code === "malformed-piece" ? "malformed" : "overlap";
+          return [mixedDiagnostic(pair, code, diagnostic.message, diagnostic.severity)];
+        });
+        const ambiguous = pair.points.some((point, index) => pair.points.slice(index + 1).some((other) => Math.hypot(point.point.x - other.point.x, point.point.y - other.point.y) <= 1e-9));
+        return ambiguous ? [...pairDiagnostics, mixedDiagnostic(pair, "ambiguous", "Multiple intersection results resolve to the same geometric point; topology is ambiguous.", "warning")] : pairDiagnostics;
+      })].sort((first, second) => byStableText(`${first.code}:${first.firstElementId ?? ""}:${first.secondElementId ?? ""}:${first.message}`, `${second.code}:${second.firstElementId ?? ""}:${second.secondElementId ?? ""}:${second.message}`));
+      return { pieces, intersections, diagnostics };
+    };
+
+    /** Recomputes a validated immutable sketch document without changing its revision. */
 export function recomputeSketchKernel(input: unknown): SketchKernelRecomputeResult {
   const original = input as DocumentSnapshot;
   const checked = validateDocument(input);
@@ -103,6 +147,7 @@ export function recomputeSketchKernel(input: unknown): SketchKernelRecomputeResu
       constraintDiagnostics: [],
           circleConstraintDiagnostics: [],
       topologyDiagnostics: [{ code: "invalid-input", message: checked.error }],
+          derivedMixedTopology: { pieces: [], intersections: [], diagnostics: [] },
       profileReady: false,
       contours: [],
     };
@@ -121,7 +166,8 @@ export function recomputeSketchKernel(input: unknown): SketchKernelRecomputeResu
           const circle = circleResults.find((candidate) => candidate.circle.id === element.id)?.result.circle;
           return circle ?? element;
         }) };
-  const sketches = circlesDocument.elements.filter((element): element is SketchElement => element.type === "sketch").sort((first, second) => byStableText(first.id, second.id));
+  const derivedMixedTopology = deriveMixedTopology(circlesDocument);
+      const sketches = circlesDocument.elements.filter((element): element is SketchElement => element.type === "sketch").sort((first, second) => byStableText(first.id, second.id));
   const topology = sketches.map(topologyForSketch);
   const topologyDiagnostics = topology.flatMap((value) => value.diagnostics).sort((first, second) => byStableText(`${first.code}:${first.sketchId ?? ""}`, `${second.code}:${second.sketchId ?? ""}`));
   const invalidTopology = topology.some((value) => !value.valid);
@@ -138,6 +184,7 @@ export function recomputeSketchKernel(input: unknown): SketchKernelRecomputeResu
     constraintDiagnostics: [...solved.diagnostics].sort((first, second) => byStableText(`${first.code}:${first.constraintIds.join(",")}`, `${second.code}:${second.constraintIds.join(",")}`)),
         circleConstraintDiagnostics,
     topologyDiagnostics,
+        derivedMixedTopology,
     profileReady: !failed && topology.length > 0 && topology.every((value) => value.valid && value.profileReady),
     contours,
   };

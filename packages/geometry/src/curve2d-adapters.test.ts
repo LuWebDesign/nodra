@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { elementId, layerId, type ArcElement, type CircleElement, type EllipseElement, type PathElement, type RectangleElement, type SketchElement, type SplineElement } from "@nodra/domain";
-import { arcElementToCurve, circleElementToCurve, elementToContour, elementToCurves, ellipseElementToCurve, lineElementToCurve, pathSegmentToCurve, rectangleElementToCurves, rotatedLineEndpoints, sketchEdgeToCurve, splineSpanToCurve } from "./index.js";
+import { arcElementToCurve, circleElementToCurve, deriveCurvePieces, elementToContour, elementToCurves, ellipseElementToCurve, lineElementToCurve, pathSegmentToCurve, rectangleElementToCurves, rotatedLineEndpoints, sketchEdgeToCurve, splineSpanToCurve } from "./index.js";
 
 const style = { stroke: "#000", strokeWidth: 1 };
 const layer = layerId("layer");
@@ -150,7 +150,28 @@ describe("Curve2D source adapters", () => {
     expect(() => rectangleElementToCurves({ ...rectangle, size: { width: 0, height: 4 } })).toThrow("finite and positive");
   });
 
-  it("keeps unsupported elements empty and never mutates source entities", () => {
+  it("derives deterministic full-domain native pieces with stable identity and orientation", () => {
+        const linePiece = deriveCurvePieces([lineElementToCurve(line())])[0]!;
+        const circleElement: CircleElement = { type: "circle", id: elementId("piece-circle"), layerId: layer, center: { x: 0, y: 0 }, radius: 4, style };
+        const arcElement: ArcElement = { type: "arc", id: elementId("piece-arc"), layerId: layer, center: { x: 0, y: 0 }, radius: 4, startAngle: 0, endAngle: Math.PI / 2, direction: "clockwise", style };
+        const circlePiece = deriveCurvePieces([circleElementToCurve(circleElement)])[0]!;
+        const arcPiece = deriveCurvePieces([arcElementToCurve(arcElement)])[0]!;
+        const cubicPiece = deriveCurvePieces([pathSegmentToCurve(path, "bc")])[0]!;
+        expect(linePiece).toMatchObject({ sourceInterval: { t0: 0, t1: 1 }, orientation: "forward" });
+        expect(circlePiece).toMatchObject({ curve: { type: "circle" }, source: { elementId: circleElement.id } });
+        expect(arcPiece).toMatchObject({ curve: { type: "arc" }, source: { elementId: arcElement.id } });
+        expect(cubicPiece).toMatchObject({ curve: { type: "cubicBezier" }, endpointIdentity: { startNodeId: "b", endNodeId: "c" } });
+        expect(deriveCurvePieces([pathSegmentToCurve(path, "bc")])).toEqual([cubicPiece]);
+      });
+
+      it("rejects invalid sourced piece metadata and keeps unsupported adapters conservative", () => {
+        const sourced = lineElementToCurve(line());
+        expect(() => deriveCurvePieces([{ ...sourced, sourceIndex: -1 }])).toThrow("source index");
+        const ellipse: EllipseElement = { type: "ellipse", id: elementId("piece-oval"), layerId: layer, position: { x: 2, y: 4 }, size: { width: 6, height: 5 }, rotation: 1, style };
+        expect(elementToCurves(ellipse)).toEqual([]);
+      });
+
+      it("keeps unsupported elements empty and never mutates source entities", () => {
     const rounded: RectangleElement = { type: "rectangle", id: elementId("rounded"), layerId: layer, position: { x: 0, y: 0 }, size: { width: 5, height: 4 }, cornerRadius: 1, rotation: 0, style };
     expect(elementToCurves(rounded)).toEqual([]);
     const before = JSON.stringify([line(), sketch, path, spline, rounded]);

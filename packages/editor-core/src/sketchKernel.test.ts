@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createDocument, elementId, layerId, type CircleElement, type SketchConstraint, type SketchElement } from "@nodra/domain";
+import { createDocument, elementId, layerId, type CircleElement, type Element, type SketchConstraint, type SketchElement } from "@nodra/domain";
 import { validateDocument } from "@nodra/validation";
 import { recomputeSketchKernel } from "./sketchKernel.js";
 
@@ -11,7 +11,7 @@ const square = (constraints?: readonly SketchConstraint[]): SketchElement => ({
   edges: [{ id: "ab", startNodeId: "a", endNodeId: "b" }, { id: "bc", startNodeId: "b", endNodeId: "c" }, { id: "cd", startNodeId: "c", endNodeId: "d" }, { id: "da", startNodeId: "d", endNodeId: "a" }],
   ...(constraints ? { constraints } : {}), style,
 });
-const documentFor = (...elements: readonly (SketchElement | CircleElement)[]): ReturnType<typeof createDocument> => ({ ...createDocument("doc", [layer]), elements });
+const documentFor = (...elements: readonly Element[]): ReturnType<typeof createDocument> => ({ ...createDocument("doc", [layer]), elements });
     const circle = (circleConstraints?: CircleElement["circleConstraints"]): CircleElement => ({ type: "circle", id: elementId("circle"), layerId: layer.id, center: { x: 1, y: 2 }, radius: 3, style, ...(circleConstraints ? { circleConstraints } : {}) });
 
 const fixed = (id: string, nodeId: string): SketchConstraint => ({ id, kind: "fixed", references: [{ elementId: elementId("square"), nodeId }] });
@@ -29,7 +29,31 @@ describe("sketch kernel", () => {
     expect(JSON.stringify(input)).toBe(before);
   });
 
-  it("recomputes constrained native circles without treating them as sketch topology", () => {
+  it("derives deterministic mixed line/circle and circle/circle intersections without mutating elements", () => {
+            const first = { ...circle(), id: elementId("circle-a"), center: { x: 0, y: 0 }, radius: 5 };
+            const second = { ...circle(), id: elementId("circle-b"), center: { x: 8, y: 0 }, radius: 5 };
+            const line = { type: "line" as const, id: elementId("mixed-line"), layerId: layer.id, start: { x: -10, y: 0 }, end: { x: 10, y: 0 }, rotation: 0, style };
+            const input = documentFor(first, second, line);
+            const before = JSON.stringify(input);
+            const result = recomputeSketchKernel(input);
+            expect(result.derivedMixedTopology.pieces).toHaveLength(3);
+            expect(result.derivedMixedTopology.intersections).toHaveLength(3);
+            expect(result.derivedMixedTopology.intersections.some((pair) => pair.kind === "points")).toBe(true);
+            expect(recomputeSketchKernel(input).derivedMixedTopology).toEqual(result.derivedMixedTopology);
+            expect(JSON.stringify(input)).toBe(before);
+          });
+
+          it("reports native circle overlap as derived metadata and never persists topology", () => {
+            const first = { ...circle(), id: elementId("overlap-a"), center: { x: 0, y: 0 }, radius: 5 };
+            const second = { ...circle(), id: elementId("overlap-b"), center: { x: 0, y: 0 }, radius: 5 };
+            const input = documentFor(first, second);
+            const result = recomputeSketchKernel(input);
+            expect(result.derivedMixedTopology.intersections[0]?.kind).toBe("overlap");
+            expect(result.derivedMixedTopology.diagnostics.map((diagnostic) => diagnostic.code)).toContain("overlap");
+            expect(result.document).toEqual(input);
+          });
+
+      it("recomputes constrained native circles without treating them as sketch topology", () => {
         const input = documentFor(circle([{ id: "cx", kind: "center-horizontal", value: 10 }, { id: "diameter", kind: "diameter", value: 8 }]));
         const result = recomputeSketchKernel(input);
         expect(result.committed).toBe(true);

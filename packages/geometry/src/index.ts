@@ -4,6 +4,11 @@ import { arcElementToCurve, lineElementToCurve } from "./curve2d-adapters.js";
 import { closestParameter, curveBounds, pointAt } from "./curve2d.js";
 import { intersectCurves } from "./intersection-engine.js";
 
+export { collectMixedIntersections } from "./mixed-intersections.js";
+export type { CurvePieceProvenance, MixedIntersectionCollection, MixedIntersectionDiagnostic, MixedIntersectionPair, MixedIntersectionPoint, MixedIntersectionSpan } from "./mixed-intersections.js";
+export { buildCurveTopology, deriveCurveTopology } from "./curve-topology.js";
+export type { CurveTopologyComponent, CurveTopologyDiagnostic, CurveTopologyFragment, CurveTopologyGraph, CurveTopologyNode, CurveTopologyOptions, CurveTopologyParameterReference, CurveTopologyPiece } from "./curve-topology.js";
+
 import { sketchProfileResult } from "./profile.js";
 import type { CircleElement, ConnectableNodeAddress, ContourElement, DimensionElement, Element, ElementId, EllipseElement, GlyphElement, HandleOffset, LineElement, PathCubicSegment, PathElement, PointMm, RectangleElement, SizeMm, SketchConstraint, SketchElement, SketchPointReference, SplineElement, SplineNode } from "@nodra/domain";
 
