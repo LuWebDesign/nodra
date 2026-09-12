@@ -2,6 +2,9 @@ import {
   type DocumentSnapshot,
   type Element,
   type ElementId,
+  type FeatureId,
+  type ParametricFeature,
+  type ContourElement,
   type DimensionElement,
   type CircleConstraint,
   type ArcElement,
@@ -149,10 +152,75 @@ const enforcePositionalCoincidences = (document: DocumentSnapshot, proposed: rea
  * Remaining sketch-affecting bypasses: resize, rotate, flip, duplicate, and
  * generic transforms are not part of this bounded closure slice yet.
  */
+type IntersectSource = Extract<Element, { readonly type: "rectangle" | "circle" | "ellipse" | "contour" }>;
+const stableJson = (value: unknown): string => JSON.stringify(value, (_, candidate: unknown) => candidate && typeof candidate === "object" && !Array.isArray(candidate) ? Object.fromEntries(Object.entries(candidate).sort(([first], [second]) => first.localeCompare(second))) : candidate);
+const isIntersectSource = (element: Element | undefined): element is IntersectSource => element?.type === "rectangle" || element?.type === "circle" || element?.type === "ellipse" || element?.type === "contour";
+const intersectOutput = (feature: ParametricFeature, sources: readonly [IntersectSource, IntersectSource]): ContourElement => {
+  const contours = shapeResultContours("intersection", sources);
+  if (contours.length === 0) throw new Error("Intersect produced an empty result");
+  const points = contours.flatMap((contour) => contour.points);
+  const xs = points.map((point) => point.x); const ys = points.map((point) => point.y);
+  const first = sources[0];
+  return {
+    type: "contour", id: feature.outputs[0]!.elementId, layerId: first.layerId,
+    position: { x: Math.min(...xs), y: Math.min(...ys) },
+    size: { width: Math.max(...xs) - Math.min(...xs), height: Math.max(...ys) - Math.min(...ys) },
+    contours, fillRule: "evenodd", rotation: 0, flipX: false, flipY: false, style: first.style,
+    ...(first.operation ? { operation: first.operation } : {}),
+    ...(first.pieceId ? { pieceId: first.pieceId } : {}),
+  };
+};
+type IntersectRebuildResult = { readonly success: true; readonly document: DocumentSnapshot } | { readonly success: false; readonly error: string };
+const rebuildIntersectFeatures = (document: DocumentSnapshot, selected?: ReadonlySet<FeatureId>): IntersectRebuildResult => {
+  if (!document.featureTree) return { success: true, document };
+  const elements = [...document.elements]; let changed = false;
+  const features: ParametricFeature[] = [];
+  for (const feature of document.featureTree.features) {
+    if (feature.operation !== "intersect" || selected && !selected.has(feature.id)) { features.push(feature); continue; }
+    if (feature.sources.length !== 2) return { success: false, error: `Intersect feature ${feature.id} requires exactly two sources` };
+    if (feature.outputs.length !== 1) return { success: false, error: `Intersect feature ${feature.id} requires exactly one output` };
+    const sources = feature.sources.map((reference) => elements.find((element) => element.id === reference.elementId));
+    if (sources.some((source) => source === undefined)) return { success: false, error: `Intersect feature ${feature.id} has a missing source` };
+    if (!isIntersectSource(sources[0]) || !isIntersectSource(sources[1])) return { success: false, error: `Intersect feature ${feature.id} has an unsupported source` };
+    const outputIndex = elements.findIndex((element) => element.id === feature.outputs[0]!.elementId);
+    if (outputIndex < 0) return { success: false, error: `Intersect feature ${feature.id} has a missing output` };
+    try {
+      const output = intersectOutput(feature, [sources[0], sources[1]]);
+      const rebuiltFeature: ParametricFeature = { id: feature.id, operation: "intersect", sources: feature.sources, outputs: feature.outputs, status: "up-to-date" };
+      if (stableJson(elements[outputIndex]) !== stableJson(output)) { elements[outputIndex] = output; changed = true; }
+      if (stableJson(feature) !== stableJson(rebuiltFeature)) changed = true;
+      features.push(rebuiltFeature);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Intersect rebuild failed";
+      const failed: ParametricFeature = { ...feature, status: "error", error: message };
+      if (stableJson(feature) !== stableJson(failed)) changed = true;
+      features.push(failed);
+    }
+  }
+  return { success: true, document: changed ? { ...document, elements, featureTree: { ...document.featureTree, features } } : document };
+};
+const rebuildAffectedIntersectFeatures = (document: DocumentSnapshot, elements: readonly Element[], candidateDocument: DocumentSnapshot = document): IntersectRebuildResult => {
+  const candidate = { ...candidateDocument, elements };
+  if (!document.featureTree) return { success: true, document: candidate };
+  const before = new Map(document.elements.map((element) => [element.id, element]));
+  const after = new Map(elements.map((element) => [element.id, element]));
+  const affected = new Set(document.featureTree.features.filter((feature) => feature.operation === "intersect" && feature.sources.some((source) => stableJson(before.get(source.elementId)) !== stableJson(after.get(source.elementId)))).map((feature) => feature.id));
+  return affected.size ? rebuildIntersectFeatures(candidate, affected) : { success: true, document: candidate };
+};
+const changedIntersectOutput = (document: DocumentSnapshot, elements: readonly Element[]): FeatureId | undefined => {
+  const after = new Map(elements.map((element) => [element.id, element]));
+  return document.featureTree?.features.find((feature) => feature.operation === "intersect" && feature.outputs.some((output) => stableJson(document.elements.find((element) => element.id === output.elementId)) !== stableJson(after.get(output.elementId))))?.id;
+};
 const replaceElements = (document: DocumentSnapshot, elements: readonly Element[]): CommandResult => {
+  const proposedOutputEdit = changedIntersectOutput(document, elements);
+  if (proposedOutputEdit) return { success: false, error: `Intersect output is derived and cannot be edited directly: ${proposedOutputEdit}` };
   const enforced = enforcePositionalCoincidences(document, elements);
   if (typeof enforced === "string") return { success: false, error: enforced };
-  return result(withElements(withoutDanglingDocumentConstraints(document, enforced), enforced));
+  const enforcedOutputEdit = changedIntersectOutput(document, enforced);
+  if (enforcedOutputEdit) return { success: false, error: `Intersect output is derived and cannot be edited directly: ${enforcedOutputEdit}` };
+  const cleaned = withoutDanglingDocumentConstraints(document, enforced);
+  const rebuilt = rebuildAffectedIntersectFeatures(document, enforced, cleaned);
+  return rebuilt.success ? result(withElements(rebuilt.document, rebuilt.document.elements)) : rebuilt;
 };
 
 const fixedSketchTransformDiagnostics = (document: DocumentSnapshot, proposed: readonly Element[]): readonly CommandDiagnostic[] => {
@@ -702,6 +770,8 @@ export const deleteElement = (id: ElementId): EditorCommand => ({
   apply: (document) => {
     const target = document.elements.find((element) => element.id === id);
     if (!target) return { success: false, error: `Element not found: ${id}` };
+    const referencedFeature = document.featureTree?.features.find((feature) => [...feature.sources, ...feature.outputs].some((reference) => reference.elementId === id));
+    if (referencedFeature) return { success: false, error: `Element is referenced by feature: ${referencedFeature.id}` };
     const elements = document.elements.filter((element) => element.id !== id && !(element.type === "dimension" && element.references.some((reference) => reference.elementId === id)));
     const candidate = removeConnectionsFor(document, new Set([id]));
     // Deletion is not geometry creation, but removing a sketch is still a
@@ -1026,6 +1096,35 @@ const contourToEditableGlyphContour = (contour: { readonly points: readonly Poin
   });
   return { nodes, segments };
 };
+
+export const createIntersectFeature = (id: FeatureId, sourceIds: readonly ElementId[]): EditorCommand => ({
+  name: `feature-intersect-create:${id}`,
+  apply: (document) => {
+    if (document.featureTree?.features.some((feature) => feature.id === id)) return { success: false, error: `Feature already exists: ${id}` };
+    if (sourceIds.length !== 2 || new Set(sourceIds).size !== 2) return { success: false, error: "Intersect requires exactly two unique sources" };
+    const sources = sourceIds.map((sourceId) => document.elements.find((element) => element.id === sourceId));
+    if (!isIntersectSource(sources[0]) || !isIntersectSource(sources[1])) return { success: false, error: "Intersect sources must be rectangles, circles, ellipses, or contours" };
+    const produced = new Set(document.featureTree?.features.flatMap((feature) => feature.outputs.map((output) => output.elementId)) ?? []);
+    if (sourceIds.some((sourceId) => produced.has(sourceId))) return { success: false, error: "Chained feature sources are not supported" };
+    const outputId = elementId(`${id}:output`);
+    if (document.elements.some((element) => element.id === outputId)) return { success: false, error: `Element already exists: ${outputId}` };
+    const feature: ParametricFeature = { id, operation: "intersect", sources: sourceIds.map((sourceId) => ({ elementId: sourceId })), outputs: [{ elementId: outputId }], status: "up-to-date" };
+    let output: ContourElement;
+    try { output = intersectOutput(feature, [sources[0], sources[1]]); }
+    catch (error) { return { success: false, error: error instanceof Error ? error.message : "Intersect creation failed" }; }
+    return result(withElements({ ...document, featureTree: { version: 1, features: [...(document.featureTree?.features ?? []), feature] } }, [...document.elements, output]));
+  },
+});
+
+export const rebuildParametricFeatures = (id?: FeatureId): EditorCommand => ({
+  name: `feature-rebuild:${id ?? "all"}`,
+  apply: (document) => {
+    if (id !== undefined && !document.featureTree?.features.some((feature) => feature.id === id)) return { success: false, error: `Feature not found: ${id}` };
+    const rebuilt = rebuildIntersectFeatures(document, id === undefined ? undefined : new Set([id]));
+    if (!rebuilt.success) return rebuilt;
+    return rebuilt.document === document ? { success: true, document } : result({ ...rebuilt.document, revision: nextRevision(document.revision) });
+  },
+});
 
 export const shapeOperation = (ids: readonly ElementId[], operation: ShapeOperation): EditorCommand => ({
   name: `shape-${operation}:${ids.join(",")}`,
@@ -2548,7 +2647,9 @@ export const solveSketch = (sketchId: ElementId): EditorCommand => ({
 const replaceCircleElements = (document: DocumentSnapshot, elements: readonly Element[]): CommandResult => {
   const recomputed = recomputeSketchKernel({ ...document, elements });
   if (!recomputed.committed) return { success: false, error: recomputed.circleConstraintDiagnostics.length ? "Circle constraints are in conflict" : "Sketch constraints are in conflict", diagnostics: kernelDiagnostics(recomputed) };
-  const checked = result(withElements(recomputed.document, recomputed.document.elements));
+  const rebuilt = rebuildAffectedIntersectFeatures(document, recomputed.document.elements, recomputed.document);
+  if (!rebuilt.success) return rebuilt;
+  const checked = result(withElements(rebuilt.document, rebuilt.document.elements));
   return checked.success ? { ...checked, diagnostics: kernelDiagnostics(recomputed) } : checked;
 };
 

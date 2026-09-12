@@ -552,6 +552,14 @@ describe("canonical millimetre geometry", () => {
     expect(contours).toHaveLength(1);
     expect(contours[0]!.points.length).toBeGreaterThan(4);
   });
+  it("intersects closed polygons without mutating either source", () => {
+    const second = { ...rectangle, id: elementId("intersection-2"), position: { x: 20, y: 20 } };
+    const before = structuredClone([rectangle, second]);
+    const contours = shapeResultContours("intersection", [rectangle, second]);
+    expect(contours).toEqual([{ points: [{ x: 20, y: 20 }, { x: 30, y: 20 }, { x: 30, y: 30 }, { x: 20, y: 30 }, { x: 20, y: 20 }] }]);
+    expect([rectangle, second]).toEqual(before);
+    expect(shapeResultContours("intersection", [rectangle, { ...second, position: { x: 100, y: 100 } }])).toEqual([]);
+  });
   it("uses visually rotated line endpoints for bounds, hits, and stable nodes", () => {
     const line = { type: "line" as const, id: elementId("rotated-line"), layerId: layerId("l"), start: { x: 0, y: 0 }, end: { x: 10, y: 0 }, rotation: Math.PI / 2, style };
     const [start, end] = rotatedLineEndpoints(line);

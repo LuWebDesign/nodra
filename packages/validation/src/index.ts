@@ -45,6 +45,12 @@ const positionalAddress = z.union([
   z.object({ kind: z.literal("named"), name: z.enum(["center", "n", "e", "s", "w", "start", "end"]) }).strict(),
 ]);
 const positionalCoincidence = z.object({ id: nonEmptyId, first: z.object({ elementId: nonEmptyId, node: positionalAddress }).strict(), second: z.object({ elementId: nonEmptyId, node: positionalAddress }).strict() }).strict();
+const featureElementReference = z.object({ elementId: nonEmptyId }).strict();
+const parametricFeature = z.object({ id: nonEmptyId, operation: z.enum(["weld", "subtract", "outline", "intersect"]), sources: z.array(featureElementReference).min(1), outputs: z.array(featureElementReference).min(1), status: z.enum(["up-to-date", "needs-rebuild", "error"]), error: z.string().min(1).optional() }).strict().superRefine((value, ctx) => {
+  if (value.status === "error" && value.error === undefined) ctx.addIssue({ code: "custom", message: "Error features must include an error message", path: ["error"] });
+  if (value.status !== "error" && value.error !== undefined) ctx.addIssue({ code: "custom", message: "Only error features may include an error message", path: ["error"] });
+});
+const parametricFeatureTree = z.object({ version: z.literal(1), features: z.array(parametricFeature) }).strict();
 const nodeReference = z.object({ kind: z.literal("node"), elementId: nonEmptyId, nodeIndex: finite.int().nonnegative(), nodeId: nonEmptyId.optional() }).strict();
 const lineReference = z.object({ kind: z.literal("line"), elementId: nonEmptyId, edgeId: nonEmptyId.optional(), edgeIndex: finite.int().nonnegative().optional() }).strict();
 const legacyNodeReference = z.object({ elementId: nonEmptyId, nodeIndex: finite.int().nonnegative(), nodeId: nonEmptyId.optional() }).strict().transform((reference) => ({ kind: "node" as const, ...reference }));
@@ -140,7 +146,7 @@ const glyph = z.object({ ...common, type: z.literal("glyph"), position: point, s
 });
 export const elementSchema = z.discriminatedUnion("type", [rectangle, circle, arc, ellipse, line, sketch, dimension, contour, path, splineElementSchema, textElement, glyph]);
 export const layerSchema = z.object({ id: nonEmptyId, name: z.string().min(1), visible: z.boolean(), order: finite.int().nonnegative() }).strict();
-const documentFields = { id: nonEmptyId, revision: finite.int().nonnegative(), origin: z.literal("top-left"), units: z.literal("mm"), page: size, layers: z.array(layerSchema), elements: z.array(elementSchema), constraints: z.array(sketchConstraint).optional(), connections: z.array(explicitConnection).default([]), positionalCoincidences: z.array(positionalCoincidence).optional() };
+const documentFields = { id: nonEmptyId, revision: finite.int().nonnegative(), origin: z.literal("top-left"), units: z.literal("mm"), page: size, layers: z.array(layerSchema), elements: z.array(elementSchema), featureTree: parametricFeatureTree.optional(), constraints: z.array(sketchConstraint).optional(), connections: z.array(explicitConnection).default([]), positionalCoincidences: z.array(positionalCoincidence).optional() };
 const transformAnchor = (point: PointMm, center: PointMm, rotation: number, flipX = false, flipY = false): PointMm => {
   const x = (point.x - center.x) * (flipX ? -1 : 1); const y = (point.y - center.y) * (flipY ? -1 : 1);
   return { x: center.x + x * Math.cos(rotation) - y * Math.sin(rotation), y: center.y + x * Math.sin(rotation) + y * Math.cos(rotation) };
@@ -204,6 +210,44 @@ const validateConnections = (elements: readonly z.infer<typeof elementSchema>[],
     }
   });
 };
+const validateFeatureTree = (elements: readonly z.infer<typeof elementSchema>[], tree: z.infer<typeof parametricFeatureTree> | undefined, ctx: z.RefinementCtx, path: readonly (string | number)[]) => {
+  if (!tree) return;
+  const elementIds = new Set(elements.map((element) => element.id));
+  const featureIds = new Set<string>();
+  const producedElementIds = new Set<string>();
+  const allProducedElementIds = new Set(tree.features.flatMap((feature) => feature.outputs.map((output) => output.elementId)));
+  tree.features.forEach((feature, featureIndex) => {
+    if (featureIds.has(feature.id)) ctx.addIssue({ code: "custom", message: "Feature IDs must be unique", path: [...path, "features", featureIndex, "id"] });
+    featureIds.add(feature.id);
+    const sourceIds = new Set<string>();
+    feature.sources.forEach((reference, referenceIndex) => {
+      if (!elementIds.has(reference.elementId)) ctx.addIssue({ code: "custom", message: "Feature source references an unknown element", path: [...path, "features", featureIndex, "sources", referenceIndex, "elementId"] });
+      if (sourceIds.has(reference.elementId)) ctx.addIssue({ code: "custom", message: "Feature source references must be unique", path: [...path, "features", featureIndex, "sources", referenceIndex, "elementId"] });
+      sourceIds.add(reference.elementId);
+    });
+    const outputIds = new Set<string>();
+    feature.outputs.forEach((reference, referenceIndex) => {
+      if (!elementIds.has(reference.elementId)) ctx.addIssue({ code: "custom", message: "Feature output references an unknown element", path: [...path, "features", featureIndex, "outputs", referenceIndex, "elementId"] });
+      if (outputIds.has(reference.elementId)) ctx.addIssue({ code: "custom", message: "Feature output references must be unique", path: [...path, "features", featureIndex, "outputs", referenceIndex, "elementId"] });
+      if (sourceIds.has(reference.elementId)) ctx.addIssue({ code: "custom", message: "Feature sources and outputs must be distinct", path: [...path, "features", featureIndex, "outputs", referenceIndex, "elementId"] });
+      if (producedElementIds.has(reference.elementId)) ctx.addIssue({ code: "custom", message: "Feature outputs may be produced by only one feature", path: [...path, "features", featureIndex, "outputs", referenceIndex, "elementId"] });
+      outputIds.add(reference.elementId);
+      producedElementIds.add(reference.elementId);
+    });
+    if (feature.operation === "intersect") {
+      if (feature.sources.length !== 2) ctx.addIssue({ code: "custom", message: "Intersect features require exactly two sources", path: [...path, "features", featureIndex, "sources"] });
+      feature.sources.forEach((reference, referenceIndex) => {
+        const source = elements.find((element) => element.id === reference.elementId);
+        if (source && source.type !== "rectangle" && source.type !== "circle" && source.type !== "ellipse" && source.type !== "contour") ctx.addIssue({ code: "custom", message: "Intersect sources must be supported closed non-sketch elements", path: [...path, "features", featureIndex, "sources", referenceIndex, "elementId"] });
+        if (allProducedElementIds.has(reference.elementId)) ctx.addIssue({ code: "custom", message: "Intersect sources must not be outputs of another feature", path: [...path, "features", featureIndex, "sources", referenceIndex, "elementId"] });
+      });
+      if (feature.outputs.length !== 1) ctx.addIssue({ code: "custom", message: "Intersect features require exactly one output", path: [...path, "features", featureIndex, "outputs"] });
+      const output = feature.outputs[0] ? elements.find((element) => element.id === feature.outputs[0]!.elementId) : undefined;
+      if (output && output.type !== "contour") ctx.addIssue({ code: "custom", message: "Intersect output must be a contour", path: [...path, "features", featureIndex, "outputs", 0, "elementId"] });
+    }
+  });
+};
+
 export const validateDocumentConstraints = (elements: readonly z.infer<typeof elementSchema>[], constraints: readonly z.infer<typeof sketchConstraint>[], ctx: z.RefinementCtx, path: readonly (string | number)[]) => {
   const sketches = new Map(elements.filter((element): element is Extract<typeof element, { type: "sketch" }> => element.type === "sketch").map((element) => [element.id, element]));
   const ids = new Set<string>();
@@ -302,11 +346,12 @@ const documentSchema = z.object({ schemaVersion: z.literal(CURRENT_SCHEMA_VERSIO
       }
     }
   }
+  validateFeatureTree(value.elements, value.featureTree, ctx, ["featureTree"]);
   validateDocumentConstraints(value.elements, value.constraints ?? [], ctx, ["constraints"]);
   validateConnections(value.elements, value.connections, ctx, ["connections"]);
   validateConnections(value.elements, value.positionalCoincidences ?? [], ctx, ["positionalCoincidences"], true);
 });
-const pageSchema = z.object({ id: nonEmptyId, name: z.string().trim().min(1), page: size, layers: z.array(layerSchema), elements: z.array(elementSchema), constraints: z.array(sketchConstraint).optional(), connections: z.array(explicitConnection).default([]), positionalCoincidences: z.array(positionalCoincidence).optional() }).strict();
+const pageSchema = z.object({ id: nonEmptyId, name: z.string().trim().min(1), page: size, layers: z.array(layerSchema), elements: z.array(elementSchema), featureTree: parametricFeatureTree.optional(), constraints: z.array(sketchConstraint).optional(), connections: z.array(explicitConnection).default([]), positionalCoincidences: z.array(positionalCoincidence).optional() }).strict();
 const projectPreferencesSchema = z.object({ lineGuidesEnabled: z.boolean().default(true), lineGuideAngle: z.union([z.literal(15), z.literal(45)]).default(45).transform(() => 45) }).strict().default({ lineGuidesEnabled: true, lineGuideAngle: 45 });
 const pieceSketchReferenceSchema = z.object({ pageId: nonEmptyId, sketchId: nonEmptyId }).strict();
 const pieceSchema = z.object({ id: nonEmptyId, name: z.string().trim().min(1), material: z.string().trim().min(1).optional(), thicknessMm: finite.gt(0).optional(), process: z.literal("cut"), state: z.enum(["design", "underdefined", "defined", "validated", "ready"]), pageId: nonEmptyId.optional(), sketches: z.array(pieceSketchReferenceSchema) }).strict();
@@ -331,7 +376,7 @@ export const projectSchema = z.object({ schemaVersion: z.literal(CURRENT_SCHEMA_
     page.elements.forEach((element, elementIndex) => {
       if (element.type === "sketch" && !ownedSketches.has(`${page.id}\u0000${element.id}`)) ctx.addIssue({ code: "custom", message: "Sketch elements must belong to a piece", path: ["pages", pageIndex, "elements", elementIndex, "id"] });
     });
-    const checked = documentSchema.safeParse({ schemaVersion: CURRENT_SCHEMA_VERSION, id: value.id, revision: value.revision, origin: value.origin, units: value.units, ...(value.capabilities ? { capabilities: value.capabilities } : {}), page: page.page, layers: page.layers, elements: page.elements, ...(page.constraints ? { constraints: page.constraints } : {}), connections: page.connections, positionalCoincidences: page.positionalCoincidences });
+    const checked = documentSchema.safeParse({ schemaVersion: CURRENT_SCHEMA_VERSION, id: value.id, revision: value.revision, origin: value.origin, units: value.units, ...(value.capabilities ? { capabilities: value.capabilities } : {}), page: page.page, layers: page.layers, elements: page.elements, ...(page.featureTree ? { featureTree: page.featureTree } : {}), ...(page.constraints ? { constraints: page.constraints } : {}), connections: page.connections, positionalCoincidences: page.positionalCoincidences });
     if (!checked.success) checked.error.issues.forEach((issue) => ctx.addIssue({ code: "custom", message: issue.message, path: ["pages", pageIndex, ...issue.path] }));
   });
 });

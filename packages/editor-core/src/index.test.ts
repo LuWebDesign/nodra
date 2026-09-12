@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { createDocument, elementId, layerId, type ArcElement, type DimensionElement, type Element, type EllipseElement, type CircleElement, type LineElement, type GlyphElement, type PathElement, type PointMm, type RectangleElement, type SketchElement, type SplineElement, type TextElement } from "@nodra/domain";
-import { addDocumentConstraint, deleteDocumentConstraint, addSketchConstraint, addSketchSegmentRelation, addToSelection, appendSketchEdge, appendSplineNode, beginGesture, cancelGesture, clearSelection, closePath, closeSplineElement, commitGesture, createEditor, createElement, addPositionalConnection, addPositionalCoincidence, deletePositionalCoincidence, createPathCubicNode, createSketchLine, cutContourSegment, cutLineAtPoint, cutPathSegment, cutSegment, cutSketchEdge, splitPathLineAt, deleteContourNodes, deleteElement, deleteElementNodes, deletePathNodes, deleteSketchConstraint, dispatch, duplicateElements, flipElements, insertContourNode, invalidDimensionIdsForShapeOperation, moveElement, moveElements, movePathNode, movePathHandle, openPath, previewGesture, previewGestureFromBase, redo, reversePath, removeFromSelection, reorderLayer, resizeElement, resizeElementToDimensions, resizeElements, resizeElementsToDimensions, rotateElementsAroundCenter, select, selectForPointerDown, setDimensionDriving, updateCircleConstraint, deleteCircleConstraint, solveCircle, setLayerVisibility, setPathJoin, shapeOperation, splitPathSegment, toggleSelection, topologyEditForPathSegmentReplacement, topologyReferenceKey, undo, updateContourNode, updateDimensionValue, updateElement, updateElementNode, updateElementStyles, updateSketchConstraint, updateDocumentConstraint, updateSplineHandle, updateSplineNode } from "./index.js";
+import { createDocument, elementId, featureId, layerId, type ArcElement, type DimensionElement, type Element, type EllipseElement, type CircleElement, type LineElement, type GlyphElement, type PathElement, type PointMm, type RectangleElement, type SketchElement, type SplineElement, type TextElement } from "@nodra/domain";
+import { addCircleConstraint, addDocumentConstraint, deleteDocumentConstraint, addSketchConstraint, addSketchSegmentRelation, addToSelection, appendSketchEdge, appendSplineNode, beginGesture, cancelGesture, clearSelection, closePath, closeSplineElement, commitGesture, createEditor, createElement, createIntersectFeature, rebuildParametricFeatures, addPositionalConnection, addPositionalCoincidence, deletePositionalCoincidence, createPathCubicNode, createSketchLine, cutContourSegment, cutLineAtPoint, cutPathSegment, cutSegment, cutSketchEdge, splitPathLineAt, deleteContourNodes, deleteElement, deleteElementNodes, deletePathNodes, deleteSketchConstraint, dispatch, duplicateElements, flipElements, insertContourNode, invalidDimensionIdsForShapeOperation, moveElement, moveElements, movePathNode, movePathHandle, openPath, previewGesture, previewGestureFromBase, redo, reversePath, removeFromSelection, reorderLayer, resizeElement, resizeElementToDimensions, resizeElements, resizeElementsToDimensions, rotateElementsAroundCenter, select, selectForPointerDown, setDimensionDriving, updateCircleConstraint, deleteCircleConstraint, solveCircle, setLayerVisibility, setPathJoin, shapeOperation, splitPathSegment, toggleSelection, topologyEditForPathSegmentReplacement, topologyReferenceKey, undo, updateContourNode, updateDimensionValue, updateElement, updateElementNode, updateElementStyles, updateSketchConstraint, updateDocumentConstraint, updateSplineHandle, updateSplineNode } from "./index.js";
 import { boundsOfElements, realGeometryNodes } from "@nodra/geometry";
 import type { Direction } from "@nodra/geometry";
 import { appendLinePoint } from "./index.js";
@@ -2159,6 +2159,92 @@ it("moves a dimension by changing only its placement offset and supports undo", 
 
     expect(state.document.elements[0]).toMatchObject({ position: rounded.position, size: rounded.size, cornerRadius: 3, rotation: -Math.PI / 4, flipY: true });
     expect(state.undo).toHaveLength(1);
+  });
+
+  it("creates a bounded intersect feature while retaining both sources in one undoable transaction", () => {
+    const second = { ...rectangle, id: elementId("intersect-second"), position: { x: 6, y: 2 } };
+    const initial = createEditor({ ...document, elements: [rectangle, second] });
+    const created = dispatch(initial, createIntersectFeature(featureId("intersect-1"), [rectangle.id, second.id]));
+    expect(created.document.elements.slice(0, 2)).toEqual([expect.objectContaining(rectangle), expect.objectContaining(second)]);
+    expect(created.document.elements[2]).toMatchObject({ type: "contour", id: "intersect-1:output", position: { x: 6, y: 2 }, size: { width: 5, height: 5 } });
+    expect(created.document.featureTree?.features).toEqual([{ id: "intersect-1", operation: "intersect", sources: [{ elementId: rectangle.id }, { elementId: second.id }], outputs: [{ elementId: "intersect-1:output" }], status: "up-to-date" }]);
+    expect(created.undo).toHaveLength(1);
+    expect(undo(created).document).toEqual(initial.document);
+    expect(redo(undo(created)).document).toEqual(created.document);
+  });
+
+  it("rebuilds intersect outputs deterministically and makes an up-to-date rebuild a no-op", () => {
+    const second = { ...rectangle, id: elementId("rebuild-second"), position: { x: 6, y: 2 } };
+    const created = dispatch(createEditor({ ...document, elements: [rectangle, second] }), createIntersectFeature(featureId("rebuild-intersect"), [rectangle.id, second.id]));
+    const staleOutput = created.document.elements[2]!;
+    const staleDocument = { ...created.document, elements: [rectangle, { ...second, position: { x: 8, y: 2 } }, staleOutput], featureTree: { version: 1 as const, features: created.document.featureTree!.features.map((feature) => ({ ...feature, status: "needs-rebuild" as const })) } };
+    const stale = createEditor(staleDocument);
+    const rebuilt = dispatch(stale, rebuildParametricFeatures(featureId("rebuild-intersect")));
+    expect(rebuilt.document.elements[2]).toMatchObject({ id: "rebuild-intersect:output", position: { x: 8, y: 2 }, size: { width: 3, height: 5 } });
+    expect(rebuilt.document.featureTree?.features[0]).toMatchObject({ status: "up-to-date" });
+    expect(rebuilt.undo).toHaveLength(1);
+    expect(dispatch(rebuilt, rebuildParametricFeatures())).toBe(rebuilt);
+  });
+
+  it("updates intersect output status atomically when a validated source replacement no longer overlaps", () => {
+    const second = { ...rectangle, id: elementId("error-second"), position: { x: 6, y: 2 } };
+    const created = dispatch(createEditor({ ...document, elements: [rectangle, second] }), createIntersectFeature(featureId("error-intersect"), [rectangle.id, second.id]));
+    const output = created.document.elements[2];
+    const moved = dispatch(created, moveElement(second.id, { x: 100, y: 0 }));
+    expect(moved.document.elements[2]).toEqual(output);
+    expect(moved.document.featureTree?.features[0]).toMatchObject({ status: "error", error: "Intersect produced an empty result" });
+    expect(moved.undo).toHaveLength(2);
+    expect(undo(moved).document).toEqual(created.document);
+    expect(dispatch(moved, rebuildParametricFeatures())).toBe(moved);
+    expect(dispatch(created, deleteElement(rectangle.id))).toBe(created);
+  });
+
+  it("rebuilds circle-sourced intersects through add, update, and delete constraint mutations", () => {
+    const circle: CircleElement = { type: "circle", id: elementId("intersect-circle"), layerId: rectangle.layerId, center: { x: 10, y: 10 }, radius: 3, style: rectangle.style };
+    const box = { ...rectangle, id: elementId("intersect-box"), position: { x: 0, y: 0 }, size: { width: 20, height: 20 } };
+    const created = dispatch(createEditor({ ...document, elements: [circle, box] }), createIntersectFeature(featureId("circle-intersect"), [circle.id, box.id]));
+    const added = dispatch(created, addCircleConstraint(circle.id, { id: "radius", kind: "radius", value: 5 }));
+    expect(added.document.elements.find((element) => element.id === "circle-intersect:output")).toMatchObject({ type: "contour", size: { width: 10, height: 10 } });
+    expect(added.document.featureTree?.features[0]).toMatchObject({ status: "up-to-date" });
+    const updated = dispatch(added, updateCircleConstraint(circle.id, "radius", { id: "radius", kind: "radius", value: 4 }));
+    expect(updated.document.elements.find((element) => element.id === "circle-intersect:output")).toMatchObject({ type: "contour", size: { width: 8, height: 8 } });
+    const removed = dispatch(updated, deleteCircleConstraint(circle.id, "radius"));
+    expect(removed.document.elements.find((element) => element.id === "circle-intersect:output")).toEqual(updated.document.elements.find((element) => element.id === "circle-intersect:output"));
+    expect(removed.document.featureTree?.features[0]).toMatchObject({ status: "up-to-date" });
+    expect(removed.undo).toHaveLength(4);
+  });
+
+  it("rejects generic edits to derived intersect outputs atomically", () => {
+    const second = { ...rectangle, id: elementId("protected-second"), position: { x: 6, y: 2 } };
+    const created = dispatch(createEditor({ ...document, elements: [rectangle, second] }), createIntersectFeature(featureId("protected-intersect"), [rectangle.id, second.id]));
+    const outputId = elementId("protected-intersect:output");
+    const command = moveElement(outputId, { x: 1, y: 0 });
+    expect(command.apply(created.document)).toEqual({ success: false, error: "Intersect output is derived and cannot be edited directly: protected-intersect" });
+    expect(dispatch(created, command)).toBe(created);
+  });
+
+  it("fails malformed intersect rebuilds deterministically without partial mutation", () => {
+    const second = { ...rectangle, id: elementId("malformed-second"), position: { x: 6, y: 2 } };
+    const created = dispatch(createEditor({ ...document, elements: [rectangle, second] }), createIntersectFeature(featureId("malformed-intersect"), [rectangle.id, second.id]));
+    const rebuild = rebuildParametricFeatures(featureId("malformed-intersect"));
+    const missingSource = { ...created.document, elements: created.document.elements.filter((element) => element.id !== second.id) };
+    expect(rebuild.apply(missingSource)).toEqual({ success: false, error: "Intersect feature malformed-intersect has a missing source" });
+    const missingSourceState = createEditor(missingSource);
+    expect(dispatch(missingSourceState, rebuild)).toBe(missingSourceState);
+    const missingOutput = { ...created.document, elements: created.document.elements.filter((element) => element.id !== "malformed-intersect:output") };
+    expect(rebuild.apply(missingOutput)).toEqual({ success: false, error: "Intersect feature malformed-intersect has a missing output" });
+    const line: LineElement = { type: "line", id: second.id, layerId: second.layerId, start: { x: 0, y: 0 }, end: { x: 1, y: 1 }, rotation: 0, style: second.style };
+    const unsupportedSource = { ...created.document, elements: created.document.elements.map((element) => element.id === second.id ? line : element) };
+    expect(rebuild.apply(unsupportedSource)).toEqual({ success: false, error: "Intersect feature malformed-intersect has an unsupported source" });
+    expect(created.document).toEqual(dispatch(created, rebuildParametricFeatures()).document);
+  });
+
+  it("rejects invalid intersect creation without changing document or history", () => {
+    const line = { type: "line" as const, id: elementId("intersect-line"), layerId: rectangle.layerId, start: { x: 0, y: 0 }, end: { x: 10, y: 0 }, rotation: 0, style: rectangle.style };
+    const initial = createEditor({ ...document, elements: [rectangle, line] });
+    expect(dispatch(initial, createIntersectFeature(featureId("bad-count"), [rectangle.id]))).toBe(initial);
+    expect(dispatch(initial, createIntersectFeature(featureId("bad-duplicate"), [rectangle.id, rectangle.id]))).toBe(initial);
+    expect(dispatch(initial, createIntersectFeature(featureId("bad-type"), [rectangle.id, line.id]))).toBe(initial);
   });
 
   it("replaces closed objects with one styled contour and keeps the operation atomic", () => {
