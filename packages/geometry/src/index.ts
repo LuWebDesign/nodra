@@ -12,7 +12,8 @@ export type { CurveTopologyComponent, CurveTopologyDiagnostic, CurveTopologyFrag
 import { sketchProfileResult } from "./profile.js";
 import type { CircleElement, ConnectableNodeAddress, ContourElement, DimensionElement, Element, ElementId, EllipseElement, GlyphElement, HandleOffset, LineElement, PathCubicSegment, PathElement, PointMm, RectangleElement, SizeMm, SketchConstraint, SketchElement, SketchPointReference, SplineElement, SplineNode } from "@nodra/domain";
 
-export type { SketchProfileClassification, SketchProfileDiagnostic, SketchProfileResult } from "./profile.js";
+export { buildSketchProfile, deriveSketchProfile, validateSketchProfile, validateSketchProfileResult } from "./profile.js";
+export type { ProfileInputElement, ProfileInputScope, SketchProfileClassification, SketchProfileDiagnostic, SketchProfileResult, SketchProfileChain, SketchProfileLoop, SketchProfileRegion } from "./profile.js";
 
 export interface Bounds { readonly x: number; readonly y: number; readonly width: number; readonly height: number }
 export interface Viewport { readonly zoom: number; readonly panMm: PointMm }

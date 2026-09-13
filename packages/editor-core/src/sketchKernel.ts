@@ -1,6 +1,6 @@
 import type { CircleElement, DocumentSnapshot, ElementId, PointMm, SketchElement } from "@nodra/domain";
 import { solveConstraintComponents, type ConstraintDiagnostic } from "@nodra/constraints";
-import { buildCurveTopology, collectMixedIntersections, deriveCurvePieces, elementToCurves, sketchProfileResult, solveCircleConstraints, type CurvePiece2D, type CurveTopologyGraph, type MixedIntersectionPair } from "@nodra/geometry";
+import { buildCurveTopology, collectMixedIntersections, deriveCurvePieces, elementToCurves, sketchProfileResult, solveCircleConstraints, validateSketchProfileResult, type CurvePiece2D, type CurveTopologyGraph, type MixedIntersectionPair, type ProfileInputScope, type SketchProfileResult } from "@nodra/geometry";
 import { validateDocument } from "@nodra/validation";
 
 /**
@@ -24,7 +24,7 @@ export interface SketchKernelOperationInput {
   readonly phase: SketchKernelOperationPhase;
 }
 export type SketchKernelState = "committed" | "rollback";
-export type SketchTopologyDiagnosticCode = "invalid-input" | "invalid-topology" | "open-profile" | "closed-profile";
+export type SketchTopologyDiagnosticCode = "invalid-input" | "invalid-topology" | "open-profile" | "closed-profile" | "invalid-fragment-reference" | "stale-source-interval" | "inconsistent-loop" | "inconsistent-region" | "source-provenance-mismatch" | "invalid-intersection" | "degenerate-segment" | "unsupported-geometry";
 
 export interface SketchTopologyDiagnostic {
   readonly code: SketchTopologyDiagnosticCode;
@@ -67,6 +67,7 @@ export type SketchMixedTopologyDiagnosticCode = "unsupported" | "overlap" | "mal
   readonly circleConstraintDiagnostics: readonly CircleConstraintDiagnostic[];
   readonly topologyDiagnostics: readonly SketchTopologyDiagnostic[];
       readonly derivedMixedTopology: SketchMixedTopologyResult;
+  readonly profiles: readonly SketchProfileResult[];
   readonly profileReady: boolean;
   readonly contours: readonly (readonly PointMm[])[];
 }
@@ -80,6 +81,9 @@ export type SketchMixedTopologyDiagnosticCode = "unsupported" | "overlap" | "mal
  */
 export type SketchKernelOperationResult = SketchKernelRecomputeResult;
 
+/** Optional seam for deterministic validation of malformed derived profile data. */
+export type SketchProfileResultFactory = (input: SketchElement | ProfileInputScope) => SketchProfileResult;
+
 const byStableText = (first: string, second: string): number => first < second ? -1 : first > second ? 1 : 0;
 const cloneDocument = (document: DocumentSnapshot): DocumentSnapshot => ({
   ...document,
@@ -89,13 +93,12 @@ const cloneDocument = (document: DocumentSnapshot): DocumentSnapshot => ({
     : element),
 });
 
-const topologyForSketch = (sketch: SketchElement): {
+const topologyForSketch = (sketch: SketchElement, profile = sketchProfileResult(sketch)): {
   readonly diagnostics: readonly SketchTopologyDiagnostic[];
   readonly contours: readonly (readonly PointMm[])[];
   readonly valid: boolean;
   readonly profileReady: boolean;
 } => {
-  const profile = sketchProfileResult(sketch);
   const contours = [...profile.outerRegions, ...profile.holes];
   const invalid = profile.status === "invalid" || profile.status === "degenerate" || profile.status === "ambiguous";
   const diagnostics: SketchTopologyDiagnostic[] = invalid
@@ -136,7 +139,7 @@ const sourceElementId = (piece: CurvePiece2D): ElementId => piece.source.element
     };
 
     /** Recomputes a validated immutable sketch document without changing its revision. */
-export function recomputeSketchKernel(input: unknown): SketchKernelRecomputeResult {
+export function recomputeSketchKernel(input: unknown, profileScope?: ProfileInputScope, profileFactory: SketchProfileResultFactory = sketchProfileResult): SketchKernelRecomputeResult {
   const original = input as DocumentSnapshot;
   const checked = validateDocument(input);
   if (!checked.success) {
@@ -151,6 +154,7 @@ export function recomputeSketchKernel(input: unknown): SketchKernelRecomputeResu
           circleConstraintDiagnostics: [],
       topologyDiagnostics: [{ code: "invalid-input", message: checked.error }],
           derivedMixedTopology: { pieces: [], intersections: [], graph: buildCurveTopology([]), diagnostics: [] },
+      profiles: [],
       profileReady: false,
       contours: [],
     };
@@ -171,12 +175,19 @@ export function recomputeSketchKernel(input: unknown): SketchKernelRecomputeResu
         }) };
   const derivedMixedTopology = deriveMixedTopology(circlesDocument);
       const sketches = circlesDocument.elements.filter((element): element is SketchElement => element.type === "sketch").sort((first, second) => byStableText(first.id, second.id));
-  const topology = sketches.map(topologyForSketch);
-  const topologyDiagnostics = topology.flatMap((value) => value.diagnostics).sort((first, second) => byStableText(`${first.code}:${first.sketchId ?? ""}`, `${second.code}:${second.sketchId ?? ""}`));
-  const invalidTopology = topology.some((value) => !value.valid);
+  const profiles = profileScope ? [profileFactory(profileScope)] : sketches.map((sketch) => profileFactory(sketch));
+  const topology = profileScope ? [] : profiles.map((profile, index) => topologyForSketch(sketches[index]!, profile));
+    const profileValidationDiagnostics = profiles.flatMap((profile, index) => validateSketchProfileResult(profile).map((diagnostic) => ({
+        code: "invalid-topology" as const,
+        ...(profileScope || !sketches[index] ? {} : { sketchId: sketches[index].id }),
+        message: `Profile validation failed (${diagnostic.code}): ${diagnostic.message}`,
+      })));
+      const topologyDiagnostics = [...topology.flatMap((value) => value.diagnostics), ...profileValidationDiagnostics]
+        ;
+      const invalidTopology = topology.some((value) => !value.valid) || profileValidationDiagnostics.length > 0;
   const failed = !solved.converged || solved.diagnostics.some((diagnostic) => diagnostic.code === "constraint-conflict" || diagnostic.code === "unsupported-constraint" || diagnostic.code === "non-converged-component") || circleConstraintDiagnostics.length > 0 || invalidTopology;
   const committedDocument = failed ? cloneDocument(document) : cloneDocument(circlesDocument);
-  const contours = topology.flatMap((value) => value.contours);
+  const contours = profiles.flatMap((profile) => [...profile.outerRegions, ...profile.holes]);
   return {
     document: committedDocument,
     changed: !failed && solved.changed,
@@ -188,7 +199,8 @@ export function recomputeSketchKernel(input: unknown): SketchKernelRecomputeResu
         circleConstraintDiagnostics,
     topologyDiagnostics,
         derivedMixedTopology,
-    profileReady: !failed && topology.length > 0 && topology.every((value) => value.valid && value.profileReady),
+    profiles,
+    profileReady: !failed && profileValidationDiagnostics.length === 0 && profiles.length > 0 && profiles.every((profile) => profile.status === "valid-closed"),
     contours,
   };
 }

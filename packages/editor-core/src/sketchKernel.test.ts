@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { createDocument, elementId, layerId, type ArcElement, type CircleElement, type Element, type SketchConstraint, type SketchElement } from "@nodra/domain";
 import { validateDocument } from "@nodra/validation";
 import { recomputeSketchKernel } from "./sketchKernel.js";
+import { sketchProfileResult, validateSketchProfileResult, type SketchProfileResult } from "@nodra/geometry";
 
 const layer = { id: layerId("default"), name: "Default", visible: true, order: 0 };
 const style = { stroke: "#000", strokeWidth: 1 };
@@ -94,6 +95,7 @@ describe("sketch kernel", () => {
       it("recomputes constrained native circles without treating them as sketch topology", () => {
         const input = documentFor(circle([{ id: "cx", kind: "center-horizontal", value: 10 }, { id: "diameter", kind: "diameter", value: 8 }]));
         const result = recomputeSketchKernel(input);
+
         expect(result.committed).toBe(true);
         expect(result.document.elements[0]).toMatchObject({ type: "circle", center: { x: 10, y: 2 }, radius: 4 });
         expect(result.circleConstraintDiagnostics).toEqual([]);
@@ -152,7 +154,8 @@ describe("sketch kernel", () => {
     expect(result.rollback).toBe(false);
     expect(result.profileReady).toBe(false);
     expect(result.contours).toHaveLength(1);
-    expect(result.topologyDiagnostics[0]?.code).toBe("open-profile");
+    expect(result.profiles.flatMap((profile) => validateSketchProfileResult(profile))).toEqual([]);
+        expect(result.topologyDiagnostics[0]?.code).toBe("open-profile");
   });
 
   it("uses split graph faces for intersecting line segments", () => {
@@ -163,7 +166,8 @@ describe("sketch kernel", () => {
     const result = recomputeSketchKernel(input);
     expect(result.committed).toBe(true);
     expect(result.profileReady).toBe(true);
-    expect(result.contours).toHaveLength(2);
+    expect(result.profiles.flatMap((profile) => validateSketchProfileResult(profile))).toEqual([]);
+        expect(result.contours).toHaveLength(2);
   });
 
   it("rolls back conflicting constraints", () => {
@@ -175,7 +179,41 @@ describe("sketch kernel", () => {
     expect(result.constraintDiagnostics.length).toBeGreaterThan(0);
   });
 
-  it("returns stable output ordering", () => {
+  it("rolls back a candidate when canonical profile provenance is tampered", () => {
+        const input = documentFor(square());
+        const result = recomputeSketchKernel(input, undefined, (profileInput) => {
+          const profile = sketchProfileResult(profileInput);
+          const first = profile.parametricFragments[0];
+          return first ? { ...profile, parametricFragments: [{ ...first, sourcePieceId: "missing-source-piece" }, ...profile.parametricFragments.slice(1)] } : profile;
+        });
+        expect(result.committed).toBe(false);
+        expect(result.rollback).toBe(true);
+        expect(result.profileReady).toBe(false);
+        expect(result.document).toEqual(input);
+        expect(result.topologyDiagnostics).toEqual(expect.arrayContaining([
+          expect.objectContaining({ code: "invalid-topology", message: expect.stringContaining("source-provenance-mismatch") }),
+        ]));
+      });
+
+      it("rejects malformed canonical profile variants before commit", () => {
+        const input = documentFor(square());
+        const variants: readonly ((profile: SketchProfileResult) => SketchProfileResult)[] = [
+          (profile) => profile.parametricFragments[0] ? { ...profile, parametricFragments: [{ ...profile.parametricFragments[0], sourcePieceId: "modified-source" }, ...profile.parametricFragments.slice(1)] } : profile,
+          (profile) => profile.parametricFragments[0] ? { ...profile, parametricFragments: [{ ...profile.parametricFragments[0], curve: { type: "line", start: { x: 0, y: 0 }, end: { x: 0, y: 0 } } }, ...profile.parametricFragments.slice(1)] } : profile,
+          (profile) => profile.loops[0] ? { ...profile, loops: [{ ...profile.loops[0], endpoints: ["incompatible-a", "incompatible-b"] }, ...profile.loops.slice(1)] } : profile,
+          (profile) => profile.parametricFragments[0] ? { ...profile, parametricFragments: [{ ...profile.parametricFragments[0], curve: { ...profile.parametricFragments[0].curve, start: { x: 99, y: 99 } } }, ...profile.parametricFragments.slice(1)] } : profile,
+          (profile) => profile.regions[0] ? { ...profile, regions: [{ ...profile.regions[0], holeLoopIds: ["missing-hole"], holes: [] }, ...profile.regions.slice(1)] } : profile,
+        ];
+        for (const variant of variants) {
+          const result = recomputeSketchKernel(input, undefined, (profileInput) => variant(sketchProfileResult(profileInput)));
+          expect(result.committed).toBe(false);
+          expect(result.rollback).toBe(true);
+          expect(result.profileReady).toBe(false);
+          expect(result.topologyDiagnostics.some((diagnostic) => diagnostic.code === "invalid-topology")).toBe(true);
+        }
+      });
+
+      it("returns stable output ordering", () => {
     const input = documentFor(square());
     expect(recomputeSketchKernel(input)).toEqual(recomputeSketchKernel(input));
   });

@@ -1,6 +1,6 @@
 import { CURRENT_SCHEMA_VERSION, isLineElement, type DocumentSnapshot, type Element, type PathElement, type SplineElement } from "@nodra/domain";
 import { constraintComponentStatesForDocument, constraintStateForElement, type ConstraintState } from "@nodra/constraints";
-import { dimensionGeometry, mmToScreen, sketchClosedContours, type Viewport } from "@nodra/geometry";
+import { dimensionGeometry, mmToScreen, buildSketchProfile, pointAt, type Curve2D, type CurveTopologyFragment, type SketchProfileResult, type Viewport } from "@nodra/geometry";
 import { validateDocument } from "@nodra/validation";
 
 const MAX_ISSUES = 8;
@@ -103,7 +103,9 @@ function renderElement(element: Element, viewport: Viewport, document: DocumentS
     const constraintStatus = mode === "editor" ? sketchConstraintStates.get(element.id) ?? constraintStateForElement(document, element.id).state : undefined;
     const constraintStroke = constraintStatus === "fully-defined" ? "#111827" : constraintStatus === "conflict" || constraintStatus === "invalid" ? "#ef4444" : constraintStatus === "overdefined" ? "#f59e0b" : "#2563eb";
     const sketchAttributes = mode === "editor" ? visualAttributes(element).replace(`stroke="${escapeAttribute(element.style.stroke)}"`, `stroke="${constraintStroke}"`) : visualAttributes(element);
-    const contours = sketchClosedContours(element).map((contour) => contour.map((point, index) => { const current = screen(point); return `${index === 0 ? "M" : "L"}${number(current.x)} ${number(current.y)}`; }).join(" ") + " Z").join(" ");
+    const profile = buildSketchProfile(element);
+        const loops = new Map(profile.loops.map((loop) => [loop.id, loop]));
+    const contours = profile.regions.flatMap((region) => [region.outerLoopId, ...region.holeLoopIds]).map((loopId) => loops.get(loopId)?.points ?? []).filter((contour) => contour.length > 0).map((contour) => contour.map((point, index) => { const current = screen(point); return `${index === 0 ? "M" : "L"}${number(current.x)} ${number(current.y)}`; }).join(" ") + " Z").join(" ");
     const faces = contours ? `<path data-sketch-fill="true" d="${escapeAttribute(contours)}" fill="${fill}" fill-opacity="${DEFAULT_FILL_OPACITY}" stroke="none" fill-rule="evenodd" />` : "";
     const lines = element.edges.map((edge) => { const start = nodes.get(edge.startNodeId); const end = nodes.get(edge.endNodeId); return start && end ? `<line x1="${number(start.x)}" y1="${number(start.y)}" x2="${number(end.x)}" y2="${number(end.y)}" />` : ""; }).join("");
     return `<g data-element-id="${escapeAttribute(element.id)}" ${sketchAttributes}>${faces}${lines}</g>`;
@@ -260,4 +262,70 @@ function renderAngularDimension(element: Extract<Element, { type: "dimension" }>
 }
 
 export function renderSplineSvg(element: SplineElement, viewport: Viewport): string { return renderPath(splineToPathElement(element), viewport); }
+export interface SketchProfileRenderOptions {
+  readonly fill?: string;
+  readonly stroke?: string;
+  readonly strokeWidth?: number;
+}
+
+export type SketchProfileRenderResult =
+  | { readonly success: true; readonly svg: string }
+  | { readonly success: false; readonly reason: "invalid" | "unsupported"; readonly error: string; readonly issues: readonly string[] };
+
+const reverseCurve = (curve: Curve2D): Curve2D => {
+  if (curve.type === "line") return { ...curve, start: curve.end, end: curve.start };
+  if (curve.type === "arc") return { ...curve, startAngle: curve.endAngle, endAngle: curve.startAngle, direction: curve.direction === "clockwise" ? "counterclockwise" : "clockwise" };
+  if (curve.type === "circle") return { type: "arc", center: curve.center, radius: curve.radius, startAngle: 0, endAngle: 0, direction: "counterclockwise", fullTurn: true };
+  return curve;
+};
+
+const profileFragmentPath = (fragment: CurveTopologyFragment, viewport: Viewport): string => {
+  const curve = fragment.orientation === "forward" ? fragment.curve : reverseCurve(fragment.curve);
+  const screen = (point: { x: number; y: number }) => mmToScreen(point, viewport);
+  const start = screen(pointAt(curve, 0));
+  if (curve.type === "line") return `M${number(start.x)} ${number(start.y)} L${number(screen(curve.end).x)} ${number(screen(curve.end).y)}`;
+  if (curve.type === "circle" || (curve.type === "arc" && curve.fullTurn === true)) {
+    const midpoint = screen(pointAt(curve, 0.5));
+    const end = screen(pointAt(curve, 1));
+    const radius = curve.radius * viewport.zoom;
+    const sweep = curve.type === "circle" || curve.direction === "clockwise" ? 1 : 0;
+    return `M${number(start.x)} ${number(start.y)} A ${number(radius)} ${number(radius)} 0 1 ${sweep} ${number(midpoint.x)} ${number(midpoint.y)} A ${number(radius)} ${number(radius)} 0 1 ${sweep} ${number(end.x)} ${number(end.y)}`;
+  }
+  if (curve.type === "arc") {
+    const end = screen(pointAt(curve, 1));
+    const sweepAngle = ((curve.endAngle - curve.startAngle) * (curve.direction === "clockwise" ? 1 : -1) % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI);
+    const radius = curve.radius * viewport.zoom;
+    return `M${number(start.x)} ${number(start.y)} A ${number(radius)} ${number(radius)} 0 ${sweepAngle > Math.PI ? 1 : 0} ${curve.direction === "clockwise" ? 1 : 0} ${number(end.x)} ${number(end.y)}`;
+  }
+  throw new Error(`Unsupported profile curve: ${curve.type}`);
+};
+
+/** Renders canonical region topology; sampled compatibility projections are intentionally ignored. */
+export function renderSketchProfileSvg(profile: SketchProfileResult, viewport: Viewport, options: SketchProfileRenderOptions = {}): SketchProfileRenderResult {
+  const checkedViewport = viewportResult(viewport);
+  if (!checkedViewport.success) return { success: false, reason: "invalid", error: checkedViewport.error, issues: [checkedViewport.error] };
+  if (!Number.isFinite(options.strokeWidth ?? 0.2) || (options.strokeWidth ?? 0.2) < 0) return { success: false, reason: "invalid", error: "profile strokeWidth must be finite and non-negative", issues: ["profile strokeWidth must be finite and non-negative"] };
+  const fill = escapeAttribute(options.fill ?? "#111");
+  const stroke = escapeAttribute(options.stroke ?? "#111");
+  const strokeWidth = number(options.strokeWidth ?? 0.2);
+  try {
+    const loops = new Map(profile.loops.map((loop) => [loop.id, loop]));
+    const paths = profile.regions.map((region) => {
+      const outer = loops.get(region.outerLoopId);
+      if (!outer) throw new Error(`Missing outer loop: ${region.outerLoopId}`);
+      const loopPath = (loop: typeof outer): string => loop.fragments.map((fragment) => profileFragmentPath(fragment, checkedViewport.data)).join(" ") + " Z";
+      const holes = region.holeLoopIds.map((id) => {
+        const hole = loops.get(id);
+        if (!hole) throw new Error(`Missing hole loop: ${id}`);
+        return loopPath(hole);
+      });
+      return `${loopPath(outer)}${holes.length ? ` ${holes.join(" ")}` : ""}`;
+    }).join(" ");
+    return { success: true, svg: `<svg xmlns="http://www.w3.org/2000/svg" data-units="mm"><path data-profile="true" d="${escapeAttribute(paths)}" fill="${fill}" stroke="${stroke}" stroke-width="${strokeWidth}" fill-rule="evenodd" /></svg>` };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unsupported profile geometry";
+    return { success: false, reason: "unsupported", error: message, issues: [message] };
+  }
+}
+
 export const svgRenderer: SvgRenderer = { render: renderSvg };
