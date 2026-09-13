@@ -1,5 +1,5 @@
 import type { DocumentSnapshot, Element, ElementId, LineElement, PathElement, PathSegment, PointMm } from "@nodra/domain";
-import { boundsOf, boundsOfElements, closestParameter, connectableNodeAddress, contourSegmentAt, contourVertexNodes, dimensionGeometry, elementCenter, elementSegmentAt, hitTest, pathGeometryNodes, pointAt, cuttableSegments, splitCuttableSegments, pathSegmentAt, realGeometryNodes, elementToCurves, intersectCurves, partitionCurveByInterval, selectSourcedCurveInterval, GEOMETRY_EPSILON, type Bounds, type ContourSegmentHit, type ContourVertexNode, type CurveFragment, type PathGeometryNode, type RealGeometryNode, type PathSegmentHit } from "@nodra/geometry";
+import { boundsOf, boundsOfElements, closestParameter, connectableNodeAddress, contourSegmentAt, contourVertexNodes, dimensionGeometry, elementCenter, elementSegmentAt, hitTest, pathGeometryNodes, pointAt, cuttableSegments, splitCuttableSegments, pathSegmentAt, realGeometryNodes, elementToCurves, intersectCurves, partitionCurveByInterval, selectRemovableCurveInterval, selectSourcedCurveInterval, GEOMETRY_EPSILON, type Bounds, type ContourSegmentHit, type ContourVertexNode, type CurveFragment, type PathGeometryNode, type RealGeometryNode, type PathSegmentHit, type SketchProfileResult } from "@nodra/geometry";
 
 export interface DragGeometry { readonly position: PointMm; readonly size: { readonly width: number; readonly height: number } }
 
@@ -145,7 +145,7 @@ export interface CutIntervalPreview {
 }
 
 /** Keeps legacy picking but derives an exact, immutable interval preview when adapters support the target. */
-export function pickCutIntervalPreview(document: DocumentSnapshot, point: PointMm, zoom: number, tolerancePx = 8): CutIntervalPreview | undefined {
+export function pickCutIntervalPreview(document: DocumentSnapshot, point: PointMm, zoom: number, tolerancePx = 8, profile?: SketchProfileResult): CutIntervalPreview | undefined {
   let hit = pickCuttableSegment(document, point, zoom, tolerancePx);
   if (!hit) {
     const visibleLayers = new Set(document.layers.filter((layer) => layer.visible).map((layer) => layer.id));
@@ -166,7 +166,18 @@ export function pickCutIntervalPreview(document: DocumentSnapshot, point: PointM
   const targetCurves = elementToCurves(targetElement);
   const target = targetElement.type === "ellipse" || targetElement.type === "circle" ? targetCurves[0] : targetCurves.find((candidate) => candidate.sourceIndex === hit.segmentIndex);
   if (!target) return { hit, fragments: [] };
-  const visibleLayers = new Set(document.layers.filter((element) => element.visible).map((element) => element.id));
+      if (profile) {
+        const targetSource = targetCurves.find((candidate) => candidate.sourceIndex === hit.segmentIndex)?.source;
+        const canonical = profile.parametricFragments.filter((fragment) => fragment.source.elementId === hit.elementId && (targetElement.type === "circle" || targetElement.type === "arc" ? fragment.source.kind === (targetElement.type === "circle" ? "circle-element" : "arc-element") : targetSource !== undefined && JSON.stringify(fragment.source) === JSON.stringify(targetSource)));
+        if (canonical.length > 0) {
+          const cuts = canonical.flatMap((fragment) => [fragment.start.sourceParameter, fragment.end.sourceParameter]);
+          let selection: ReturnType<typeof selectRemovableCurveInterval>;
+          try { selection = selectRemovableCurveInterval(target.curve, cuts, point); } catch { return { hit, fragments: [] }; }
+          if (selection.kind !== "selected") return { hit, fragments: [] };
+          return { hit, fragments: partitionCurveByInterval(target.curve, selection.interval).selected };
+        }
+      }
+      const visibleLayers = new Set(document.layers.filter((element) => element.visible).map((element) => element.id));
   const adaptedByElement = new Map<ElementId, ReturnType<typeof elementToCurves>>();
   const targetBounds = targetElement.type === "arc" ? boundsOf(targetElement) : undefined;
   // Legacy elements without an exact adapter remain a conservative veto, but

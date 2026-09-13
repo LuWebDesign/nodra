@@ -39,12 +39,48 @@ describe("canonical parametric sketch profiles", () => {
   });
   it("materializes circles and accepts canonical arcs without flattening", () => {
     const circle = circleElementToCurve({ type: "circle", id: "circle" as never, layerId: "layer" as never, center: { x: 0, y: 0 }, radius: 5, style: { stroke: "#000", strokeWidth: 1 } });
-    expect(sketchProfileResult([deriveCurvePieces([circle])[0]!]).loops).toHaveLength(1);
+    const fullCircle = sketchProfileResult([deriveCurvePieces([circle])[0]!]);
+    expect(fullCircle.status).toBe("valid-closed");
+    expect(fullCircle.loops).toHaveLength(1);
+    expect(fullCircle.regions).toHaveLength(1);
     const arc = arcElementToCurve({ type: "arc", id: "arc" as never, layerId: "layer" as never, center: { x: 0, y: 0 }, radius: 4, startAngle: 0, endAngle: Math.PI / 2, direction: "clockwise", style: { stroke: "#000", strokeWidth: 1 } });
     expect(sketchProfileResult(deriveCurvePieces([arc])).parametricFragments[0]?.curve.type).toBe("arc");
   });
   it("keeps stable output across repeated derivation", () => {
     const line = lineElementToCurve({ type: "line", id: "line" as never, layerId: "layer" as never, start: { x: 0, y: 0 }, end: { x: 1, y: 0 }, rotation: 0, style: { stroke: "#000", strokeWidth: 1 } });
     const pieces = deriveCurvePieces([line]); expect(sketchProfileResult(pieces)).toEqual(sketchProfileResult(pieces));
+  });
+  it("derives canonical crossing-circle topology with two fragments per source and one region", () => {
+    const first = { type: "circle" as const, id: "first-circle" as never, layerId: "layer" as never, center: { x: 0, y: 0 }, radius: 5, style: { stroke: "#000", strokeWidth: 1 } };
+    const second = { ...first, id: "second-circle" as never, center: { x: 6, y: 0 } };
+    const result = sketchProfileResult({ elements: [first, second] });
+    const fragments = result.parametricFragments.filter((fragment) => fragment.curve.type === "arc");
+    expect(fragments).toHaveLength(4);
+    expect(fragments.filter((fragment) => fragment.source.elementId === first.id)).toHaveLength(2);
+    expect(fragments.filter((fragment) => fragment.source.elementId === second.id)).toHaveLength(2);
+    expect(result.status).toBe("valid-closed");
+    expect(result.loops).toHaveLength(1);
+    expect(result.regions).toHaveLength(1);
+    expect(validateSketchProfileResult(result)).toEqual([]);
+  });
+  it.each([
+    ["tangent", { x: 10, y: 0 }], ["concentric", { x: 0, y: 0 }],
+    ["coincident", { x: 0, y: 0 }], ["disjoint", { x: 20, y: 0 }],
+  ])("keeps %s circle scopes conservative", (_case, center) => {
+    const first = { type: "circle" as const, id: "conservative-first" as never, layerId: "layer" as never, center: { x: 0, y: 0 }, radius: 5, style: { stroke: "#000", strokeWidth: 1 } };
+    const second = { ...first, id: "conservative-second" as never, center };
+    const result = sketchProfileResult({ elements: [first, second] });
+    if (_case === "disjoint") expect(result.regions).toHaveLength(2);
+    else expect(result.status).not.toBe("valid-closed");
+  });
+  it("keeps circle plus native line and partial arc provenance explicit", () => {
+    const circle = { type: "circle" as const, id: "mixed-circle" as never, layerId: "layer" as never, center: { x: 0, y: 0 }, radius: 5, style: { stroke: "#000", strokeWidth: 1 } };
+    const line = { type: "line" as const, id: "mixed-line" as never, layerId: "layer" as never, start: { x: -8, y: 0 }, end: { x: 8, y: 0 }, rotation: 0, style: { stroke: "#000", strokeWidth: 1 } };
+    const arc = { type: "arc" as const, id: "mixed-arc" as never, layerId: "layer" as never, center: { x: 6, y: 0 }, radius: 5, startAngle: 0, endAngle: Math.PI, direction: "counterclockwise" as const, style: { stroke: "#000", strokeWidth: 1 } };
+    const result = sketchProfileResult({ elements: [circle, line, arc] });
+    expect(result.parametricFragments.some((fragment) => fragment.source.elementId === line.id && fragment.curve.type === "line")).toBe(true);
+    expect(result.parametricFragments.filter((fragment) => fragment.source.elementId === circle.id && fragment.curve.type === "arc").length).toBeGreaterThan(1);
+    expect(result.parametricFragments.some((fragment) => fragment.source.elementId === arc.id && fragment.curve.type === "arc")).toBe(true);
+    expect(validateSketchProfileResult(result)).toEqual([]);
   });
 });

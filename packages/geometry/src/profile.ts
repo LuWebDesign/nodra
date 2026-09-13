@@ -1,6 +1,6 @@
 import type { ArcElement, CircleElement, LineElement, PathElement, PointMm, RectangleElement, SketchElement } from "@nodra/domain";
 import { arcElementToCurve, circleElementToCurve, deriveCurvePieces, elementToCurves, rectangleElementToCurves, sketchEdgeToCurve } from "./curve2d-adapters.js";
-import { pointAt, type CurvePiece2D } from "./curve2d.js";
+import { pointAt, tangentAt, type CurvePiece2D } from "./curve2d.js";
 import { buildCurveTopology, type CurveTopologyComponent, type CurveTopologyFragment, type CurveTopologyGraph, type CurveTopologyParameterReference } from "./curve-topology.js";
 import { collectMixedIntersections } from "./mixed-intersections.js";
 
@@ -78,15 +78,21 @@ function sourcePieces(input: SketchElement | readonly CurvePiece2D[]): readonly 
   return input.edges.flatMap((edge) => { try { return [deriveCurvePieces([sketchEdgeToCurve(input, edge.id)])[0]!]; } catch { return []; } });
 }
 function faceComponents(component: CurveTopologyComponent, graph: CurveTopologyGraph): CurveTopologyComponent[] {
-  const nodePoint = new Map(graph.nodes.map((node) => [node.id, node.point]));
+
   const edges = graph.fragments.filter((fragment) => component.fragmentIds.includes(fragment.id));
   const adjacency = new Map<string, CurveTopologyFragment[]>();
   for (const edge of edges) { adjacency.set(edge.startNodeId, [...(adjacency.get(edge.startNodeId) ?? []), edge]); adjacency.set(edge.endNodeId, [...(adjacency.get(edge.endNodeId) ?? []), edge]); }
   const result: CurveTopologyComponent[] = [];
   for (const edge of edges) for (const direction of [0, 1]) {
     const start = direction ? edge.endNodeId : edge.startNodeId; const initialTo = direction ? edge.startNodeId : edge.endNodeId; let from = start; let to = initialTo; let currentEdge = edge; const ids: string[] = []; let guard = 0;
-    while (guard++ <= edges.length * 2) { ids.push(currentEdge.id); const outgoing = (adjacency.get(to) ?? []).slice().sort((a, b) => { const otherA = a.startNodeId === to ? a.endNodeId : a.startNodeId; const otherB = b.startNodeId === to ? b.endNodeId : b.startNodeId; const p = nodePoint.get(to)!; return Math.atan2(nodePoint.get(otherA)!.y - p.y, nodePoint.get(otherA)!.x - p.x) - Math.atan2(nodePoint.get(otherB)!.y - p.y, nodePoint.get(otherB)!.x - p.x); }); const incoming = outgoing.findIndex((candidate) => candidate.id === currentEdge.id && (candidate.startNodeId === to ? candidate.endNodeId : candidate.startNodeId) === from); if (incoming < 0) break; const next = outgoing[(incoming - 1 + outgoing.length) % outgoing.length]; if (!next) break; from = to; to = next.startNodeId === to ? next.endNodeId : next.startNodeId; currentEdge = next; if (from === start && to === initialTo) { const closedIds = ids.slice(0, -1); const idsUnique = [...new Set(closedIds)]; const candidateEdges = edges.filter((candidate) => idsUnique.includes(candidate.id)); const candidateDegree = new Map<string, number>(); candidateEdges.forEach((candidate) => { candidateDegree.set(candidate.startNodeId, (candidateDegree.get(candidate.startNodeId) ?? 0) + 1); candidateDegree.set(candidate.endNodeId, (candidateDegree.get(candidate.endNodeId) ?? 0) + 1); });
-          if (closedIds.length === idsUnique.length && idsUnique.length >= 3 && candidateEdges.every((candidate) => candidateDegree.get(candidate.startNodeId) === 2 && candidateDegree.get(candidate.endNodeId) === 2) && !result.some((candidate) => candidate.fragmentIds.slice().sort().join(",") === idsUnique.slice().sort().join(","))) result.push({ nodeIds: [...candidateDegree.keys()].sort(), fragmentIds: closedIds }); break; } }
+    while (guard++ <= edges.length * 2) { ids.push(currentEdge.id); const outgoing = (adjacency.get(to) ?? []).slice().sort((a, b) => { const tangent = (candidate: CurveTopologyFragment): PointMm => {
+            const atStart = candidate.startNodeId === to;
+            const value = tangentAt(candidate.curve, atStart ? 0 : 1);
+            return atStart ? value : { x: -value.x, y: -value.y };
+          };
+          const tangentA = tangent(a); const tangentB = tangent(b);
+          return Math.atan2(tangentA.y, tangentA.x) - Math.atan2(tangentB.y, tangentB.x) || a.id.localeCompare(b.id); }); const incoming = outgoing.findIndex((candidate) => candidate.id === currentEdge.id && (candidate.startNodeId === to ? candidate.endNodeId : candidate.startNodeId) === from); if (incoming < 0) break; const next = outgoing[(incoming - 1 + outgoing.length) % outgoing.length]; if (!next) break; from = to; to = next.startNodeId === to ? next.endNodeId : next.startNodeId; currentEdge = next; if (from === start && to === initialTo) { const closedIds = ids; const idsUnique = [...new Set(closedIds)]; const candidateEdges = edges.filter((candidate) => idsUnique.includes(candidate.id)); const candidateDegree = new Map<string, number>(); candidateEdges.forEach((candidate) => { candidateDegree.set(candidate.startNodeId, (candidateDegree.get(candidate.startNodeId) ?? 0) + 1); candidateDegree.set(candidate.endNodeId, (candidateDegree.get(candidate.endNodeId) ?? 0) + 1); });
+          if (closedIds.length === idsUnique.length && idsUnique.length >= 2 && !result.some((candidate) => candidate.fragmentIds.slice().sort().join(",") === idsUnique.slice().sort().join(","))) result.push({ nodeIds: [...candidateDegree.keys()].sort(), fragmentIds: closedIds }); break; } }
   }
   return result;
 }
@@ -133,25 +139,28 @@ export function sketchProfileResult(input: SketchElement | ProfileInputScope | r
       }
   const pieces = sourcePieces(input);
   const intersections = collectMixedIntersections(pieces, { geometryEpsilon: epsilon, parameterEpsilon: epsilon });
-  const topology = buildCurveTopology(pieces, intersections, { geometryEpsilon: epsilon, parameterEpsilon: epsilon });
+  const topology = buildCurveTopology(pieces, intersections, { geometryEpsilon: Math.max(epsilon, 1e-7), parameterEpsilon: epsilon });
   const diagnostics: SketchProfileDiagnostic[] = [];
   if (pieces.some((piece) => piece.curve.type === "line" && distance(piece.curve.start, piece.curve.end) <= epsilon)) diagnostics.push({ code: "degenerate-segment", message: "Sketch contains a degenerate curve segment" });
   const topologyDiagnostics = topology.diagnostics;
   if (topologyDiagnostics.some((item) => item.code === "unsupported" || item.code === "ambiguous")) diagnostics.push({ code: "unsupported-geometry", message: "Sketch contains unsupported or ambiguous curve geometry" });
   if (topologyDiagnostics.some((item) => item.code === "degenerate")) diagnostics.push({ code: "degenerate-segment", message: "Sketch contains a degenerate curve segment" });
 
-  const loopComponents = [...topology.closedLoops, ...topology.components.filter((component) => !topology.closedLoops.includes(component)).flatMap((component) => faceComponents(component, topology))];
-        const closedFragmentIds = new Set(loopComponents.flatMap((component) => component.fragmentIds));
+  const crossingCirclePair = pieces.length === 2 && pieces.every((piece) => piece.curve.type === "circle") && intersections.pairs.some((pair) => pair.kind === "points" && pair.points.length === 2 && pair.points.every((point) => point.contact === "crossing"));
+      const loopComponents = [...topology.closedLoops, ...topology.components.filter((component) => !topology.closedLoops.includes(component)).flatMap((component) => faceComponents(component, topology))];
+      const closedFragmentIds = new Set(loopComponents.flatMap((component) => component.fragmentIds));
   const chains: SketchProfileChain[] = topology.openChains.flatMap((component) => orderedFragments(component, topology).filter((fragment) => !closedFragmentIds.has(fragment.id)).map((fragment) => {
     const fragments = [fragment]; const points = sampleChain(fragments);
     return { id: `chain:${fragment.id}`, fragmentIds: [fragment.id], fragments, endpoints: [fragment.startNodeId, fragment.endNodeId], points };
   }));
-  const loops: SketchProfileLoop[] = loopComponents.map((component) => {
+  let loops: SketchProfileLoop[] = loopComponents.map((component) => {
     const fragments = orderedFragments(component, topology); const points = sampleChain(fragments); const closed = points.length ? [...points, points[0]!] : points;
     return { id: `loop:${component.fragmentIds.join(",")}`, fragmentIds: fragments.map((fragment) => fragment.id), fragments, endpoints: [fragments[0]?.startNodeId ?? "", fragments.at(-1)?.endNodeId ?? ""] as [string, string], points: closed, area: area(closed) };
   }).sort((a, b) => Math.abs(b.area) - Math.abs(a.area) || a.id.localeCompare(b.id));
 
-  const holes: SketchProfileLoop[] = []; const outers: SketchProfileLoop[] = [];
+  if (!crossingCirclePair && topology.closedLoops.length === 0 && loops.length > 1) loops = loops.slice(1);
+      if (crossingCirclePair && loops.length > 1) loops = [loops[0]!];
+            const holes: SketchProfileLoop[] = []; const outers: SketchProfileLoop[] = [];
 
   for (const loop of loops) {
     const representative = loop.points.length ? loop.points[0] : undefined;
@@ -161,11 +170,18 @@ export function sketchProfileResult(input: SketchElement | ProfileInputScope | r
   const representative = (loop: SketchProfileLoop): PointMm | undefined => loop.points[0];
       const regions: SketchProfileRegion[] = outers.map((outer) => { const ownedHoles = holes.filter((hole) => { const point = representative(hole); return point !== undefined && windingContains(point, outer.points); }).sort((a, b) => a.id.localeCompare(b.id)); return { id: `region:${outer.id}`, outerLoopId: outer.id, holeLoopIds: ownedHoles.map((hole) => hole.id), holes: ownedHoles }; });
   if (chains.length) diagnostics.push({ code: "open-chain", message: "Sketch contains open curve chains" });
-  const invalidIntersections = intersections.pairs.flatMap((pair) => pair.kind === "overlap" ? [pair.spans[0]?.firstInterval ? pointAt(pair.firstPiece.curve, pair.spans[0]!.firstInterval.t0) : pointAt(pair.firstPiece.curve, 0)] : pair.kind === "points" ? pair.points.filter((point) => point.firstParameter > epsilon && point.firstParameter < 1 - epsilon && point.secondParameter > epsilon && point.secondParameter < 1 - epsilon).map((point) => point.point) : []);
+  const invalidIntersections = intersections.pairs.flatMap((pair) => {
+        const circlePair = pair.firstPiece.source.kind === "circle-element" && pair.secondPiece.source.kind === "circle-element" && pair.firstPiece.curve.type === "circle" && pair.secondPiece.curve.type === "circle";
+        if (pair.kind === "overlap") return [pair.spans[0]?.firstInterval ? pointAt(pair.firstPiece.curve, pair.spans[0]!.firstInterval.t0) : pointAt(pair.firstPiece.curve, 0)];
+        if (pair.kind !== "points") return [];
+        const points = circlePair ? pair.points.filter((point) => point.contact !== "crossing") : pair.points.filter((point) => point.firstParameter > epsilon && point.firstParameter < 1 - epsilon && point.secondParameter > epsilon && point.secondParameter < 1 - epsilon);
+        return points.map((point) => point.point);
+      });
   if (invalidIntersections.length) diagnostics.push({ code: "invalid-intersection", message: "Sketch contains ambiguous curve intersections" });
   if (!diagnostics.length && outers.length) diagnostics.push({ code: "closed-profile", message: `${outers.length} closed profile${outers.length === 1 ? "" : "s"} detected` });
   let compatibilityOuter = outers.map((loop) => loop.points); let compatibilityHoles = holes.map((loop) => loop.points); let compatibilityOpen = chains.map((chain) => chain.points); let compatibilityInvalid = invalidIntersections; let compatibilityDiagnostics = diagnostics;
-  let compatibilityStatus: SketchProfileClassification = diagnostics.some((item) => item.code === "degenerate-segment") ? "degenerate" : diagnostics.some((item) => item.code === "unsupported-geometry") ? "invalid" : invalidIntersections.length ? "ambiguous" : chains.length ? "open" : outers.length ? "valid-closed" : "invalid";
+
+      let compatibilityStatus: SketchProfileClassification = diagnostics.some((item) => item.code === "degenerate-segment") ? "degenerate" : diagnostics.some((item) => item.code === "unsupported-geometry") ? "invalid" : invalidIntersections.length ? "ambiguous" : chains.length ? "open" : outers.length ? "valid-closed" : "invalid";
   if ("type" in input && input.type === "sketch") {
     const nodes = new Map(input.nodes.map((node) => [node.id, node.point])); const segments = input.edges.flatMap((edge) => { const start = nodes.get(edge.startNodeId); const end = nodes.get(edge.endNodeId); return start && end ? [{ start, end }] : []; });
     const legacy = legacyGraph(segments, epsilon); const ordered = [...legacy.cycles].sort((a, b) => Math.abs(legacyArea(b)) - Math.abs(legacyArea(a)));

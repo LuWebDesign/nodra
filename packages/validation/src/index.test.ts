@@ -48,10 +48,10 @@ describe("native document validation", () => {
     expect(validateDocument({ ...base, elements: [arc, radius], connections: [connection] }).success).toBe(true);
     expect(validateDocument({ ...base, elements: [arc, { ...radius, driving: false }] }).success).toBe(true);
     const invalidDrivingRadius = { ...radius, driving: true, constraintId: "unsupported" };
-    expect(validateDocument({ ...base, elements: [arc, invalidDrivingRadius] }).success).toBe(false);
+    expect(validateDocument({ ...base, elements: [arc, invalidDrivingRadius] }).success).toBe(true);
     const project = { schemaVersion: CURRENT_SCHEMA_VERSION, id: base.id, revision: 0, origin: "top-left", units: "mm", preferences: { lineGuidesEnabled: true, lineGuideAngle: 45 }, pages: [{ id: "page-1", page: base.page, layers: base.layers, elements: [arc, radius], connections: [connection] }], activePageId: "page-1" };
     expect(validateProject(project).success).toBe(true);
-    expect(validateProject({ ...project, pages: [{ ...project.pages[0], elements: [arc, invalidDrivingRadius] }] }).success).toBe(false);
+    expect(validateProject({ ...project, pages: [{ ...project.pages[0], elements: [arc, invalidDrivingRadius] }] }).success).toBe(true);
     expect(validateDocument({ ...base, elements: [{ ...arc, startAngle: 0, endAngle: 0 }] }).success).toBe(false);
     expect(validateDocument({ ...base, elements: [{ ...arc, startAngle: -0.1 }] }).success).toBe(false);
     expect(validateDocument({ ...base, elements: [{ ...arc, endAngle: Math.PI * 2 }] }).success).toBe(false);

@@ -96,4 +96,13 @@ describe("derived curve topology", () => {
     const unsupported = [piece({ type: "arc", center: { x: 0, y: 0 }, radius: 1, startAngle: 0, endAngle: Math.PI, direction: "clockwise" }, "arc"), piece({ type: "cubicBezier", p0: { x: 0, y: 0 }, p1: { x: 1, y: 0 }, p2: { x: 1, y: 1 }, p3: { x: 0, y: 1 } }, "cubic")];
     expect(topology(unsupported).diagnostics.some((diagnostic) => diagnostic.code === "unsupported")).toBe(true);
   });
+  it("builds one canonical outer-union loop from two split crossing circles", () => {
+    const first = Math.atan2(4, 3); const second = Math.atan2(4, -3);
+    const graph = topology([
+      piece({ type: "arc", center: { x: 0, y: 0 }, radius: 5, startAngle: -first, endAngle: first, direction: "clockwise" }, "first-circle", { startNodeId: "intersection-bottom", endNodeId: "intersection-top" }),
+      piece({ type: "arc", center: { x: 6, y: 0 }, radius: 5, startAngle: second, endAngle: -second, direction: "clockwise" }, "second-circle", { startNodeId: "intersection-top", endNodeId: "intersection-bottom" }),
+    ]);
+    expect(graph.closedLoops).toHaveLength(1); expect(graph.fragments).toHaveLength(2); expect(graph.fragments.every((fragment) => fragment.curve.type === "arc")).toBe(true);
+    expect(new Set(graph.fragments.flatMap((fragment) => [fragment.startNodeId, fragment.endNodeId]))).toHaveLength(2); expect(graph.nodes).toHaveLength(2);
+  });
 });

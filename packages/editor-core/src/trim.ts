@@ -11,7 +11,7 @@ export interface TrimTarget {
   readonly profile: SketchProfileResult;
 }
 export interface TrimCandidate { readonly target: TrimTarget; readonly diagnostics: readonly CommandDiagnostic[]; readonly supported: boolean }
-export type TrimGeometryTarget = Omit<TrimTarget, "point" | "scope" | "profile"> & { readonly point?: PointMm };
+export type TrimGeometryTarget = Omit<TrimTarget, "point" | "scope" | "profile"> & { readonly point?: PointMm; readonly scope?: ProfileInputScope; readonly profile?: SketchProfileResult };
 export type TrimApply = (document: DocumentSnapshot, target: TrimGeometryTarget) => CommandResult;
 
 /** Canonical geometric mutation seam shared by Trim and legacy Cut. */
@@ -21,7 +21,7 @@ export function applyTrimGeometry(document: DocumentSnapshot, target: TrimGeomet
 
 const diagnostic = (code: string, message: string): CommandDiagnostic => ({ kind: "topology", code, message });
 const stable = (value: unknown): string => JSON.stringify(value);
-const unsafeCodes = new Set(["unsupported-geometry", "degenerate-segment", "invalid-fragment-reference", "stale-source-interval", "inconsistent-loop", "inconsistent-region", "source-provenance-mismatch"]);
+const unsafeCodes = new Set(["degenerate-segment", "invalid-fragment-reference", "stale-source-interval", "inconsistent-loop", "inconsistent-region", "source-provenance-mismatch"]);
 const profileDiagnostics = (profile: SketchProfileResult): readonly CommandDiagnostic[] => profile.diagnostics.filter((item) => unsafeCodes.has(item.code)).map((item) => diagnostic(`profile-${item.code}`, item.message));
 
 /** Rebinds the explicit transient scope to the current snapshot and validates its derived profile. */
@@ -37,8 +37,10 @@ export function buildTrimCandidate(document: DocumentSnapshot, target: TrimTarge
   if (source.type === "spline" || source.type === "ellipse") return { target, supported: false, diagnostics: [diagnostic("unsupported-trim-geometry", `Trim does not support ${source.type} geometry`)] };
   const profile = buildSketchProfile(scope);
   const diagnostics = profileDiagnostics(profile);
-  const statusDiagnostic = profile.status === "open" || profile.status === "valid-closed" || profile.status === "ambiguous" ? [] : [diagnostic(`profile-${profile.status}`, `Trim profile is ${profile.status}`)];
-  if (profile.status !== "open" && profile.status !== "valid-closed" && profile.status !== "ambiguous" || diagnostics.length || stable(target.profile) !== stable(profile)) {
+  const targetFragments = profile.parametricFragments.filter((fragment) => fragment.source.elementId === source.id);
+      const circleWithCuts = source.type === "circle" && targetFragments.length >= 2;
+      const statusDiagnostic = profile.status === "open" || profile.status === "valid-closed" || profile.status === "ambiguous" || circleWithCuts ? [] : [diagnostic(`profile-${profile.status}`, `Trim profile is ${profile.status}`)];
+  if (profile.status !== "open" && profile.status !== "valid-closed" && profile.status !== "ambiguous" && !circleWithCuts || diagnostics.length || stable(target.profile) !== stable(profile)) {
     const mismatch = stable(target.profile) !== stable(profile) ? [diagnostic("stale-trim-profile", "Trim profile is stale or does not match the current scope")] : [];
     return { target: { ...target, scope, profile }, supported: false, diagnostics: [...statusDiagnostic, ...diagnostics, ...mismatch] };
   }

@@ -1219,6 +1219,20 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
     setTextDraft({ position: element.position, value: element.text, elementId: element.id, fontSize: element.fontSize, element });
   };
 
+  const trimTargetFor = (hit: ReturnType<typeof pickCuttableSegment>, point: PointMm): TrimTarget | undefined => {
+    if (!hit) return undefined;
+    const snapshot = editorRef.current.document;
+    const element = snapshot.elements.find((candidate) => candidate.id === hit.elementId);
+    if (!element) return undefined;
+    const requestedScope = activePieceId ? profileScopeForPiece(project, activePage, activePieceId) : { elements: [element].filter((candidate): candidate is Extract<Element, { type: "sketch" | "rectangle" | "circle" | "arc" | "line" | "path" }> => ["sketch", "rectangle", "circle", "arc", "line", "path"].includes(candidate.type)) };
+    const currentElements = new Map(snapshot.elements.map((candidate) => [candidate.id, candidate]));
+    const scope = { elements: requestedScope.elements.flatMap((candidate) => {
+      const current = currentElements.get(candidate.id);
+      return current && ["sketch", "rectangle", "circle", "arc", "line", "path"].includes(current.type) ? [current as Extract<Element, { type: "sketch" | "rectangle" | "circle" | "arc" | "line" | "path" }>] : [];
+    }) };
+    return { elementId: hit.elementId, segmentIndex: hit.segmentIndex, point, ...(hit.ringIndex === undefined ? {} : { ringIndex: hit.ringIndex }), scope, profile: sketchProfileResult(scope) };
+  };
+
   const onCanvasPointerDown = (event: PointerEvent<HTMLDivElement>) => {
      // Commit before handling the next canvas target. This makes pointer-down
      // the authoritative boundary for a draft instead of relying on blur order.
@@ -1355,22 +1369,16 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
     }
      if (tool === "cut") {
         const hit = pickCuttableSegment(editorRef.current.document, point, zoom);
-        const element = hit ? editorRef.current.document.elements.find((candidate) => candidate.id === hit.elementId) : undefined;
-        if (hit && element) {
-          const requestedScope = activePieceId ? profileScopeForPiece(project, activePage, activePieceId) : { elements: [element].filter((candidate): candidate is Extract<Element, { type: "sketch" | "rectangle" | "circle" | "arc" | "line" | "path" }> => ["sketch", "rectangle", "circle", "arc", "line", "path"].includes(candidate.type)) };
-              const currentElements = new Map(editorRef.current.document.elements.map((candidate) => [candidate.id, candidate]));
-              const scope = { elements: requestedScope.elements.flatMap((candidate) => {
-                const current = currentElements.get(candidate.id);
-                return current && ["sketch", "rectangle", "circle", "arc", "line", "path"].includes(current.type) ? [current as Extract<Element, { type: "sketch" | "rectangle" | "circle" | "arc" | "line" | "path" }>] : [];
-              }) };
-              const target = { elementId: hit.elementId, segmentIndex: hit.segmentIndex, point, ...(hit.ringIndex === undefined ? {} : { ringIndex: hit.ringIndex }), scope, profile: sketchProfileResult(scope) };
-              const next = dispatch(editorRef.current, trimSegment(target));
+        const target = trimTargetFor(hit, point);
+        const element = target ? editorRef.current.document.elements.find((candidate) => candidate.id === target.elementId) : undefined;
+        if (target && element) {
+          const next = dispatch(editorRef.current, trimSegment(target));
           if (next !== editorRef.current) {
             const selectedIds = element.type === "line"
-              ? next.document.elements.filter((candidate) => candidate.type === "path" && (candidate.id === hit.elementId || candidate.id.startsWith(`${hit.elementId}:piece:`) || candidate.id.startsWith(`${hit.elementId}:cut:`))).map((candidate) => candidate.id)
+              ? next.document.elements.filter((candidate) => candidate.type === "path" && (candidate.id === target.elementId || candidate.id.startsWith(`${target.elementId}:piece:`) || candidate.id.startsWith(`${target.elementId}:cut:`))).map((candidate) => candidate.id)
               : element.type === "arc"
-                ? next.document.elements.filter((candidate) => candidate.type === "arc" && (candidate.id === hit.elementId || candidate.id.startsWith(`${hit.elementId}:trim:`))).map((candidate) => candidate.id)
-                : next.document.elements.some((candidate) => candidate.id === hit.elementId) ? [hit.elementId] : [];
+                ? next.document.elements.filter((candidate) => candidate.type === "arc" && (candidate.id === target.elementId || candidate.id.startsWith(`${target.elementId}:trim:`))).map((candidate) => candidate.id)
+                : next.document.elements.some((candidate) => candidate.id === target.elementId) ? [target.elementId] : [];
             setEditorState(select(next, selectedIds));
             setEditModeElementIds(selectedIds);
           }
@@ -1643,16 +1651,14 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
      if (tool === "cut" && !interaction.current) {
            const snapshot = editorRef.current.document;
            const cursor = pointAt(event);
-           const pickedPreview = pickCutIntervalPreview(snapshot, cursor, zoom);
-               const hit = pickedPreview?.hit ?? pickCuttableSegment(snapshot, cursor, zoom);
-           if (!hit) setCutSegmentHover(undefined);
+           const hit = pickCuttableSegment(snapshot, cursor, zoom);
+           const target = trimTargetFor(hit, cursor);
+           if (!target || !hit) setCutSegmentHover(undefined);
            else {
-             const targetElement = snapshot.elements.find((element) => element.id === hit.elementId);
-             const scope = activePieceId && targetElement ? profileScopeForPiece(project, activePage, activePieceId) : { elements: targetElement && ["sketch", "rectangle", "circle", "arc", "line", "path"].includes(targetElement.type) ? [targetElement] as Extract<Element, { type: "sketch" | "rectangle" | "circle" | "arc" | "line" | "path" }>[] : [] };
-             const target: TrimTarget = { elementId: hit.elementId, segmentIndex: hit.segmentIndex, point: cursor, ...(hit.ringIndex === undefined ? {} : { ringIndex: hit.ringIndex }), scope, profile: sketchProfileResult(scope) };
+             const pickedPreview = pickCutIntervalPreview(snapshot, cursor, zoom, 8, target.profile);
              const preview = trimPreview(snapshot, target);
              const previewGeometry = preview.success ? pickedPreview : undefined;
-                 setCutSegmentHover({ hit, fragments: previewGeometry?.fragments ?? [], ...(preview.success ? { previewDocument: preview.document } : {}), ...(preview.diagnostics ? { diagnostics: preview.diagnostics } : {}) });
+             setCutSegmentHover({ hit, fragments: previewGeometry?.fragments ?? [], ...(preview.success ? { previewDocument: preview.document } : {}), ...(preview.diagnostics ? { diagnostics: preview.diagnostics } : {}) });
            }
          }
      else setCutSegmentHover(undefined);

@@ -425,6 +425,28 @@ function intersectCircleArc(circle: CircleCurve2D, arc: ArcCurve2D, geometryEpsi
   return points.length ? { kind: "points", points } : none();
 }
 
+function intersectArcArc(first: ArcCurve2D, second: ArcCurve2D, geometryEpsilon: number, parameterEpsilon: number): IntersectionResult {
+  const firstSupportingCircle: CircleCurve2D = { type: "circle", center: first.center, radius: first.radius };
+  const secondSupportingCircle: CircleCurve2D = { type: "circle", center: second.center, radius: second.radius };
+  const result = intersectCircles(firstSupportingCircle, secondSupportingCircle, geometryEpsilon);
+  if (result.kind === "overlap") {
+    // Coincident arc portions require interval boolean operations. Do not guess at
+    // their topology: leave the conservative diagnostic authoritative.
+    return { kind: "unsupported", reason: "coincident-curve-portions" };
+  }
+  if (result.kind !== "points") return result;
+  const points = result.points.flatMap((intersection): IntersectionPoint[] => {
+    const firstParameter = arcParameterAtPoint(first, intersection.point, geometryEpsilon, parameterEpsilon);
+    const secondParameter = arcParameterAtPoint(second, intersection.point, geometryEpsilon, parameterEpsilon);
+    if (firstParameter === undefined || secondParameter === undefined) return [];
+    const contact: IntersectionContact = arcEndpoint(firstParameter, first, parameterEpsilon) || arcEndpoint(secondParameter, second, parameterEpsilon)
+      ? "endpoint"
+      : intersection.contact;
+    return [{ point: intersection.point, firstParameter, secondParameter, contact }];
+  });
+  return points.length ? { kind: "points", points: points.sort((left, right) => left.firstParameter - right.firstParameter) } : none();
+}
+
 function intersectCircles(first: CircleCurve2D, second: CircleCurve2D, geometryEpsilon: number): IntersectionResult {
   const centerOffset = subtract(second.center, first.center);
   const centerDistance = checkedNumber(Math.hypot(centerOffset.x, centerOffset.y));
@@ -688,5 +710,6 @@ export function intersectCurves(first: Curve2D, second: Curve2D, options?: Inter
   if (first.type === "arc" && second.type === "line") return swapResult(intersectLineArc(second, first, geometryEpsilon, parameterEpsilon));
   if (first.type === "circle" && second.type === "arc") return intersectCircleArc(first, second, geometryEpsilon, parameterEpsilon);
   if (first.type === "arc" && second.type === "circle") return swapResult(intersectCircleArc(second, first, geometryEpsilon, parameterEpsilon));
+  if (first.type === "arc" && second.type === "arc") return intersectArcArc(first, second, geometryEpsilon, parameterEpsilon);
   return { kind: "unsupported", reason: "curve-pair" };
 }

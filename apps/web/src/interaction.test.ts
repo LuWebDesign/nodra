@@ -3,7 +3,7 @@ import { createDocument, elementId, layerId, type DocumentSnapshot } from "@nodr
 import { validateDocument } from "@nodra/validation";
 import { canActivateRotation, circleGeometry, centerPageInCanvas, clientPointToCanvas, clientPointToPage, creationGuides, directionalGuide, hasNonCollinearPoints, hoveredSelectionCenter, INITIAL_ZOOM, isDrawingTool, marqueeSelection, MAX_ZOOM, MIN_ZOOM, movementExceedsThreshold, nodeAlignmentGuides, normalizeBounds, normalizeDrag, pagePointToScreen, screenDeltaToMm, screenPointToMm, viewportPointToCanvas, containsBounds, elementsContainedBy, pickDimensionTarget, pickElement, pickFormaElement, pickFormaNode, pickFormaSegment, pickHoverNode, pickCutIntervalPreview, pickCuttableSegment, pickNode, pointerDownIntent, selectedNodeAnchor, selectionCenter, selectionFrame, snapCreationPoint, snapMoveDelta, visibleEditablePathNodeIndexes, visibleNativeCircularCenters, zoomAtPoint } from "./interaction.js";
 import { geometryPatch, geometryValue } from "./propertyBar.js";
-import { dimensionKindForNodes, dimensionOffsetForPlacement, pointMidpoint } from "@nodra/geometry";
+import { dimensionKindForNodes, dimensionOffsetForPlacement, pointMidpoint, sketchProfileResult } from "@nodra/geometry";
 
 describe("native center datums", () => {
   it("returns only visible native circle and arc centers", () => {
@@ -504,6 +504,23 @@ describe("drag geometry", () => {
     expect(preview?.fragments[0]?.curve.type).toBe("cubicBezier");
     expect(preview?.fragments[0]?.sourceInterval.t0).toBeCloseTo(0.3, 8);
     expect(preview?.fragments[0]?.sourceInterval.t1).toBeCloseTo(0.7, 8);
+  });
+
+  it("uses canonical profile fragments when the live document lacks the cutter", () => {
+    const layer = { id: layerId("canonical-profile-hover"), name: "Canonical profile", visible: true, order: 0 };
+    const style = { stroke: "#000", strokeWidth: 1 };
+    const first = { type: "circle" as const, id: elementId("canonical-first"), layerId: layer.id, center: { x: 0, y: 0 }, radius: 5, style };
+    const second = { type: "circle" as const, id: elementId("canonical-second"), layerId: layer.id, center: { x: 6, y: 0 }, radius: 5, style };
+    const profile = sketchProfileResult({ elements: [first, second] });
+    const expected = profile.parametricFragments.find((fragment) => fragment.source.elementId === first.id && fragment.start.sourceParameter < 0.5 && fragment.end.sourceParameter > 0.5);
+    expect(expected?.curve.type).toBe("arc");
+    const curve = expected!.curve;
+    if (curve.type !== "arc") throw new Error("expected canonical arc");
+    const angle = (curve.startAngle + curve.endAngle) / 2;
+    const cursor = { x: curve.center.x + curve.radius * Math.cos(angle), y: curve.center.y + curve.radius * Math.sin(angle) };
+    const preview = pickCutIntervalPreview({ ...createDocument("canonical-profile-hover", [layer]), elements: [first] }, cursor, 10, 8, profile);
+    expect(preview?.hit.elementId).toBe(first.id);
+    expect(preview?.fragments).toEqual([{ curve: expected!.curve, sourceInterval: expected!.sourceInterval }]);
   });
 
   it("previews circular intervals as exact arcs rather than hover polylines", () => {

@@ -76,8 +76,8 @@ describe("editor core", () => {
     const survivingArc = result.document.elements.find((element) => element.id === circle.id);
     expect(survivingArc).toMatchObject({ type: "arc" });
     expect(survivingArc).not.toHaveProperty("circleConstraints");
-    expect(result.document.elements.find((element) => element.id === radial.id)).toMatchObject({ type: "dimension", references: [{ nodeId: "center", nodeIndex: 0 }, { nodeId: "start", nodeIndex: 1 }] });
-    expect(result.document.elements.find((element) => element.id === radial.id)).not.toHaveProperty("driving");
+    expect(result.document.elements.find((element) => element.id === radial.id)).toMatchObject({ type: "dimension", driving: true, constraintId: "radius-5", references: [{ nodeId: "center", nodeIndex: 0 }, { nodeId: "start", nodeIndex: 1 }] });
+    expect(result.document.elements.find((element) => element.id === radial.id)).toHaveProperty("driving", true);
     expect(result.document.elements.some((element) => element.id === linear.id)).toBe(false);
     expect(result.document.connections).toEqual([
       { ...connections[0], first: { elementId: circle.id, node: { kind: "named", name: "center" } } },
@@ -2634,5 +2634,18 @@ it("moves a dimension by changing only its placement offset and supports undo", 
     expect(moved.undo).toHaveLength(1);
     expect(undo(moved).document).toEqual(initial.document);
     expect(redo(undo(moved)).document).toEqual(moved.document);
+  });
+
+  it("edits circle center and radius handles without changing topology node identity", () => {
+    const circle: CircleElement = { type: "circle", id: elementId("handle-circle"), layerId: layerId("default"), center: { x: 10, y: 10 }, radius: 5, style: rectangle.style };
+    const initial = createEditor({ ...document, elements: [circle] });
+    const initialNodes = realGeometryNodes(circle).map(({ kind, nodeId }) => ({ kind, nodeId }));
+    const moved = dispatch(initial, updateElementNode(circle.id, 0, { x: 12, y: 14 }));
+    expect(moved.document.elements[0]).toMatchObject({ type: "circle", center: { x: 12, y: 14 }, radius: 5 });
+    expect(realGeometryNodes(moved.document.elements[0]!).map(({ kind, nodeId }) => ({ kind, nodeId }))).toEqual(initialNodes);
+
+    const resized = dispatch(moved, updateElementNode(circle.id, 2, { x: 12, y: 20 }));
+    expect(resized.document.elements[0]).toMatchObject({ type: "circle", center: { x: 12, y: 14 }, radius: 6 });
+    expect(realGeometryNodes(resized.document.elements[0]!).map(({ kind, nodeId }) => ({ kind, nodeId }))).toEqual(initialNodes);
   });
 });

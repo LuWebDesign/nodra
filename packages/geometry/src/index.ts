@@ -4,6 +4,8 @@ import { arcElementToCurve, lineElementToCurve } from "./curve2d-adapters.js";
 import { closestParameter, curveBounds, pointAt } from "./curve2d.js";
 import { intersectCurves } from "./intersection-engine.js";
 
+export { deriveCircleLens } from "./circle-lens.js";
+export type { CircleLensResult, DerivedCircleLensArc } from "./circle-lens.js";
 export { collectMixedIntersections } from "./mixed-intersections.js";
 export type { CurvePieceProvenance, MixedIntersectionCollection, MixedIntersectionDiagnostic, MixedIntersectionPair, MixedIntersectionPoint, MixedIntersectionSpan } from "./mixed-intersections.js";
 export { buildCurveTopology, deriveCurveTopology } from "./curve-topology.js";

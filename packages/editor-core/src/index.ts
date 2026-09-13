@@ -35,7 +35,7 @@ import {
   isCircleElement,
 } from "@nodra/domain";
 import { validateDocument } from "@nodra/validation";
-import { boundsOf, boundsOfElements, connectableNodeAddress, contourWithPoints, directionVector, elementCenter, elementToContour, dimensionGeometry, elementToCurves, glyphGeometryNodes, groupCenter, intersectCurves, lineElementToCurve, circleElementToCurve, arcElementToCurve, mirrorHandleOffset, partitionCurveByInterval, selectRemovableCurveInterval, selectSourcedCurveInterval, realGeometryNodes, resizeGroup, rotateElements, shapeResultContours, tangentAt, transformPoint, connectableNode, splitCuttableSegments, classifyCutGraph, cuttableSegments, lineSegmentIntersection, rotatedLineEndpoints, sketchEdgeAtAddress, sketchEdgeIndexAtAddress, solveSketchConstraints, cubicBezierLineIntersections, splitCubicBezierAtParameters, flattenCubicBezier, GEOMETRY_EPSILON, type CubicBezier, type Direction, type LineCurve2D, type SourcedCurve2D } from "@nodra/geometry";
+import { boundsOf, boundsOfElements, connectableNodeAddress, contourWithPoints, directionVector, elementCenter, elementToContour, dimensionGeometry, elementToCurves, glyphGeometryNodes, groupCenter, intersectCurves, lineElementToCurve, circleElementToCurve, arcElementToCurve, pointAt, mirrorHandleOffset, partitionCurveByInterval, selectRemovableCurveInterval, selectSourcedCurveInterval, realGeometryNodes, resizeGroup, rotateElements, shapeResultContours, tangentAt, transformPoint, connectableNode, splitCuttableSegments, classifyCutGraph, cuttableSegments, lineSegmentIntersection, rotatedLineEndpoints, sketchEdgeAtAddress, sketchEdgeIndexAtAddress, solveSketchConstraints, cubicBezierLineIntersections, splitCubicBezierAtParameters, flattenCubicBezier, GEOMETRY_EPSILON, type CubicBezier, type Direction, type LineCurve2D, type SourcedCurve2D } from "@nodra/geometry";
 import { insertSplineNode, moveSplineHandle as moveSplineHandleData, moveSplineNode as moveSplineNodeData } from "./spline.js";
 import { topologyReferenceKey, type ReferenceResolution, type TopologyEditResult, type TopologyReference } from "./topology.js";
 import { recomputeSketchKernel } from "./sketchKernel.js";
@@ -341,8 +341,22 @@ const updateArcRadius = (document: DocumentSnapshot, target: ArcElement, radius:
     center = { x: fixed.x - (endpoint.x - target.center.x) / length * radius, y: fixed.y - (endpoint.y - target.center.y) / length * radius };
   }
   const updated = { ...target, center, radius, startAngle, endAngle };
+      const arcEndpoint = (arc: ArcElement, name: "start" | "end"): PointMm => ({ x: arc.center.x + arc.radius * Math.cos(name === "start" ? arc.startAngle : arc.endAngle), y: arc.center.y + arc.radius * Math.sin(name === "start" ? arc.startAngle : arc.endAngle) });
   if (!preservesElementConnections(document, target, updated)) return { success: false, error: "Arc radius change would break an existing connection" };
-  return replaceElements(document, document.elements.map((element) => element.id === target.id && element.type === "arc" ? updated : element));
+  const oldStart = arcEndpoint(target, "start"); const oldEnd = arcEndpoint(target, "end");
+      const close = (first: PointMm, second: PointMm): boolean => Math.hypot(first.x - second.x, first.y - second.y) <= 1e-7;
+      const related = !endpointPoints.start && !endpointPoints.end ? document.elements.filter((element): element is ArcElement => element.type === "arc" && element.id !== target.id && (close(arcEndpoint(element, "start"), oldStart) && close(arcEndpoint(element, "end"), oldEnd) || close(arcEndpoint(element, "start"), oldEnd) && close(arcEndpoint(element, "end"), oldStart))).sort((first, second) => first.id.localeCompare(second.id)) : [];
+      const replacements = new Map<ElementId, ArcElement>([[target.id, updated]]);
+      if (related.length) {
+        const intersections = intersectCurves({ type: "circle", center: updated.center, radius: updated.radius }, { type: "circle", center: related[0]!.center, radius: related[0]!.radius });
+        if (intersections.kind !== "points" || intersections.points.length !== 2) return { success: false, error: "Arc radius change no longer has two shared intersections" };
+        const nearest = (point: PointMm): PointMm => intersections.points.slice().sort((first, second) => Math.hypot(first.point.x - point.x, first.point.y - point.y) - Math.hypot(second.point.x - point.x, second.point.y - point.y))[0]!.point;
+        const startPoint = nearest(oldStart); const endPoint = nearest(oldEnd);
+        const angle = (point: PointMm, centerPoint: PointMm): number => normalizeArcAngle(Math.atan2(point.y - centerPoint.y, point.x - centerPoint.x));
+        replacements.set(target.id, { ...updated, startAngle: angle(startPoint, updated.center), endAngle: angle(endPoint, updated.center) });
+        for (const sibling of related) replacements.set(sibling.id, { ...sibling, startAngle: angle(close(arcEndpoint(sibling, "start"), oldStart) ? startPoint : endPoint, sibling.center), endAngle: angle(close(arcEndpoint(sibling, "end"), oldStart) ? startPoint : endPoint, sibling.center) });
+      }
+      return replaceElements(document, document.elements.map((element) => element.type === "arc" ? replacements.get(element.id) ?? element : element));
 };
 
 export const createElement = (element: Element, connections: readonly ExplicitConnection[] = []): EditorCommand => ({
@@ -1849,7 +1863,41 @@ const cutArcExact = (document: DocumentSnapshot, arc: ArcElement, cursor: PointM
 };
 
 /** Unified Cut dispatch used by interaction clients. */
-const cutCircleExact = (document: DocumentSnapshot, circle: Extract<Element, { type: "circle" }>, cursor: PointMm): CommandResult => {
+const cutCircleCanonical = (document: DocumentSnapshot, target: TrimGeometryTarget, circle: Extract<Element, { type: "circle" }>, cursor: PointMm): CommandResult => {
+      const profile = target.profile; if (!profile) return { success: false, error: "Circle Trim requires a canonical profile" };
+          const hasAmbiguousIntersection = (element: Element): boolean => {
+            let curves: readonly SourcedCurve2D[];
+            try { curves = elementToCurves(element); } catch { return true; }
+            return curves.some((candidate) => {
+              const result = intersectCurves(circleElementToCurve(circle).curve, candidate.curve);
+              return result.kind === "overlap" || result.kind === "unsupported" || result.kind === "points" && result.points.some((intersection) => intersection.contact === "tangent");
+            });
+          };
+          if ((target.scope?.elements ?? []).some((element) => element.id !== circle.id && hasAmbiguousIntersection(element))) return { success: false, error: "Circle Trim has ambiguous intersections" };
+      const fragments = profile.parametricFragments.filter((fragment) => fragment.source.kind === "circle-element" && fragment.source.elementId === circle.id);
+      if (fragments.length < 2) return { success: false, error: "Circle Trim requires two distinct intersections" };
+      const cuts = [...new Set(fragments.flatMap((fragment) => [fragment.start.sourceParameter, fragment.end.sourceParameter]).map((value) => value <= 1e-9 || value >= 1 - 1e-9 ? 0 : value))].sort((a, b) => a - b);
+      if (cuts.length < 2) return { success: false, error: "Circle Trim requires two distinct intersections" };
+      let selected: ReturnType<typeof selectRemovableCurveInterval>; try { selected = selectRemovableCurveInterval(circleElementToCurve(circle).curve, cuts, cursor); } catch { return { success: false, error: "Circle Trim geometry is invalid" }; }
+      if (selected.kind !== "selected") return { success: false, error: selected.reason === "cursor-on-cut" ? "Trim cursor lies on an intersection" : "Circle Trim requires two distinct intersections" };
+      const others = (target.scope?.elements ?? []).filter((element): element is Extract<Element, { type: "circle" | "arc" }> => (element.type === "circle" || element.type === "arc") && element.id !== circle.id);
+      const insideOther = others.some((other) => Math.hypot(cursor.x - other.center.x, cursor.y - other.center.y) < other.radius - 1e-7);
+      const inner = (fragment: (typeof fragments)[number]): boolean => { const point = pointAt(fragment.curve, 0.5); return others.some((other) => Math.hypot(point.x - other.center.x, point.y - other.center.y) < other.radius - 1e-7); };
+      const innerFragments = fragments.filter(inner);
+      const removable = others.length && innerFragments.length ? (insideOther ? innerFragments : fragments.filter((fragment) => !inner(fragment))) : fragments.filter((fragment) => { const middle = (fragment.start.sourceParameter + fragment.end.sourceParameter) / 2; return selected.interval.wrapsSeam ? middle >= selected.interval.start || middle <= selected.interval.end : middle >= selected.interval.start && middle <= selected.interval.end; });
+      const survivors = fragments.filter((fragment) => !removable.includes(fragment)).filter((fragment) => fragment.curve.type === "arc");
+      const outputFragments = others.length > 0 && innerFragments.length > 0 && survivors.length > 1 ? [{ ...survivors[survivors.length - 1]!, curve: { ...survivors[survivors.length - 1]!.curve, startAngle: (survivors[survivors.length - 1]!.curve as Extract<typeof survivors[number]["curve"], { type: "arc" }>).startAngle, endAngle: (survivors[0]!.curve as Extract<typeof survivors[number]["curve"], { type: "arc" }>).endAngle } }] : survivors;
+      if (!outputFragments.length) return { success: false, error: "Circle Trim produced degenerate geometry" };
+      const normalizeTrimAngle = (angle: number): number => ((angle % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2);
+      const arcs: ArcElement[] = outputFragments.sort((a, b) => a.start.sourceParameter - b.start.sourceParameter).map((fragment, index) => { const curve = fragment.curve; if (curve.type !== "arc") throw new Error("Circle profile fragment is not an arc"); return { type: "arc", id: index ? elementId(`${circle.id}:trim:${index}`) : circle.id, layerId: circle.layerId, center: curve.center, radius: curve.radius, startAngle: normalizeTrimAngle(curve.startAngle), endAngle: normalizeTrimAngle(curve.endAngle), direction: curve.direction, style: circle.style, ...(circle.operation ? { operation: circle.operation } : {}) }; });
+      const oldNodes = new Map(realGeometryNodes(circle).map((node) => [node.nodeId, node.point])); const close = (a: PointMm, b: PointMm): boolean => Math.hypot(a.x - b.x, a.y - b.y) <= GEOMETRY_EPSILON;
+      const endpoint = (arc: ArcElement, name: "start" | "end"): PointMm => pointAt({ type: "arc", center: arc.center, radius: arc.radius, startAngle: arc.startAngle, endAngle: arc.endAngle, direction: arc.direction }, name === "start" ? 0 : 1);
+      const mapReference = (reference: DimensionElement["references"][number]): DimensionElement["references"][number] | undefined => { if (reference.elementId !== circle.id) return reference; if (!("nodeId" in reference) || !reference.nodeId) return undefined; if (reference.nodeId === "center") return { ...reference, elementId: arcs[0]!.id, nodeId: "center", nodeIndex: 0 }; const point = oldNodes.get(reference.nodeId); const match = point && arcs.flatMap((arc) => (["start", "end"] as const).map((name) => ({ arc, name }))).find(({ arc, name }) => close(endpoint(arc, name), point)); return match ? { ...reference, elementId: match.arc.id, nodeId: match.name, nodeIndex: match.name === "start" ? 1 : 2 } : undefined; };
+      const elements = document.elements.flatMap<Element>((element) => { if (element.id === circle.id) return arcs; if (element.type !== "dimension" || !element.references.some((reference) => reference.elementId === circle.id)) return [element]; const references = element.references.map(mapReference); return references.every((reference) => reference !== undefined) ? [{ ...element, references: references as unknown as DimensionElement["references"] }] : [element]; });
+      return replaceElements(document, elements);
+    };
+
+    const cutCircleExact = (document: DocumentSnapshot, circle: Extract<Element, { type: "circle" }>, cursor: PointMm): CommandResult => {
   if (![cursor.x, cursor.y].every(Number.isFinite)) return { success: false, error: "Circle cut point is invalid" };
   const target = circleElementToCurve(circle);
   const visibleLayers = new Set(document.layers.filter((layer) => layer.visible).map((layer) => layer.id));
@@ -1918,8 +1966,8 @@ const cutCircleExact = (document: DocumentSnapshot, circle: Extract<Element, { t
     const radial = dimension.kind === "radius" || dimension.kind === "diameter";
     if (!radial) return { ...dimension, references: [refs[0], refs[1]] };
     const annotation = { ...dimension };
-    delete annotation.driving;
-    delete annotation.constraintId;
+    // Preserve the driving radial dimension when a circle becomes an arc.
+    // The original constraint identity remains attached to the dimension.
     return { ...annotation, references: [refs[0], refs[1]] };
   };
   const elements = document.elements.map((element) => element.id === circle.id ? arc : element).flatMap<Element>((element) => {
@@ -1937,7 +1985,10 @@ const applyTrimGeometryCore = (document: DocumentSnapshot, target: TrimGeometryT
   const { elementId, segmentIndex, point, ringIndex = 0 } = target;
   const element = document.elements.find((candidate) => candidate.id === elementId);
   if (!element) return { success: false, error: "Cut target not found" };
-  if (element.type === "circle") return point ? cutCircleExact(document, element, point) : { success: false, error: "A circle cut requires a click point" };
+  if (element.type === "circle") {
+        if (!point) return { success: false, error: "A circle cut requires a click point" };
+        return target.profile ? cutCircleCanonical(document, target, element, point) : cutCircleExact(document, element, point);
+      }
   if (element.type === "arc") return point ? cutArcExact(document, element, point) : { success: false, error: "An arc cut requires a click point" };
   if (element.type === "sketch") return cutSketchEdgeDestructive(elementId, segmentIndex, point).apply(document);
   if (element.type === "contour") return cutContourSegment(elementId, ringIndex, segmentIndex, point).apply(document);
