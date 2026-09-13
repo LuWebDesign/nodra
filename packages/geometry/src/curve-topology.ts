@@ -98,7 +98,18 @@ export function buildCurveTopology(pieces: readonly CurvePiece2D[], intersection
   const fragments: CurveTopologyFragment[] = [];
   pieces.forEach((piece, index) => {
     const split = cuts[index]!.length === 0 ? [{ curve: piece.curve, sourceInterval: { t0: 0, t1: 1 } }] : splitCurveAtParameters(piece.curve, cuts[index]!, parameterEpsilon);
-    split.forEach((fragment) => {
+    // A native circle is periodic: its first and last atomic intervals meet at the seam.
+    const canonicalSplit = piece.curve.type === "circle" && split.length > 2 && distance(pointAt(split[0]!.curve, 0), pointAt(split.at(-1)!.curve, 1)) <= geometryEpsilon
+      ? [{
+          curve: (() => {
+            const first = split[0]!.curve; const last = split.at(-1)!.curve;
+            if (first.type !== "arc" || last.type !== "arc") throw new Error("circle seam fragments must be arcs");
+            return { ...last, endAngle: first.endAngle };
+          })(),
+          sourceInterval: { t0: split.at(-1)!.sourceInterval.t0, t1: split[0]!.sourceInterval.t1 },
+        }, ...split.slice(1, -1)]
+      : split;
+    canonicalSplit.forEach((fragment) => {
       const t0 = fragment.sourceInterval.t0; const t1 = fragment.sourceInterval.t1;
       const start: CurveTopologyParameterReference = { source: piece.source, sourceParameter: sourceParameter(piece, t0), pieceParameter: t0 }; const end: CurveTopologyParameterReference = { source: piece.source, sourceParameter: sourceParameter(piece, t1), pieceParameter: t1 };
       const id = `fragment:${hash(`${ids[index]}|${numberKey(sourceParameter(piece, t0))}|${numberKey(sourceParameter(piece, t1))}|${piece.orientation}`)}`;

@@ -401,6 +401,131 @@ test("trims a native circle into one exact arc and restores it with undo", async
   await expect(arc).toHaveCount(1);
 });
 
+test("cuts both overlapping native circles through canonical hover arcs and undoes both", async ({ page }) => {
+  await page.goto("/modelo");
+  const pageBounds = await visibleBoundingBox(page.locator(".page"));
+  const radius = 70;
+  const firstCenter = { x: pageBounds.x + 220, y: pageBounds.y + 220 };
+  const secondCenter = { x: firstCenter.x + 90, y: firstCenter.y };
+  const drawCircle = async (center: { x: number; y: number }) => {
+    await page.getByRole("button", { name: "Círculo" }).click();
+    await page.mouse.click(center.x, center.y);
+    await page.mouse.move(center.x + radius, center.y);
+    await page.mouse.click(center.x + radius, center.y);
+  };
+  await drawCircle(firstCenter);
+  await drawCircle(secondCenter);
+  const circles = page.locator(".page-svg svg circle[data-element-id]");
+  await expect(circles).toHaveCount(2);
+  const firstId = await circles.nth(0).getAttribute("data-element-id");
+  const secondId = await circles.nth(1).getAttribute("data-element-id");
+  expect(firstId).not.toBeNull();
+  expect(secondId).not.toBeNull();
+
+  await page.getByRole("button", { name: "Seleccion" }).click();
+  await page.mouse.click(firstCenter.x, firstCenter.y);
+  const originalRadius = Number(await page.locator(".inspector").getByLabel("Radio en milímetros").inputValue());
+  await page.mouse.click(secondCenter.x, secondCenter.y);
+  const secondOriginalRadius = Number(await page.locator(".inspector").getByLabel("Radio en milímetros").inputValue());
+  expect(secondOriginalRadius).toBeCloseTo(originalRadius);
+
+  await page.getByRole("button", { name: "Cortar segmentos" }).click();
+  const firstBox = await visibleBoundingBox(circles.nth(0));
+  const secondBox = await visibleBoundingBox(circles.nth(1));
+  const firstCircle = { center: { x: firstBox.x + firstBox.width / 2, y: firstBox.y + firstBox.height / 2 }, radius: firstBox.width / 2 };
+  const secondCircle = { center: { x: secondBox.x + secondBox.width / 2, y: secondBox.y + secondBox.height / 2 }, radius: secondBox.width / 2 };
+  const separation = Math.hypot(secondCircle.center.x - firstCircle.center.x, secondCircle.center.y - firstCircle.center.y);
+  const midpoint = { x: (firstCircle.center.x + secondCircle.center.x) / 2, y: (firstCircle.center.y + secondCircle.center.y) / 2 };
+  const halfChord = Math.sqrt(firstCircle.radius ** 2 - (separation / 2) ** 2);
+  const perpendicular = { x: -(secondCircle.center.y - firstCircle.center.y) / separation, y: (secondCircle.center.x - firstCircle.center.x) / separation };
+  const crossings = [
+    { x: midpoint.x + perpendicular.x * halfChord, y: midpoint.y + perpendicular.y * halfChord },
+    { x: midpoint.x - perpendicular.x * halfChord, y: midpoint.y - perpendicular.y * halfChord },
+  ];
+  const cutPoints = [
+    { x: firstCircle.center.x - firstCircle.radius, y: firstCircle.center.y },
+    { x: secondCircle.center.x + secondCircle.radius, y: secondCircle.center.y },
+  ];
+  for (const [index, point] of cutPoints.entries()) {
+    await page.mouse.move(point.x, point.y);
+    const hover = page.locator(".cut-segment-hover-overlay");
+    const hoverPaths = hover.locator("path");
+    await expect(hoverPaths.first()).toBeVisible();
+    expect(await hoverPaths.count()).toBeGreaterThan(0);
+    for (let pathIndex = 0; pathIndex < await hoverPaths.count(); pathIndex += 1) await expect(hoverPaths.nth(pathIndex)).toHaveAttribute("d", / A /);
+    const hoverEndpoints = await hoverPaths.evaluateAll((paths) => paths.flatMap((candidate) => {
+      const path = candidate as SVGPathElement;
+      const transform = path.getScreenCTM();
+      if (!transform) return [];
+      const first = path.getPointAtLength(0);
+      const last = path.getPointAtLength(path.getTotalLength());
+      return [new DOMPoint(first.x, first.y).matrixTransform(transform), new DOMPoint(last.x, last.y).matrixTransform(transform)].map((point) => ({ x: point.x, y: point.y }));
+    }));
+    for (const crossing of crossings) expect(Math.min(...hoverEndpoints.map((point) => Math.hypot(point.x - crossing.x, point.y - crossing.y)))).toBeLessThan(2);
+    await expect(hover.locator("line, polyline")).toHaveCount(0);
+    await page.mouse.click(point.x, point.y);
+    const id = index === 0 ? firstId : secondId;
+    await expect(page.locator(`.page-svg svg circle[data-element-id="${id}"]`)).toHaveCount(0);
+    const arc = page.locator(`.page-svg svg path[data-element-id="${id}"]`);
+    await expect(arc).toHaveCount(1);
+    await expect(arc).toHaveAttribute("d", / A /);
+    await page.getByRole("button", { name: "Seleccion" }).click();
+    const arcPoint = await arc.evaluate((element) => {
+      const path = element as SVGPathElement;
+      const transform = path.getScreenCTM()!;
+      const point = path.getPointAtLength(path.getTotalLength() * 0.5);
+      const screen = new DOMPoint(point.x, point.y).matrixTransform(transform);
+      return { x: screen.x, y: screen.y };
+    });
+    await page.mouse.click(arcPoint.x, arcPoint.y);
+    await expect.poll(async () => Number(await page.locator(".inspector").getByLabel("Radio en milímetros").inputValue())).toBeCloseTo(index === 0 ? originalRadius : secondOriginalRadius);
+    if (index === 0) await page.getByRole("button", { name: "Cortar segmentos" }).click();
+  }
+  await expect(page.locator(".page-svg svg circle[data-element-id]")).toHaveCount(0);
+  expect(await page.locator(".page-svg svg path[data-element-id]").count()).toBeGreaterThanOrEqual(2);
+  const selectArcPoints = async (id: string, otherCenter: { x: number; y: number }) => page.locator(`.page-svg svg path[data-element-id="${id}"]`).evaluate((element, center) => {
+    const path = element as SVGPathElement;
+    const transform = path.getScreenCTM()!;
+    return Array.from({ length: 9 }, (_, index) => (index + 1) / 10).map((fraction) => {
+      const point = path.getPointAtLength(path.getTotalLength() * fraction);
+      const screen = new DOMPoint(point.x, point.y).matrixTransform(transform);
+      return { x: screen.x, y: screen.y, distance: Math.hypot(screen.x - center.x, screen.y - center.y) };
+    }).sort((first, second) => second.distance - first.distance);
+  }, otherCenter);
+  const firstArcPoints = await selectArcPoints(firstId!, secondCircle.center);
+  const secondArcPoints = await selectArcPoints(secondId!, firstCircle.center);
+  for (const point of [...firstArcPoints, ...secondArcPoints]) expect(Math.min(...crossings.map((crossing) => Math.hypot(point.x - crossing.x, point.y - crossing.y)))).toBeGreaterThan(5);
+  await page.getByRole("button", { name: "Seleccion" }).click();
+  await page.mouse.click(pageBounds.x + 30, pageBounds.y + 30);
+  let firstSelected = false;
+  const profileOverlay = page.locator('[data-profile-selection-preview="true"]');
+  for (const point of firstArcPoints) {
+    await page.mouse.click(point.x, point.y);
+    if (await page.locator(".inspector").getByLabel("Radio en milímetros").count()) { firstSelected = true; break; }
+  }
+  expect(firstSelected).toBe(true);
+  await expect.poll(async () => Number(await page.locator(".inspector").getByLabel("Radio en milímetros").inputValue())).toBeCloseTo(originalRadius);
+  await page.keyboard.down("Shift");
+  try {
+    for (const point of secondArcPoints) {
+      await page.mouse.click(point.x, point.y);
+      if (await profileOverlay.count()) break;
+    }
+  } finally {
+    await page.keyboard.up("Shift");
+  }
+  await expect(profileOverlay, `Profile overlay missing after Shift-selecting arc IDs ${firstId} and ${secondId}` ).toHaveCount(1);
+  const profilePath = profileOverlay.locator('path[data-profile="true"]');
+  await expect(profilePath).toHaveCount(1);
+  await expect(profilePath).toHaveAttribute("d", / A /);
+  await expect(profileOverlay.locator("line, polyline")).toHaveCount(0);
+
+  await page.getByRole("button", { name: "Deshacer" }).click();
+  await page.getByRole("button", { name: "Deshacer" }).click();
+  await expect(page.locator(".page-svg svg circle[data-element-id]")).toHaveCount(2);
+  await expect(page.locator(".page-svg svg path[data-element-id]")).toHaveCount(0);
+});
+
 test("edits rectangle dimensions around its center with proportional lock and undo", async ({ page }) => {
   await page.goto("/modelo");
   await drawRectangle(page);
