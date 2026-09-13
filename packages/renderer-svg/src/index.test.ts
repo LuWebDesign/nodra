@@ -207,9 +207,16 @@ describe("SVG renderer boundary", () => {
         const circle = { type: "circle" as const, id: elementId("profile-circle"), layerId: layer.id, center: { x: 20, y: 20 }, radius: 10, style };
         const profile = buildSketchProfile({ elements: [circle] });
         expect(profile.status).toBe("valid-closed");
-        const result = renderSketchProfileSvg(profile, { zoom: 1, panMm: { x: 0, y: 0 } });
+        const result = renderSketchProfileSvg(profile, { zoom: 2, panMm: { x: 5, y: 10 } }, { width: 120, height: 90 });
+        const repeated = renderSketchProfileSvg(profile, { zoom: 2, panMm: { x: 5, y: 10 } }, { width: 120, height: 90 });
         expect(result.success).toBe(true);
-        if (result.success) expect(result.svg.match(/ A /g)).toHaveLength(2);
+        expect(repeated).toEqual(result);
+        if (result.success) {
+          expect(result.svg).toContain('<svg xmlns="http://www.w3.org/2000/svg" data-units="mm" width="120" height="90" viewBox="0 0 120 90">');
+          expect(result.svg).toContain('M50 20 A 20 20');
+          expect(result.svg.match(/ A /g)).toHaveLength(2);
+          expect(result.svg).toContain('fill-rule="evenodd"');
+        }
       });
 
       it("renders canonical region holes from parametric fragments and preserves classification", () => {
@@ -219,7 +226,7 @@ describe("SVG renderer boundary", () => {
         expect(profile.status).toBe("valid-closed");
         expect(profile.regions).toHaveLength(1);
         expect(profile.regions[0]?.holes).toHaveLength(1);
-        const result = renderSketchProfileSvg(profile, { zoom: 1, panMm: { x: 0, y: 0 } }, { fill: "#123<&" });
+        const result = renderSketchProfileSvg(profile, { zoom: 1, panMm: { x: 0, y: 0 } }, { fill: "#123<&", width: 120, height: 90 });
         expect(result.success).toBe(true);
         if (result.success) {
           expect(result.svg.match(/ A /g)).toHaveLength(4);

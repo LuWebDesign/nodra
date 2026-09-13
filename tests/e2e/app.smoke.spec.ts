@@ -503,7 +503,75 @@ test("creates nested rectangle and circle objects with click gestures", async ({
   await expect(page.locator('.page-svg svg circle[data-element-id]')).toHaveCount(1);
 });
 
-test("continues a click line and closes a valid non-collinear path", async ({ page }) => {
+test("keeps the profile preview aligned for a selected rectangle with an inner circle", async ({ page }) => {
+      await page.goto("/modelo");
+      const bounds = await visibleBoundingBox(page.locator(".page"));
+      const rectangleStart = { x: bounds.x + 100, y: bounds.y + 100 };
+      const rectangleEnd = { x: bounds.x + 260, y: bounds.y + 220 };
+      await page.getByRole("button", { name: "Rectángulo" }).click();
+      await page.mouse.click(rectangleStart.x, rectangleStart.y);
+      await page.mouse.click(rectangleEnd.x, rectangleEnd.y);
+      await page.getByRole("button", { name: "Círculo" }).click();
+      const circleCenter = { x: bounds.x + 180, y: bounds.y + 160 };
+      await page.mouse.click(circleCenter.x, circleCenter.y);
+      await page.mouse.move(circleCenter.x + 35, circleCenter.y);
+      await page.mouse.click(circleCenter.x + 35, circleCenter.y);
+
+      const mainSvg = page.locator(".page-svg svg");
+      const rectangle = mainSvg.locator('rect[data-element-id]').first();
+      const circle = mainSvg.locator('circle[data-element-id]').first();
+      await expect(rectangle).toHaveCount(1);
+      await expect(circle).toHaveCount(1);
+      const rectangleBox = await visibleBoundingBox(rectangle);
+      const circleBox = await visibleBoundingBox(circle);
+
+      await page.getByRole("button", { name: "Seleccion" }).click();
+      await page.mouse.click(rectangleBox.x + 20, rectangleBox.y + 20);
+      await page.keyboard.down("Shift");
+          try {
+            await page.mouse.click(circleBox.x + circleBox.width / 2, circleBox.y + circleBox.height / 2);
+          } finally {
+            await page.keyboard.up("Shift");
+          }
+
+
+
+      const overlay = page.locator('[data-profile-selection-preview="true"]');
+      await expect(overlay).toHaveCount(1);
+      await expect(overlay).toHaveCSS("pointer-events", "none");
+      const previewSvg = overlay.locator(":scope > svg");
+      const previewPath = previewSvg.locator('path[data-profile="true"]');
+      await expect(previewSvg).toHaveCount(1);
+      await expect(previewPath).toHaveCount(1);
+      await expect(previewPath).toHaveAttribute("fill-rule", "evenodd");
+      const previewData = await previewPath.getAttribute("d");
+      expect(previewData).toMatch(/^M/);
+      expect(previewData?.match(/ L/g)?.length).toBeGreaterThanOrEqual(3);
+      expect(previewData?.match(/ A /g)?.length).toBe(2);
+
+      for (const attribute of ["width", "height", "viewBox"] as const) {
+        const mainAttribute = await mainSvg.getAttribute(attribute);
+            expect(mainAttribute).not.toBeNull();
+            await expect(previewSvg).toHaveAttribute(attribute, mainAttribute!);
+      }
+      const mainSvgBox = await visibleBoundingBox(mainSvg);
+      const previewSvgBox = await visibleBoundingBox(previewSvg);
+      expect(Math.abs(previewSvgBox.x - mainSvgBox.x)).toBeLessThan(2);
+      expect(Math.abs(previewSvgBox.y - mainSvgBox.y)).toBeLessThan(2);
+      expect(Math.abs(previewSvgBox.width - mainSvgBox.width)).toBeLessThan(2);
+      expect(Math.abs(previewSvgBox.height - mainSvgBox.height)).toBeLessThan(2);
+      const previewBox = await visibleBoundingBox(previewPath);
+      expect(previewBox.x).toBeGreaterThanOrEqual(rectangleBox.x - 2);
+      expect(previewBox.y).toBeGreaterThanOrEqual(rectangleBox.y - 2);
+      expect(previewBox.x + previewBox.width).toBeLessThanOrEqual(rectangleBox.x + rectangleBox.width + 2);
+      expect(previewBox.y + previewBox.height).toBeLessThanOrEqual(rectangleBox.y + rectangleBox.height + 2);
+      expect(circleBox.x).toBeGreaterThanOrEqual(rectangleBox.x - 2);
+      expect(circleBox.y).toBeGreaterThanOrEqual(rectangleBox.y - 2);
+      expect(circleBox.x + circleBox.width).toBeLessThanOrEqual(rectangleBox.x + rectangleBox.width + 2);
+      expect(circleBox.y + circleBox.height).toBeLessThanOrEqual(rectangleBox.y + rectangleBox.height + 2);
+    });
+
+    test("continues a click line and closes a valid non-collinear path", async ({ page }) => {
   await page.goto("/modelo");
   const bounds = await page.locator(".page").boundingBox();
   expect(bounds).not.toBeNull();
