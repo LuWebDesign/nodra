@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createDocument, elementId, layerId, withElements, type ArcElement, type DocumentSnapshot } from "@nodra/domain";
-import { renderSvg } from "./index.js";
+import { buildSketchProfile } from "@nodra/geometry";
+    import { renderSketchProfileSvg, renderSvg } from "./index.js";
 
 const layer = { id: layerId("design"), name: "Design", visible: true, order: 0 } as const;
 const style = { stroke: "#111", strokeWidth: 0.2 } as const;
@@ -202,7 +203,32 @@ describe("SVG renderer boundary", () => {
     expect(source).toEqual(before);
   });
 
-  it("renders text strokes with the configured positive model width", () => {
+  it("renders canonical full-circle profiles with native arc commands", () => {
+        const circle = { type: "circle" as const, id: elementId("profile-circle"), layerId: layer.id, center: { x: 20, y: 20 }, radius: 10, style };
+        const profile = buildSketchProfile({ elements: [circle] });
+        expect(profile.status).toBe("valid-closed");
+        const result = renderSketchProfileSvg(profile, { zoom: 1, panMm: { x: 0, y: 0 } });
+        expect(result.success).toBe(true);
+        if (result.success) expect(result.svg.match(/ A /g)).toHaveLength(2);
+      });
+
+      it("renders canonical region holes from parametric fragments and preserves classification", () => {
+        const outer = { type: "circle" as const, id: elementId("profile-outer"), layerId: layer.id, center: { x: 20, y: 20 }, radius: 10, style };
+        const inner = { type: "circle" as const, id: elementId("profile-hole"), layerId: layer.id, center: { x: 20, y: 20 }, radius: 4, style };
+        const profile = buildSketchProfile({ elements: [outer, inner] });
+        expect(profile.status).toBe("valid-closed");
+        expect(profile.regions).toHaveLength(1);
+        expect(profile.regions[0]?.holes).toHaveLength(1);
+        const result = renderSketchProfileSvg(profile, { zoom: 1, panMm: { x: 0, y: 0 } }, { fill: "#123<&" });
+        expect(result.success).toBe(true);
+        if (result.success) {
+          expect(result.svg.match(/ A /g)).toHaveLength(4);
+          expect(result.svg).toContain('fill="#123&lt;&amp;"');
+          expect(result.svg).toContain('fill-rule="evenodd"');
+        }
+      });
+
+      it("renders text strokes with the configured positive model width", () => {
     const source = withElements(createDocument("thin-text", [layer]), [{
       type: "text", id: elementId("thin-text"), layerId: layer.id, position: { x: 10, y: 20 }, size: { width: 40, height: 20 },
       text: "thin", fontFamily: "Arial", fontSize: 10, fontWeight: "normal", fontStyle: "normal", textAlign: "left", lineHeight: 1.2, rotation: 0,

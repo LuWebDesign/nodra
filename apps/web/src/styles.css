@@ -97,7 +97,7 @@
  .status-palette .swatch { width:18px; height:18px; }
  .status-palette .swatch.no-fill { font-size:13px; line-height:16px; }
 /* Unedited document geometry uses a neutral black contour; editing overlays provide the active colors. */
-.page-svg svg [data-element-id] { stroke: #111827; }.page-svg svg text { user-select:none; -webkit-user-select:none; }
+.page-svg svg [data-element-id] { stroke: #111827; }.page-svg svg text { user-select:none; -webkit-user-select:none; }.profile-preview-overlay svg { width:100%; height:100%; overflow:visible; }
 
 /* The contextual text font selector remains in the inspector Text tab. */
 
