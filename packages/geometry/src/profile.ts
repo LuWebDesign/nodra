@@ -1,5 +1,5 @@
-import type { ArcElement, CircleElement, LineElement, PointMm, RectangleElement, SketchElement } from "@nodra/domain";
-import { arcElementToCurve, circleElementToCurve, deriveCurvePieces, rectangleElementToCurves, sketchEdgeToCurve } from "./curve2d-adapters.js";
+import type { ArcElement, CircleElement, LineElement, PathElement, PointMm, RectangleElement, SketchElement } from "@nodra/domain";
+import { arcElementToCurve, circleElementToCurve, deriveCurvePieces, elementToCurves, rectangleElementToCurves, sketchEdgeToCurve } from "./curve2d-adapters.js";
 import { pointAt, type CurvePiece2D } from "./curve2d.js";
 import { buildCurveTopology, type CurveTopologyComponent, type CurveTopologyFragment, type CurveTopologyGraph, type CurveTopologyParameterReference } from "./curve-topology.js";
 import { collectMixedIntersections } from "./mixed-intersections.js";
@@ -9,7 +9,7 @@ export interface SketchProfileDiagnostic { readonly code: "open-chain" | "invali
 export interface SketchProfileChain { readonly id: string; readonly fragmentIds: readonly string[]; readonly fragments: readonly CurveTopologyFragment[]; readonly endpoints: readonly [string, string]; readonly points: readonly PointMm[] }
 export interface SketchProfileLoop extends SketchProfileChain { readonly area: number }
 export interface SketchProfileRegion { readonly id: string; readonly outerLoopId: string; readonly holeLoopIds: readonly string[]; readonly holes: readonly SketchProfileLoop[] }
-export type ProfileInputElement = SketchElement | RectangleElement | CircleElement | ArcElement | LineElement;
+export type ProfileInputElement = SketchElement | RectangleElement | CircleElement | ArcElement | LineElement | PathElement;
 /** Explicit transient eligibility boundary for profile derivation. */
 export interface ProfileInputScope { readonly elements: readonly ProfileInputElement[] }
 export interface SketchProfileResult {
@@ -125,7 +125,7 @@ export function sketchProfileResult(input: SketchElement | ProfileInputScope | r
       if ("elements" in input) {
         const pieces = input.elements.slice().sort((first, second) => first.id.localeCompare(second.id)).flatMap((element) => {
           try {
-            const curves = element.type === "sketch" ? element.edges.map((edge) => sketchEdgeToCurve(element, edge.id)) : element.type === "circle" ? [circleElementToCurve(element)] : element.type === "arc" ? [arcElementToCurve(element)] : element.type === "rectangle" ? rectangleElementToCurves(element) : [{ curve: { type: "line" as const, start: element.start, end: element.end }, source: { kind: "line-element" as const, elementId: element.id }, sourceIndex: 0 }];
+            const curves = element.type === "sketch" ? element.edges.map((edge) => sketchEdgeToCurve(element, edge.id)) : element.type === "circle" ? [circleElementToCurve(element)] : element.type === "arc" ? [arcElementToCurve(element)] : element.type === "rectangle" ? rectangleElementToCurves(element) : element.type === "path" ? elementToCurves(element) : [{ curve: { type: "line" as const, start: element.start, end: element.end }, source: { kind: "line-element" as const, elementId: element.id }, sourceIndex: 0 }];
             return deriveCurvePieces(curves);
           } catch { return []; }
         });

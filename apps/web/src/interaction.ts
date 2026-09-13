@@ -140,6 +140,8 @@ export function pickPathNode(document: DocumentSnapshot, point: PointMm, zoom: n
 export interface CutIntervalPreview {
   readonly hit: CuttableSegmentHit;
   readonly fragments: readonly CurveFragment[];
+      readonly previewDocument?: DocumentSnapshot;
+      readonly diagnostics?: readonly { readonly code: string; readonly message: string }[];
 }
 
 /** Keeps legacy picking but derives an exact, immutable interval preview when adapters support the target. */
