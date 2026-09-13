@@ -3,7 +3,7 @@ import type { ProfileInputElement, ProfileInputScope } from "@nodra/geometry";
 
 /** Native geometry accepted by profile derivation, kept transient at the editor boundary. */
 const isProfileInputElement = (element: Element): element is ProfileInputElement =>
-  element.type === "sketch" || element.type === "rectangle" || element.type === "circle" || element.type === "arc" || element.type === "line";
+  element.type === "sketch" || element.type === "rectangle" || element.type === "circle" || element.type === "arc" || element.type === "line" || element.type === "path";
 
 const scope = (elements: readonly Element[]): ProfileInputScope => ({
   // Filtering preserves the page's document order and never mutates its snapshots.

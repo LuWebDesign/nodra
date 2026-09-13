@@ -45,6 +45,8 @@ export * from "./topology.js";
 export * from "./sketchSession.js";
 export * from "./sketchKernel.js";
 export * from "./profileScope.js";
+export * from "./trim.js";
+import { applyTrimGeometry, trimCommand, previewTrim, type TrimGeometryTarget, type TrimTarget } from "./trim.js";
 
 export type ElementPatch = { readonly position?: PointMm; readonly size?: SizeMm; readonly center?: PointMm; readonly radius?: number; readonly rotation?: number; readonly cornerRadius?: number; readonly cornerRadii?: { readonly topLeft: number; readonly topRight: number; readonly bottomRight: number; readonly bottomLeft: number }; readonly style?: VisualStyle; readonly operation?: OperationMetadata; readonly start?: PointMm; readonly end?: PointMm; readonly text?: string; readonly fontFamily?: string; readonly fontSize?: number; readonly fontWeight?: "normal" | "bold"; readonly fontStyle?: "normal" | "italic"; readonly textAlign?: "left" | "center" | "right"; readonly lineHeight?: number; readonly scaleX?: number; readonly scaleY?: number };
 export interface ContourNodeAddress { readonly ringIndex: number; readonly pointIndex: number }
@@ -1930,21 +1932,31 @@ const cutCircleExact = (document: DocumentSnapshot, circle: Extract<Element, { t
   return replaceElements({ ...document, connections }, elements);
 };
 
+/** The exact geometric Trim mutation retained behind the public Cut compatibility API. */
+const applyTrimGeometryCore = (document: DocumentSnapshot, target: TrimGeometryTarget): CommandResult => {
+  const { elementId, segmentIndex, point, ringIndex = 0 } = target;
+  const element = document.elements.find((candidate) => candidate.id === elementId);
+  if (!element) return { success: false, error: "Cut target not found" };
+  if (element.type === "circle") return point ? cutCircleExact(document, element, point) : { success: false, error: "A circle cut requires a click point" };
+  if (element.type === "arc") return point ? cutArcExact(document, element, point) : { success: false, error: "An arc cut requires a click point" };
+  if (element.type === "sketch") return cutSketchEdgeDestructive(elementId, segmentIndex, point).apply(document);
+  if (element.type === "contour") return cutContourSegment(elementId, ringIndex, segmentIndex, point).apply(document);
+  if (element.type === "line") return cutLineAtPoint(elementId, point ?? element.start).apply(document);
+  if (element.type === "path" && element.segments[segmentIndex]?.type === "cubicBezier") return point ? cutOpenSingleCubicPath(document, element, point) : { success: false, error: "A cubic cut requires a click point" };
+  if (element.type === "rectangle" || element.type === "ellipse" || element.type === "path") return cutPathSegment(elementId, segmentIndex, point).apply(document);
+  return { success: false, error: "Element segment is not cuttable" };
+};
+
+/** Legacy Cut remains an additive compatibility wrapper over canonical Trim geometry. */
 export const cutSegment = (elementId: ElementId, segmentIndex: number, point?: PointMm, ringIndex = 0): EditorCommand => ({
   name: `cut:${elementId}:${ringIndex}:${segmentIndex}`,
-  apply: (document) => {
-    const element = document.elements.find((candidate) => candidate.id === elementId);
-    if (!element) return { success: false, error: "Cut target not found" };
-    if (element.type === "circle") return point ? cutCircleExact(document, element, point) : { success: false, error: "A circle cut requires a click point" };
-    if (element.type === "arc") return point ? cutArcExact(document, element, point) : { success: false, error: "An arc cut requires a click point" };
-    if (element.type === "sketch") return cutSketchEdgeDestructive(elementId, segmentIndex, point).apply(document);
-    if (element.type === "contour") return cutContourSegment(elementId, ringIndex, segmentIndex, point).apply(document);
-    if (element.type === "line") return cutLineAtPoint(elementId, point ?? element.start).apply(document);
-    if (element.type === "path" && element.segments[segmentIndex]?.type === "cubicBezier") return point ? cutOpenSingleCubicPath(document, element, point) : { success: false, error: "A cubic cut requires a click point" };
-    if (element.type === "rectangle" || element.type === "ellipse" || element.type === "path") return cutPathSegment(elementId, segmentIndex, point).apply(document);
-    return { success: false, error: "Element segment is not cuttable" };
-  },
+  apply: (document) => applyTrimGeometry(document, { elementId, segmentIndex, ...(point ? { point } : {}), ringIndex }, applyTrimGeometryCore),
 });
+
+/** Canonical Trim command and preview share the same exact mutation core. */
+export const trimSegment = (target: TrimTarget): EditorCommand => trimCommand(target, applyTrimGeometryCore);
+export const trimPreview = (document: DocumentSnapshot, target: TrimTarget): CommandResult => previewTrim(document, target, applyTrimGeometryCore);
+export const trim = trimSegment;
 
 export const splitPathSegment = (pathId: ElementId, segmentIndex: number, newNodeId = `path-node-${crypto.randomUUID()}`): EditorCommand => ({ name: `path-split:${pathId}:${segmentIndex}`, apply: (document) => {
   const path = pathAt(document, pathId); const segment = path?.segments[segmentIndex];
