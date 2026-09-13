@@ -63,3 +63,15 @@ export const saveProjectMirror = (project: ProjectSnapshot): void => {
 export const removeProjectMirror = (projectId: string): void => {
   try { localStorage.removeItem(projectMirrorKey(projectId)); } catch { /* best-effort mirror cleanup */ }
 };
+
+/** Serializes browser repository mutations while allowing each operation to observe its own result. */
+export const createPersistenceQueue = () => {
+  let tail = Promise.resolve();
+  return {
+    enqueue<T>(operation: () => Promise<T>): Promise<T> {
+      const result = tail.then(operation);
+      tail = result.then(() => undefined, () => undefined);
+      return result;
+    },
+  };
+};

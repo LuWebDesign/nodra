@@ -5,7 +5,7 @@ import { constraintComponentStatesForDocument, constraintResidualsForDocument, t
 import { arcThroughThreePoints, boundsOfElements, connectableNodeAddress, contourVertexNodes, dimensionKindForPlacement, dimensionOffsetForAlignedPlacement, dimensionOffsetForPlacement, elementCenter, editableGeometryNodes, glyphGeometryNodes, groupCenter, groupHandlePoints, pathGeometryNodes, pointMidpoint, dimensionGeometry, realGeometryNodes, sketchProfileResult, solveSketchConstraints, resizeHandle, rotatedResizeHandles, rotationFromDrag, rotationHandlePoints, visibleBezierHandleGuides, type CurveFragment, type Direction, type GroupHandle, type ResizeHandle } from "@nodra/geometry";
 import { DexieProjectRepository, requestStoragePersistence, type FontRecord } from "@nodra/persistence";
 import { validateDesign } from "@nodra/validation";
-import { loadCollapsedPages, loadLastOpenedProject, loadProjectMirror, removeLastOpenedProject, removeProjectMirror, saveCollapsedPages, saveLastAppLocation, saveLastOpenedProject, saveProjectMirror } from "./appPersistence.js";
+import { createPersistenceQueue, loadCollapsedPages, loadLastOpenedProject, loadProjectMirror, removeLastOpenedProject, removeProjectMirror, saveCollapsedPages, saveLastAppLocation, saveLastOpenedProject, saveProjectMirror } from "./appPersistence.js";
 import { selectRecoveredProject } from "./appRecovery.js";
 import { addSolvedDocumentConstraint, documentConstraintDiagnosticId, supportsGlobalConstraintKind, updateSolvedDocumentConstraint } from "./globalConstraintCommands.js";
 import { renderSketchProfileSvg, renderSvg } from "@nodra/renderer-svg";
@@ -283,7 +283,7 @@ export function App() {
   const centeredViewport = useRef<string | undefined>(undefined);
   const recoveredNotice = useRef(false);
   const lastOfficialSave = useRef<{ readonly projectId: string; readonly snapshot: string } | undefined>(undefined);
-      const browserSaveQueue = useRef<Promise<void>>(Promise.resolve());
+      const browserSaveQueue = useRef(createPersistenceQueue());
   const restoredFontIds = useRef(new Set<string>());
   const directionTooltipTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   editorRef.current = editor;
@@ -805,7 +805,7 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
               const nextProject = addPiece(currentProject, { name: pieceName, material: pieceMaterial, ...(thicknessMm === undefined ? {} : { thicknessMm }) });
               setPieceFormProjectId(undefined); setActiveProjectMetadata({ ...source.metadata, updatedAt: Date.now() }); setProject(nextProject); setActivePieceId(nextProject.activePieceId ?? nextProject.pieces[0]?.id); setMode("design"); setView("editor"); setTool("select");
           const metadata = { ...source.metadata, updatedAt: Date.now() };
-          const result = await repository.saveProject(metadata, nextProject);
+          const result = await browserSaveQueue.current.enqueue(() => repository.saveProject(metadata, nextProject));
           if (!result.ok) { persist.set("failed", result.error ?? "No se pudo crear la pieza"); return; }
           lastOfficialSave.current = { projectId: metadata.id, snapshot: JSON.stringify(nextProject) };
           setDashboardSources((current) => current.map((item) => item.metadata.id === source.metadata.id ? { metadata, project: nextProject } : item));
@@ -834,7 +834,7 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
                  }),
            };
            const metadata = { ...source.metadata, updatedAt: Date.now() };
-           const result = await repository.saveProject(metadata, nextProject);
+           const result = await browserSaveQueue.current.enqueue(() => repository.saveProject(metadata, nextProject));
            if (!result.ok) { persist.set("failed", result.error ?? "No se pudo editar la pieza"); return; }
            lastOfficialSave.current = { projectId: metadata.id, snapshot: JSON.stringify(nextProject) };
            setDashboardSources((current) => current.map((item) => item.metadata.id === source.metadata.id ? { metadata, project: nextProject } : item));
@@ -849,7 +849,7 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
               const committedProject = sketchSessionRef.current.status === "idle" ? projectFromDocument(project, editorRef.current.document) : project;
                   const nextProject = addPage(committedProject);
               const metadata = { ...activeProjectMetadata, updatedAt: Date.now() };
-              const result = await repository.saveProject(metadata, nextProject);
+              const result = await browserSaveQueue.current.enqueue(() => repository.saveProject(metadata, nextProject));
               if (!result.ok) { persist.set("failed", result.error ?? "No se pudo crear la página"); return; }
               lastOfficialSave.current = { projectId: metadata.id, snapshot: JSON.stringify(nextProject) };
               setDashboardSources((current) => current.map((item) => item.metadata.id === metadata.id ? { metadata, project: nextProject } : item));
@@ -862,7 +862,7 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
         try {
           const currentProject = currentProjectForSource(source);
               const metadata = renameProjectMetadata(source.metadata, renameDraft);
-          const result = await repository.saveProject(metadata, currentProject);
+          const result = await browserSaveQueue.current.enqueue(() => repository.saveProject(metadata, currentProject));
           if (!result.ok) { persist.set("failed", result.error ?? "No se pudo renombrar el proyecto"); return; }
           setDashboardSources((current) => current.map((item) => item.metadata.id === metadata.id ? { metadata, project: currentProject } : item));
           if (activeProjectMetadata.id === metadata.id) setActiveProjectMetadata(metadata);
@@ -876,7 +876,7 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
                   const nextProject = entity.type === "piece" ? renamePiece(currentProject, entity.id, entity.value) : renamePage(currentProject, entity.id, entity.value);
               const metadata = { ...source.metadata, updatedAt: Date.now() };
               setPieceFormProjectId(undefined); setActiveProjectMetadata(metadata); setProject(nextProject); setActivePieceId(nextProject.activePieceId ?? nextProject.pieces[0]?.id); setMode("design"); setView("editor"); setTool("select");
-              const result = await repository.saveProject(metadata, nextProject);
+              const result = await browserSaveQueue.current.enqueue(() => repository.saveProject(metadata, nextProject));
               if (!result.ok) { persist.set("failed", result.error ?? "No se pudo renombrar"); return; }
               lastOfficialSave.current = { projectId: metadata.id, snapshot: JSON.stringify(nextProject) };
               setDashboardSources((current) => current.map((item) => item.metadata.id === metadata.id ? { metadata, project: nextProject } : item));
@@ -891,7 +891,7 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
         try {
           const nextProject = deletePiece(currentProject, piece);
           const metadata = { ...source.metadata, updatedAt: Date.now() };
-          const result = await repository.saveProject(metadata, nextProject);
+          const result = await browserSaveQueue.current.enqueue(() => repository.saveProject(metadata, nextProject));
           if (!result.ok) { persist.set("failed", result.error ?? "No se pudo eliminar la pieza"); return; }
           lastOfficialSave.current = { projectId: metadata.id, snapshot: JSON.stringify(nextProject) };
           setDashboardSources((current) => current.map((item) => item.metadata.id === metadata.id ? { metadata, project: nextProject } : item));
@@ -909,7 +909,7 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
           const blank = createEmptyProject(createDocument(projectId, [{ id: layerId("layer-1"), name: "Capa de diseño", visible: true, order: 0 }]));
           const source = configureInitialProject(blank, { projectName: newProjectDraft.projectName });
           persist.set("saving", "Guardando proyecto");
-          const result = await repository.saveProject(source.metadata, source.project);
+          const result = await browserSaveQueue.current.enqueue(() => repository.saveProject(source.metadata, source.project));
           if (!result.ok) { persist.set("failed", result.error ?? "No se pudo crear el proyecto"); return; }
           lastOfficialSave.current = { projectId: source.metadata.id, snapshot: JSON.stringify(source.project) };
           setDashboardSources((current) => [source, ...current]); setActiveProjectMetadata(source.metadata); setProject(source.project); setDetailProjectId(source.metadata.id); setNewProjectDraft(undefined); setMode("design"); setView("project"); saveLastOpenedProject({ projectId: source.project.id, pageId: source.project.activePageId, view: "project", mode });
@@ -921,7 +921,7 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
         const projectId = deleteProjectId;
         if (!projectId) return;
         try {
-          await repository.deleteProject(projectId);
+          await browserSaveQueue.current.enqueue(() => repository.deleteProject(projectId));
           removeProjectMirror(projectId);
           setDashboardSources((current) => current.filter((source) => source.metadata.id !== projectId));
           if (activeProjectMetadata.id === projectId) { removeLastOpenedProject(); setView("editor"); setActiveProjectMetadata({ id: "", name: "Proyecto sin título", updatedAt: Date.now() }); persist.set("saved", "Proyecto eliminado; ya no quedan proyectos");
@@ -944,20 +944,17 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
       persist.set("failed", error instanceof Error ? error.message : "No se pudo abrir el proyecto");
     }
   };
-  const saveBrowserProject = (snapshot: ProjectSnapshot, metadata: ProjectMetadata): Promise<void> => {
-      browserSaveQueue.current = browserSaveQueue.current.catch(() => undefined).then(async () => {
-        if (metadata.id !== snapshot.id) { persist.set("failed", "La identidad del proyecto activo no coincide"); return; }
-        persist.set("saving", "Guardando proyecto");
-        const result = await repository.saveProject(metadata, snapshot);
-        if (!result.ok) { persist.set("failed", result.error ?? "No se pudo guardar el proyecto"); return; }
-        lastOfficialSave.current = { projectId: metadata.id, snapshot: JSON.stringify(snapshot) };
-        setActiveProjectMetadata(metadata);
-        setDashboardSources((current) => current.some((source) => source.metadata.id === metadata.id) ? current.map((source) => source.metadata.id === metadata.id ? { metadata, project: snapshot } : source) : [{ metadata, project: snapshot }, ...current]);
-        saveProjectMirror(snapshot);
-        persist.set("saved", "Proyecto guardado");
-      });
-      return browserSaveQueue.current;
-    };
+  const saveBrowserProject = (snapshot: ProjectSnapshot, metadata: ProjectMetadata): Promise<void> => browserSaveQueue.current.enqueue(async () => {
+    if (metadata.id !== snapshot.id) { persist.set("failed", "La identidad del proyecto activo no coincide"); return; }
+    persist.set("saving", "Guardando proyecto");
+    const result = await repository.saveProject(metadata, snapshot);
+    if (!result.ok) { persist.set("failed", result.error ?? "No se pudo guardar el proyecto"); return; }
+    lastOfficialSave.current = { projectId: metadata.id, snapshot: JSON.stringify(snapshot) };
+    setActiveProjectMetadata(metadata);
+    setDashboardSources((current) => current.some((source) => source.metadata.id === metadata.id) ? current.map((source) => source.metadata.id === metadata.id ? { metadata, project: snapshot } : source) : [{ metadata, project: snapshot }, ...current]);
+    saveProjectMirror(snapshot);
+    persist.set("saved", "Proyecto guardado");
+  });
     useEffect(() => {
       if (!persistenceReady || desktopFileBridge() || savePolicy.mode !== "prompted-autosave") return;
       if (!shouldAutosaveProject(savePolicy.mode, sketchSessionRef.current.status, project, lastOfficialSave.current)) return;
@@ -1009,7 +1006,7 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
   const deleteLocalFont = async (font: FontRecord) => {
     if (!confirm(`¿Eliminar la fuente local "${font.family}"?`)) return;
     try {
-      await repository.deleteFont(document.id, font.id);
+      await browserSaveQueue.current.enqueue(() => repository.deleteFont(document.id, font.id));
       restoredFontIds.current.delete(font.id);
       setLocalFonts((current) => current.filter((item) => item.id !== font.id));
       setFontSources((current) => {
@@ -1039,7 +1036,7 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
       const record: FontRecord = { id: `${document.id}:${family}`, projectId: document.id, family, name: file.name, ...(file.type ? { format: file.type } : {}), blob: new Blob([bytes], { type: file.type }), savedAt: Date.now() };
       setFontLoadError(undefined);
       try {
-        await repository.saveFont(record);
+        await browserSaveQueue.current.enqueue(() => repository.saveFont(record));
         restoredFontIds.current.add(record.id);
         setLocalFonts((current) => [record, ...current.filter((font) => font.id !== record.id)]);
         persist.set("saved", `Fuente guardada localmente: ${family}`);
@@ -2469,7 +2466,7 @@ return <main className={`app-shell${persistenceReady ? "" : " hydrating"}`}>
       <section className="canvas-area">
              <div ref={setCanvasRef} className={`${grid ? "canvas" : "canvas no-grid"}${isDrawingTool(tool) ? " drawing-tool" : ""}`} onPointerDown={onCanvasPointerDown} onPointerMove={onCanvasPointerMove} onPointerUp={(event) => finishPointer(event, false)} onPointerCancel={(event) => finishPointer(event, true)} onLostPointerCapture={cancelPointerInteraction} onPointerLeave={() => { setCursorPoint(undefined); setNodeHover(undefined); setCutSegmentHover(undefined); setDimensionNodeHover(undefined); setFormaSegmentHover(undefined); }} onDoubleClick={onCanvasDoubleClick} onWheel={onWheel}>
             {rulerHorizontal}{rulerVertical}<span className="ruler-corner" aria-hidden="true" />
-            <div className="page" style={pageStyle}>{/* SAFETY: renderSvg emits allowlisted SVG from validated document data. */}<div className={`page-svg${textDraft ? " editing-text" : ""}`} dangerouslySetInnerHTML={{ __html: rendered.success ? rendered.svg : "" }} />{profilePreviewSvg && <div className="profile-preview-overlay" data-profile-selection-preview="true" aria-hidden="true" style={{ position: "absolute", inset: 0, pointerEvents: "none", zIndex: 4 }} dangerouslySetInnerHTML={{ __html: profilePreviewSvg }} />}{(alignmentGuideOverlay.length > 0 || splineOverlay.length > 0 || selectedEditOverlay.length > 0 || pathGuideOverlay.length > 0) && <svg data-spline-overlay-layer="true" viewBox={`0 0 ${document.page.width} ${document.page.height}`} style={{ position: "absolute", inset: 0, width: "100%", height: "100%", pointerEvents: "none", overflow: "visible", zIndex: 5 }}><defs><marker id="forma-handle-arrow" markerWidth="5" markerHeight="5" refX="4" refY="2.5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0,0 L5,2.5 L0,5 Z" fill="#1683ff" /></marker></defs>{alignmentGuideOverlay}{selectedEditOverlay}{pathGuideOverlay}{splineOverlay}</svg>}</div>
+            <div className="page" data-document-revision={document.revision} data-document-element-ids={document.elements.map((element) => element.id).join(",")} style={pageStyle}>{/* SAFETY: renderSvg emits allowlisted SVG from validated document data. */}<div className={`page-svg${textDraft ? " editing-text" : ""}`} dangerouslySetInnerHTML={{ __html: rendered.success ? rendered.svg : "" }} />{profilePreviewSvg && <div className="profile-preview-overlay" data-profile-selection-preview="true" aria-hidden="true" style={{ position: "absolute", inset: 0, pointerEvents: "none", zIndex: 4 }} dangerouslySetInnerHTML={{ __html: profilePreviewSvg }} />}{(alignmentGuideOverlay.length > 0 || splineOverlay.length > 0 || selectedEditOverlay.length > 0 || pathGuideOverlay.length > 0) && <svg data-spline-overlay-layer="true" viewBox={`0 0 ${document.page.width} ${document.page.height}`} style={{ position: "absolute", inset: 0, width: "100%", height: "100%", pointerEvents: "none", overflow: "visible", zIndex: 5 }}><defs><marker id="forma-handle-arrow" markerWidth="5" markerHeight="5" refX="4" refY="2.5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0,0 L5,2.5 L0,5 Z" fill="#1683ff" /></marker></defs>{alignmentGuideOverlay}{selectedEditOverlay}{pathGuideOverlay}{splineOverlay}</svg>}</div>
               {textDraft && (() => {
                 const existing = textDraft.element;
                 const lines = textDraft.value.split("\n");
