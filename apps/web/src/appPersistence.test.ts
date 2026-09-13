@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { createDocument, createProject } from "@nodra/domain";
 import {
   collapsedPagesKey,
+  createPersistenceQueue,
   loadCollapsedPages,
   loadLastOpenedProject,
   loadProjectMirror,
@@ -75,5 +76,24 @@ describe("app persistence", () => {
     removeProjectMirror(project.id);
     expect(loadLastOpenedProject()).toBeUndefined();
     expect(loadProjectMirror(project.id)).toBeUndefined();
+  });
+
+  it("serializes queued saves before a project deletion", async () => {
+    const queue = createPersistenceQueue();
+    const events: string[] = [];
+    let releaseSave!: () => void;
+    const saveStarted = new Promise<void>((resolve) => { releaseSave = resolve; });
+    const save = queue.enqueue(async () => {
+      events.push("save-start");
+      await saveStarted;
+      events.push("save-end");
+    });
+    const deletion = queue.enqueue(async () => { events.push("delete"); });
+
+    await Promise.resolve();
+    expect(events).toEqual(["save-start"]);
+    releaseSave();
+    await Promise.all([save, deletion]);
+    expect(events).toEqual(["save-start", "save-end", "delete"]);
   });
 });

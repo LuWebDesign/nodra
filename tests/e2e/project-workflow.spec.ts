@@ -26,6 +26,31 @@ test("named project creation opens its project detail", async ({ page }) => {
   await expect(page.locator(".project-detail")).toContainText("Todavía no hay piezas");
 });
 
+test("deleting a newly created project remains deleted after reload", async ({ page }) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: "Proyectos" }).click();
+  await page.getByRole("button", { name: "+ Nuevo proyecto" }).click();
+  await page.getByLabel("Nombre del proyecto").fill("Proyecto para eliminar");
+  await page.getByRole("button", { name: "Crear proyecto" }).click();
+  await expect(page.locator(".project-detail h1")).toHaveText("Proyecto para eliminar");
+
+  await page.getByRole("button", { name: "← Volver a Proyectos" }).click();
+  const card = page.locator(".project-card").filter({ hasText: "Proyecto para eliminar" });
+  await expect(card).toHaveCount(1);
+  await card.getByRole("button", { name: "Eliminar proyecto" }).click();
+  await expect(page.getByRole("dialog", { name: "Eliminar proyecto" })).toBeVisible();
+  await page.getByRole("dialog", { name: "Eliminar proyecto" }).getByRole("button", { name: "Eliminar proyecto" }).click();
+  await expect(card).toHaveCount(0);
+
+  await page.reload();
+  await expect(page).toHaveURL("/modelo");
+  await expect(page.getByRole("heading", { name: "Empezá un proyecto" })).toBeVisible();
+
+  await page.getByRole("button", { name: "Proyectos" }).click();
+  await expect(page.getByRole("heading", { name: "¿Qué querés diseñar hoy?" })).toBeVisible();
+  await expect(page.locator(".project-card").filter({ hasText: "Proyecto para eliminar" })).toHaveCount(0);
+});
+
 test("opens the editor immediately after creating a piece from project detail", async ({ page }) => {
   await page.goto("/");
   await page.getByRole("button", { name: "Proyectos" }).click();
@@ -55,11 +80,12 @@ test("restores the last named project after reload", async ({ page }) => {
   await page.getByRole("button", { name: "+ Nuevo proyecto" }).click();
   await page.getByLabel("Nombre del proyecto").fill("Proyecto persistente");
   await page.getByRole("button", { name: "Crear proyecto" }).click();
-    await expect(page.locator(".project-detail h1")).toHaveText("Proyecto persistente");
-    await page.reload();
-    await expect(page.locator(".project-detail h1")).toHaveText("Proyecto persistente");
+  await expect(page.locator(".project-detail h1")).toHaveText("Proyecto persistente");
+  await page.reload();
+  await expect(page.locator(".project-detail h1")).toHaveText("Proyecto persistente");
 });
-test("persists deleted geometry after reloading a project", async ({ page }) => {
+
+test("keeps deleted geometry absent from the persisted document after reload", async ({ page }) => {
   await page.goto("/proyectos");
   await page.getByRole("button", { name: "+ Nuevo proyecto" }).click();
   await page.getByLabel("Nombre del proyecto").fill("Proyecto persistencia");
@@ -76,28 +102,31 @@ test("persists deleted geometry after reloading a project", async ({ page }) => 
   await page.mouse.click(pageBounds!.x + 260, pageBounds!.y + 220);
   const rectangle = page.locator('.page-svg svg rect[data-element-id]');
   await expect(rectangle).toHaveCount(1);
-  const staleMirror = await page.evaluate(() => {
-    const last = localStorage.getItem("nodra:last-opened-project");
-    const projectId = last ? (JSON.parse(last) as { projectId: string }).projectId : undefined;
-    return projectId ? localStorage.getItem(`nodra:project-mirror:${projectId}`) : null;
-  });
-  expect(staleMirror).not.toBeNull();
-  await page.getByRole("button", { name: "Preparar" }).click();
-  await page.getByRole("button", { name: "Modelo", exact: true }).click();
-  await expect(page.getByRole("toolbar", { name: "Herramientas de diseño" })).toBeVisible();
+  const rectangleId = await rectangle.getAttribute("data-element-id");
+  expect(rectangleId).not.toBeNull();
+  const documentPage = page.locator(".page");
+  const revisionBeforeDelete = Number(await documentPage.getAttribute("data-document-revision"));
+
+  await page.getByRole("button", { name: "Seleccion" }).click();
   const rectangleBounds = await rectangle.boundingBox();
   expect(rectangleBounds).not.toBeNull();
-  await page.getByRole("button", { name: "Seleccion" }).click();
   await page.mouse.click(rectangleBounds!.x + rectangleBounds!.width / 2, rectangleBounds!.y + rectangleBounds!.height / 2);
   await page.keyboard.press("Delete");
   await expect(rectangle).toHaveCount(0);
-  await page.evaluate((serializedMirror) => {
-    const last = localStorage.getItem("nodra:last-opened-project");
-    const projectId = last ? (JSON.parse(last) as { projectId: string }).projectId : undefined;
-    if (!projectId || !serializedMirror) throw new Error("Missing stale mirror fixture");
-    const legacyMirror = JSON.parse(serializedMirror) as { project: unknown };
-    localStorage.setItem(`nodra:project-mirror:${projectId}`, JSON.stringify(legacyMirror.project));
-  }, staleMirror);
+  await expect.poll(async () => Number(await documentPage.getAttribute("data-document-revision"))).toBeGreaterThan(revisionBeforeDelete);
+  await expect(documentPage).not.toHaveAttribute("data-document-element-ids", new RegExp(rectangleId!));
+
   await page.reload();
   await expect(page.locator('.page-svg svg rect[data-element-id]')).toHaveCount(0);
+  const reloadedPage = page.locator(".page");
+  await expect.poll(async () => Number(await reloadedPage.getAttribute("data-document-revision"))).toBeGreaterThan(revisionBeforeDelete);
+  await expect(reloadedPage).not.toHaveAttribute("data-document-element-ids", new RegExp(rectangleId!));
+
+  await page.getByRole("button", { name: "Proyectos" }).click();
+  const persistedProjectCard = page.locator(".project-card").filter({ hasText: "Proyecto persistencia" });
+  await expect(persistedProjectCard).toHaveCount(1);
+  await persistedProjectCard.getByRole("button", { name: "Ver proyecto" }).click();
+  await expect(page.locator(".project-detail")).toBeVisible();
+  await expect(page.locator(".project-metrics article").filter({ hasText: "Objetos" }).locator("strong")).toHaveText("0");
+  await expect(page.locator(".project-information-card")).toContainText("Revisión");
 });
