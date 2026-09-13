@@ -14,9 +14,11 @@ describe("selection profile preview wiring", () => {
     const project = createProject(withElements(createDocument("profile-preview", [{ id: layerId("layer-1"), name: "Layer", visible: true, order: 0 }]), square()));
     const page = projectPage(project);
     const pieceId = project.pieces[0]!.id;
-    const preview = profilePreviewForSelection(project, page, pieceId, square().map((element) => element.id));
+    const preview = profilePreviewForSelection(project, page, pieceId, square().map((element) => element.id), page.page);
 
     expect(preview).toContain('data-profile="true"');
+    expect(preview).toContain(`width="${page.page.width}" height="${page.page.height}" viewBox="0 0 ${page.page.width} ${page.page.height}"`);
+    expect(preview).toContain('M0 0 L10 0');
     expect(profilePreviewForSelection(project, page, pieceId, [])).toBeUndefined();
   });
 });

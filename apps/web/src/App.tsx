@@ -146,13 +146,14 @@ export const profilePreviewForSelection = (
   activePage: ReturnType<typeof projectPage>,
   activePieceId: PieceId | undefined,
   selection: readonly ElementId[],
+  page = activePage.page,
 ): string | undefined => {
   if (!activePieceId || selection.length === 0) return undefined;
   const inputScope = profileScopeForSelection(project, activePage, activePieceId, selection);
   if (inputScope.elements.length === 0 || (inputScope.elements.length === 1 && inputScope.elements[0]?.type !== "sketch")) return undefined;
   const profile = sketchProfileResult(inputScope);
   if (profile.status !== "valid-closed" || profile.regions.length === 0) return undefined;
-  const renderedProfile = renderSketchProfileSvg(profile, { zoom: 1, panMm: { x: 0, y: 0 } }, { fill: "none", stroke: "#1683ff", strokeWidth: 0.8 });
+  const renderedProfile = renderSketchProfileSvg(profile, { zoom: 1, panMm: { x: 0, y: 0 } }, { fill: "none", stroke: "#1683ff", strokeWidth: 0.8, width: page.width, height: page.height });
   return renderedProfile.success ? renderedProfile.svg : undefined;
 };
 
@@ -289,7 +290,7 @@ export function App() {
   creationDraftRef.current = creationDraft;
   const activePiece = activePieceId === undefined ? undefined : project.pieces.find((piece) => piece.id === resolveActivePieceId(project, activePieceId));
       const activePage = projectPage(project, project.activePageId);
-      const profilePreviewSvg = useMemo(() => profilePreviewForSelection(project, activePage, activePiece?.id, selection), [activePage, activePiece?.id, project, selection]);
+      const profilePreviewSvg = useMemo(() => profilePreviewForSelection(project, activePage, activePiece?.id, selection, document.page), [activePage, activePiece?.id, document.page, project, selection]);
       const initializationUserOverride = useRef(false);
 
         useEffect(() => { const route = routeFromPath(window.location.pathname); if (route.view === "editor" && window.location.pathname === "/preparar") setMode("prepare"); const onPopState = () => { const next = routeFromPath(window.location.pathname); setView(next.view); if (next.projectId) setDetailProjectId(next.projectId); if (next.view === "editor") setMode(window.location.pathname === "/preparar" ? "prepare" : "design"); }; addEventListener("popstate", onPopState); return () => removeEventListener("popstate", onPopState); }, [setMode]);

@@ -266,6 +266,9 @@ export interface SketchProfileRenderOptions {
   readonly fill?: string;
   readonly stroke?: string;
   readonly strokeWidth?: number;
+  /** Page dimensions establish the same root SVG contract as renderSvg. */
+  readonly width?: number;
+  readonly height?: number;
 }
 
 export type SketchProfileRenderResult =
@@ -305,6 +308,10 @@ export function renderSketchProfileSvg(profile: SketchProfileResult, viewport: V
   const checkedViewport = viewportResult(viewport);
   if (!checkedViewport.success) return { success: false, reason: "invalid", error: checkedViewport.error, issues: [checkedViewport.error] };
   if (!Number.isFinite(options.strokeWidth ?? 0.2) || (options.strokeWidth ?? 0.2) < 0) return { success: false, reason: "invalid", error: "profile strokeWidth must be finite and non-negative", issues: ["profile strokeWidth must be finite and non-negative"] };
+  const hasWidth = options.width !== undefined;
+  const hasHeight = options.height !== undefined;
+  if (hasWidth !== hasHeight || (hasWidth && (!Number.isFinite(options.width) || options.width! <= 0 || !Number.isFinite(options.height) || options.height! <= 0))) return { success: false, reason: "invalid", error: "profile dimensions must be positive and finite", issues: ["profile dimensions must be positive and finite"] };
+  const rootAttributes = hasWidth ? ` width="${number(options.width!)}" height="${number(options.height!)}" viewBox="0 0 ${number(options.width!)} ${number(options.height!)}"` : "";
   const fill = escapeAttribute(options.fill ?? "#111");
   const stroke = escapeAttribute(options.stroke ?? "#111");
   const strokeWidth = number(options.strokeWidth ?? 0.2);
@@ -321,7 +328,7 @@ export function renderSketchProfileSvg(profile: SketchProfileResult, viewport: V
       });
       return `${loopPath(outer)}${holes.length ? ` ${holes.join(" ")}` : ""}`;
     }).join(" ");
-    return { success: true, svg: `<svg xmlns="http://www.w3.org/2000/svg" data-units="mm"><path data-profile="true" d="${escapeAttribute(paths)}" fill="${fill}" stroke="${stroke}" stroke-width="${strokeWidth}" fill-rule="evenodd" /></svg>` };
+    return { success: true, svg: `<svg xmlns="http://www.w3.org/2000/svg" data-units="mm"${rootAttributes}><path data-profile="true" d="${escapeAttribute(paths)}" fill="${fill}" stroke="${stroke}" stroke-width="${strokeWidth}" fill-rule="evenodd" /></svg>` };
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unsupported profile geometry";
     return { success: false, reason: "unsupported", error: message, issues: [message] };
