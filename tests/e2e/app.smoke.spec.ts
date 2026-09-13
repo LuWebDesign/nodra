@@ -852,6 +852,33 @@ test("reuses an existing sketch node when continuing the same line", async ({ pa
   expect(starts[0]).toEqual(starts[1]);
 });
 
+
+test("continues a Line from the solved near-horizontal endpoint without branching", async ({ page }) => {
+  await page.goto("/modelo");
+  const bounds = await page.locator(".page").boundingBox();
+  expect(bounds).not.toBeNull();
+  await page.getByRole("button", { name: "Línea" }).click();
+  const first = { x: bounds!.x + 120, y: bounds!.y + 120 };
+  const nearHorizontalSecond = { x: first.x + 90, y: first.y + 3 };
+  const third = { x: nearHorizontalSecond.x + 6, y: nearHorizontalSecond.y + 70 };
+  const fourth = { x: third.x + 70, y: third.y + 40 };
+  await page.mouse.click(first.x, first.y);
+  await page.mouse.click(nearHorizontalSecond.x, nearHorizontalSecond.y);
+  await page.mouse.click(third.x, third.y);
+  await page.mouse.click(fourth.x, fourth.y);
+
+  const sketch = page.locator('.page-svg svg g[data-element-id]').first();
+  await expect(sketch).toHaveCount(1);
+  const lines = sketch.locator("line");
+  await expect(lines).toHaveCount(3);
+  const endpoints = await lines.evaluateAll((elements) => elements.map((line) => ({
+    start: [line.getAttribute("x1"), line.getAttribute("y1")],
+    end: [line.getAttribute("x2"), line.getAttribute("y2")],
+  })));
+  expect(endpoints[2]?.start).toEqual(endpoints[1]?.end);
+  expect(endpoints[2]?.start).not.toEqual(endpoints[1]?.start);
+});
+
 test("continues drawing from a closed sketch", async ({ page }) => {
   await page.goto("/modelo");
   const bounds = await page.locator(".page").boundingBox();

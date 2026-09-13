@@ -1331,7 +1331,8 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
           const targetNodeId = snappedSketchNode?.elementId === draft.elementId ? snappedSketchNode.nodeId : undefined;
           const next = dispatch(editorRef.current, appendSketchEdge(draft.elementId, draft.currentNodeId, creationPoint, targetNodeId));
           const sketch = next.document.elements.find((element): element is Extract<Element, { type: "sketch" }> => element.id === draft.elementId && element.type === "sketch");
-          const currentNodeId = targetNodeId ?? sketch?.nodes.find((node) => node.point.x === creationPoint.x && node.point.y === creationPoint.y)?.id ?? draft.currentNodeId;
+          const appendedEdge = sketch?.edges.at(-1);
+          const currentNodeId = targetNodeId ?? appendedEdge?.endNodeId ?? draft.currentNodeId;
           const nextDraft = { ...draft, points: [...draft.points, creationPoint], pointer: creationPoint, currentNodeId };
          creationDraftRef.current = nextDraft;
          setCreationDraft(nextDraft);
