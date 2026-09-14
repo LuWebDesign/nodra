@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createDocument, elementId, featureId, layerId, type ArcElement, type DimensionElement, type Element, type EllipseElement, type CircleElement, type LineElement, type GlyphElement, type PathElement, type PointMm, type RectangleElement, type SketchElement, type SplineElement, type TextElement } from "@nodra/domain";
-import { addCircleConstraint, addDocumentConstraint, deleteDocumentConstraint, addSketchConstraint, addSketchSegmentRelation, addToSelection, appendSketchEdge, appendSplineNode, beginGesture, cancelGesture, clearSelection, closePath, closeSplineElement, commitGesture, createEditor, createElement, createIntersectFeature, rebuildParametricFeatures, addPositionalConnection, addPositionalCoincidence, deletePositionalCoincidence, createPathCubicNode, createSketchLine, cutContourSegment, cutLineAtPoint, cutPathSegment, cutSegment, cutSketchEdge, splitPathLineAt, deleteContourNodes, deleteElement, deleteElementNodes, deletePathNodes, deleteSketchConstraint, dispatch, duplicateElements, flipElements, insertContourNode, invalidDimensionIdsForShapeOperation, moveElement, moveElements, movePathNode, movePathHandle, openPath, previewGesture, previewGestureFromBase, redo, reversePath, removeFromSelection, reorderLayer, resizeElement, resizeElementToDimensions, resizeElements, resizeElementsToDimensions, rotateElementsAroundCenter, select, selectForPointerDown, setDimensionDriving, updateCircleConstraint, deleteCircleConstraint, solveCircle, setLayerVisibility, setPathJoin, shapeOperation, splitPathSegment, toggleSelection, topologyEditForPathSegmentReplacement, topologyReferenceKey, undo, updateContourNode, updateDimensionValue, updateElement, updateElementNode, updateElementStyles, updateSketchConstraint, updateDocumentConstraint, updateSplineHandle, updateSplineNode } from "./index.js";
-import { boundsOfElements, realGeometryNodes } from "@nodra/geometry";
+import { addCircleConstraint, addDocumentConstraint, deleteDocumentConstraint, addSketchConstraint, addSketchSegmentRelation, addToSelection, appendSketchEdge, appendSplineNode, beginGesture, cancelGesture, clearSelection, closePath, closeSplineElement, commitGesture, consolidateSketches, createEditor, createElement, createIntersectFeature, rebuildParametricFeatures, addPositionalConnection, addPositionalCoincidence, deletePositionalCoincidence, createPathCubicNode, createSketchLine, cutContourSegment, cutLineAtPoint, cutPathSegment, cutSegment, cutSketchEdge, splitPathLineAt, deleteContourNodes, deleteElement, deleteElementNodes, deletePathNodes, deleteSketchConstraint, dispatch, duplicateElements, flipElements, insertContourNode, invalidDimensionIdsForShapeOperation, moveElement, moveElements, movePathNode, movePathHandle, openPath, previewGesture, previewGestureFromBase, redo, reversePath, removeFromSelection, reorderLayer, resizeElement, resizeElementToDimensions, resizeElements, resizeElementsToDimensions, rotateElementsAroundCenter, select, selectForPointerDown, setDimensionDriving, updateCircleConstraint, deleteCircleConstraint, solveCircle, setLayerVisibility, setPathJoin, shapeOperation, splitPathSegment, toggleSelection, topologyEditForPathSegmentReplacement, topologyReferenceKey, undo, updateContourNode, updateDimensionValue, updateElement, updateElementNode, updateElementStyles, updateSketchConstraint, updateDocumentConstraint, updateSplineHandle, updateSplineNode } from "./index.js";
+import { boundsOfElements, realGeometryNodes, sketchProfileResult } from "@nodra/geometry";
 import type { Direction } from "@nodra/geometry";
 import { appendLinePoint } from "./index.js";
 
@@ -365,6 +365,118 @@ describe("editor core", () => {
         const state = dispatch(createEditor({ ...document, elements: [first, second] }), addSketchSegmentRelation(relation));
         expect(state.document.elements.map((element) => element.id)).toEqual([first.id, second.id]);
         expect(state.document.constraints).toEqual([relation]);
+      });
+
+      it("consolidates two connected linear sketches into one closed, reference-safe undo step", () => {
+        const firstId = elementId("z-consolidation-half");
+        const secondId = elementId("a-consolidation-half");
+        const first: SketchElement = {
+          type: "sketch", id: firstId, layerId: layerId("default"), style: rectangle.style,
+          nodes: [{ id: "first-start", point: { x: 0, y: 0 } }, { id: "first-corner", point: { x: 10, y: 0 } }, { id: "first-end", point: { x: 10, y: 10 } }],
+          edges: [{ id: "top", startNodeId: "first-start", endNodeId: "first-corner" }, { id: "right", startNodeId: "first-corner", endNodeId: "first-end" }],
+          constraints: [{ id: "top-horizontal", kind: "horizontal", references: [{ elementId: firstId, nodeId: "first-start" }, { elementId: firstId, nodeId: "first-corner" }] }],
+        };
+        const second: SketchElement = {
+          type: "sketch", id: secondId, layerId: layerId("default"), style: rectangle.style,
+          nodes: [{ id: "second-start", point: { x: 10, y: 10 } }, { id: "second-corner", point: { x: 0, y: 10 } }, { id: "second-end", point: { x: 0, y: 0 } }],
+          edges: [{ id: "bottom", startNodeId: "second-start", endNodeId: "second-corner" }, { id: "left", startNodeId: "second-corner", endNodeId: "second-end" }],
+          constraints: [{ id: "left-vertical", kind: "vertical", references: [{ elementId: secondId, nodeId: "second-corner" }, { elementId: secondId, nodeId: "second-end" }] }],
+        };
+        const linked: DimensionElement = { ...dimension, id: elementId("consolidation-dimension"), kind: "aligned", references: [{ kind: "node", elementId: first.id, nodeIndex: 1, nodeId: "first-corner" }, { kind: "node", elementId: second.id, nodeIndex: 1, nodeId: "second-corner" }] };
+        const pageConstraint = { id: "consolidation-equal", kind: "equal" as const, references: [{ elementId: first.id, edgeId: "top" }, { elementId: second.id, edgeId: "bottom" }] as const };
+        const initial = createEditor({ ...document, elements: [first, second, linked], constraints: [pageConstraint] });
+
+        const consolidated = dispatch(initial, consolidateSketches([first.id, second.id]));
+        const merged = consolidated.document.elements.find((element): element is SketchElement => element.type === "sketch")!;
+
+        expect(merged.id).toBe(second.id);
+        expect(merged.nodes).toHaveLength(4);
+        expect(new Set(merged.nodes.map((node) => node.id)).size).toBe(4);
+        expect(merged.edges.map((edge) => edge.id).sort()).toEqual(["bottom", "left", "right", "top"]);
+        expect(new Set(merged.edges.flatMap((edge) => [edge.startNodeId, edge.endNodeId]))).toEqual(new Set(merged.nodes.map((node) => node.id)));
+        expect(sketchProfileResult(merged).status).toBe("valid-closed");
+        expect(merged.constraints).toEqual(expect.arrayContaining([
+          expect.objectContaining({ id: "top-horizontal", references: [{ elementId: second.id, nodeId: "second-end" }, { elementId: second.id, nodeId: "first-corner" }] }),
+          expect.objectContaining({ id: "left-vertical", references: [{ elementId: second.id, nodeId: "second-corner" }, { elementId: second.id, nodeId: "second-end" }] }),
+        ]));
+        expect(consolidated.document.constraints).toEqual([{ ...pageConstraint, references: [{ elementId: second.id, edgeId: "top" }, { elementId: second.id, edgeId: "bottom" }] }]);
+        expect(consolidated.document.elements.find((element) => element.id === linked.id)).toMatchObject({ references: [{ elementId: second.id, nodeId: "first-corner", nodeIndex: 3 }, { elementId: second.id, nodeId: "second-corner", nodeIndex: 1 }] });
+        expect(consolidated.undo).toHaveLength(1);
+        expect(undo(consolidated).document).toEqual(initial.document);
+        expect(redo(undo(consolidated)).document).toEqual(consolidated.document);
+      });
+
+      it("rejects disconnected, edge-ID-colliding, and ambiguous sketch consolidation atomically", () => {
+        const half = (id: string, points: readonly [PointMm, PointMm, PointMm], edgeIds: readonly [string, string]): SketchElement => ({
+          type: "sketch", id: elementId(id), layerId: layerId("default"), style: rectangle.style,
+          nodes: points.map((point, index) => ({ id: `${id}-node-${index}`, point })),
+          edges: [{ id: edgeIds[0], startNodeId: `${id}-node-0`, endNodeId: `${id}-node-1` }, { id: edgeIds[1], startNodeId: `${id}-node-1`, endNodeId: `${id}-node-2` }],
+        });
+        const first = half("reject-first", [{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }], ["first-a", "first-b"]);
+        const disconnected = half("reject-disconnected", [{ x: 20, y: 20 }, { x: 30, y: 20 }, { x: 30, y: 30 }], ["second-a", "second-b"]);
+        const collision = half("reject-collision", [{ x: 10, y: 10 }, { x: 0, y: 10 }, { x: 0, y: 0 }], ["first-a", "second-b"]);
+        const ambiguous: SketchElement = { ...collision, id: elementId("reject-ambiguous"), nodes: [{ id: "ambiguous-a", point: { x: 0, y: 0 } }, { id: "ambiguous-b", point: { x: -10, y: 0 } }, { id: "ambiguous-c", point: { x: 0, y: 0 } }], edges: [{ id: "ambiguous-a", startNodeId: "ambiguous-a", endNodeId: "ambiguous-b" }, { id: "ambiguous-b", startNodeId: "ambiguous-b", endNodeId: "ambiguous-c" }] };
+        for (const other of [disconnected, collision, ambiguous]) {
+          const initial = createEditor({ ...document, elements: [first, other] });
+          expect(dispatch(initial, consolidateSketches([first.id, other.id]))).toBe(initial);
+          expect(initial.undo).toHaveLength(0);
+        }
+      });
+
+      it("remaps persisted endpoint connections and removes relations made redundant by consolidation", () => {
+        const targetId = elementId("a-connected-half");
+        const sourceId = elementId("z-connected-half");
+        const target: SketchElement = {
+          type: "sketch", id: targetId, layerId: layerId("default"), style: rectangle.style,
+          nodes: [{ id: "target-start", point: { x: 0, y: 0 } }, { id: "target-corner", point: { x: 10, y: 0 } }, { id: "target-end", point: { x: 10, y: 10 } }],
+          edges: [{ id: "target-top", startNodeId: "target-start", endNodeId: "target-corner" }, { id: "target-right", startNodeId: "target-corner", endNodeId: "target-end" }],
+        };
+        const source: SketchElement = {
+          type: "sketch", id: sourceId, layerId: layerId("default"), style: rectangle.style,
+          nodes: [{ id: "source-start", point: { x: 10, y: 10 } }, { id: "source-corner", point: { x: 0, y: 10 } }, { id: "source-end", point: { x: 0, y: 0 } }],
+          edges: [{ id: "source-bottom", startNodeId: "source-start", endNodeId: "source-corner" }, { id: "source-left", startNodeId: "source-corner", endNodeId: "source-end" }],
+        };
+        const external: LineElement = { type: "line", id: elementId("connected-external"), layerId: layerId("default"), start: { x: 0, y: 10 }, end: { x: -5, y: 10 }, rotation: 0, style: rectangle.style };
+        const redundant = { id: "joined-endpoints", first: { elementId: target.id, node: { kind: "sketch" as const, nodeId: "target-end" } }, second: { elementId: source.id, node: { kind: "sketch" as const, nodeId: "source-start" } } };
+        const retained = { id: "external-endpoint", first: { elementId: source.id, node: { kind: "sketch" as const, nodeId: "source-corner" } }, second: { elementId: external.id, node: { kind: "line" as const, name: "start" as const } } };
+        const initial = createEditor({ ...document, elements: [target, source, external], connections: [redundant, retained] });
+
+        const consolidated = dispatch(initial, consolidateSketches([target.id, source.id]));
+
+        expect(consolidated.document.connections).toEqual([{ ...retained, first: { elementId: target.id, node: { kind: "sketch", nodeId: "source-corner" } } }]);
+        expect(consolidated.document.connections?.some((connection) => connection.first.elementId === connection.second.elementId && JSON.stringify(connection.first.node) === JSON.stringify(connection.second.node))).toBe(false);
+        expect(undo(consolidated).document).toEqual(initial.document);
+        expect(redo(undo(consolidated)).document).toEqual(consolidated.document);
+      });
+
+      it("remaps positional coincidences and preserves valid external constraints through undo and redo", () => {
+        const targetId = elementId("a-positional-half");
+        const sourceId = elementId("z-positional-half");
+        const target: SketchElement = {
+          type: "sketch", id: targetId, layerId: layerId("default"), style: rectangle.style,
+          nodes: [{ id: "target-start", point: { x: 0, y: 0 } }, { id: "target-corner", point: { x: 10, y: 0 } }, { id: "target-end", point: { x: 10, y: 10 } }],
+          edges: [{ id: "target-top", startNodeId: "target-start", endNodeId: "target-corner" }, { id: "target-right", startNodeId: "target-corner", endNodeId: "target-end" }],
+        };
+        const source: SketchElement = {
+          type: "sketch", id: sourceId, layerId: layerId("default"), style: rectangle.style,
+          nodes: [{ id: "source-start", point: { x: 10, y: 10 } }, { id: "source-corner", point: { x: 0, y: 10 } }, { id: "source-end", point: { x: 0, y: 0 } }],
+          edges: [{ id: "source-bottom", startNodeId: "source-start", endNodeId: "source-corner" }, { id: "source-left", startNodeId: "source-corner", endNodeId: "source-end" }],
+        };
+        const external = createSketchLine(elementId("positional-external"), layerId("default"), rectangle.style, { x: 0, y: 10 }, { x: -5, y: 10 });
+        const redundant = { id: "positional-joined-endpoints", first: { elementId: target.id, node: { kind: "sketch" as const, nodeId: "target-end" } }, second: { elementId: source.id, node: { kind: "sketch" as const, nodeId: "source-start" } } };
+        const retained = { id: "positional-external-endpoint", first: { elementId: source.id, node: { kind: "sketch" as const, nodeId: "source-corner" } }, second: { elementId: external.id, node: { kind: "sketch" as const, nodeId: external.nodes[0]!.id } } };
+        const externalConstraint = { id: "source-to-external", kind: "distance-horizontal" as const, value: 5, references: [{ elementId: source.id, nodeId: "source-corner" }, { elementId: external.id, nodeId: external.nodes[1]!.id }] as const };
+        const initial = createEditor({ ...document, elements: [target, source, external], constraints: [externalConstraint], positionalCoincidences: [redundant, retained] });
+
+        const consolidated = dispatch(initial, consolidateSketches([target.id, source.id]));
+        const merged = consolidated.document.elements.find((element): element is SketchElement => element.id === target.id && element.type === "sketch")!;
+
+        expect(consolidated.document.positionalCoincidences).toEqual([{ ...retained, first: { elementId: target.id, node: { kind: "sketch", nodeId: "source-corner" } } }]);
+        expect(consolidated.document.constraints).toEqual([{ ...externalConstraint, references: [{ elementId: target.id, nodeId: "source-corner" }, externalConstraint.references[1]] }]);
+        expect(consolidated.document.positionalCoincidences?.some((relation) => relation.first.elementId === relation.second.elementId && JSON.stringify(relation.first.node) === JSON.stringify(relation.second.node))).toBe(false);
+        expect(merged.edges.every((edge) => merged.nodes.some((node) => node.id === edge.startNodeId) && merged.nodes.some((node) => node.id === edge.endNodeId))).toBe(true);
+        expect(undo(consolidated).document).toEqual(initial.document);
+        expect(redo(undo(consolidated)).document).toEqual(consolidated.document);
       });
 
       it("deletes sketch nodes with their attached constraints while preserving the sketch model", () => {

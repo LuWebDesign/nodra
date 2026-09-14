@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent, type PointerEvent, type ReactNode, type WheelEvent } from "react";
 import { createDocument, createEmptyProject, createProject, documentFromProject, elementId, layerId, pageId, projectFromDocument, projectPage, type DocumentSnapshot, hasRotation, type ArcElement, type DimensionElement, type Element, type SketchConstraint, type ElementId, type PieceId, type PointMm, type ProjectSnapshot, type SplineElement, type TextElement, type ExplicitConnection } from "@nodra/domain";
-import { deleteDocumentConstraint, addPositionalCoincidence, deletePositionalCoincidence, addSketchConstraint, addToSelection, appendSketchEdge, appendSplineNode, beginGesture, cancelGesture, clearSelection, closePath, trimSegment, trimPreview, closeSplineElement, commitGesture, convertTextToGlyphs, createElement, createPathCubicNode, createPathNode, createSketchLine, deleteContourNodes, deleteElement, deleteElementNodes, deletePathNodes, deleteSketchConstraint, dispatch, duplicateElements, flipElements, insertFormaNode, invalidDimensionIdsForShapeOperation, moveElements, movePathHandle, movePathNode, openPath, updateSplineNode, previewGesture, previewGestureFromBase, redo, resizeElement, resizeElementToDimensions, resizeElements, resizeElementsToDimensions, rotateElement, updateDimensionValue, setDimensionDriving, rotateElementsAroundCenter, select, selectForPointerDown, setPathJoin, shapeOperation, splitPathSegment, undo, updateContourNode, updateElement, updateElementNode, updateElementStyles, updatePage, updateSketchConstraint, updateSplineHandle, type EditorCommand, type FlipAxis, type ShapeOperation, profileScopeForSelection, profileScopeForPiece, type TrimTarget } from "@nodra/editor-core";
+import { deleteDocumentConstraint, addPositionalCoincidence, deletePositionalCoincidence, addSketchConstraint, addToSelection, appendSketchEdge, appendSplineNode, beginGesture, cancelGesture, clearSelection, closePath, trimSegment, trimPreview, closeSplineElement, commitGesture, consolidateSketches, convertTextToGlyphs, createElement, createPathCubicNode, createPathNode, createSketchLine, deleteContourNodes, deleteElement, deleteElementNodes, deletePathNodes, deleteSketchConstraint, dispatch, duplicateElements, flipElements, insertFormaNode, invalidDimensionIdsForShapeOperation, moveElements, movePathHandle, movePathNode, openPath, updateSplineNode, previewGesture, previewGestureFromBase, redo, resizeElement, resizeElementToDimensions, resizeElements, resizeElementsToDimensions, rotateElement, updateDimensionValue, setDimensionDriving, rotateElementsAroundCenter, select, selectForPointerDown, setPathJoin, shapeOperation, splitPathSegment, undo, updateContourNode, updateElement, updateElementNode, updateElementStyles, updatePage, updateSketchConstraint, updateSplineHandle, type EditorCommand, type EditorState, type FlipAxis, type ShapeOperation, profileScopeForSelection, profileScopeForPiece, type TrimTarget } from "@nodra/editor-core";
 import { constraintComponentStatesForDocument, constraintResidualsForDocument, type ConstraintState } from "@nodra/constraints";
-import { arcThroughThreePoints, boundsOfElements, connectableNodeAddress, contourVertexNodes, dimensionKindForPlacement, dimensionOffsetForAlignedPlacement, dimensionOffsetForPlacement, elementCenter, editableGeometryNodes, glyphGeometryNodes, groupCenter, groupHandlePoints, pathGeometryNodes, pointMidpoint, dimensionGeometry, realGeometryNodes, sketchProfileResult, solveSketchConstraints, resizeHandle, rotatedResizeHandles, rotationFromDrag, rotationHandlePoints, visibleBezierHandleGuides, type CurveFragment, type Direction, type GroupHandle, type ResizeHandle } from "@nodra/geometry";
+import { arcThroughThreePoints, boundsOfElements, connectableNodeAddress, contourVertexNodes, dimensionKindForPlacement, dimensionOffsetForAlignedPlacement, dimensionOffsetForPlacement, elementCenter, editableGeometryNodes, GEOMETRY_EPSILON, glyphGeometryNodes, groupCenter, groupHandlePoints, pathGeometryNodes, pointMidpoint, dimensionGeometry, realGeometryNodes, sketchProfileResult, solveSketchConstraints, resizeHandle, rotatedResizeHandles, rotationFromDrag, rotationHandlePoints, visibleBezierHandleGuides, type CurveFragment, type Direction, type GroupHandle, type ResizeHandle } from "@nodra/geometry";
 import { DexieProjectRepository, requestStoragePersistence, type FontRecord } from "@nodra/persistence";
 import { validateDesign } from "@nodra/validation";
 import { createPersistenceQueue, loadCollapsedPages, loadLastOpenedProject, loadProjectMirror, removeLastOpenedProject, removeProjectMirror, saveCollapsedPages, saveLastAppLocation, saveLastOpenedProject, saveProjectMirror } from "./appPersistence.js";
@@ -130,6 +130,48 @@ type ActiveInteraction = {
   splineHandle?: "in" | "out";
 };
 type CreationDraft = { readonly tool: "rectangle" | "circle" | "line" | "arc"; readonly points: readonly PointMm[]; readonly pointer: PointMm; readonly snaps?: readonly (CreationSnap | undefined)[]; readonly elementId?: ElementId; readonly currentNodeId?: string };
+
+type LineSketchPointCommit = {
+  readonly elementId: ElementId;
+  readonly currentNodeId: string;
+  readonly point: PointMm;
+  readonly snappedSketchNode?: { readonly elementId: ElementId; readonly nodeId: string };
+};
+
+export const commitLineSketchPoint = (editor: EditorState, commit: LineSketchPointCommit): { readonly editor: EditorState; readonly elementId: ElementId; readonly currentNodeId: string; readonly consolidated: boolean } => {
+  const targetNodeId = commit.snappedSketchNode?.elementId === commit.elementId ? commit.snappedSketchNode.nodeId : undefined;
+  const appended = dispatch(editor, appendSketchEdge(commit.elementId, commit.currentNodeId, commit.point, targetNodeId));
+  const appendedSketch = appended.document.elements.find((element): element is Extract<Element, { type: "sketch" }> => element.id === commit.elementId && element.type === "sketch");
+  const appendedEdge = appendedSketch?.edges.at(-1);
+  const currentNodeId = targetNodeId ?? appendedEdge?.endNodeId ?? commit.currentNodeId;
+  if (appended === editor || commit.snappedSketchNode?.elementId === commit.elementId) {
+    return { editor: select(appended, [commit.elementId]), elementId: commit.elementId, currentNodeId, consolidated: false };
+  }
+
+  const geometricallyCoincidentSketchIds = appended.document.elements
+    .filter((element): element is Extract<Element, { type: "sketch" }> => element.type === "sketch" && element.id !== commit.elementId)
+    .filter((sketch) => sketch.nodes.some((node) => Math.hypot(node.point.x - commit.point.x, node.point.y - commit.point.y) <= GEOMETRY_EPSILON))
+    .map((sketch) => sketch.id)
+    .sort();
+  const candidateIds = commit.snappedSketchNode && commit.snappedSketchNode.elementId !== commit.elementId
+    ? [commit.snappedSketchNode.elementId]
+    : geometricallyCoincidentSketchIds;
+
+  for (const candidateId of candidateIds) {
+    const consolidated = dispatch(appended, consolidateSketches([commit.elementId, candidateId]));
+    if (consolidated === appended) continue;
+    const retainedId = [commit.elementId, candidateId].sort()[0]!;
+    const retainedSketch = consolidated.document.elements.find((element): element is Extract<Element, { type: "sketch" }> => element.id === retainedId && element.type === "sketch");
+    const retainedNodeId = retainedId === commit.elementId
+      ? currentNodeId
+      : commit.snappedSketchNode?.elementId === retainedId
+        ? commit.snappedSketchNode.nodeId
+        : retainedSketch?.nodes.find((node) => Math.hypot(node.point.x - commit.point.x, node.point.y - commit.point.y) <= GEOMETRY_EPSILON)?.id ?? currentNodeId;
+    return { editor: select(consolidated, [retainedId]), elementId: retainedId, currentNodeId: retainedNodeId, consolidated: true };
+  }
+
+  return { editor: select(appended, [commit.elementId]), elementId: commit.elementId, currentNodeId, consolidated: false };
+};
 
 type FormaNodeOverlay =
   | { readonly kind: "contour"; readonly key: string; readonly elementId: ElementId; readonly point: PointMm; readonly contour: ContourNodeHit }
@@ -1349,7 +1391,7 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
          creationDraftRef.current = nextDraft;
          setCreationDraft(nextDraft);
        } else if (draft.points.length === 1 && !draft.elementId) {
-          const sketch = createSketchLine(id(), layerId(editorRef.current.document.layers[0]?.id ?? "layer-1"), { ...defaultStyle, strokeWidth: 1.5 }, draft.points[0]!, creationPoint);
+          const sketch = { ...createSketchLine(id(), layerId(editorRef.current.document.layers[0]?.id ?? "layer-1"), { ...defaultStyle, strokeWidth: 1.5 }, draft.points[0]!, creationPoint), ...(activePiece ? { pieceId: activePiece.id } : {}) };
           const next = dispatch(editorRef.current, createElement(sketch, creationConnections(sketch, [...(draft.snaps ?? []), creationSnap])));
           const nextDraft = { tool, points: [...draft.points, creationPoint], pointer: creationPoint, elementId: sketch.id, currentNodeId: sketch.nodes[1]!.id } as const;
          creationDraftRef.current = nextDraft;
@@ -1364,15 +1406,11 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
                 if (activePiece) commitNewSketch(selectedNext, sketch.id, activePiece.id);
               }
        } else if (draft.elementId && draft.currentNodeId) {
-          const targetNodeId = snappedSketchNode?.elementId === draft.elementId ? snappedSketchNode.nodeId : undefined;
-          const next = dispatch(editorRef.current, appendSketchEdge(draft.elementId, draft.currentNodeId, creationPoint, targetNodeId));
-          const sketch = next.document.elements.find((element): element is Extract<Element, { type: "sketch" }> => element.id === draft.elementId && element.type === "sketch");
-          const appendedEdge = sketch?.edges.at(-1);
-          const currentNodeId = targetNodeId ?? appendedEdge?.endNodeId ?? draft.currentNodeId;
-          const nextDraft = { ...draft, points: [...draft.points, creationPoint], pointer: creationPoint, currentNodeId };
+          const committed = commitLineSketchPoint(editorRef.current, { elementId: draft.elementId, currentNodeId: draft.currentNodeId, point: creationPoint, ...(snappedSketchNode ? { snappedSketchNode } : {}) });
+          const nextDraft = { ...draft, points: [...draft.points, creationPoint], pointer: creationPoint, elementId: committed.elementId, currentNodeId: committed.currentNodeId };
          creationDraftRef.current = nextDraft;
          setCreationDraft(nextDraft);
-         setEditorState(select(next, [draft.elementId]));
+         setEditorState(committed.editor);
        }
        return;
      }

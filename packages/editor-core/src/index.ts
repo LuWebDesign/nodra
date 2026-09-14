@@ -35,7 +35,7 @@ import {
   isCircleElement,
 } from "@nodra/domain";
 import { validateDocument } from "@nodra/validation";
-import { boundsOf, boundsOfElements, connectableNodeAddress, contourWithPoints, directionVector, elementCenter, elementToContour, dimensionGeometry, elementToCurves, glyphGeometryNodes, groupCenter, intersectCurves, lineElementToCurve, circleElementToCurve, arcElementToCurve, pointAt, mirrorHandleOffset, partitionCurveByInterval, selectRemovableCurveInterval, selectSourcedCurveInterval, realGeometryNodes, resizeGroup, rotateElements, shapeResultContours, tangentAt, transformPoint, connectableNode, splitCuttableSegments, classifyCutGraph, cuttableSegments, lineSegmentIntersection, rotatedLineEndpoints, sketchEdgeAtAddress, sketchEdgeIndexAtAddress, solveSketchConstraints, cubicBezierLineIntersections, splitCubicBezierAtParameters, flattenCubicBezier, GEOMETRY_EPSILON, type CubicBezier, type Direction, type LineCurve2D, type SourcedCurve2D } from "@nodra/geometry";
+import { boundsOf, boundsOfElements, connectableNodeAddress, contourWithPoints, directionVector, elementCenter, elementToContour, dimensionGeometry, elementToCurves, glyphGeometryNodes, groupCenter, intersectCurves, lineElementToCurve, circleElementToCurve, arcElementToCurve, pointAt, mirrorHandleOffset, partitionCurveByInterval, selectRemovableCurveInterval, selectSourcedCurveInterval, realGeometryNodes, resizeGroup, rotateElements, shapeResultContours, tangentAt, transformPoint, connectableNode, splitCuttableSegments, classifyCutGraph, cuttableSegments, lineSegmentIntersection, rotatedLineEndpoints, sketchEdgeAtAddress, sketchEdgeIndexAtAddress, sketchProfileResult, solveSketchConstraints, cubicBezierLineIntersections, splitCubicBezierAtParameters, flattenCubicBezier, GEOMETRY_EPSILON, type CubicBezier, type Direction, type LineCurve2D, type SourcedCurve2D } from "@nodra/geometry";
 import { insertSplineNode, moveSplineHandle as moveSplineHandleData, moveSplineNode as moveSplineNodeData } from "./spline.js";
 import { topologyReferenceKey, type ReferenceResolution, type TopologyEditResult, type TopologyReference } from "./topology.js";
 import { recomputeSketchKernel } from "./sketchKernel.js";
@@ -531,6 +531,131 @@ const remapSketchEdgeDimensionReferences = (edit: TopologyEditResult, sketchId: 
   };
   const first = remap(element.references[0]); const second = remap(element.references[1]);
   return first && second ? [{ ...element, references: [first, second] }] : [];
+});
+
+/** Consolidates exactly two compatible open linear chains into one closed sketch.
+ * The lexicographically smallest sketch ID owns the result. References that
+ * cannot be remapped without changing their meaning reject the whole command. */
+export const consolidateSketches = (sketchIds: readonly ElementId[]): EditorCommand => ({
+  name: `sketch-consolidate:${[...new Set(sketchIds)].sort().join(",")}`,
+  apply: (document) => {
+    const ids = [...new Set(sketchIds)].sort();
+    const fail = (error: string, code = "invalid-sketch-consolidation"): CommandResult => ({ success: false, error, diagnostics: [{ kind: "topology", code, message: error }] });
+    if (ids.length !== 2) return fail("Sketch consolidation requires exactly two distinct sketches");
+    const sketches = ids.map((id) => document.elements.find((element): element is SketchElement => element.id === id && element.type === "sketch"));
+    const target = sketches[0]; const source = sketches[1];
+    if (!target || !source) return fail("One or more sketches were not found");
+    const selected = new Set(ids);
+    if (document.featureTree?.features.some((feature) => [...feature.sources, ...feature.outputs].some((reference) => selected.has(reference.elementId)))) return fail("Feature references to consolidated sketches are not supported in this slice", "unsupported-consolidation-reference");
+    const metadata = (sketch: SketchElement) => ({ layerId: sketch.layerId, style: sketch.style, operation: sketch.operation, pieceId: "pieceId" in sketch ? sketch.pieceId : undefined });
+    if (stableJson(metadata(target)) !== stableJson(metadata(source))) return fail("Sketch metadata differs and cannot be consolidated deterministically");
+    const chainEndpoints = (sketch: SketchElement): readonly string[] | undefined => {
+      if (!sketch.nodes.length || !sketch.edges.length || new Set(sketch.nodes.map((node) => node.id)).size !== sketch.nodes.length || new Set(sketch.edges.map((edge) => edge.id)).size !== sketch.edges.length) return undefined;
+      const nodeIds = new Set(sketch.nodes.map((node) => node.id)); const degrees = new Map(sketch.nodes.map((node) => [node.id, 0])); const adjacency = new Map(sketch.nodes.map((node) => [node.id, [] as string[]]));
+      for (const edge of sketch.edges) {
+        if (edge.startNodeId === edge.endNodeId || !nodeIds.has(edge.startNodeId) || !nodeIds.has(edge.endNodeId)) return undefined;
+        degrees.set(edge.startNodeId, degrees.get(edge.startNodeId)! + 1); degrees.set(edge.endNodeId, degrees.get(edge.endNodeId)! + 1);
+        adjacency.get(edge.startNodeId)!.push(edge.endNodeId); adjacency.get(edge.endNodeId)!.push(edge.startNodeId);
+      }
+      const endpoints = sketch.nodes.filter((node) => degrees.get(node.id) === 1).map((node) => node.id);
+      if (endpoints.length !== 2 || sketch.nodes.some((node) => (degrees.get(node.id) ?? 0) < 1 || (degrees.get(node.id) ?? 0) > 2)) return undefined;
+      const visited = new Set<string>(); const pending = [endpoints[0]!];
+      while (pending.length) { const id = pending.pop()!; if (visited.has(id)) continue; visited.add(id); pending.push(...(adjacency.get(id) ?? [])); }
+      return visited.size === sketch.nodes.length ? endpoints : undefined;
+    };
+    const targetEndpoints = chainEndpoints(target); const sourceEndpoints = chainEndpoints(source);
+    if (!targetEndpoints || !sourceEndpoints) return fail("Sketch consolidation supports only unambiguous open linear chains");
+    const point = (sketch: SketchElement, nodeId: string): PointMm => sketch.nodes.find((node) => node.id === nodeId)!.point;
+    const close = (first: PointMm, second: PointMm): boolean => Math.hypot(first.x - second.x, first.y - second.y) <= GEOMETRY_EPSILON;
+    const matches = sourceEndpoints.flatMap((sourceNodeId) => targetEndpoints.filter((targetNodeId) => close(point(source, sourceNodeId), point(target, targetNodeId))).map((targetNodeId) => ({ sourceNodeId, targetNodeId })));
+    if (matches.length !== 2 || new Set(matches.map((match) => match.sourceNodeId)).size !== 2 || new Set(matches.map((match) => match.targetNodeId)).size !== 2) return fail(matches.length ? "Sketch endpoint geometry is ambiguous" : "Sketches are not geometrically connected");
+    const endpointSets = [new Set(targetEndpoints), new Set(sourceEndpoints)] as const;
+    if (target.nodes.some((targetNode) => source.nodes.some((sourceNode) => close(targetNode.point, sourceNode.point) && (!endpointSets[0].has(targetNode.id) || !endpointSets[1].has(sourceNode.id))))) return fail("Sketches contain an ambiguous non-endpoint coincidence");
+    const edgeIds = [...target.edges, ...source.edges].map((edge) => edge.id);
+    if (new Set(edgeIds).size !== edgeIds.length) return fail("Sketch edge IDs collide");
+    const constraintIds = [...(target.constraints ?? []), ...(source.constraints ?? [])].map((constraint) => constraint.id);
+    if (new Set(constraintIds).size !== constraintIds.length) return fail("Sketch constraint IDs collide");
+    const targetNodeMap = new Map(target.nodes.map((node) => [node.id, node.id]));
+    const sourceNodeMap = new Map(source.nodes.map((node) => [node.id, matches.find((match) => match.sourceNodeId === node.id)?.targetNodeId ?? node.id]));
+    const retainedSourceNodes = source.nodes.filter((node) => !matches.some((match) => match.sourceNodeId === node.id));
+    if (retainedSourceNodes.some((node) => targetNodeMap.has(node.id))) return fail("Sketch node IDs collide");
+    const maps = new Map<ElementId, ReadonlyMap<string, string>>([[target.id, targetNodeMap], [source.id, sourceNodeMap]]);
+    const remapConstraint = (constraint: SketchConstraint, owner?: ElementId): SketchConstraint | undefined => {
+      const references = constraint.references.map((reference) => {
+        if (!selected.has(reference.elementId)) return reference;
+        const nodeMap = maps.get(reference.elementId);
+        if ("nodeId" in reference) { const nodeId = nodeMap?.get(reference.nodeId); return nodeId ? { ...reference, elementId: target.id, nodeId } : undefined; }
+        const sketch = reference.elementId === target.id ? target : source;
+        return sketch.edges.some((edge) => edge.id === reference.edgeId) ? { ...reference, elementId: target.id } : undefined;
+      });
+      if (owner !== undefined && constraint.references.some((reference) => reference.elementId !== owner) || references.some((reference) => reference === undefined)) return undefined;
+      return { ...constraint, references: references as unknown as SketchConstraint["references"] };
+    };
+    const constraints = [...(target.constraints ?? []).map((constraint) => remapConstraint(constraint, target.id)), ...(source.constraints ?? []).map((constraint) => remapConstraint(constraint, source.id))];
+    if (constraints.some((constraint) => constraint === undefined)) return fail("A local sketch constraint cannot be remapped safely", "unsupported-consolidation-reference");
+    const merged: SketchElement = {
+      ...target,
+      nodes: [...target.nodes, ...retainedSourceNodes],
+      edges: [...target.edges, ...source.edges.map((edge) => ({ ...edge, startNodeId: sourceNodeMap.get(edge.startNodeId)!, endNodeId: sourceNodeMap.get(edge.endNodeId)! }))],
+      ...(constraints.length ? { constraints: constraints as readonly SketchConstraint[] } : {}),
+    };
+    if (sketchProfileResult(merged).status !== "valid-closed") return fail("Consolidated sketch does not produce one valid closed profile");
+    const remapDimensionReference = (reference: DimensionElement["references"][number]): DimensionElement["references"][number] | undefined => {
+      if (!selected.has(reference.elementId)) return reference;
+      const before = reference.elementId === target.id ? target : source;
+      if ("nodeIndex" in reference) {
+        const beforeNode = reference.nodeId !== undefined ? before.nodes.find((node) => node.id === reference.nodeId) : before.nodes[reference.nodeIndex];
+        const nodeId = beforeNode ? maps.get(before.id)?.get(beforeNode.id) : undefined; const nodeIndex = nodeId === undefined ? -1 : merged.nodes.findIndex((node) => node.id === nodeId);
+        return nodeId !== undefined && nodeIndex >= 0 ? { ...reference, elementId: target.id, nodeId, nodeIndex } : undefined;
+      }
+      if (!("kind" in reference) || reference.kind !== "line") return undefined;
+      const beforeEdge = reference.edgeId !== undefined ? before.edges.find((edge) => edge.id === reference.edgeId) : before.edges[reference.edgeIndex ?? 0];
+      const edgeIndex = beforeEdge ? merged.edges.findIndex((edge) => edge.id === beforeEdge.id) : -1;
+      return beforeEdge && edgeIndex >= 0 ? { ...reference, elementId: target.id, edgeId: beforeEdge.id, edgeIndex } : undefined;
+    };
+    let unsafeDimension = false;
+    const elements = document.elements.flatMap<Element>((element) => {
+      if (element.id === source.id) return [];
+      if (element.id === target.id) return [merged];
+      if (element.type !== "dimension") return [element];
+      const first = remapDimensionReference(element.references[0]); const second = remapDimensionReference(element.references[1]);
+      if (!first || !second) { unsafeDimension = true; return [element]; }
+      return [{ ...element, references: [first, second] }];
+    });
+    if (unsafeDimension) return fail("A dimension reference cannot be remapped safely", "unsupported-consolidation-reference");
+    const documentConstraints = (document.constraints ?? []).map((constraint) => constraint.references.some((reference) => selected.has(reference.elementId)) ? remapConstraint(constraint) : constraint);
+    if (documentConstraints.some((constraint) => constraint === undefined)) return fail("A document constraint cannot be remapped safely", "unsupported-consolidation-reference");
+    const remapConnectionReference = (reference: ExplicitConnection["first"]): ExplicitConnection["first"] | undefined => {
+      if (!selected.has(reference.elementId)) return reference;
+      if (reference.node.kind !== "sketch") return undefined;
+      const nodeId = maps.get(reference.elementId)?.get(reference.node.nodeId);
+      return nodeId ? { ...reference, elementId: target.id, node: { ...reference.node, nodeId } } : undefined;
+    };
+    const remapRelations = <T extends ExplicitConnection | PositionalCoincidence>(relations: readonly T[]): readonly T[] | undefined => {
+      const remapped: T[] = []; const relationKeys = new Set<string>();
+      for (const relation of relations) {
+        const first = remapConnectionReference(relation.first); const second = remapConnectionReference(relation.second);
+        if (!first || !second) return undefined;
+        const firstKey = stableJson(first); const secondKey = stableJson(second);
+        if (firstKey === secondKey) continue;
+        const key = [firstKey, secondKey].sort().join("\u0000");
+        if (relationKeys.has(key)) continue;
+        relationKeys.add(key);
+        remapped.push({ ...relation, first, second });
+      }
+      return remapped;
+    };
+    const connections = remapRelations(document.connections ?? []);
+    const positionalCoincidences = remapRelations(document.positionalCoincidences ?? []);
+    if (!connections || !positionalCoincidences) return fail("A connection reference cannot be remapped safely", "unsupported-consolidation-reference");
+    const destinations = new Map<string, readonly TopologyReference[]>();
+    for (const sketch of [target, source]) for (const edge of sketch.edges) {
+      const original = sketchEdgeReference(sketch.id, edge.id);
+      destinations.set(topologyReferenceKey(original), [sketchEdgeReference(target.id, edge.id)]);
+    }
+    const edit = topologyEditForReferenceDestinations(elements, [target, source].flatMap((sketch) => sketch.edges.map((edge) => sketchEdgeReference(sketch.id, edge.id))), destinations, "Sketch edge was removed during consolidation");
+    return replaceSketchTopology({ ...document, elements, constraints: documentConstraints as readonly DocumentConstraint[], connections, positionalCoincidences }, edit);
+  },
 });
 
 const constraintReferencesSketchEdge = (constraint: SketchConstraint, sketchId: ElementId, edge: SketchElement["edges"][number]): boolean => {

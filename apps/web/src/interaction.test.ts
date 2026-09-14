@@ -269,6 +269,22 @@ describe("click creation geometry", () => {
     expect(snapCreationPoint(document, { x: 20.5, y: 20 }, 1, 8)).toEqual({ point: { x: 20, y: 20 }, kind: "center" });
   });
 
+  it("keeps cross-sketch snap hover feedback transient until a line click is confirmed", () => {
+    const layer = { id: layerId("line-hover-layer"), name: "Sketches", visible: true, order: 0 };
+    const first = { type: "sketch" as const, id: elementId("line-hover-first"), layerId: layer.id, nodes: [{ id: "first-start", point: { x: 0, y: 0 } }, { id: "first-end", point: { x: 10, y: 0 } }], edges: [{ id: "first-edge", startNodeId: "first-start", endNodeId: "first-end" }], style: { stroke: "#000", strokeWidth: 1.5 } };
+    const second = { type: "sketch" as const, id: elementId("line-hover-second"), layerId: layer.id, nodes: [{ id: "second-start", point: { x: 10, y: 10 } }, { id: "second-end", point: { x: 0, y: 10 } }], edges: [{ id: "second-edge", startNodeId: "second-start", endNodeId: "second-end" }], style: { stroke: "#000", strokeWidth: 1.5 } };
+    const document = { ...createDocument("line-hover", [layer]), elements: [first, second] };
+    const before = structuredClone(document);
+
+    expect(snapCreationPoint(document, { x: 10.25, y: 10 }, 4, 8)).toMatchObject({
+      point: { x: 10, y: 10 },
+      address: { kind: "sketch", nodeId: "second-start" },
+      node: { elementId: second.id },
+    });
+    expect(document).toEqual(before);
+    expect(document.elements).toHaveLength(2);
+  });
+
   it("does not collapse a line endpoint onto its source for a zero-length alignment guide", () => {
     const layer = { id: layerId("line-guide-layer"), name: "Guides", visible: true, order: 0 };
     const circle = { type: "circle" as const, id: elementId("line-guide-circle"), layerId: layer.id, center: { x: 20, y: 20 }, radius: 10, style: { stroke: "#000", strokeWidth: 1 } };
