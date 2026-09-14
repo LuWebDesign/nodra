@@ -157,6 +157,28 @@ export const profilePreviewForSelection = (
   return renderedProfile.success ? renderedProfile.svg : undefined;
 };
 
+/** Derives visual-only profile layers without replacing or persisting source elements. */
+export const profileOverlaysForPiece = (
+  project: ProjectSnapshot,
+  activePage: ReturnType<typeof projectPage>,
+  activePieceId: PieceId | undefined,
+  selection: readonly ElementId[],
+  page = activePage.page,
+): { readonly fill?: string; readonly selection?: string } => {
+  const selectionPreview = profilePreviewForSelection(project, activePage, activePieceId, selection, page);
+  if (selectionPreview) return { selection: selectionPreview };
+  if (!activePieceId) return {};
+  const visibleLayers = new Set(activePage.layers.filter((layer) => layer.visible).map((layer) => layer.id));
+  const inputScope = {
+    elements: profileScopeForPiece(project, activePage, activePieceId).elements.filter((element) => visibleLayers.has(element.layerId)),
+  };
+  if (inputScope.elements.length === 0) return {};
+  const profile = sketchProfileResult(inputScope);
+  if (profile.status !== "valid-closed" || profile.regions.length === 0) return {};
+  const renderedProfile = renderSketchProfileSvg(profile, { zoom: 1, panMm: { x: 0, y: 0 } }, { fill: "#111827", stroke: "none", strokeWidth: 0, width: page.width, height: page.height });
+  return renderedProfile.success ? { fill: renderedProfile.svg } : {};
+};
+
 
 export function App() {
   const { mode, tool, setMode, setTool } = useUiStore();
@@ -290,7 +312,7 @@ export function App() {
   creationDraftRef.current = creationDraft;
   const activePiece = activePieceId === undefined ? undefined : project.pieces.find((piece) => piece.id === resolveActivePieceId(project, activePieceId));
       const activePage = projectPage(project, project.activePageId);
-      const profilePreviewSvg = useMemo(() => profilePreviewForSelection(project, activePage, activePiece?.id, selection, document.page), [activePage, activePiece?.id, document.page, project, selection]);
+      const profileOverlays = useMemo(() => profileOverlaysForPiece(project, activePage, activePiece?.id, selection, document.page), [activePage, activePiece?.id, document.page, project, selection]);
       const initializationUserOverride = useRef(false);
 
         useEffect(() => { const route = routeFromPath(window.location.pathname); if (route.view === "editor" && window.location.pathname === "/preparar") setMode("prepare"); const onPopState = () => { const next = routeFromPath(window.location.pathname); setView(next.view); if (next.projectId) setDetailProjectId(next.projectId); if (next.view === "editor") setMode(window.location.pathname === "/preparar" ? "prepare" : "design"); }; addEventListener("popstate", onPopState); return () => removeEventListener("popstate", onPopState); }, [setMode]);
@@ -2473,7 +2495,7 @@ return <main className={`app-shell${persistenceReady ? "" : " hydrating"}`}>
       <section className="canvas-area">
              <div ref={setCanvasRef} className={`${grid ? "canvas" : "canvas no-grid"}${isDrawingTool(tool) ? " drawing-tool" : ""}`} onPointerDown={onCanvasPointerDown} onPointerMove={onCanvasPointerMove} onPointerUp={(event) => finishPointer(event, false)} onPointerCancel={(event) => finishPointer(event, true)} onLostPointerCapture={cancelPointerInteraction} onPointerLeave={() => { setCursorPoint(undefined); setNodeHover(undefined); setCutSegmentHover(undefined); setDimensionNodeHover(undefined); setFormaSegmentHover(undefined); }} onDoubleClick={onCanvasDoubleClick} onWheel={onWheel}>
             {rulerHorizontal}{rulerVertical}<span className="ruler-corner" aria-hidden="true" />
-            <div className="page" data-document-revision={document.revision} data-document-element-ids={document.elements.map((element) => element.id).join(",")} style={pageStyle}>{/* SAFETY: renderSvg emits allowlisted SVG from validated document data. */}<div className={`page-svg${textDraft ? " editing-text" : ""}`} dangerouslySetInnerHTML={{ __html: rendered.success ? rendered.svg : "" }} />{profilePreviewSvg && <div className="profile-preview-overlay" data-profile-selection-preview="true" aria-hidden="true" style={{ position: "absolute", inset: 0, pointerEvents: "none", zIndex: 4 }} dangerouslySetInnerHTML={{ __html: profilePreviewSvg }} />}{(alignmentGuideOverlay.length > 0 || splineOverlay.length > 0 || selectedEditOverlay.length > 0 || pathGuideOverlay.length > 0) && <svg data-spline-overlay-layer="true" viewBox={`0 0 ${document.page.width} ${document.page.height}`} style={{ position: "absolute", inset: 0, width: "100%", height: "100%", pointerEvents: "none", overflow: "visible", zIndex: 5 }}><defs><marker id="forma-handle-arrow" markerWidth="5" markerHeight="5" refX="4" refY="2.5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0,0 L5,2.5 L0,5 Z" fill="#1683ff" /></marker></defs>{alignmentGuideOverlay}{selectedEditOverlay}{pathGuideOverlay}{splineOverlay}</svg>}</div>
+            <div className="page" data-document-revision={document.revision} data-document-element-ids={document.elements.map((element) => element.id).join(",")} style={pageStyle}>{/* SAFETY: renderSvg emits allowlisted SVG from validated document data. */}<div className={`page-svg${textDraft ? " editing-text" : ""}`} style={{ position: "relative", zIndex: 1 }} dangerouslySetInnerHTML={{ __html: rendered.success ? rendered.svg : "" }} />{profileOverlays.fill && <div data-piece-profile-fill="true" aria-hidden="true" style={{ position: "absolute", inset: 0, pointerEvents: "none", opacity: 0.22, zIndex: 0 }} dangerouslySetInnerHTML={{ __html: profileOverlays.fill }} />}{profileOverlays.selection && <div className="profile-preview-overlay" data-profile-selection-preview="true" aria-hidden="true" style={{ position: "absolute", inset: 0, pointerEvents: "none", zIndex: 4 }} dangerouslySetInnerHTML={{ __html: profileOverlays.selection }} />}{(alignmentGuideOverlay.length > 0 || splineOverlay.length > 0 || selectedEditOverlay.length > 0 || pathGuideOverlay.length > 0) && <svg data-spline-overlay-layer="true" viewBox={`0 0 ${document.page.width} ${document.page.height}`} style={{ position: "absolute", inset: 0, width: "100%", height: "100%", pointerEvents: "none", overflow: "visible", zIndex: 5 }}><defs><marker id="forma-handle-arrow" markerWidth="5" markerHeight="5" refX="4" refY="2.5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0,0 L5,2.5 L0,5 Z" fill="#1683ff" /></marker></defs>{alignmentGuideOverlay}{selectedEditOverlay}{pathGuideOverlay}{splineOverlay}</svg>}</div>
               {textDraft && (() => {
                 const existing = textDraft.element;
                 const lines = textDraft.value.split("\n");
