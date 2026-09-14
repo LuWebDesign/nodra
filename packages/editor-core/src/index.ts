@@ -634,6 +634,125 @@ export const cutSketchEdge = (sketchId: ElementId, segmentIndex: number, cutPoin
   },
 });
 
+type ExactSketchCutSelection = { readonly kind: "selected"; readonly interval: { readonly start: number; readonly end: number } } | { readonly kind: "rejected" } | { readonly kind: "fallback" };
+
+const selectedExactSketchInterval = (document: DocumentSnapshot, sketch: SketchElement, segmentIndex: number, point: PointMm): ExactSketchCutSelection => {
+  const target = elementToCurves(sketch).find((candidate) => candidate.sourceIndex === segmentIndex);
+  if (!target || target.curve.type !== "line") return { kind: "fallback" };
+  const targetLine = target.curve;
+  const visibleLayers = new Set(document.layers.filter((layer) => layer.visible).map((layer) => layer.id));
+  const cuts: number[] = [];
+  for (const element of document.elements) {
+    if (!visibleLayers.has(element.layerId)) continue;
+    const candidates = elementToCurves(element);
+    if (candidates.length === 0) {
+      const touchesUnsupported = cuttableSegments(element).some((segment) => lineSegmentIntersection(targetLine.start, targetLine.end, segment.start, segment.end, 1e-8) !== undefined);
+      if (touchesUnsupported) return { kind: "fallback" };
+      continue;
+    }
+    for (const candidate of candidates) {
+      if (candidate.source.elementId === sketch.id && candidate.sourceIndex === segmentIndex) continue;
+      const intersection = intersectCurves(target.curve, candidate.curve);
+      if (intersection.kind === "overlap" || intersection.kind === "unsupported") return { kind: "rejected" };
+      if (intersection.kind !== "points") continue;
+      const transversal = intersection.points.filter(({ firstParameter, secondParameter }) => transversalCurveIntersection(target, candidate, firstParameter, secondParameter));
+      if (transversal.length > 0 && candidate.curve.type !== "line") return { kind: "fallback" };
+      cuts.push(...transversal.map(({ firstParameter }) => firstParameter));
+    }
+  }
+  const selection = selectRemovableCurveInterval(target.curve, cuts, point);
+  if (selection.kind === "rejected") return selection.reason === "cursor-on-cut" ? { kind: "rejected" } : { kind: "fallback" };
+  if (selection.interval.wrapsSeam) return { kind: "fallback" };
+  return { kind: "selected", interval: { start: selection.interval.start, end: selection.interval.end } };
+};
+
+const cutExactSketchInterval = (document: DocumentSnapshot, sketch: SketchElement, segmentIndex: number, interval: { readonly start: number; readonly end: number }): CommandResult => {
+  const edge = sketch.edges[segmentIndex]!;
+  const startNode = sketch.nodes.find((node) => node.id === edge.startNodeId)!;
+  const endNode = sketch.nodes.find((node) => node.id === edge.endNodeId)!;
+  const pointAtParameter = (parameter: number): PointMm => ({ x: startNode.point.x + (endNode.point.x - startNode.point.x) * parameter, y: startNode.point.y + (endNode.point.y - startNode.point.y) * parameter });
+  const boundaries = [interval.start, interval.end].filter((parameter) => parameter > 1e-7 && parameter < 1 - 1e-7).map((parameter) => ({ parameter, point: pointAtParameter(parameter) }));
+  const referenceMap = new Map<string, ReferenceResolution>();
+  const replacements = new Map<ElementId, SketchElement>();
+  const affectedEdges = new Map<ElementId, Set<string>>();
+  const uniqueId = (base: string, used: Set<string>): string => { let candidate = base; let suffix = 1; while (used.has(candidate)) candidate = `${base}:${suffix++}`; used.add(candidate); return candidate; };
+
+  for (const sourceSketch of document.elements.filter((element): element is SketchElement => element.type === "sketch")) {
+    const usedNodeIds = new Set(sourceSketch.nodes.map((node) => node.id));
+    const usedEdgeIds = new Set(sourceSketch.edges.map((candidate) => candidate.id));
+    const addedNodes: SketchElement["nodes"][number][] = [];
+    const nextEdges = sourceSketch.edges.flatMap((candidate, index) => {
+      if (sourceSketch.id === sketch.id && index === segmentIndex) {
+        const survivorIntervals = [[0, interval.start], [interval.end, 1]].filter(([first, last]) => last! - first! > 1e-7) as [number, number][];
+        const replacementEdges = survivorIntervals.map(([first, last], survivorIndex) => {
+          const startId = first <= 1e-7 ? candidate.startNodeId : uniqueId(`${candidate.id}:trim-node:${first}`, usedNodeIds);
+          const endId = last >= 1 - 1e-7 ? candidate.endNodeId : uniqueId(`${candidate.id}:trim-node:${last}`, usedNodeIds);
+          if (first > 1e-7) addedNodes.push({ id: startId, point: pointAtParameter(first) });
+          if (last < 1 - 1e-7 && !addedNodes.some((node) => node.id === endId)) addedNodes.push({ id: endId, point: pointAtParameter(last) });
+          return { id: survivorIndex === 0 ? candidate.id : uniqueId(`${candidate.id}:trim:${survivorIndex + 1}`, usedEdgeIds), startNodeId: startId, endNodeId: endId };
+        });
+        affectedEdges.set(sourceSketch.id, new Set([candidate.id]));
+        const original = sketchEdgeReference(sourceSketch.id, candidate.id);
+        referenceMap.set(topologyReferenceKey(original), replacementEdges.length ? { kind: "replaced", references: replacementEdges.map((replacement) => sketchEdgeReference(sourceSketch.id, replacement.id)) } : { kind: "removed", reason: "Sketch edge interval was removed" });
+        return replacementEdges;
+      }
+      const first = sourceSketch.nodes.find((node) => node.id === candidate.startNodeId)?.point;
+      const last = sourceSketch.nodes.find((node) => node.id === candidate.endNodeId)?.point;
+      if (!first || !last) return [candidate];
+      const boundary = boundaries.find(({ point }) => {
+        const hit = lineSegmentIntersection(startNode.point, endNode.point, first, last, 1e-7);
+        return hit !== undefined && Math.hypot(hit.point.x - point.x, hit.point.y - point.y) <= 1e-6 && hit.secondT > 1e-7 && hit.secondT < 1 - 1e-7;
+      });
+      if (!boundary) return [candidate];
+      const hit = lineSegmentIntersection(startNode.point, endNode.point, first, last, 1e-7)!;
+      const nodeId = uniqueId(`${candidate.id}:trim-node:${boundary.parameter}`, usedNodeIds);
+      addedNodes.push({ id: nodeId, point: hit.point });
+      const split = [{ id: candidate.id, startNodeId: candidate.startNodeId, endNodeId: nodeId }, { id: uniqueId(`${candidate.id}:trim:2`, usedEdgeIds), startNodeId: nodeId, endNodeId: candidate.endNodeId }];
+      affectedEdges.set(sourceSketch.id, new Set([...(affectedEdges.get(sourceSketch.id) ?? []), candidate.id]));
+      const original = sketchEdgeReference(sourceSketch.id, candidate.id);
+      referenceMap.set(topologyReferenceKey(original), { kind: "replaced", references: split.map((replacement) => sketchEdgeReference(sourceSketch.id, replacement.id)) });
+      return split;
+    });
+    if (nextEdges.every((candidate, index) => candidate === sourceSketch.edges[index])) continue;
+    const usedNodes = new Set(nextEdges.flatMap((candidate) => [candidate.startNodeId, candidate.endNodeId]));
+    const removed = affectedEdges.get(sourceSketch.id) ?? new Set<string>();
+    const constraints = sourceSketch.constraints?.filter((constraint) => constraint.references.every((reference) => "nodeId" in reference ? usedNodes.has(reference.nodeId) : nextEdges.some((candidate) => candidate.id === reference.edgeId)) && !sourceSketch.edges.some((candidate) => removed.has(candidate.id) && constraintReferencesSketchEdge(constraint, sourceSketch.id, candidate)));
+    replacements.set(sourceSketch.id, { ...sourceSketch, nodes: [...sourceSketch.nodes, ...addedNodes].filter((node) => usedNodes.has(node.id)), edges: nextEdges, ...(constraints ? { constraints } : {}) });
+  }
+
+  if (!replacements.has(sketch.id)) return { success: false, error: "Sketch cut interval did not change geometry" };
+  const documentConstraints = document.constraints?.filter((constraint) => ![...affectedEdges].some(([sketchId, edgeIds]) => {
+    const sourceSketch = document.elements.find((element): element is SketchElement => element.id === sketchId && element.type === "sketch");
+    return sourceSketch?.edges.some((candidate) => edgeIds.has(candidate.id) && constraintReferencesSketchEdge(constraint, sketchId, candidate)) ?? false;
+  }));
+  const referenceSurvives = (reference: ExplicitConnection["first"]): boolean => {
+    const address = reference.node;
+    return address.kind !== "sketch" || !replacements.has(reference.elementId) || replacements.get(reference.elementId)!.nodes.some((node) => node.id === address.nodeId);
+  };
+  const candidateDocument: DocumentSnapshot = {
+    ...document,
+    ...(documentConstraints ? { constraints: documentConstraints } : {}),
+    connections: (document.connections ?? []).filter((connection) => referenceSurvives(connection.first) && referenceSurvives(connection.second)),
+    positionalCoincidences: (document.positionalCoincidences ?? []).filter((relation) => referenceSurvives(relation.first) && referenceSurvives(relation.second)),
+  };
+  const baseElements = document.elements.map((element) => replacements.get(element.id) ?? element);
+  const edit: TopologyEditResult = { elements: baseElements, referenceMap, diagnostics: [] };
+  const edgeRemapped = [...replacements.entries()].reduce<readonly Element[]>((current, [id, replacement]) => remapSketchEdgeDimensionReferences({ ...edit, elements: current }, id, document.elements.find((element): element is SketchElement => element.id === id && element.type === "sketch")!.edges, replacement.edges), baseElements);
+  const elements = edgeRemapped.flatMap<Element>((element) => {
+    if (element.type !== "dimension") return [element];
+    const references = element.references.map((reference) => {
+      if (!("nodeIndex" in reference) || !replacements.has(reference.elementId)) return reference;
+      const before = document.elements.find((candidate): candidate is SketchElement => candidate.id === reference.elementId && candidate.type === "sketch");
+      const after = replacements.get(reference.elementId);
+      const node = reference.nodeId !== undefined ? before?.nodes.find((candidate) => candidate.id === reference.nodeId) : before?.nodes[reference.nodeIndex];
+      const nodeIndex = node && after ? after.nodes.findIndex((candidate) => candidate.id === node.id) : -1;
+      return node && nodeIndex >= 0 ? { ...reference, nodeId: node.id, nodeIndex } : undefined;
+    });
+    return references[0] && references[1] ? [{ ...element, references: [references[0], references[1]] }] : [];
+  });
+  return replaceSketchTopology(candidateDocument, { ...edit, elements });
+};
+
 const cutSketchEdgeDestructive = (sketchId: ElementId, segmentIndex: number, cutPoint?: PointMm): EditorCommand => ({
   name: `sketch-cut-edge:${sketchId}:${segmentIndex}`,
   apply: (document) => {
@@ -646,6 +765,9 @@ const cutSketchEdgeDestructive = (sketchId: ElementId, segmentIndex: number, cut
     const documentConstraints = document.constraints?.filter((constraint) => !constraintReferencesSketchEdge(constraint, sketch.id, edge));
     const baseDocument = documentConstraints && documentConstraints.length !== document.constraints?.length ? { ...document, constraints: documentConstraints } : document;
     if (cutPoint) {
+      const exactSelection = (() => { try { return selectedExactSketchInterval(document, sketch, segmentIndex, cutPoint); } catch { return { kind: "fallback" } as const; } })();
+      if (exactSelection.kind === "rejected") return { success: false, error: "Cut cursor lies on an intersection or overlapping edge" };
+      if (exactSelection.kind === "selected") return cutExactSketchInterval(document, sketch, segmentIndex, exactSelection.interval);
       // Pick the actual crossing once, then split every sketch edge which passes
       // through that same point. Other geometry remains only a snap target.
       const crossingSegments = document.elements.flatMap((element) => element.type === "dimension" ? [] : cuttableSegments(element).filter((segment) => segment.elementId !== sketch.id || segment.segmentIndex !== segmentIndex));

@@ -391,15 +391,14 @@ describe("editor core", () => {
     const cut = dispatch(closed, cutSketchEdge(sketch.id, 1));
     expect(cut.document.elements[0]).toMatchObject({ type: "sketch", nodes: [{ id: sketch.nodes[0]!.id }, { id: sketch.nodes[1]!.id }, { point: { x: 10, y: 10 } }], edges: [{ startNodeId: sketch.nodes[0]!.id, endNodeId: sketch.nodes[1]!.id }, { startNodeId: branched.nodes[2]!.id, endNodeId: sketch.nodes[0]!.id }] });
   });
-  it("removes the clicked sketch edge while splitting a crossing sketch at the shared point", () => {
+  it("does not cut a sketch when the cursor is on its crossing", () => {
      const clicked = createSketchLine(elementId("cut-clicked-sketch"), layerId("default"), rectangle.style, { x: 0, y: 0 }, { x: 20, y: 0 });
      const crossing = createSketchLine(elementId("cut-crossing-sketch"), layerId("default"), rectangle.style, { x: 10, y: -10 }, { x: 10, y: 10 });
-     const state = dispatch(createEditor({ ...document, elements: [clicked, crossing] }), cutSegment(clicked.id, 0, { x: 10, y: 0 }));
-     const result = state.document.elements.find((element) => element.id === crossing.id);
-     expect(state.document.elements.find((element) => element.id === clicked.id && element.type === "sketch" && element.edges.length === 0)).toBeUndefined();
-     expect(result?.type === "sketch" ? result.edges : []).toHaveLength(2);
-     expect(result?.type === "sketch" ? result.nodes.some((node) => node.point.x === 10 && node.point.y === 0) : false).toBe(true);
-     expect(state.undo).toHaveLength(1);
+     const initial = createEditor({ ...document, elements: [clicked, crossing] });
+     const state = dispatch(initial, cutSegment(clicked.id, 0, { x: 10, y: 0 }));
+     expect(state).toBe(initial);
+     expect(state.document.elements).toEqual([clicked, crossing]);
+     expect(state.undo).toHaveLength(0);
    });
 
   it("converts a cut contour boundary to an open path", () => {

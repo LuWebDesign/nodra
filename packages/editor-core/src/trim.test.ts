@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { createDocument, elementId, layerId, nextRevision, type ArcElement, type CircleElement, type DocumentSnapshot, type LineElement, type RectangleElement } from "@nodra/domain";
+import { createDocument, elementId, layerId, nextRevision, type ArcElement, type CircleElement, type DimensionElement, type DocumentSnapshot, type LineElement, type RectangleElement, type SketchElement } from "@nodra/domain";
 import { buildSketchProfile, type ProfileInputScope } from "@nodra/geometry";
-import { createEditor, dispatch, redo, trimCommand, trimPreview, trimSegment, undo, updateDimensionValue, type TrimTarget } from "./index.js";
+import { createEditor, createSketchLine, dispatch, redo, trimCommand, trimPreview, trimSegment, undo, updateDimensionValue, type TrimTarget } from "./index.js";
 import { previewTrim } from "./trim.js";
 
 const layer = layerId("trim-test");
@@ -52,7 +52,65 @@ const targetFor = (current: DocumentSnapshot, element: DocumentSnapshot["element
     expect(result.document.elements.some((element) => element.id === target.id)).toBe(true);
     expect(result.undo).toHaveLength(1);
   });
-  it("keeps preview and commit geometrically identical across Trim parity cases", () => {
+  it("removes only the selected sketch-edge fragment at one interior crossing", () => {
+        const target = createSketchLine(elementId("trim-sketch-target"), layer, style, { x: 0, y: 0 }, { x: 20, y: 0 });
+        const crossing = createSketchLine(elementId("trim-sketch-crossing"), layer, style, { x: 10, y: -10 }, { x: 10, y: 10 });
+        const current = documentWith(target, crossing);
+        const trimTarget = targetFor(current, target, { x: 5, y: 0 });
+        const preview = trimPreview(current, trimTarget);
+        const committed = dispatch(createEditor(current), trimSegment(trimTarget));
+        const survivor = committed.document.elements.find((element) => element.id === target.id);
+        const splitCrossing = committed.document.elements.find((element) => element.id === crossing.id);
+
+        expect(preview.success, preview.success ? undefined : preview.error).toBe(true);
+        if (preview.success) expect({ ...preview.document, revision: committed.document.revision }).toEqual(committed.document);
+        expect(survivor?.type === "sketch" ? survivor.edges : []).toHaveLength(1);
+        expect(survivor?.type === "sketch" ? survivor.nodes.map((node) => node.point) : []).toEqual([{ x: 20, y: 0 }, { x: 10, y: 0 }]);
+        expect(splitCrossing?.type === "sketch" ? splitCrossing.edges : []).toHaveLength(2);
+        expect(splitCrossing?.type === "sketch" ? splitCrossing.nodes.some((node) => node.point.x === 10 && node.point.y === 0) : false).toBe(true);
+        expect(committed.undo).toHaveLength(1);
+        expect(undo(committed).document).toEqual(current);
+        expect(redo(undo(committed)).document).toEqual(committed.document);
+      });
+      it("preserves both sketch survivors and remaps dependencies across two crossings", () => {
+        const target = createSketchLine(elementId("trim-sketch-middle"), layer, style, { x: 0, y: 0 }, { x: 20, y: 0 });
+        const left = createSketchLine(elementId("trim-sketch-left-cutter"), layer, style, { x: 5, y: -10 }, { x: 5, y: 10 });
+        const right = createSketchLine(elementId("trim-sketch-right-cutter"), layer, style, { x: 15, y: -10 }, { x: 15, y: 10 });
+        const anchor = createSketchLine(elementId("trim-sketch-anchor"), layer, style, { x: 30, y: 0 }, { x: 40, y: 0 });
+        const edgeId = target.edges[0]!.id;
+        const dimension: DimensionElement = { type: "dimension", id: elementId("trim-sketch-dimension"), layerId: layer, kind: "angular", references: [{ kind: "line", elementId: target.id, edgeId, edgeIndex: 0 }, { kind: "line", elementId: target.id, edgeId, edgeIndex: 0 }], offset: { x: 0, y: -8 }, precision: 2, units: "mm", rotation: 0, style };
+        const connection = { id: "trim-sketch-connection", first: { elementId: target.id, node: { kind: "sketch" as const, nodeId: target.nodes[0]!.id } }, second: { elementId: anchor.id, node: { kind: "sketch" as const, nodeId: anchor.nodes[0]!.id } } };
+        const current = { ...documentWith(target, left, right, anchor, dimension), connections: [connection] };
+        const trimTarget = targetFor(current, target, { x: 10, y: 0 });
+        const preview = trimPreview(current, trimTarget);
+        const committed = dispatch(createEditor(current), trimSegment(trimTarget));
+        const survivor = committed.document.elements.find((element): element is SketchElement => element.id === target.id && element.type === "sketch");
+        const remapped = committed.document.elements.find((element): element is DimensionElement => element.id === dimension.id && element.type === "dimension");
+
+        expect(preview.success, preview.success ? undefined : preview.error).toBe(true);
+        if (preview.success) expect({ ...preview.document, revision: committed.document.revision }).toEqual(committed.document);
+        expect(survivor?.edges).toHaveLength(2);
+        expect(survivor?.edges[0]?.id).toBe(edgeId);
+        expect(survivor?.nodes.map((node) => node.point)).toEqual([{ x: 0, y: 0 }, { x: 20, y: 0 }, { x: 5, y: 0 }, { x: 15, y: 0 }]);
+        expect(survivor?.constraints).toEqual(target.constraints);
+        expect(remapped?.references).toEqual([{ kind: "line", elementId: target.id, edgeId, edgeIndex: 0 }, { kind: "line", elementId: target.id, edgeId, edgeIndex: 0 }]);
+        expect(committed.document.connections).toEqual([connection]);
+        expect(committed.document.elements.find((element): element is SketchElement => element.id === left.id && element.type === "sketch")?.edges).toHaveLength(2);
+        expect(committed.document.elements.find((element): element is SketchElement => element.id === right.id && element.type === "sketch")?.edges).toHaveLength(2);
+      });
+      it("does not mutate when the sketch Trim cursor lies on a crossing", () => {
+        const target = createSketchLine(elementId("trim-sketch-noop"), layer, style, { x: 0, y: 0 }, { x: 20, y: 0 });
+        const crossing = createSketchLine(elementId("trim-sketch-noop-crossing"), layer, style, { x: 10, y: -10 }, { x: 10, y: 10 });
+        const current = documentWith(target, crossing);
+        const trimTarget = targetFor(current, target, { x: 10, y: 0 });
+        const preview = trimPreview(current, trimTarget);
+        const committed = dispatch(createEditor(current), trimSegment(trimTarget));
+
+        expect(preview.success).toBe(false);
+        expect(committed.document).toEqual(current);
+        expect(committed.undo).toHaveLength(0);
+      });
+      it("keeps preview and commit geometrically identical across Trim parity cases", () => {
         const compare = (current: DocumentSnapshot, target: TrimTarget): void => {
           const preview = trimPreview(current, target);
           const committed = dispatch(createEditor(current), trimSegment(target));

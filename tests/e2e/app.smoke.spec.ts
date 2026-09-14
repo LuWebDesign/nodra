@@ -313,6 +313,44 @@ test("creates a cubic segment when placing an anchor with a drag", async ({ page
   await expect(page.locator(".page-svg svg path[data-element-id]")).toHaveAttribute("d", / C/);
 });
 
+test("cuts only the selected Line sketch fragment and supports undo and redo", async ({ page }) => {
+  await page.goto("/modelo");
+  const pageBounds = await visibleBoundingBox(page.locator(".page"));
+  const targetStart = { x: pageBounds.x + 100, y: pageBounds.y + 180 };
+  const targetEnd = { x: targetStart.x + 200, y: targetStart.y };
+  const crossingX = targetStart.x + 100;
+
+  await drawLine(page, targetStart, targetEnd);
+  await page.getByRole("button", { name: "Seleccion" }).click();
+  await drawLine(page, { x: crossingX, y: targetStart.y - 80 }, { x: crossingX, y: targetStart.y + 80 });
+  const sketches = page.locator('.page-svg svg g[data-element-id]');
+  await expect(sketches).toHaveCount(2);
+  const targetId = await sketches.nth(0).getAttribute("data-element-id");
+  const crossingId = await sketches.nth(1).getAttribute("data-element-id");
+  expect(targetId).not.toBeNull();
+  expect(crossingId).not.toBeNull();
+  const target = page.locator(`.page-svg svg g[data-element-id="${targetId}"]`);
+  const crossing = page.locator(`.page-svg svg g[data-element-id="${crossingId}"]`);
+  const originalTargetStart = await target.locator(":scope > line").getAttribute("x1");
+  const originalTargetEnd = await target.locator(":scope > line").getAttribute("x2");
+
+  await page.getByRole("button", { name: "Cortar segmentos" }).click();
+  const selectedSide = { x: targetStart.x + 40, y: targetStart.y };
+  await page.mouse.move(selectedSide.x, selectedSide.y);
+  await expect(page.locator(".cut-segment-hover-overlay")).toBeVisible();
+  await page.mouse.click(selectedSide.x, selectedSide.y);
+  await expect(target.locator(":scope > line")).toHaveCount(1);
+  await expect(target.locator(":scope > line")).not.toHaveAttribute("x1", originalTargetStart!);
+  await expect(target.locator(":scope > line")).toHaveAttribute("x2", originalTargetEnd!);
+  await expect(crossing.locator(":scope > line")).toHaveCount(2);
+
+  await page.getByRole("button", { name: "Deshacer" }).click();
+  await expect(target.locator(":scope > line")).toHaveAttribute("x1", originalTargetStart!);
+  await expect(crossing.locator(":scope > line")).toHaveCount(1);
+  await page.getByRole("button", { name: "Rehacer" }).click();
+  await expect(target.locator(":scope > line")).toHaveCount(1);
+  await expect(crossing.locator(":scope > line")).toHaveCount(2);
+});
 test("cuts a Pen cubic through a Line sketch and supports undo and redo", async ({ page }) => {
   await page.goto("/modelo");
   const pageBounds = await page.locator(".page").boundingBox();
