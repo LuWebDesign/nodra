@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createDocument, elementId, layerId, nextRevision, type ArcElement, type CircleElement, type DimensionElement, type DocumentSnapshot, type LineElement, type RectangleElement, type SketchElement } from "@nodra/domain";
-import { buildSketchProfile, type ProfileInputScope } from "@nodra/geometry";
+import { buildSketchProfile, sketchProfileResult, type ProfileInputScope } from "@nodra/geometry";
 import { createEditor, createSketchLine, dispatch, redo, trimCommand, trimPreview, trimSegment, undo, updateDimensionValue, type TrimTarget } from "./index.js";
 import { previewTrim } from "./trim.js";
 
@@ -68,6 +68,11 @@ const targetFor = (current: DocumentSnapshot, element: DocumentSnapshot["element
         expect(survivor?.type === "sketch" ? survivor.nodes.map((node) => node.point) : []).toEqual([{ x: 20, y: 0 }, { x: 10, y: 0 }]);
         expect(splitCrossing?.type === "sketch" ? splitCrossing.edges : []).toHaveLength(2);
         expect(splitCrossing?.type === "sketch" ? splitCrossing.nodes.some((node) => node.point.x === 10 && node.point.y === 0) : false).toBe(true);
+        const coincidence = committed.document.positionalCoincidences?.[0];
+        expect(coincidence).toMatchObject({ first: { elementId: crossing.id, node: { kind: "sketch" } }, second: { elementId: target.id, node: { kind: "sketch" } } });
+        if (!coincidence || coincidence.first.node.kind !== "sketch" || coincidence.second.node.kind !== "sketch") throw new Error("Expected sketch coincidence");
+        const coincidenceNodeIds = [coincidence.first.node.nodeId, coincidence.second.node.nodeId];
+        expect(committed.document.elements.flatMap((element) => element.type === "sketch" ? element.nodes.filter((node) => coincidenceNodeIds.includes(node.id)).map((node) => node.point) : [])).toEqual([{ x: 10, y: 0 }, { x: 10, y: 0 }]);
         expect(committed.undo).toHaveLength(1);
         expect(undo(committed).document).toEqual(current);
         expect(redo(undo(committed)).document).toEqual(committed.document);
@@ -98,7 +103,50 @@ const targetFor = (current: DocumentSnapshot, element: DocumentSnapshot["element
         expect(committed.document.elements.find((element): element is SketchElement => element.id === left.id && element.type === "sketch")?.edges).toHaveLength(2);
         expect(committed.document.elements.find((element): element is SketchElement => element.id === right.id && element.type === "sketch")?.edges).toHaveLength(2);
       });
-      it("does not mutate when the sketch Trim cursor lies on a crossing", () => {
+      it("consolidates two linear sketch chains when Cut completes their shared contour", () => {
+         // This slice intentionally covers exactly two linear chains; arcs and larger chain sets remain unsupported.
+         const firstId = elementId("a-trim-contour-half");
+         const secondId = elementId("z-trim-contour-half");
+         const first: SketchElement = {
+           type: "sketch", id: firstId, layerId: layer, style,
+           nodes: [{ id: "first-left", point: { x: 5, y: 0 } }, { id: "first-nw", point: { x: 5, y: -10 } }, { id: "first-ne", point: { x: 15, y: -10 } }, { id: "first-right", point: { x: 15, y: 0 } }],
+           edges: [{ id: "first-left-edge", startNodeId: "first-left", endNodeId: "first-nw" }, { id: "first-top-edge", startNodeId: "first-nw", endNodeId: "first-ne" }, { id: "first-right-edge", startNodeId: "first-ne", endNodeId: "first-right" }],
+           constraints: [{ id: "first-top-horizontal", kind: "horizontal", references: [{ elementId: firstId, nodeId: "first-nw" }, { elementId: firstId, nodeId: "first-ne" }] }],
+         };
+         const second: SketchElement = {
+           type: "sketch", id: secondId, layerId: layer, style,
+           nodes: [{ id: "second-left", point: { x: 0, y: 0 } }, { id: "second-right", point: { x: 20, y: 0 } }, { id: "second-se", point: { x: 20, y: 10 } }, { id: "second-sw", point: { x: 0, y: 10 } }],
+           edges: [{ id: "second-cut-edge", startNodeId: "second-left", endNodeId: "second-right" }, { id: "second-right-edge", startNodeId: "second-right", endNodeId: "second-se" }, { id: "second-bottom-edge", startNodeId: "second-se", endNodeId: "second-sw" }, { id: "second-left-edge", startNodeId: "second-sw", endNodeId: "second-left" }],
+           constraints: [{ id: "second-bottom-horizontal", kind: "horizontal", references: [{ elementId: secondId, nodeId: "second-se" }, { elementId: secondId, nodeId: "second-sw" }] }],
+         };
+         const external = line("trim-contour-anchor", { x: 0, y: 10 }, { x: 20, y: 10 });
+         const dimension: DimensionElement = { type: "dimension", id: elementId("trim-contour-dimension"), layerId: layer, kind: "angular", references: [{ kind: "line", elementId: second.id, edgeId: "second-bottom-edge", edgeIndex: 2 }, { kind: "line", elementId: second.id, edgeId: "second-bottom-edge", edgeIndex: 2 }], offset: { x: 0, y: -8 }, precision: 2, units: "mm", rotation: 0, style };
+         const pageConstraint = { id: "trim-contour-equal", kind: "equal" as const, references: [{ elementId: first.id, edgeId: "first-top-edge" }, { elementId: second.id, edgeId: "second-bottom-edge" }] as const };
+         const connection = { id: "trim-contour-connection", first: { elementId: second.id, node: { kind: "sketch" as const, nodeId: "second-sw" } }, second: { elementId: external.id, node: { kind: "line" as const, name: "start" as const } } };
+         const positionalCoincidence = { id: "trim-contour-coincidence", first: { elementId: second.id, node: { kind: "sketch" as const, nodeId: "second-se" } }, second: { elementId: external.id, node: { kind: "line" as const, name: "end" as const } } };
+         const current = { ...documentWith(first, second, external, dimension), constraints: [pageConstraint], connections: [connection], positionalCoincidences: [positionalCoincidence] };
+         const command = trimSegment(targetFor(current, second, { x: 10, y: 0 }));
+         const applied = command.apply(current);
+         if (!applied.success) throw new Error(JSON.stringify(applied));
+         const committed = dispatch(createEditor(current), command);
+         const sketches = committed.document.elements.filter((element): element is SketchElement => element.type === "sketch");
+
+         expect(sketches).toHaveLength(1);
+         expect(sketches[0]?.id).toBe(first.id);
+         expect(sketches[0]?.edges).toHaveLength(8);
+         expect(sketches[0]?.edges.map((edge) => edge.id)).toEqual(expect.arrayContaining(["first-left-edge", "first-top-edge", "first-right-edge", "second-cut-edge", "second-right-edge", "second-bottom-edge", "second-left-edge"]));
+         expect(sketches[0]?.constraints?.map((constraint) => constraint.id)).toEqual(expect.arrayContaining(["first-top-horizontal", "second-bottom-horizontal"]));
+         expect(sketchProfileResult(sketches[0]!).status).toBe("valid-closed");
+         expect(committed.document.constraints).toEqual([{ ...pageConstraint, references: [{ elementId: first.id, edgeId: "first-top-edge" }, { elementId: first.id, edgeId: "second-bottom-edge" }] }]);
+         expect(committed.document.elements.find((element) => element.id === dimension.id)).toMatchObject({ references: [{ elementId: first.id, edgeId: "second-bottom-edge" }, { elementId: first.id, edgeId: "second-bottom-edge" }] });
+         expect(committed.document.connections).toEqual([{ ...connection, first: { elementId: first.id, node: { kind: "sketch", nodeId: "second-sw" } } }]);
+         expect(committed.document.positionalCoincidences).toEqual([{ ...positionalCoincidence, first: { elementId: first.id, node: { kind: "sketch", nodeId: "second-se" } } }]);
+         expect(committed.document.revision).toBe(nextRevision(current.revision));
+         expect(committed.undo).toHaveLength(1);
+         expect(undo(committed).document).toEqual(current);
+         expect(redo(undo(committed)).document).toEqual(committed.document);
+       });
+       it("does not mutate when the sketch Trim cursor lies on a crossing", () => {
         const target = createSketchLine(elementId("trim-sketch-noop"), layer, style, { x: 0, y: 0 }, { x: 20, y: 0 });
         const crossing = createSketchLine(elementId("trim-sketch-noop-crossing"), layer, style, { x: 10, y: -10 }, { x: 10, y: 10 });
         const current = documentWith(target, crossing);

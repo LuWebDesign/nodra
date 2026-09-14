@@ -800,9 +800,16 @@ const cutExactSketchInterval = (document: DocumentSnapshot, sketch: SketchElemen
   const referenceMap = new Map<string, ReferenceResolution>();
   const replacements = new Map<ElementId, SketchElement>();
   const affectedEdges = new Map<ElementId, Set<string>>();
+  const participatingSketchIds = new Set<ElementId>([sketch.id]);
   const uniqueId = (base: string, used: Set<string>): string => { let candidate = base; let suffix = 1; while (used.has(candidate)) candidate = `${base}:${suffix++}`; used.add(candidate); return candidate; };
 
   for (const sourceSketch of document.elements.filter((element): element is SketchElement => element.type === "sketch")) {
+    if (sourceSketch.id !== sketch.id && boundaries.some(({ point }) => sourceSketch.edges.some((candidate) => {
+      const first = sourceSketch.nodes.find((node) => node.id === candidate.startNodeId)?.point;
+      const last = sourceSketch.nodes.find((node) => node.id === candidate.endNodeId)?.point;
+      const hit = first && last ? lineSegmentIntersection(startNode.point, endNode.point, first, last, 1e-7) : undefined;
+      return hit !== undefined && Math.hypot(hit.point.x - point.x, hit.point.y - point.y) <= 1e-6;
+    }))) participatingSketchIds.add(sourceSketch.id);
     const usedNodeIds = new Set(sourceSketch.nodes.map((node) => node.id));
     const usedEdgeIds = new Set(sourceSketch.edges.map((candidate) => candidate.id));
     const addedNodes: SketchElement["nodes"][number][] = [];
@@ -875,7 +882,44 @@ const cutExactSketchInterval = (document: DocumentSnapshot, sketch: SketchElemen
     });
     return references[0] && references[1] ? [{ ...element, references: [references[0], references[1]] }] : [];
   });
-  return replaceSketchTopology(candidateDocument, { ...edit, elements });
+  const finalEdit = { ...edit, elements };
+  if (participatingSketchIds.size === 2) {
+    const intermediate: DocumentSnapshot = { ...candidateDocument, elements };
+    const consolidated = consolidateSketches([...participatingSketchIds]).apply(intermediate);
+    if (consolidated.success) {
+      const consolidationMap = consolidated.topology?.referenceMap ?? new Map<string, ReferenceResolution>();
+      const resolve = (reference: TopologyReference): readonly TopologyReference[] => {
+        const resolution = consolidationMap.get(topologyReferenceKey(reference));
+        return resolution?.kind === "removed" ? [] : resolution?.kind === "replaced" ? resolution.references : resolution?.kind === "preserved" ? [resolution.reference] : [reference];
+      };
+      const composed = new Map(consolidationMap);
+      for (const [key, resolution] of referenceMap) {
+        if (resolution.kind === "removed") composed.set(key, resolution);
+        else {
+          const references = (resolution.kind === "replaced" ? resolution.references : [resolution.reference]).flatMap(resolve);
+          composed.set(key, references.length === 0 ? { kind: "removed", reason: "Sketch edge was removed during Trim consolidation" } : references.length === 1 && topologyReferenceKey(references[0]!) === key ? { kind: "preserved", reference: references[0]! } : { kind: "replaced", references });
+        }
+      }
+      return { ...consolidated, topology: { elements: consolidated.document.elements, referenceMap: composed, diagnostics: [...edit.diagnostics, ...(consolidated.topology?.diagnostics ?? [])] } };
+    }
+    if (consolidated.diagnostics?.some((diagnostic) => diagnostic.code === "unsupported-consolidation-reference")) return consolidated;
+  }
+  const existingCoincidences = candidateDocument.positionalCoincidences ?? [];
+  const addedCoincidences: PositionalCoincidence[] = [];
+  for (const { point } of boundaries) {
+    const references = elements.flatMap((element) => element.type === "sketch" && participatingSketchIds.has(element.id)
+      ? element.nodes.filter((node) => Math.hypot(node.point.x - point.x, node.point.y - point.y) <= 1e-6).map((node) => ({ elementId: element.id, node: { kind: "sketch" as const, nodeId: node.id } }))
+      : []);
+    if (references.length !== 2 || references[0]!.elementId === references[1]!.elementId) continue;
+    const [first, second] = [...references].sort((left, right) => stableJson(left).localeCompare(stableJson(right))) as [ExplicitConnection["first"], ExplicitConnection["second"]];
+    const duplicate = [...existingCoincidences, ...addedCoincidences].some((relation) => {
+      const keys = [stableJson(relation.first), stableJson(relation.second)].sort();
+      return keys[0] === stableJson(first) && keys[1] === stableJson(second);
+    });
+    if (!duplicate) addedCoincidences.push({ id: `trim-coincidence:${first.elementId}:${first.node.kind === "sketch" ? first.node.nodeId : "node"}:${second.elementId}:${second.node.kind === "sketch" ? second.node.nodeId : "node"}`, first, second });
+  }
+  const topologyDocument = addedCoincidences.length ? { ...candidateDocument, elements, positionalCoincidences: [...existingCoincidences, ...addedCoincidences] } : candidateDocument;
+  return replaceSketchTopology(topologyDocument, finalEdit);
 };
 
 const cutSketchEdgeDestructive = (sketchId: ElementId, segmentIndex: number, cutPoint?: PointMm): EditorCommand => ({
