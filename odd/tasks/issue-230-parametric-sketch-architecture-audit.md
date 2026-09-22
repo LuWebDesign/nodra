@@ -40,16 +40,17 @@ Produce a repository-evidence-based audit of KOND's current parametric sketch ar
   - Evidence: report sections B.4, B.5, C.4, and H; three independent verification passes corrected call ordering, rollback ownership, topology-path scope, and project/document preservation wording; final verification found no blockers and `git diff --check` passed.
   - Commit: `4204f599cfc1606c6a5bf630b59880e81a98b30f` (`docs(architecture): map current sketch state ownership`).
 
-- [ ] **T3 — Trace required end-to-end flows**
+- [x] **T3 — Trace required end-to-end flows**
   - Trace line creation, rectangle creation, entity snap, dimension creation/editing, and geometry movement through real calls and tests.
   - Record preview/commit, solver, validation, persistence, rendering, and undo behavior.
-  - Status: evidence complete; awaiting human review and explicit commit authorization.
+  - Status: complete.
   - Evidence: report sections B.6 and B.7; independent verification corrected the existing-sketch-node line branch, native rectangle E2E coverage, and positional-coincidence propagation scope; final verification found no blocking factual inaccuracies and confirmed product source unchanged.
-  - Commit: pending explicit authorization.
+  - Commit: `676b022d9bac98a25bc6cfe80118b3a9a234934b` (`docs(architecture): trace parametric sketch workflows`).
 
 - [ ] **T4 — Build the responsibility and tool-coupling matrices**
   - Map Line, Rectangle, Circle, Arc, Spline/Bezier, Trim, Move/Edit, and Dimension responsibilities.
   - Identify duplicated mathematics, leaked responsibilities, and intentional specialization.
+  - Status: in progress.
   - Evidence: pending.
   - Commit: pending explicit authorization.
 

@@ -705,8 +705,8 @@ Preliminary answer: **the repository contains several split and overlapping resp
 |---|---|---|
 | T1 — Baseline and capability inventory | Complete | Baseline `9434cfdd`; independently verified; committed as `0af8d7a` |
 | T2 — Architecture and sources of truth | Complete | Sections B.4, B.5, C.4, and H; independently verified; committed as `4204f59` |
-| T3 — Required end-to-end flows | Evidence complete; independently verified; awaiting human review and commit authorization | Sections B.6 and B.7; no blocking factual inaccuracies |
-| T4 — Responsibility/tool matrices | Pending | — |
+| T3 — Required end-to-end flows | Complete | Sections B.6 and B.7; independently verified; committed as `676b022` |
+| T4 — Responsibility/tool matrices | In progress | — |
 | T5 — Findings and disposition | Pending | — |
 | T6 — Target architecture/contracts | Pending | — |
 | T7 — Migration/testing/performance/UX/rollback | Pending | — |
