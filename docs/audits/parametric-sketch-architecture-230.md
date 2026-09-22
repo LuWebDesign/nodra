@@ -597,17 +597,171 @@ Interaction, editor-core, geometry, constraints, renderer, and E2E tests cover s
 
 # E. Findings
 
-> Pending evidence synthesis in T5.
+## E.1 Severity method
 
-Preliminary architectural observations are intentionally not assigned final severity until the required flows identify concrete consequences.
+- `CRITICAL` — proven data loss/corruption, unrecoverable invalid state, security boundary failure, or systemic failure of a supported core workflow.
+- `HIGH` — proven major user-visible failure or architectural defect that reliably prevents a supported workflow.
+- `MEDIUM` — verified behavioral inconsistency, material capability gap, or cross-layer ownership that increases product risk but has no proven catastrophic outcome.
+- `LOW` — bounded maintainability, contract clarity, duplication, or evidence/coverage risk without a proven material failure.
+
+**No `CRITICAL` or `HIGH` finding is proven by the current repository evidence.** The audit does not inflate severity merely because issue #230 is strategically important.
+
+## E.2 Medium findings
+
+### F-01 — Gesture-dependent Line representation
+
+- **Severity:** MEDIUM
+- **Type:** verified architectural inconsistency
+- **Evidence:** `apps/web/src/App.tsx` click flow (`CreationDraft`, `createSketchLine`, `appendSketchEdge`) versus drag flow (`newElement("line")`, gesture preview/commit); editor-core sketch commands.
+- **Verified consequence:** the visible Line tool creates or extends a solver-backed `SketchElement` through clicks but creates a native `LineElement` through dragging. Topology, automatic relations, snapping persistence, dimensions, solving, and later edits therefore depend on gesture choice.
+- **Not proven:** whether this is an accidental defect or intentional legacy compatibility.
+
+### F-02 — Relationship semantics are path-dependent
+
+- **Severity:** MEDIUM
+- **Type:** architectural gap
+- **Evidence:** `DocumentSnapshot.connections`, `positionalCoincidences`, solver `coincident` constraints; `creationConnections`; `enforcePositionalCoincidences`; `replaceElements`, `replaceSketchElements`, and `replaceSketchTopology`.
+- **Verified consequence:** visually coincident creation/movement can result in legacy metadata, enforced positional propagation, shared sketch topology, a solver constraint, or no persistent relation, depending on the exact gesture and representation.
+- **Not proven:** that the three persisted forms are intended to have identical product semantics.
+
+### F-03 — Automatic relation lifecycle is distributed
+
+- **Severity:** MEDIUM
+- **Type:** architectural gap
+- **Evidence:** `createSketchLine` and `appendSketchEdge` create `auto:*` constraints; App/interaction functions create transient direction and alignment feedback; dimension edits remove selected automatic relations in editor-core.
+- **Verified consequence:** feedback, relation creation, conflict/rollback handling, and later removal are implemented by separate paths without one explicit candidate → validate → redundancy/conflict check → commit lifecycle.
+- **Not proven:** that duplicate or conflicting automatic relations currently escape kernel rollback.
+
+### F-04 — Dimension eligibility and mutation contracts differ by representation
+
+- **Severity:** MEDIUM
+- **Type:** verified contract inconsistency
+- **Evidence:** App `shouldCreateSketchDrivingConstraint`; editor-core `setDimensionDriving`, sketch constraint derivation, and `updateDimensionValue` entity branches.
+- **Verified consequence:** App can classify a same-native-line angular dimension as eligible for driving, while editor-core rejects the follow-up driving command because the target is not a sketch. The already-created dimension remains non-driving. Native-line angular value edits can still update geometry directly.
+- **Not proven:** a geometry-edit failure; the inconsistency is in driving eligibility/state semantics.
+
+### F-05 — Construction geometry is absent
+
+- **Severity:** MEDIUM
+- **Type:** capability gap
+- **Evidence:** no construction role/flag, validation, migration, rendering style, conversion command, solver behavior, export filtering, or focused test exists across domain, validation, editor-core, geometry, renderer, and persistence.
+- **Verified consequence:** KOND cannot currently persist or distinguish construction geometry under a shared entity/kernel contract.
+- **Not proven:** an active regression in an existing supported workflow.
+
+### F-06 — Web orchestration owns persistent relation and dimension semantics
+
+- **Severity:** MEDIUM
+- **Type:** architectural gap
+- **Evidence:** App `creationConnections`, `newDimension`, `newCircleDimension`, `newAngularDimension`, and driving-eligibility helpers; editor-core validation/mutation commands.
+- **Verified consequence:** the composition layer constructs persisted domain records and decides initial parametric intent while editor-core independently validates and applies that intent. F-04 demonstrates one concrete eligibility mismatch across this boundary.
+
+### F-07 — Rectangle is a native shape rather than a parametric four-edge sketch
+
+- **Severity:** MEDIUM
+- **Type:** deliberate limitation
+- **Evidence:** App `newElement("rectangle")`, domain `RectangleElement`, editor-core native resize/dimension branches, native rectangle E2E coverage.
+- **Verified consequence:** rectangle creation does not produce four sketch edges or H/V/coincident constraints; later edits use native resize semantics.
+- **Not proven:** that the native rectangle representation should be removed or replaced.
+
+### F-08 — Solver behavior is bounded and representation-specific
+
+- **Severity:** MEDIUM
+- **Type:** deliberate limitation
+- **Evidence:** geometry sketch/circle solvers; constraints adapters/components/residuals/DOF; sketch kernel rollback; generic versus sketch-specific editor replacement paths.
+- **Verified consequence:** sketches and circles receive bounded parametric solving, while native lines, rectangles, arcs, splines, and many transforms use entity-specific direct geometry behavior.
+- **Not proven:** solver corruption or a need to replace the current solver.
+
+## E.3 Low findings
+
+### F-09 — Solved coordinates and design intent use separate lifecycle layers
+
+- **Severity:** LOW
+- **Type:** architectural observation
+- **Evidence:** persisted sketch coordinates and constraints in domain; derived solve output/diagnostics in constraints/kernel; accepted solved coordinates committed by editor-core replacement paths.
+- **Verified consequence:** coordinates store the accepted geometric result while constraints store intent and diagnostics remain derived.
+- **Not proven:** divergence, reload corruption, or an invalid source of truth.
+
+### F-10 — Parametric component state and piece lifecycle state are separate
+
+- **Severity:** LOW
+- **Type:** contract/evidence gap
+- **Evidence:** constraints `ConstraintState`, component state and DOF versus domain `PieceSnapshot.state`; project/document conversion preserves piece metadata.
+- **Verified consequence:** no synchronization contract between these state systems was found.
+- **Not proven:** stale or incorrect user-visible piece state.
+
+### F-11 — Selected preview/projection mathematics are duplicated
+
+- **Severity:** LOW
+- **Type:** maintainability gap
+- **Evidence:** App spline/arc preview paths, editor-core spline conversion, renderer spline/arc/profile projection.
+- **Verified consequence:** spline cubic conversion and arc SVG projection are repeated at transient and committed projection boundaries.
+- **Not proven:** current preview/commit visual divergence.
+
+### F-12 — Multi-segment click-line cancellation is not a transaction rollback
+
+- **Severity:** LOW
+- **Type:** contract ambiguity
+- **Evidence:** App dispatches each confirmed segment immediately; Escape clears the creation draft and cancels only an active gesture.
+- **Verified consequence:** Escape leaves already accepted click-created segments in the document and history.
+- **Not proven:** that product UX defines the whole multi-segment session as one cancellable transaction.
+
+### F-13 — Cross-flow integration evidence is incomplete
+
+- **Severity:** LOW
+- **Type:** test/evidence gap
+- **Evidence:** strong package/helper coverage and substantial smoke/workflow E2E tests, but no complete proof for every pointer → preview → relation/solve → commit/cancel → persistence → undo chain.
+- **Verified consequence:** architectural invariants are often proven in separate layers rather than one integrated flow.
+- **Not proven:** a failing persistence/history invariant; previews are currently gated out of official persistence.
+
+## E.4 Explicitly unproven hypotheses
+
+The following must not be reported as confirmed defects:
+
+- solver corruption or a need for solver replacement;
+- persisted solved coordinates diverging from constraint intent;
+- stale `PieceSnapshot.state` relative to component DOF;
+- preview/commit visual mismatch;
+- snap/inference performance failure;
+- automatic relations silently leaving a conflicting sketch committed;
+- data loss in undo/redo, IndexedDB revisions, or recovery mirrors.
 
 ---
 
 # F. KEEP / REFACTOR / REPLACE / REMOVE / CREATE
 
-> Pending T5.
+| Component or responsibility | Disposition | Evidence-based rationale |
+|---|---|---|
+| Domain snapshots, schema v9, stable IDs and references | KEEP | Established persisted foundation with validation, migration, consumers, and tests. |
+| Sketch node/edge topology | KEEP | Stable topology is used by constraints, dimensions, profiles, editing, and persistence. |
+| Geometry helpers, curves, intersections, profiles and topology derivation | KEEP | Shared mathematical foundation with broad consumers and tests. |
+| Constraint normalization, components, residuals, rank and DOF | KEEP | Real bounded parametric capability; no replacement evidence. |
+| Sketch/circle solving | KEEP | Operational and tested; bounded scope is explicit. Do not rebuild the solver. |
+| Sketch kernel and session boundary | KEEP | Provides recomputation, rollback, diagnostics, scoped sessions, and validation integration. |
+| Editor-core command, validation, no-op, gesture and history mechanisms | KEEP | Enforces mutation and transaction invariants across tools. |
+| Native Line/Rectangle/Circle/Arc/Spline representations | KEEP | Existing consumers, rendering, dimensions, compatibility, and tests prohibit removal without a migration decision. |
+| Renderer SVG boundary | KEEP | Verified one-way projection without geometric ownership. |
+| Dexie repository and web recovery mirror distinction | KEEP | Durable revisions and best-effort recovery have separate tested responsibilities. |
+| Transient inference guides | KEEP | Correctly remain feedback rather than persistent model truth. |
+| Explicit connection metadata | KEEP | Existing compatibility and consumers are verified; semantics must be clarified before any migration. |
+| Positional coincidences | KEEP | Enforced by generic and sketch replacement paths with focused tests. |
+| Solver coincident constraints | KEEP | Required for persistent parametric sketch intent. |
+| Click-line versus drag-line tool contract | REFACTOR | Preserve supported representations, but make gesture-dependent semantics explicit and coherent. |
+| Snap candidate and persistent-result coordination | REFACTOR | Candidate policies are useful; mapping from feedback to topology/metadata/constraint is distributed. |
+| Automatic relation creation lifecycle | REFACTOR | Preserve existing automatic relations while consolidating candidate, validation, conflict, and commit semantics. |
+| Dimension creation and driving eligibility in App | REFACTOR | Persistent construction and capability decisions cross the web/editor boundary and already exhibit one mismatch. |
+| Entity-specific dimension mutation in editor-core | KEEP | Broad supported behavior and tests exist; it should not be discarded merely because orchestration is distributed. |
+| App-owned spline/arc preview projection | REFACTOR | Preserve previews while reducing repeated projection mathematics and parity risk. |
+| App/editor trim scope coordination | KEEP | Preview scope and commit rebinding/validation are intentionally split; no defect is proven. |
+| Constraint-to-piece-state synchronization policy | CREATE | The current systems coexist without a verified contract; T6 must decide whether synchronization is required. |
+| Construction geometry role and lifecycle | CREATE | No current cross-layer model exists; creation is conditional on approved target semantics. |
+| Explicit snap/inference/relation lifecycle contract | CREATE | Existing implementations need a documented ownership contract; this does not imply a new package or class. |
+| Additional cross-flow integration scenarios | CREATE | Package coverage is strong, but selected critical interaction/history/persistence chains need integrated evidence. |
 
-No component will be marked `REMOVE` without verified consumers, tests, responsibility, and replacement behavior.
+## F.1 Rejected dispositions
+
+- **REPLACE:** no current component has evidence sufficient to justify replacement.
+- **REMOVE:** no current component has evidence sufficient to justify removal; every implemented foundation has consumers, tests, compatibility value, or unresolved product semantics.
+- `CREATE` means a missing responsibility/contract must be defined in T6; it does not pre-authorize a service, package, schema change, or implementation.
 
 ---
 
@@ -750,7 +904,7 @@ Preliminary answer: **the repository contains several split and overlapping resp
 | T2 — Architecture and sources of truth | Complete | Sections B.4, B.5, C.4, and H; independently verified; committed as `4204f59` |
 | T3 — Required end-to-end flows | Complete | Sections B.6 and B.7; independently verified; committed as `676b022` |
 | T4 — Responsibility/tool matrices | Complete | Section D; independently verified; committed as `64410c3` |
-| T5 — Findings and disposition | In progress | — |
+| T5 — Findings and disposition | Evidence complete; independently verified; awaiting human review and commit authorization | Sections E and F; no blocking factual inaccuracies |
 | T6 — Target architecture/contracts | Pending | — |
 | T7 — Migration/testing/performance/UX/rollback | Pending | — |
 | T8 — Review and approval gate | Pending | — |
