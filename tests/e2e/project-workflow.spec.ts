@@ -74,6 +74,56 @@ test("opens the editor immediately after creating a piece from project detail", 
   await expect(page.locator('.page-svg svg rect[data-element-id]')).toHaveCount(1);
 });
 
+test("does not persist a cancelled pre-commit line draft after reload", async ({ page }) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: "Proyectos" }).click();
+  await page.getByRole("button", { name: "+ Nuevo proyecto" }).click();
+  await page.getByLabel("Nombre del proyecto").fill("Proyecto línea cancelada");
+  await page.getByRole("button", { name: "Crear proyecto" }).click();
+  await page.getByRole("region", { name: "Piezas" }).getByRole("button", { name: "+ Nueva pieza" }).click();
+  const dialog = page.getByRole("dialog", { name: "Nueva pieza" });
+  await dialog.getByLabel("Nombre de la pieza").fill("Pieza línea cancelada");
+  await dialog.getByRole("button", { name: "Crear pieza" }).click();
+
+  const pageBounds = await page.locator(".page").boundingBox();
+  expect(pageBounds).not.toBeNull();
+  const pageElement = page.locator(".page");
+  await page.getByRole("button", { name: "Línea", exact: true }).click();
+  await page.mouse.click(pageBounds!.x + 140, pageBounds!.y + 140);
+  expect(await pageElement.getAttribute("data-document-element-ids")).toBe("");
+  await page.keyboard.press("Escape");
+  await page.reload();
+  await expect(page.locator(".page")).toHaveAttribute("data-document-element-ids", "");
+});
+
+test("persists only committed line geometry after reload", async ({ page }) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: "Proyectos" }).click();
+  await page.getByRole("button", { name: "+ Nuevo proyecto" }).click();
+  await page.getByLabel("Nombre del proyecto").fill("Proyecto línea persistente");
+  await page.getByRole("button", { name: "Crear proyecto" }).click();
+  await page.getByRole("region", { name: "Piezas" }).getByRole("button", { name: "+ Nueva pieza" }).click();
+  const dialog = page.getByRole("dialog", { name: "Nueva pieza" });
+  await dialog.getByLabel("Nombre de la pieza").fill("Pieza línea persistente");
+  await dialog.getByRole("button", { name: "Crear pieza" }).click();
+
+  const pageBounds = await page.locator(".page").boundingBox();
+  expect(pageBounds).not.toBeNull();
+  const pageElement = page.locator(".page");
+  await page.getByRole("button", { name: "Línea", exact: true }).click();
+  await page.mouse.click(pageBounds!.x + 140, pageBounds!.y + 140);
+  await page.mouse.click(pageBounds!.x + 280, pageBounds!.y + 220);
+  await expect.poll(async () => (await pageElement.getAttribute("data-document-element-ids"))?.length ?? 0).toBeGreaterThan(0);
+  const committedIds = await pageElement.getAttribute("data-document-element-ids");
+  expect(committedIds).toBeTruthy();
+
+  // The current UI intentionally exposes no stable selector for whether click-created line geometry
+  // is represented as a sketch or native line. This characterization verifies persistence only.
+  await page.reload();
+  await expect.poll(async () => (await page.locator(".page").getAttribute("data-document-element-ids"))?.length ?? 0).toBeGreaterThan(0);
+  await expect(page.locator(".page")).toHaveAttribute("data-document-element-ids", committedIds!);
+});
+
 test("restores the last named project after reload", async ({ page }) => {
   await page.goto("/");
   await page.getByRole("button", { name: "Proyectos" }).click();

@@ -85,13 +85,13 @@ Produce a repository-evidence-based audit of KOND's current parametric sketch ar
 
 ## Post-audit implementation gate
 
-- [ ] **WU1 — Characterization and compatibility contracts**
-  - Authorization: explicitly approved after T8; this is the only authorized WU.
+- [x] **WU1 — Characterization and compatibility contracts**
+  - Authorization: explicitly approved after T8; this was the only authorized WU.
   - Scope: behavior-first tests/contracts for current line representation, relation forms, dimension eligibility, topology/reference behavior, and preview/history/persistence boundaries.
   - Out of scope: product behavior, schema, solver changes, role writers, WU2+.
-  - Status: in progress.
-  - Evidence: pending.
-  - Commit: pending.
+  - Status: complete.
+  - Evidence: `packages/editor-core/src/index.test.ts` characterizes non-driving dimension identity/references and repeated same-value numerical drift/history; `tests/e2e/project-workflow.spec.ts` proves canceled pre-commit line draft is absent after reload and committed line IDs persist. Independent verification: 198/198 editor-core tests and 3/3 targeted Playwright tests passed. Click-vs-drag representation remains package-evidence-only because no stable public browser selector exists.
+  - Commit: pending WU1 evidence commit.
 
 ## Deliverable
 

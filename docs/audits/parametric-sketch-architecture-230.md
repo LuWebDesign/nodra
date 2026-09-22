@@ -713,6 +713,14 @@ Interaction, editor-core, geometry, constraints, renderer, and E2E tests cover s
 - **Verified consequence:** architectural invariants are often proven in separate layers rather than one integrated flow.
 - **Not proven:** a failing persistence/history invariant; previews are currently gated out of official persistence.
 
+### F-14 — Repeated non-driving dimension updates are not snapshot-idempotent
+
+- **Severity:** LOW
+- **Type:** confirmed behavior defect
+- **Evidence:** WU1 characterization in `packages/editor-core/src/index.test.ts` repeats `updateDimensionValue` with the same non-driving sketch dimension value; the second call produces floating-point endpoint drift, a distinct editor state, and a second undo entry.
+- **Verified consequence:** an apparently repeated value edit is not a command no-op under the editor snapshot/history contract.
+- **Not proven:** material user-visible geometry error at normal display precision; the characterized drift is numerical and bounded by the focused test.
+
 ## E.4 Explicitly unproven hypotheses
 
 The following must not be reported as confirmed defects:
@@ -749,7 +757,7 @@ The following must not be reported as confirmed defects:
 | Snap candidate and persistent-result coordination | REFACTOR | Candidate policies are useful; mapping from feedback to topology/metadata/constraint is distributed. |
 | Automatic relation creation lifecycle | REFACTOR | Preserve existing automatic relations while consolidating candidate, validation, conflict, and commit semantics. |
 | Dimension creation and driving eligibility in App | REFACTOR | Persistent construction and capability decisions cross the web/editor boundary and already exhibit one mismatch. |
-| Entity-specific dimension mutation in editor-core | KEEP | Broad supported behavior and tests exist; it should not be discarded merely because orchestration is distributed. |
+| Entity-specific dimension mutation in editor-core | REFACTOR | Preserve broad supported behavior, but WU1 confirms the non-driving sketch path needs idempotent repeated-value handling. |
 | App-owned spline/arc preview projection | REFACTOR | Preserve previews while reducing repeated projection mathematics and parity risk. |
 | App/editor trim scope coordination | KEEP | Preview scope and commit rebinding/validation are intentionally split; no defect is proven. |
 | Constraint-to-piece-state synchronization policy | CREATE | The current systems coexist without a verified contract; T6 must decide whether synchronization is required. |
@@ -940,6 +948,7 @@ Closed-profile validity remains a separate geometric/product property. DOF does 
 | F-11 projection duplication | Prefer shared pure projection helpers later; no renderer rewrite. |
 | F-12 Escape semantics | Preserve current behavior until T7 specifies transaction scope explicitly. |
 | F-13 evidence gaps | Use these contracts as T7 acceptance boundaries. |
+| F-14 repeated non-driving dimension drift | Add snapshot/history idempotence to WU5 dimension command acceptance; do not change it during WU1 characterization. |
 
 ---
 
@@ -1240,7 +1249,7 @@ This contract projects existing component states, residuals, rank and DOF. It ne
 - **Out of scope:** New solver capabilities, parameter registry, conversion among connections/positional coincidences/constraints.
 - **Dependencies:** WU1; WU2–WU5 only when relations must honor construction roles.
 - **Coexistence:** Non-driving dimensions and native direct-edit behavior remain supported. Existing relation forms remain explicit and non-equivalent.
-- **Tests:** unsupported driving rejection before mutation; native-line angular behavior; supported promotion retaining `ElementId`; atomic solver failure; no-op/history invariants.
+- **Tests:** unsupported driving rejection before mutation; native-line angular behavior; supported promotion retaining `ElementId`; atomic solver failure; repeated non-driving same-value updates are snapshot/history no-ops after the later corrective slice.
 - **Acceptance:** Web presents capability results; editor-core owns accepted persistent mutations.
 - **Rollback:** Revert new command routing while preserving old valid dimension/relation records.
 - **Review risk:** Medium; separate eligibility from layout/value-editor work.
@@ -1428,6 +1437,7 @@ The audit confirms several responsibility splits that already produce observable
 
 - one Line tool creates a sketch or native line according to gesture path;
 - snap outcomes differ between metadata, positional propagation, shared topology, solver constraints, and non-persistent correction;
+- repeated non-driving dimension values currently introduce a small numerical drift and another undo entry instead of becoming an idempotent no-op;
 - web decides some persistent dimension/relation semantics while editor-core separately validates capability, producing a confirmed driving-eligibility mismatch;
 - automatic relation feedback, creation, and removal follow separate paths;
 - construction geometry is absent as a shared persisted role;

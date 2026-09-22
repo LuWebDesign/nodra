@@ -1634,6 +1634,36 @@ it("updates an angled sketch line dimension without requiring a separate constra
      expect(Math.hypot(updated.nodes[1]!.point.x - updated.nodes[0]!.point.x, updated.nodes[1]!.point.y - updated.nodes[0]!.point.y)).toBeCloseTo(20);
    });
 
+it("characterizes a non-driving sketch dimension update and repeated-value history behavior", () => {
+     const sketch = createSketchLine(elementId("characterized-sketch-dimension"), layerId("default"), rectangle.style, { x: 0, y: 0 }, { x: 10, y: 10 });
+     const linked: DimensionElement = { type: "dimension", id: elementId("characterized-sketch-dimension-value"), layerId: sketch.layerId, kind: "aligned", references: [{ kind: "node", elementId: sketch.id, nodeIndex: 0, nodeId: sketch.nodes[0]!.id }, { kind: "node", elementId: sketch.id, nodeIndex: 1, nodeId: sketch.nodes[1]!.id }], offset: { x: 0, y: -8 }, precision: 2, units: "mm", rotation: 0, style: rectangle.style };
+     const initial = createEditor({ ...document, elements: [sketch, linked] });
+     const updated = dispatch(initial, updateDimensionValue(linked.id, 20));
+     const updatedSketch = updated.document.elements[0] as SketchElement;
+     const updatedDimension = updated.document.elements[1] as DimensionElement;
+
+     expect(updatedSketch.id).toBe(sketch.id);
+     expect(updatedSketch.nodes.map((node) => node.id)).toEqual(sketch.nodes.map((node) => node.id));
+     expect(updatedSketch.nodes[0]?.point).toEqual(sketch.nodes[0]?.point);
+     expect(updatedSketch.nodes[1]?.point.x).toBeCloseTo(Math.sqrt(200));
+     expect(updatedSketch.nodes[1]?.point.y).toBeCloseTo(Math.sqrt(200));
+     expect(updatedSketch.edges).toEqual(sketch.edges);
+     expect(updatedDimension).toEqual(linked);
+     expect(updatedDimension.driving).toBeUndefined();
+     expect(updatedDimension.constraintId).toBeUndefined();
+     expect(updated.undo).toHaveLength(1);
+     expect(undo(updated).document).toEqual(initial.document);
+     // Repeating the nominal value currently re-solves the unconstrained sketch and records another transaction.
+     const repeated = dispatch(updated, updateDimensionValue(linked.id, 20));
+     expect(repeated).not.toBe(updated);
+     expect(repeated.undo).toHaveLength(2);
+     // The repeated solve changes the endpoint by floating-point drift, so this is not a semantic document no-op.
+     const repeatedSketch = repeated.document.elements[0] as SketchElement;
+     expect(repeatedSketch.nodes[1]?.point.x).toBeCloseTo(Math.sqrt(200));
+     expect(repeatedSketch.nodes[1]?.point.y).toBeCloseTo(Math.sqrt(200));
+     expect(repeatedSketch.nodes[1]?.point).not.toEqual(updatedSketch.nodes[1]?.point);
+   });
+
 it("preserves a horizontal sketch relation while changing an angular dimension", () => {
      const sketch: SketchElement = { type: "sketch", id: elementId("constrained-angular-sketch"), layerId: layerId("default"), nodes: [{ id: "a", point: { x: 0, y: 0 } }, { id: "b", point: { x: 10, y: 0 } }, { id: "c", point: { x: 10, y: 10 } }], edges: [{ id: "ab", startNodeId: "a", endNodeId: "b" }, { id: "bc", startNodeId: "b", endNodeId: "c" }], constraints: [{ id: "horizontal", kind: "horizontal", references: [{ elementId: elementId("constrained-angular-sketch"), nodeId: "a" }, { elementId: elementId("constrained-angular-sketch"), nodeId: "b" }] }], style: rectangle.style };
      const angle: DimensionElement = { type: "dimension", id: elementId("constrained-angular-dimension"), layerId: sketch.layerId, kind: "angular", references: [{ kind: "line", elementId: sketch.id, edgeIndex: 0 }, { kind: "line", elementId: sketch.id, edgeIndex: 1 }], offset: { x: 5, y: -5 }, precision: 2, units: "mm", rotation: 0, style: rectangle.style };
