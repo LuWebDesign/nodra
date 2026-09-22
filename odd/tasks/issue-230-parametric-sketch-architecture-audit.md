@@ -25,13 +25,13 @@ Produce a repository-evidence-based audit of KOND's current parametric sketch ar
 
 ## Tasks
 
-- [ ] **T1 — Establish the repository baseline and capability inventory**
+- [x] **T1 — Establish the repository baseline and capability inventory**
   - Record package boundaries, model/schema invariants, solver scope, relevant exports, tests, and known limitations.
   - Classify the eleven requested systems as `YES | PARTIAL | NO` and `GOOD | COUPLED | DUPLICATED | LEAKING | MISSING` using cited evidence.
   - Create the initial audit report structure.
   - Evidence: `docs/audits/parametric-sketch-architecture-230.md` at baseline `9434cfdd`; independent structural/evidence verification found no remaining blocking factual inaccuracies and confirmed documentation-only scope.
-  - Status: evidence complete; awaiting human review and explicit commit authorization.
-  - Commit: pending explicit authorization.
+  - Status: complete.
+  - Commit: `0af8d7a16cb8be02ea08e89ddb2bc6439614f3d8` (`docs(architecture): establish issue 230 audit baseline`).
 
 - [ ] **T2 — Map current architecture and sources of truth**
   - Identify ownership of geometry, constraints, dimensions, solved state, selection, interaction state, history, rendering, and persistence.

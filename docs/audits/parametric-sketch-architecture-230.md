@@ -352,8 +352,8 @@ Preliminary answer: **the repository contains several split and overlapping resp
 
 | Task | Status | Evidence |
 |---|---|---|
-| T1 — Baseline and capability inventory | Evidence complete; independently verified; awaiting human review and commit authorization | This document at baseline `9434cfdd`; current manifests/source/tests; no blocking factual inaccuracies found |
-| T2 — Architecture and sources of truth | Pending | — |
+| T1 — Baseline and capability inventory | Complete | Baseline `9434cfdd`; independently verified; committed as `0af8d7a` |
+| T2 — Architecture and sources of truth | In progress | — |
 | T3 — Required end-to-end flows | Pending | — |
 | T4 — Responsibility/tool matrices | Pending | — |
 | T5 — Findings and disposition | Pending | — |
