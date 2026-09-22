@@ -3,7 +3,7 @@
 Issue: [#230](https://github.com/LuWebDesign/nodra/issues/230)  
 Audit branch: `chore/audit-parametric-sketch-architecture-230`  
 Baseline commit: `9434cfddfc20ac2103cdf7b412fdfb45684310e6`  
-Status: **AUDIT IN PROGRESS — T1 baseline recorded**
+Status: **ARCHITECTURE AND MIGRATION APPROVED — ONLY WU1 CHARACTERIZATION/CONTRACTS AUTHORIZED**
 
 ## Audit Contract
 
@@ -39,7 +39,7 @@ System existence is classified as `YES | PARTIAL | NO`. Architectural condition 
 
 # A. Executive Summary
 
-> Status: preliminary baseline; final conclusions are deferred until the required flows and coupling matrix are complete.
+> Status: final evidence synthesis; implementation remains explicitly unauthorized.
 
 KOND already has a substantive parametric-sketch foundation. It is not a coordinate-only drawing application and it is not starting from an empty architecture. Current source contains:
 
@@ -64,7 +64,7 @@ The baseline also shows material architectural gaps:
 - DOF/component state exists, while persisted piece state is separate and coarser;
 - dimension-driving behavior is not general across all geometry.
 
-These facts justify the audit, but they do **not yet prove** that missing responsibility separation is the primary cause of current behavioral defects. That conclusion remains pending the required end-to-end traces.
+These facts justify the audit. The completed traces and findings establish that responsibility separation contributes to several observed inconsistencies, but they do **not** establish it as the primary cause of every current KOND behavior.
 
 ---
 
@@ -1416,13 +1416,63 @@ No verification command was run during this audit-planning task.
 
 # M. Recommendation
 
-> Final answer deferred until T5–T8.
-
 Question required by issue #230:
 
 > Are KOND's current problems caused partially or primarily by missing separation of these responsibilities?
 
-Preliminary answer: **the repository contains several split and overlapping responsibility paths that plausibly contribute to inconsistency, but the baseline alone cannot establish whether they are the primary cause.** The required end-to-end traces and severity-ranked findings must establish causality before the final recommendation.
+## M.1 Evidence-based answer
+
+**Partially, yes; primarily, not proven.**
+
+The audit confirms several responsibility splits that already produce observable inconsistency or contract ambiguity:
+
+- one Line tool creates a sketch or native line according to gesture path;
+- snap outcomes differ between metadata, positional propagation, shared topology, solver constraints, and non-persistent correction;
+- web decides some persistent dimension/relation semantics while editor-core separately validates capability, producing a confirmed driving-eligibility mismatch;
+- automatic relation feedback, creation, and removal follow separate paths;
+- construction geometry is absent as a shared persisted role;
+- dimensions and solver behavior differ deliberately by supported representation.
+
+Therefore, lack of explicit separation/lifecycle contracts is a **verified contributing architectural cause** for part of the current inconsistency. The evidence does **not** prove that it is the primary cause of every observed problem: the repository also intentionally supports native entities, bounded solving, legacy compatibility relations, and representation-specific edits. No data corruption, solver replacement need, or CRITICAL/HIGH failure was demonstrated.
+
+## M.2 Recommended decision
+
+Approve the target architecture and migration plan **only as a bounded refactoring program**, with these constraints:
+
+1. Keep the existing package direction, native entities, solver, sketch kernel, history, renderer, persistence, IDs, and reference model.
+2. Refactor ownership/lifecycle around relation and dimension capability commands; do not add a new package or rewrite the solver.
+3. Treat `NORMAL | CONSTRUCTION` as a future additive model decision, with native-element and sketch-edge granularity, forward-compatible readers, and separate editor-geometric versus fabricable/export filtering.
+4. Keep connections, positional coincidences, solver constraints, and shared sketch nodes distinct until an explicit semantic-equivalence decision is approved.
+5. Follow WU1–WU12 in order; no tool migration, schema writer, topology propagation, cleanup, or optimization may skip its upstream gate.
+6. Treat migration as forward-only: code rollback is not automatic persisted-data downgrade.
+7. Stop after approval; implementation starts only from the approved work-unit gate.
+
+## M.3 Decisions required before implementation
+
+| Decision | Required answer |
+|---|---|
+| Target architecture | Approve or reject the bounded ownership model in G/I. |
+| Construction role | Approve `NORMAL | CONSTRUCTION` only, including native and sketch-edge scope. |
+| Fabricable behavior | Confirm construction exclusion is limited to the future fabricable/export filter, while editor geometric profiles remain role-neutral. |
+| Definition state | Accept derived state and current precedence; keep `PieceSnapshot.state` independent. |
+| Relation coexistence | Accept no implicit conversion among connections, positional coincidences, solver constraints, and shared sketch nodes. |
+| Native entities | Confirm native Line/Rectangle/Circle/Arc/Spline remain supported; parametric rectangle is optional and explicit only. |
+| Transaction UX | Decide separately whether multi-segment click Line should remain per-segment history/Escape behavior or gain a scoped transaction; this audit does not decide it. |
+| Migration safety | Accept forward-only schema rollout, WU gates, compatibility tests, and recovery/export strategy before any role writer. |
+
+## M.4 Audit closure gate
+
+**Approval recorded:** architecture and migration approved; only **WU1 characterization/contracts** is authorized as the next implementation unit.
+
+All later work units remain gated. Until a later unit is separately approved:
+
+- do not start WU2 or any schema writer;
+- do not replace/remove the solver or native entities;
+- do not collapse relationship forms;
+- do not publish construction-role writers;
+- do not skip compatibility, persistence/recovery, or review gates.
+
+WU1 may add behavior-first characterization/contracts only. It may not change product behavior, schema, solver capability, or persisted model semantics.
 
 ---
 
@@ -1436,5 +1486,5 @@ Preliminary answer: **the repository contains several split and overlapping resp
 | T4 — Responsibility/tool matrices | Complete | Section D; independently verified; committed as `64410c3` |
 | T5 — Findings and disposition | Complete | Sections E and F; independently verified; committed as `ecdedc9` |
 | T6 — Target architecture/contracts | Complete | Sections G, H.4, and I; independently verified; committed as `0b4816b` |
-| T7 — Migration/testing/performance/UX/rollback | Evidence complete; independently verified; awaiting human review and commit authorization | Sections J, K.2, and L; no blocking factual inaccuracies |
-| T8 — Review and approval gate | Pending | — |
+| T7 — Migration/testing/performance/UX/rollback | Complete | Sections J, K.2, and L; independently verified; committed as `4befe48` |
+| T8 — Review and approval gate | Complete; architecture/migration approved | Only WU1 characterization/contracts is authorized; later WUs remain gated |

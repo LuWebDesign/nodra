@@ -69,18 +69,29 @@ Produce a repository-evidence-based audit of KOND's current parametric sketch ar
   - Evidence: report sections G, H.4, and I; independent design challenge required target-only construction semantics, native/edge role granularity, existing reference/ID reuse, geometric-vs-fabricable profile separation, future role inheritance, and state normalization. Re-verification found no blocking contradiction, over-modeling, hidden T7 decision, or dependency violation.
   - Commit: `0b4816b5abc7b887e28460137d584abfd0ed1620` (`docs(architecture): define parametric sketch target`).
 
-- [ ] **T7 — Define migration, testing, performance, UX, and rollback plans**
+- [x] **T7 — Define migration, testing, performance, UX, and rollback plans**
   - Order migration work units by verified dependencies.
   - Define coexistence, acceptance criteria, rollback, schema compatibility, and review-size boundaries.
-  - Status: evidence complete; awaiting human review and explicit commit authorization.
+  - Status: complete.
   - Evidence: report sections J, K.2, and L; independent review corrected forward-only migration language and split role command/topology propagation, derived definition/tool migration, persistence/recovery, UX/performance, and cleanup into independently gated slices. Final verification found no blockers and confirmed product source unchanged.
-  - Commit: pending explicit authorization.
+  - Commit: `4befe48104820064ad35ee2df777e264fa651491` (`docs(architecture): plan parametric sketch migration`).
 
-- [ ] **T8 — Review and approval gate**
+- [x] **T8 — Review and approval gate**
   - Verify that every claim is cited and every unresolved decision is explicit.
   - Present the completed audit and stop before implementation.
+  - Status: complete; architecture/migration approved, with WU1 characterization/contracts as the only authorized implementation unit.
+  - Evidence: final T8 verification confirmed A–M coverage, grounded partial-cause recommendation, no product-source changes, explicit decisions, and forward-only migration caveats.
+  - Commit: pending closure commit.
+
+## Post-audit implementation gate
+
+- [ ] **WU1 — Characterization and compatibility contracts**
+  - Authorization: explicitly approved after T8; this is the only authorized WU.
+  - Scope: behavior-first tests/contracts for current line representation, relation forms, dimension eligibility, topology/reference behavior, and preview/history/persistence boundaries.
+  - Out of scope: product behavior, schema, solver changes, role writers, WU2+.
+  - Status: in progress.
   - Evidence: pending.
-  - Commit: pending explicit authorization.
+  - Commit: pending.
 
 ## Deliverable
 
