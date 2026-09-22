@@ -904,7 +904,7 @@ Preliminary answer: **the repository contains several split and overlapping resp
 | T2 — Architecture and sources of truth | Complete | Sections B.4, B.5, C.4, and H; independently verified; committed as `4204f59` |
 | T3 — Required end-to-end flows | Complete | Sections B.6 and B.7; independently verified; committed as `676b022` |
 | T4 — Responsibility/tool matrices | Complete | Section D; independently verified; committed as `64410c3` |
-| T5 — Findings and disposition | Evidence complete; independently verified; awaiting human review and commit authorization | Sections E and F; no blocking factual inaccuracies |
-| T6 — Target architecture/contracts | Pending | — |
+| T5 — Findings and disposition | Complete | Sections E and F; independently verified; committed as `ecdedc9` |
+| T6 — Target architecture/contracts | In progress | — |
 | T7 — Migration/testing/performance/UX/rollback | Pending | — |
 | T8 — Review and approval gate | Pending | — |

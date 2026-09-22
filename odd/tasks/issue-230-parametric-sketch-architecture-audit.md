@@ -54,17 +54,18 @@ Produce a repository-evidence-based audit of KOND's current parametric sketch ar
   - Evidence: report section D; matrix distinguishes transient inference from persistent relations, native from sketch entities, duplicated mechanics from intentional specialization, and factual cross-layer ownership from severity. Independent verification found no blockers and confirmed product source unchanged.
   - Commit: `64410c3cdfe63e365ca90e4660a100b9e128f0ef` (`docs(architecture): map sketch tool coupling`).
 
-- [ ] **T5 — Produce severity-ranked findings and disposition matrix**
+- [x] **T5 — Produce severity-ranked findings and disposition matrix**
   - Classify findings as `CRITICAL | HIGH | MEDIUM | LOW`.
   - Classify components as `KEEP | REFACTOR | REPLACE | REMOVE | CREATE` only after consumer and test evidence.
   - Separate verified defects, architectural gaps, deliberate limitations, and hypotheses.
-  - Status: evidence complete; awaiting human review and explicit commit authorization.
+  - Status: complete.
   - Evidence: report sections E and F; findings were independently challenged for factual support and severity, then integrated with no CRITICAL/HIGH claims, explicit unproven hypotheses, and no unsupported REMOVE/REPLACE disposition. Final verification found no blockers and confirmed product source unchanged.
-  - Commit: pending explicit authorization.
+  - Commit: `ecdedc97917d6d2fa3f621a0389c866d220d6e72` (`docs(architecture): classify parametric sketch findings`).
 
 - [ ] **T6 — Define target architecture and minimal contracts**
   - Propose repository-adapted boundaries for snap, inference, relations, automatic relations, dimensions, solver/DOF, and construction geometry.
   - Define sources of truth and compatibility constraints without creating code.
+  - Status: in progress.
   - Evidence: pending.
   - Commit: pending explicit authorization.
 
