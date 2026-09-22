@@ -525,30 +525,73 @@ The following overlaps are verified architectural facts; their severity and beha
 
 # D. Tool Coupling Matrix
 
-> Pending T3 and T4. No matrix cell will be inferred from tool labels alone.
+Classification:
 
-Required tools:
+- `NONE` — no verified responsibility;
+- `DELEGATED` — the tool calls an owning package/helper;
+- `EMBEDDED` — the responsibility is implemented inside the tool/orchestration path;
+- `DUPLICATED` — materially equivalent implementation exists in multiple paths;
+- `LEAKING` — persistent model semantics or representation mathematics cross their expected boundary.
 
-- Line
-- Rectangle
-- Circle
-- Arc
-- Spline/Bezier
-- Trim
-- Move/Edit
-- Dimension
+Transient visual inference and persistent automatic relations are intentionally classified separately.
 
-Required responsibility columns:
+| Tool/path | Pointer handling | Geometry creation | Snap | Inference | Persistent relations | Solving | Dimension logic | Renderer logic | DOF/state |
+|---|---|---|---|---|---|---|---|---|---|
+| Line — click sketch | `EMBEDDED` — App multi-click draft | `DELEGATED` — `createSketchLine` / `appendSketchEdge` | `DELEGATED` — interaction candidates | `EMBEDDED` — transient direction/alignment guides | `LEAKING` — App creates explicit connection metadata; editor-core creates `auto:*` constraints | `DELEGATED` — sketch replacement/kernel | `DELEGATED` — geometry/editor-core dimension paths | `DELEGATED` — renderer sketch edges | `DELEGATED` — constraints/kernel |
+| Line — drag native | `EMBEDDED` — App gesture | `EMBEDDED` — App `newElement("line")`, then editor command | `NONE` — no verified creation-snap persistence | `NONE` | `NONE` | `NONE` — generic validation only | `DELEGATED` — native-line branches | `DELEGATED` | `NONE` |
+| Rectangle | `EMBEDDED` — App two-click/gesture paths | `LEAKING` — App constructs persisted native shape | `DELEGATED` — interaction candidate | `NONE` — normalized drag is construction, not geometric inference | `LEAKING` — App maps confirmed snap into connection metadata | `NONE` — no sketch solve | `DELEGATED` — native resize branch | `DELEGATED` | `NONE` |
+| Circle | `EMBEDDED` — App draft/gesture | `LEAKING` — App constructs native circle using geometry helper | `DELEGATED` | `NONE` | `LEAKING` — App may create explicit connection metadata | `DELEGATED` — layered geometry, constraints adapter, and editor-core circle solve | `DELEGATED` — circular dimension paths | `DELEGATED` | `DELEGATED` — circle-specific constraint state, not general sketch DOF |
+| Arc | `EMBEDDED` — App three-point draft | `LEAKING` — App constructs native arc via `arcThroughThreePoints` | `DELEGATED` | `NONE` — three-point construction is not inference | `LEAKING` — confirmed start/end snaps may create connections; through-point does not | `NONE` — no general native-arc solver | `DELEGATED` — radial measurement/edit support is bounded | `DELEGATED` for commit; App owns direct preview path | `NONE` |
+| Spline / Bezier | `EMBEDDED` — App plus spline editor gestures | `DELEGATED` — editor-core spline commands | `DELEGATED` — transient generic/node policies; no persistent spline snap relation verified | `NONE` | `NONE` | `NONE` — no spline solver | `DELEGATED` — measurable nodes, no general driving path | `DUPLICATED` — App preview plus editor-core/renderer spline-to-path conversion | `NONE` — editor state is not parametric DOF |
+| Trim | `EMBEDDED` — App cut picking/preview | `DELEGATED` — editor-core trim candidate/application | `NONE` — hit tolerance is picking | `NONE` — intersections/topology are geometric derivation | `DELEGATED` — remaps/preserves existing references rather than creating a new relation | `DELEGATED` — kernel/profile validation where applicable | `DELEGATED` — reference remapping | `EMBEDDED` preview overlay / `DELEGATED` committed render | `NONE` |
+| Move / Edit | `EMBEDDED` — App move/resize/rotate/node gestures | `DELEGATED` — editor-core transform commands | `DELEGATED` — move/node snap helpers | `EMBEDDED` — transient alignment feedback | `DELEGATED` — path-dependent positional propagation/preservation | `DELEGATED` on sketch paths; `NONE` for many native paths | `DELEGATED` — entity-specific command behavior | `DELEGATED` commit / `EMBEDDED` overlays | `DELEGATED` for sketches; `NONE` for native entities |
+| Dimension | `EMBEDDED` — App picking/draft/editor | `LEAKING` — App directly constructs persisted dimension records | `NONE` — target picking is not snap | `EMBEDDED` — placement-kind interpretation | `LEAKING` — App decides driving eligibility; editor-core creates/removes supported constraints | `DELEGATED` — sketch/circle paths | `LEAKING` — semantics distributed across App creation, geometry derivation, and entity-specific editor-core mutation | `DELEGATED` | `DELEGATED` through associated constraints; no independent dimension DOF |
 
-- pointer handling;
-- geometry creation;
-- snap;
-- inference;
-- constraint creation;
-- solving;
-- dimension logic;
-- renderer logic;
-- DOF state.
+## D.1 Verified duplicated mathematics and mechanics
+
+1. **Spline cubic conversion** — App preview, `packages/editor-core/src/spline.ts`, and renderer-svg independently resolve relative handles and cubic spans.
+2. **Arc SVG projection** — App preview and renderer/profile projection repeat endpoint, sweep, large-arc, and SVG path construction. Arc construction itself remains centralized in `arcThroughThreePoints`.
+3. **Snap candidate mechanics** — creation, move, and Forma-node snap policies separately scan/exclude candidates and apply zoom-scaled tolerances. Their gesture policies differ, so only the shared mechanics are duplicated.
+4. **Connection source-node selection** — `creationConnections` reselects the nearest source node and maps it to an address after interaction already selected a snap target.
+
+Dimension display derivation and dimension mutation are intentionally different responsibilities and are not classified as one duplicated algorithm.
+
+## D.2 Verified boundary leaks or cross-layer ownership
+
+1. **Persistent relations in web** — `creationConnections` constructs domain `ExplicitConnection` records from pointer results.
+2. **Persistent dimension semantics in web** — App creates `DimensionElement` records and decides initial driving eligibility.
+3. **Trim scope coordination** — App builds the piece/selection scope and `TrimTarget`; editor-core rebinds and validates it before mutation. Ownership is shared rather than exclusively assigned to either layer.
+4. **Transient geometric SVG in web** — spline, arc, dimension, trim, and profile previews use App-owned paths in addition to renderer projection. These previews are not persistent model truth.
+5. **Spline projection boundary** — editor-core and renderer each convert native splines to path-like cubic representations.
+
+## D.3 Intentional specialization
+
+The following distinctions are verified and are not automatically defects:
+
+- native line/rectangle/circle/arc behavior versus bounded `SketchElement` solving;
+- transient visual inference versus persistent automatic relations;
+- circle-specific constraints versus sketch constraints;
+- native spline relative handles versus path absolute cubic controls;
+- trim preview versus commit, with editor-core candidate rebinding/validation;
+- native rectangle projection to boundary curves for topology consumers versus creation as one rectangle element;
+- renderer constraint coloring as presentation behavior;
+- sketch-session checkpoints versus generic editor history;
+- entity-specific dimension driving where solver support differs.
+
+## D.4 Test evidence and limits
+
+Interaction, editor-core, geometry, constraints, renderer, and E2E tests cover substantial line/sketch, native shape, spline/path, trim, movement, and dimension behavior. The browser suite is not comprehensive evidence for every matrix cell: solver/DOF internals, every move/edit variant, complete preview-to-persistence chains, and every snap-to-relation path remain package-level or uncovered.
+
+## D.5 Unresolved T4 hypotheses
+
+- Whether click-sketch versus drag-native Line is intentional compatibility behavior.
+- Whether three persistent relationship forms encode distinct product semantics.
+- Whether App-owned dimension and relation construction causes observable inconsistency.
+- Whether repeated spline/arc projection logic can diverge.
+- Whether native transform paths preserve every relevant relation.
+- Whether absent spline/arc DOF is deliberate product scope.
+- Whether App-built trim scope can become stale outside covered rebinding cases.
+- Whether repeated snap scans create measurable pointer-move cost.
 
 ---
 
@@ -706,7 +749,7 @@ Preliminary answer: **the repository contains several split and overlapping resp
 | T1 — Baseline and capability inventory | Complete | Baseline `9434cfdd`; independently verified; committed as `0af8d7a` |
 | T2 — Architecture and sources of truth | Complete | Sections B.4, B.5, C.4, and H; independently verified; committed as `4204f59` |
 | T3 — Required end-to-end flows | Complete | Sections B.6 and B.7; independently verified; committed as `676b022` |
-| T4 — Responsibility/tool matrices | In progress | — |
+| T4 — Responsibility/tool matrices | Evidence complete; independently verified; awaiting human review and commit authorization | Section D; no blocking factual inaccuracies |
 | T5 — Findings and disposition | Pending | — |
 | T6 — Target architecture/contracts | Pending | — |
 | T7 — Migration/testing/performance/UX/rollback | Pending | — |

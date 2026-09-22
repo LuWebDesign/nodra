@@ -50,8 +50,8 @@ Produce a repository-evidence-based audit of KOND's current parametric sketch ar
 - [ ] **T4 — Build the responsibility and tool-coupling matrices**
   - Map Line, Rectangle, Circle, Arc, Spline/Bezier, Trim, Move/Edit, and Dimension responsibilities.
   - Identify duplicated mathematics, leaked responsibilities, and intentional specialization.
-  - Status: in progress.
-  - Evidence: pending.
+  - Status: evidence complete; awaiting human review and explicit commit authorization.
+  - Evidence: report section D; matrix distinguishes transient inference from persistent relations, native from sketch entities, duplicated mechanics from intentional specialization, and factual cross-layer ownership from severity. Independent verification found no blockers and confirmed product source unchanged.
   - Commit: pending explicit authorization.
 
 - [ ] **T5 — Produce severity-ranked findings and disposition matrix**
