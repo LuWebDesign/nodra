@@ -47,17 +47,18 @@ Produce a repository-evidence-based audit of KOND's current parametric sketch ar
   - Evidence: report sections B.6 and B.7; independent verification corrected the existing-sketch-node line branch, native rectangle E2E coverage, and positional-coincidence propagation scope; final verification found no blocking factual inaccuracies and confirmed product source unchanged.
   - Commit: `676b022d9bac98a25bc6cfe80118b3a9a234934b` (`docs(architecture): trace parametric sketch workflows`).
 
-- [ ] **T4 — Build the responsibility and tool-coupling matrices**
+- [x] **T4 — Build the responsibility and tool-coupling matrices**
   - Map Line, Rectangle, Circle, Arc, Spline/Bezier, Trim, Move/Edit, and Dimension responsibilities.
   - Identify duplicated mathematics, leaked responsibilities, and intentional specialization.
-  - Status: evidence complete; awaiting human review and explicit commit authorization.
+  - Status: complete.
   - Evidence: report section D; matrix distinguishes transient inference from persistent relations, native from sketch entities, duplicated mechanics from intentional specialization, and factual cross-layer ownership from severity. Independent verification found no blockers and confirmed product source unchanged.
-  - Commit: pending explicit authorization.
+  - Commit: `64410c3cdfe63e365ca90e4660a100b9e128f0ef` (`docs(architecture): map sketch tool coupling`).
 
 - [ ] **T5 — Produce severity-ranked findings and disposition matrix**
   - Classify findings as `CRITICAL | HIGH | MEDIUM | LOW`.
   - Classify components as `KEEP | REFACTOR | REPLACE | REMOVE | CREATE` only after consumer and test evidence.
   - Separate verified defects, architectural gaps, deliberate limitations, and hypotheses.
+  - Status: in progress.
   - Evidence: pending.
   - Commit: pending explicit authorization.
 
