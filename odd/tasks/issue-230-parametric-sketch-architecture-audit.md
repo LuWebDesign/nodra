@@ -65,8 +65,8 @@ Produce a repository-evidence-based audit of KOND's current parametric sketch ar
 - [ ] **T6 — Define target architecture and minimal contracts**
   - Propose repository-adapted boundaries for snap, inference, relations, automatic relations, dimensions, solver/DOF, and construction geometry.
   - Define sources of truth and compatibility constraints without creating code.
-  - Status: in progress.
-  - Evidence: pending.
+  - Status: evidence complete; awaiting human review and explicit commit authorization.
+  - Evidence: report sections G, H.4, and I; independent design challenge required target-only construction semantics, native/edge role granularity, existing reference/ID reuse, geometric-vs-fabricable profile separation, future role inheritance, and state normalization. Re-verification found no blocking contradiction, over-modeling, hidden T7 decision, or dependency violation.
   - Commit: pending explicit authorization.
 
 - [ ] **T7 — Define migration, testing, performance, UX, and rollback plans**

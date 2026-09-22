@@ -767,7 +767,179 @@ The following must not be reported as confirmed defects:
 
 # G. Target Architecture
 
-> Pending T6. The audit will evaluate the issue's proposed layering against current repository boundaries rather than imposing new classes or packages.
+## G.1 Design objective
+
+The target is a bounded refactoring of ownership and lifecycle contracts, not a new CAD platform. It keeps the current package graph, native entities, stable sketch topology, solver, sketch kernel, commands/history, renderer, and persistence.
+
+```text
+Pointer / keyboard
+        ↓
+apps/web transient interaction
+  tool mode, selection, hover, viewport, drafts, feedback
+        ├── pure geometry queries
+        │     picking, snap candidates, inference, layout preview
+        ↓
+editor-core command / gesture boundary
+  preview → capability validation → relation validation → solve → commit/cancel
+        ├── domain snapshot
+        │     geometry, stable topology, constraints, dimensions,
+        │     NORMAL/CONSTRUCTION roles and legacy relationship records
+        ├── constraints
+        │     bounded capabilities, components, residuals, conflict,
+        │     redundancy, rank and DOF
+        └── geometry
+              coordinates, curves, references, topology/profile derivation,
+              measurement and display geometry
+        ↓
+Accepted validated DocumentSnapshot
+        ├── derived definition state / profiles / diagnostics
+        ├── renderer-svg projection
+        ├── web project conversion and recovery scheduling
+        └── persistence validated durable revisions
+```
+
+Core rule:
+
+```text
+Transient interaction never becomes model truth without confirmation.
+Solver output remains provisional until editor-core accepts it.
+Only one accepted, validated snapshot enters history and persistence.
+```
+
+T7 will define migration transaction boundaries. T6 defines only observable ownership and atomicity invariants.
+
+## G.2 Target ownership within existing packages
+
+| Responsibility | Target owner | Adjustment |
+|---|---|---|
+| Persistent entities, IDs, references and geometry role | `@nodra/domain` | Keep current model; add only approved `NORMAL | CONSTRUCTION` semantics at native-element and sketch-edge granularity. |
+| Structural validation and migrations | `@nodra/validation` | Validate role, references, dimension/constraint compatibility, and schema migration. |
+| Coordinates, curves, picking, snap mathematics, geometric inference, profiles and dimension geometry | `@nodra/geometry` | Prefer pure functions; no tool state or persistent relation writes. |
+| Constraint capabilities, normalization, solve, residuals, redundancy/conflict, rank and DOF | `@nodra/constraints` | Keep bounded solver; expose explicit supported/unsupported diagnostics. |
+| Persistent commands, relation/dimension/role mutation, kernel recomputation, rollback and history | `@nodra/editor-core` | Own atomic model decisions currently split with web. |
+| Tool mode, selection presentation, hover, drafts, viewport and previews | `apps/web` | Remain transient composition; stop deciding durable relation/dimension capability. |
+| SVG projection | `@nodra/renderer-svg` | Consume accepted model plus derived state; never own geometry or fabrication policy. |
+| Durable revisions | `@nodra/persistence` | Keep validated project storage. |
+| Recovery/autosave orchestration | `apps/web` | Keep mirror and arbitration distinct from durable history. |
+
+No new package or service class is required. “Service” names in issue #230 denote contracts implementable as pure functions and editor-core commands.
+
+## G.3 Target sources of truth
+
+| Concern | Target source of truth |
+|---|---|
+| Geometry | Persisted domain `Element` records. |
+| Sketch topology | Stable `SketchElement.nodes` and `.edges`. |
+| Constraints | Persisted local/document constraint intent under current compatibility model. |
+| Dimensions | Persisted `DimensionElement` identity, references and layout; a compatible driving constraint owns the driving value. |
+| Accepted solved geometry | Coordinates in the latest accepted validated document snapshot. |
+| Definition state | Derived constraints component state, residuals, rank and DOF; never a manual renderer flag. |
+| Profiles and mixed topology | Derived from stable geometry/topology; not persisted truth. |
+| Selection | Transient editor selection plus narrower UI context where needed. |
+| Tool interaction | Web drafts/feedback plus editor-core gesture base; never domain data. |
+| Piece lifecycle | Existing `PieceSnapshot.state`, kept separate from DOF unless a later explicit product rule is approved. |
+| Durable state | Validated persistence revisions; localStorage remains recovery-only. |
+
+The target introduces neither a second solved-geometry cache nor a general parameter registry.
+
+## G.4 Relationship coexistence
+
+During migration, the following remain explicit and non-equivalent:
+
+- `connections`: compatibility metadata created only by confirmed operations;
+- `positionalCoincidences`: explicit propagated positional relations;
+- local/document solver constraints: parametric design intent;
+- shared sketch nodes: topology identity within a sketch.
+
+No form is silently converted into another. Every new command declares which form it creates. Same-sketch node reuse remains valid; unsupported cross-representation relations fail with a diagnostic rather than fusing element identities.
+
+Native Line, Rectangle, Circle, Arc and Spline elements remain valid. No automatic rectangle-to-four-edge conversion or native-to-sketch rewrite is part of T6.
+
+## G.5 Construction geometry decision
+
+Construction role support does **not** exist in the current model. The following is a target decision whose schema migration and rollout belong to T7.
+
+The only persisted role introduced by the target is:
+
+```text
+NORMAL | CONSTRUCTION
+```
+
+Granularity:
+
+- a native geometric element may carry the role;
+- an individual `SketchEdge` may carry the role independently of sibling edges.
+
+Semantics:
+
+- both roles remain selectable, snappable, inferable, constrainable, dimensionable and solver-visible where the entity type is supported;
+- construction geometry is visually distinct in editor mode;
+- existing geometric profile/topology derivation remains a geometric operation and does not silently become fabrication policy;
+- a separate target fabricable-profile/export filter excludes construction geometry unless it was explicitly converted to `NORMAL`;
+- the role is model semantics, not merely a renderer style or `operation` value;
+- future split children must inherit the source edge role; trim survivors must preserve it; merge/remap commands must report role conflicts instead of guessing;
+- these inheritance rules are target invariants, not current behavior, and their schema/transaction migration is deferred to T7;
+- conversion changes the role without rebuilding entity identity.
+
+A third `REFERENCE` role is intentionally rejected as unsupported over-modeling.
+
+## G.6 Definition-state decision
+
+For the bounded solver scope:
+
+- `conflict`: supported constraints cannot be satisfied or solving does not converge under kernel policy;
+- `overdefined`: the component contains redundant/dependent equations under current rank analysis;
+- `fully-defined`: valid component, no conflict/overdefinition, and zero remaining DOF;
+- `underdefined`: valid component with remaining DOF;
+- `invalid`: unsupported or structurally invalid references/input.
+
+The geometry solver's current `defined` result normalizes to the public `fully-defined` state. Aggregate precedence is `invalid` → `conflict` → `overdefined` → `underdefined` → `fully-defined`; any component in an earlier state determines the aggregate. `invalid` comes from structural validation or unsupported/invalid constraint diagnostics, not from DOF alone.
+
+Closed-profile validity remains a separate geometric/product property. DOF does not automatically mutate `PieceSnapshot.state`.
+
+## G.7 Required invariants
+
+- Snap and inference only return transient candidates/feedback.
+- Rejected automatic relations are not persisted; they may remain transient feedback.
+- Relation commit performs capability, reference, redundancy, conflict and degeneracy checks within current solver support.
+- Geometry, topology, constraints, references and dimensions commit atomically or remain unchanged.
+- Failed/no-op commands add no revision or history.
+- Preview adds no persistence or undo state; cancel restores the gesture base.
+- A supported non-driving dimension may be promoted to driving without changing its `ElementId`; unsupported promotion is rejected before marking it driving.
+- Stable IDs and explicit topology reference maps govern split/trim/remap; coordinate proximity is not identity.
+- Renderer projects accepted state and derived diagnostics but never establishes alternate constraint truth.
+- Editor styling and fabrication/export filtering remain separate concerns.
+
+## G.8 Non-goals and rejected alternatives
+
+- no solver rewrite or new solver package;
+- no new orchestration package;
+- no native-entity removal;
+- no universal sketch entity or immediate rectangle decomposition;
+- no big-bang migration;
+- no general parameter registry;
+- no persisted DOF, residual, profile or solver cache;
+- no automatic conversion among connections, positional coincidences and constraints;
+- no worker, spatial index or caching layer without measurement;
+- no SolidWorks-scale patterns, blocks, 3D or external-reference system.
+
+## G.9 Finding-to-decision traceability
+
+| Finding | Target response |
+|---|---|
+| F-01 line representation split | Preserve both representations; make gesture/command semantics explicit and non-silent. |
+| F-02 relationship semantics | Preserve forms; require relation-kind-specific commands and no implicit conversion. |
+| F-03 automatic relations | Use one proposal → capability/redundancy/conflict validation → solve → commit lifecycle. |
+| F-04 dimension mismatch | Move driving eligibility/creation behind editor-core and bounded constraints capability checks. |
+| F-05 construction absence | Add `NORMAL | CONSTRUCTION` role at native-element and sketch-edge granularity. |
+| F-06 App persistent semantics | Keep web transient; route durable relation/dimension decisions through editor-core. |
+| F-07 native rectangle | Keep it; do not impose four-edge sketch semantics. |
+| F-08 bounded solver | Keep solver/adapters and expose explicit capability diagnostics. |
+| F-09 geometry versus intent | Declare accepted coordinates current geometry and constraints design intent; derive solve state. |
+| F-10 piece versus DOF state | Keep separate; prohibit implicit synchronization. |
+| F-11 projection duplication | Prefer shared pure projection helpers later; no renderer rewrite. |
+| F-12 Escape semantics | Preserve current behavior until T7 specifies transaction scope explicitly. |
+| F-13 evidence gaps | Use these contracts as T7 acceptance boundaries. |
 
 ---
 
@@ -803,31 +975,189 @@ The following are recomputed and are not independent persisted truth:
 
 Selection, gesture bases, pointer interaction, drafts, hover, guides, viewport, sketch-session checkpoints, and undo/redo stacks remain runtime state. They do not belong to domain snapshots or durable project history.
 
-## H.4 Missing or unresolved current contracts
+## H.4 Target model additions and preserved absences
 
-- No construction-geometry role exists.
-- No unified parameter entity exists.
-- No verified synchronization exists between DOF/component state and `PieceSnapshot.state`.
-- Coincidence meaning is distributed across three persisted relation forms.
-- Stable reference migration is supported, but topology-changing flow evidence remains for T3.
-- The target model and compatibility strategy remain deferred to T6 and T7.
+- Target decision: add only `NORMAL | CONSTRUCTION` role semantics, supporting native elements and individual `SketchEdge` records; no current model behavior is implied.
+- Preserve existing stable IDs and reference unions; do not create a parallel universal `GeometryReference` identity system.
+- Dimensions remain `Element`s identified by `ElementId`; do not introduce a separate `DimensionId` identity domain.
+- Keep values in compatible constraints/dimension metadata; do not create a general parameter registry.
+- Keep solve results, residuals, DOF, profiles and mixed topology derived; do not persist a solved-state cache.
+- Keep `PieceSnapshot.state` independent from component DOF until a separate product decision establishes synchronization.
+- Keep connections, positional coincidences and solver constraints distinct during coexistence.
+- Future topology contract: split children inherit roles, trim survivors retain them, and ambiguous merges fail with diagnostics; T7 owns schema migration and transaction rollout.
+- Keep editor geometric profile/topology derivation distinct from a new fabricable-profile/export filter, which excludes construction geometry while retaining editor interaction and supported solving.
 
 ---
 
 # I. Service Contracts
 
-> Pending T6.
+These are conceptual TypeScript-like contracts, not implementation authorization. They should reuse or carefully extend existing node, edge, dimension and connectable-address references rather than introduce a parallel persisted reference hierarchy.
 
-Contracts to evaluate:
+## I.1 Snap candidate query
 
-- Snap;
-- Inference;
-- Relations/constraints;
-- Automatic relations;
-- Dimensions;
-- Sketch state/DOF.
+```ts
+type SnapTargetAdapter =
+  | { readonly kind: "connectable"; readonly reference: ConnectableNodeReference }
+  | { readonly kind: "sketch-edge"; readonly reference: SketchEdgeReference }
+  | {
+      readonly kind: "transient-curve";
+      readonly elementId: ElementId;
+      readonly parameter: number;
+    };
 
-Names such as `SnapService` are conceptual until evidence justifies a concrete repository abstraction.
+type SnapCandidate = {
+  readonly target: SnapTargetAdapter;
+  readonly point: PointMm;
+  readonly distanceMm: number;
+  readonly priority: number;
+  readonly source: "node" | "anchor" | "curve";
+};
+
+function querySnapCandidates(
+  document: DocumentSnapshot,
+  input: {
+    readonly point: PointMm;
+    readonly toleranceMm: number;
+    readonly visibleElementIds: readonly ElementId[];
+    readonly excludedElementIds?: readonly ElementId[];
+  },
+): readonly SnapCandidate[];
+```
+
+The persisted-capable variants adapt existing `ConnectableNodeReference` and `SketchEdgeReference`; the curve variant is transient and does not create a new persisted reference hierarchy. A candidate never persists a relation.
+
+## I.2 Transient inference
+
+```ts
+type InferencePreview = {
+  readonly point: PointMm;
+  readonly guides: readonly InferenceGuide[];
+  readonly suggestedRelations: readonly RelationProposal[];
+};
+
+function inferTransientGeometry(context: InferenceContext): InferencePreview;
+```
+
+Inference owns feedback and proposals, not document mutation.
+
+## I.3 Relation validation and commit
+
+```ts
+type RelationValidation =
+  | { readonly ok: true }
+  | {
+      readonly ok: false;
+      readonly code:
+        | "unsupported"
+        | "invalid-reference"
+        | "redundant"
+        | "conflict"
+        | "degenerate";
+      readonly constraintIds: readonly string[];
+    };
+
+function validateRelation(
+  document: DocumentSnapshot,
+  proposal: RelationProposal,
+): RelationValidation;
+```
+
+Validation is bounded by current solver capabilities. Editor-core owns the command that applies an accepted proposal and invokes kernel solve/rollback.
+
+## I.4 Automatic relations
+
+```ts
+function proposeAutomaticRelations(
+  before: DocumentSnapshot,
+  operation: GeometryOperation,
+  inference: InferencePreview,
+): readonly RelationProposal[];
+
+function validateAutomaticRelations(
+  document: DocumentSnapshot,
+  proposals: readonly RelationProposal[],
+): readonly RelationValidation[];
+```
+
+Lifecycle:
+
+```text
+candidate → capability/reference validation → redundancy/conflict check
+          → explicit editor command → kernel solve → atomic commit or rollback
+```
+
+A rejected proposal is not persisted. Existing `auto:*` behavior remains compatible while policy is consolidated incrementally.
+
+## I.5 Dimensions
+
+```ts
+type DimensionDraft = {
+  readonly kind: DimensionKind;
+  readonly references: readonly DimensionReference[];
+  readonly layout: DimensionLayout;
+};
+
+function previewDimension(
+  document: DocumentSnapshot,
+  draft: DimensionDraft,
+  cursor: PointMm,
+): DimensionPreview;
+
+function validateDimensionDriving(
+  document: DocumentSnapshot,
+  dimension: DimensionElement,
+): RelationValidation;
+
+function createDimension(draft: DimensionDraft): EditorCommand;
+function updateDimensionValue(dimensionId: ElementId, value: number): EditorCommand;
+```
+
+Web chooses targets and displays placement. Geometry derives measurement/layout. Editor-core validates references, driving eligibility, solving, history and atomic mutation. A non-driving dimension remains an annotation; driving requires an explicit compatible constraint.
+
+## I.6 Construction role
+
+```ts
+type GeometryRole = "normal" | "construction";
+
+type GeometryRoleTarget =
+  | { readonly kind: "element"; readonly elementId: ElementId }
+  | {
+      readonly kind: "sketch-edge";
+      readonly sketchId: ElementId;
+      readonly edgeId: SketchEdgeReference["edgeId"];
+    };
+
+function setGeometryRole(
+  targets: readonly GeometryRoleTarget[],
+  role: GeometryRole,
+): EditorCommand;
+```
+
+Role changes preserve identity. Future split/trim commands must carry role inheritance through their existing topology mappings; T7 defines migration and transaction rollout.
+
+## I.7 Sketch definition and DOF
+
+```ts
+type SketchDefinition = {
+  readonly state:
+    | "underdefined"
+    | "fully-defined"
+    | "overdefined"
+    | "conflict"
+    | "invalid";
+  readonly degreesOfFreedom: number;
+  readonly rank: number;
+  readonly affectedElementIds: readonly ElementId[];
+  readonly diagnostics: readonly ConstraintDiagnostic[];
+};
+
+function deriveSketchDefinition(
+  document: DocumentSnapshot,
+  scope?: readonly ElementId[],
+): SketchDefinition;
+```
+
+This contract projects existing component states, residuals, rank and DOF. It neither mutates piece lifecycle state nor persists definition flags.
 
 ---
 
@@ -905,6 +1235,6 @@ Preliminary answer: **the repository contains several split and overlapping resp
 | T3 — Required end-to-end flows | Complete | Sections B.6 and B.7; independently verified; committed as `676b022` |
 | T4 — Responsibility/tool matrices | Complete | Section D; independently verified; committed as `64410c3` |
 | T5 — Findings and disposition | Complete | Sections E and F; independently verified; committed as `ecdedc9` |
-| T6 — Target architecture/contracts | In progress | — |
+| T6 — Target architecture/contracts | Evidence complete; independently verified; awaiting human review and commit authorization | Sections G, H.4, and I; architecturally ready |
 | T7 — Migration/testing/performance/UX/rollback | Pending | — |
 | T8 — Review and approval gate | Pending | — |
