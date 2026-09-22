@@ -247,6 +247,188 @@ Explicit piece/selection profile scope
   → renderSketchProfileSvg()
 ```
 
+## B.6 Required end-to-end flow evidence
+
+### A. Create a line
+
+Current behavior has two gesture-dependent representations.
+
+#### A1. Click sequence: parametric sketch line
+
+```text
+pointer click
+  → page-space point and snap candidate
+  → CreationDraft
+  → confirmation click
+    ├→ ordinary start: createSketchLine()
+    │    → createElement(SketchElement, creationConnections)
+    └→ start anchored to an existing sketch node: appendSketchEdge() on that sketch
+  → dispatch()
+  → validated sketch replacement / solve where applicable
+  → EditorState transaction
+  → project synchronization, rendering, and eligible persistence
+```
+
+Verified ownership:
+
+| Step | Owner and symbols | Behavior |
+|---|---|---|
+| Pointer and draft | `App.tsx` pointer handlers, `CreationDraft` | Web owns the multi-click interaction and transient feedback. |
+| Candidate and feedback | `snapCreationPoint`, creation/alignment/directional guides | Interaction code returns candidates/guides; no hover result is persisted. |
+| Initial model creation | `createSketchLine`, or `appendSketchEdge` when the initial snap anchors to an existing sketch node | Creates a new stable sketch graph for an ordinary start, or extends the existing sketch topology for the anchored branch. |
+| Automatic relations | `createSketchLine` | Adds `auto:*` horizontal or vertical relation when the angular threshold is met. |
+| First confirmed snap relation | `creationConnections` + `createElement` | May persist explicit connection metadata for confirmed creation snaps. |
+| Continuation | `appendSketchEdge` | Adds stable topology, can reuse a same-sketch target node, and can add H/V or perpendicular automatic relations. |
+| Mutation/history | `dispatch` and command-result validation | Each accepted dispatched creation command can create a transaction. |
+| Solve/rollback | sketch replacement/kernel paths | Supported sketch constraints are solved; rejected/no-op results do not create a transaction. |
+| Render/persist | `renderSvg`, `setEditorState`, project conversion and persistence effects | Committed state is rendered and may be mirrored/autosaved when eligibility gates pass. |
+
+Escape clears the active creation draft but does not undo sketch segments already dispatched by prior clicks. Existing tests do not establish that the complete multi-segment gesture is intended to be one transaction.
+
+#### A2. Drag sequence: native line
+
+```text
+pointer down + drag
+  → beginGesture()
+  → pointer move
+  → newElement("line")
+  → gesture preview
+  → pointer up
+  → commitGesture() or cancelGesture()
+```
+
+This path creates a native `LineElement`, not a sketch. It does not receive sketch topology, automatic H/V/perpendicular relations, or sketch solver semantics. The verified drag path also bypasses creation-snap connection persistence.
+
+**Verified representation split:** the same visible line tool can produce different domain entities and parametric behavior depending on gesture path. Severity and intended compatibility status remain for T5.
+
+### B. Create a rectangle
+
+```text
+first click
+  → snap candidate + CreationDraft
+  → pointer movement / normalized transient preview
+  → confirmation click
+  → newElement("rectangle")
+  → createElement(RectangleElement, optional creation connections)
+  → validation/history/render/persistence
+```
+
+A rectangle is one native `RectangleElement` with position, size, corner radius, and rotation. It is not four sketch edges and creation does not produce horizontal, vertical, or coincident sketch constraints.
+
+Consequences verified in current code:
+
+- later edits use rectangle resize/shape commands, not vertex constraint solving;
+- named anchors can participate in explicit connection metadata;
+- an unrotated rectangle dimension can resize the native shape through `updateDimensionValue`;
+- this is direct native-shape geometry behavior, not the idealized four-edge parametric rectangle from issue #230.
+
+`tests/e2e/app.smoke.spec.ts` covers native rectangle creation through the two-click pointer sequence. No browser-level test proves four-edge parametric rectangle behavior, because that behavior is not implemented by the creation path.
+
+### C. Endpoint-to-endpoint snap
+
+#### Candidate and feedback
+
+`snapCreationPoint` searches visible real geometry nodes using zoom-scaled tolerance and returns the nearest point/address. Creation guides and hover state display feedback without mutating the document.
+
+#### Coordinate effect
+
+On confirmation, web orchestration chooses the snapped point before directional/alignment fallbacks. Move snapping is different: `snapMoveDelta` returns a corrected delta and guide; it does not write the document.
+
+#### Persistence semantics by path
+
+| Context | Persistent result |
+|---|---|
+| First confirmed native/sketch creation using `creationConnections` | May append `ExplicitConnection` metadata. |
+| Same-sketch continuation snapped to an existing sketch node | Reuses the stable node in topology; no separate connection is required. |
+| Continuation snapped to an external endpoint | No equivalent confirmed persistent-connection path was found in the continuation command. |
+| Move snap | Alters the requested movement delta only; it does not create a relation. |
+| Hover/guide | Never creates a relation. |
+
+Three relationship forms therefore coexist:
+
+1. explicit `connections` metadata;
+2. enforced `positionalCoincidences`;
+3. solver `coincident` constraints.
+
+Positional coincidence propagation is implemented by both applicable generic `replaceElements` paths and sketch replacement paths, so supported native moves can propagate explicitly persisted positional coincidences. This remains command/path dependent rather than an automatic property of every coordinate edit. Legacy explicit connections remain metadata rather than general solver constraints.
+
+Unit tests strongly cover candidate priority, visibility, named addresses, zoom tolerance, and selected positional-coincidence behavior. No complete browser test covers pointer feedback through persisted relation and undo.
+
+### D. Create and edit a dimension
+
+```text
+hover / click
+  → pickDimensionTarget()
+  → first-reference draft
+  → second reference
+  → placement preview
+  → DimensionElement creation
+  → optional setDimensionDriving()
+  → value edit through updateDimensionValue()
+  → supported geometry/constraint update
+  → render/history/persistence
+```
+
+Verified ownership and behavior:
+
+- `pickDimensionTarget` owns reference picking and prioritizes real nodes, circular center/rim targets, and supported native line bodies.
+- `newDimension`, `newCircleDimension`, and `newAngularDimension` in web orchestration build persisted dimension elements.
+- placement geometry comes from geometry helpers.
+- preview is synthesized for rendering as a temporary dimension input; it is not persisted.
+- supported circle and same-sketch dimensions can be switched to driving mode by associating a constraint.
+- `updateDimensionValue` contains entity-specific branches for cross-object references, arcs/circles, native lines, paths, sketches, angular behavior, and unrotated rectangles.
+- driving sketch branches update constraints and solve; native branches can change coordinates directly through editor-core commands.
+- accepted updates use normal history/no-op semantics and render as document elements.
+
+There is no standalone parameter model. Strong helper/command tests exist, but no browser-level test spans target picking, placement, driving edit, persistence, rendering, and undo.
+
+### E. Move geometry
+
+```text
+pointer down on selection/node
+  → beginGesture()
+  → pointer move from gesture base
+    → screen delta to mm
+    → snapMoveDelta()
+    → alignmentGuides()
+    → previewGestureFromBase(move/update command)
+  → pointer up
+  → commitGesture() or cancelGesture()
+  → render and eligible project persistence
+  → undo/redo
+```
+
+`previewGestureFromBase` avoids cumulative pointer drift. `moveElements` constructs translated coordinates for each supported native representation inside editor-core; this is a direct coordinate update behind the command/validation boundary.
+
+Behavior differs by representation:
+
+- sketch-specific node/replacement paths invoke sketch solving and can reject conflict/overdefined results;
+- supported positional coincidences propagate through applicable generic `replaceElements` and sketch replacement paths, including supported native moves;
+- native legacy elements do not acquire sketch constraints merely because they moved;
+- legacy explicit connections are metadata and are not universally enforced as solver relations;
+- cancel restores the gesture base;
+- an accepted commit creates one transaction, while rejected/no-op results do not advance history or revision;
+- active previews are excluded from official persistence, while accepted committed state can update mirrors/autosave under normal gates.
+
+Unit tests cover snap-delta selection, command/history semantics, solver behavior, and selected positional propagation. Missing integration coverage includes a full pointer drag with snap + solve + commit/cancel + undo and repeated constrained preview moves.
+
+## B.7 Cross-flow verified discrepancies
+
+1. **Gesture-dependent line model** — click creates a sketch; drag creates a native line.
+2. **Different preview channels** — gesture snapshots, render-only dimension elements, and separate creation overlays coexist.
+3. **Different commit boundaries** — click continuation dispatches accepted segments while its draft remains active; drag gestures commit at pointer-up.
+4. **Snap does not imply one relation type** — a snap may produce metadata, shared topology, only a corrected coordinate/delta, or no persistent relation.
+5. **Direct coordinate updates remain representation-specific** — editor-core contains native geometry writes while sketch paths add solver/replacement semantics.
+6. **Escape semantics differ from rollback** — clearing a web draft does not reverse already accepted editor transactions.
+
+### T3 hypotheses still requiring later classification
+
+- The line representation split may be intentional legacy compatibility or an accidental architectural divergence.
+- External endpoint snap during sketch continuation may be intentionally non-persistent or a missing relation path.
+- Multi-segment click creation may intentionally create multiple undo entries or violate the expected one-gesture transaction rule.
+- Generic transforms beyond the traced move paths may bypass solver guarantees.
+- Current package tests may be sufficient for units but insufficient for user-visible flow compatibility.
+
 ---
 
 # C. Responsibility Map
@@ -523,7 +705,7 @@ Preliminary answer: **the repository contains several split and overlapping resp
 |---|---|---|
 | T1 — Baseline and capability inventory | Complete | Baseline `9434cfdd`; independently verified; committed as `0af8d7a` |
 | T2 — Architecture and sources of truth | Complete | Sections B.4, B.5, C.4, and H; independently verified; committed as `4204f59` |
-| T3 — Required end-to-end flows | In progress | — |
+| T3 — Required end-to-end flows | Evidence complete; independently verified; awaiting human review and commit authorization | Sections B.6 and B.7; no blocking factual inaccuracies |
 | T4 — Responsibility/tool matrices | Pending | — |
 | T5 — Findings and disposition | Pending | — |
 | T6 — Target architecture/contracts | Pending | — |

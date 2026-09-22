@@ -43,8 +43,8 @@ Produce a repository-evidence-based audit of KOND's current parametric sketch ar
 - [ ] **T3 — Trace required end-to-end flows**
   - Trace line creation, rectangle creation, entity snap, dimension creation/editing, and geometry movement through real calls and tests.
   - Record preview/commit, solver, validation, persistence, rendering, and undo behavior.
-  - Status: in progress.
-  - Evidence: pending.
+  - Status: evidence complete; awaiting human review and explicit commit authorization.
+  - Evidence: report sections B.6 and B.7; independent verification corrected the existing-sketch-node line branch, native rectangle E2E coverage, and positional-coincidence propagation scope; final verification found no blocking factual inaccuracies and confirmed product source unchanged.
   - Commit: pending explicit authorization.
 
 - [ ] **T4 — Build the responsibility and tool-coupling matrices**
