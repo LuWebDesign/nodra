@@ -62,16 +62,17 @@ Produce a repository-evidence-based audit of KOND's current parametric sketch ar
   - Evidence: report sections E and F; findings were independently challenged for factual support and severity, then integrated with no CRITICAL/HIGH claims, explicit unproven hypotheses, and no unsupported REMOVE/REPLACE disposition. Final verification found no blockers and confirmed product source unchanged.
   - Commit: `ecdedc97917d6d2fa3f621a0389c866d220d6e72` (`docs(architecture): classify parametric sketch findings`).
 
-- [ ] **T6 — Define target architecture and minimal contracts**
+- [x] **T6 — Define target architecture and minimal contracts**
   - Propose repository-adapted boundaries for snap, inference, relations, automatic relations, dimensions, solver/DOF, and construction geometry.
   - Define sources of truth and compatibility constraints without creating code.
-  - Status: evidence complete; awaiting human review and explicit commit authorization.
+  - Status: complete.
   - Evidence: report sections G, H.4, and I; independent design challenge required target-only construction semantics, native/edge role granularity, existing reference/ID reuse, geometric-vs-fabricable profile separation, future role inheritance, and state normalization. Re-verification found no blocking contradiction, over-modeling, hidden T7 decision, or dependency violation.
-  - Commit: pending explicit authorization.
+  - Commit: `0b4816b5abc7b887e28460137d584abfd0ed1620` (`docs(architecture): define parametric sketch target`).
 
 - [ ] **T7 — Define migration, testing, performance, UX, and rollback plans**
   - Order migration work units by verified dependencies.
   - Define coexistence, acceptance criteria, rollback, schema compatibility, and review-size boundaries.
+  - Status: in progress.
   - Evidence: pending.
   - Commit: pending explicit authorization.
 

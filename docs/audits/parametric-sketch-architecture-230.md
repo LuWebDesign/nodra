@@ -1235,6 +1235,6 @@ Preliminary answer: **the repository contains several split and overlapping resp
 | T3 — Required end-to-end flows | Complete | Sections B.6 and B.7; independently verified; committed as `676b022` |
 | T4 — Responsibility/tool matrices | Complete | Section D; independently verified; committed as `64410c3` |
 | T5 — Findings and disposition | Complete | Sections E and F; independently verified; committed as `ecdedc9` |
-| T6 — Target architecture/contracts | Evidence complete; independently verified; awaiting human review and commit authorization | Sections G, H.4, and I; architecturally ready |
-| T7 — Migration/testing/performance/UX/rollback | Pending | — |
+| T6 — Target architecture/contracts | Complete | Sections G, H.4, and I; independently verified; committed as `0b4816b` |
+| T7 — Migration/testing/performance/UX/rollback | In progress | — |
 | T8 — Review and approval gate | Pending | — |
