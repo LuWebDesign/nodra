@@ -1163,9 +1163,168 @@ This contract projects existing component states, residuals, rank and DOF. It ne
 
 # J. Migration Plan
 
-> Pending T7. No big-bang rewrite will be proposed.
+## J.1 Migration principles
 
-Each migration unit must define objective, scope, exclusions, dependencies, coexistence, tests, acceptance criteria, and rollback.
+- No big-bang rewrite, solver replacement, new package, universal entity, or implicit conversion of relationship forms.
+- Every change begins with behavior-first characterization at the package boundary that owns the invariant.
+- Native entities and the four current relationship/topology forms coexist throughout migration.
+- Schema migration is forward-compatible, not automatically reversible: code can be reverted only while compatible readers tolerate written data. Persisted role writes require explicit compatibility tests and durable revision recovery; no destructive downgrade is claimed.
+- Cleanup occurs only after reader/consumer inventory, old-fixture compatibility, persistence/recovery evidence, and explicit approval.
+
+## J.2 Dependency-ordered work units
+
+### WU1 — Freeze contracts and characterization
+
+- **Objective:** Make current behavior and T6 invariants executable before any behavior/schema change.
+- **Likely surfaces:** domain, validation, geometry, constraints, editor-core/kernel, web interaction/stores, persistence/recovery, renderer, selected E2E tests.
+- **Out of scope:** Product changes, schema writes, solver changes, broad snapshot rewrites.
+- **Dependencies:** None.
+- **Coexistence:** Current behavior remains authoritative; tests characterize rather than replace it.
+- **Tests:** click-sketch versus drag-native Line; native Rectangle; three relationship forms; dimension promotion mismatch; topology remapping; preview/history/persistence boundaries.
+- **Acceptance:** Every later WU names a protected regression contract.
+- **Rollback:** Revert test-only commits.
+- **Review risk:** Low only if split by subsystem.
+
+### WU2 — Schema read compatibility and validation
+
+- **Objective:** Establish target-only `normal | construction` role reads without breaking legacy records.
+- **Likely surfaces:** `packages/domain/src/index.ts`, `packages/validation/src/index.ts`, domain/validation tests, persistence serializers/readers.
+- **Out of scope:** Role-writing UI, renderer styling, fabrication filtering, implicit relation conversion.
+- **Dependencies:** WU1.
+- **Coexistence:** Omitted role reads as `normal` during the compatibility window; strict validation rejects unknown values; legacy v9 fixtures remain readable.
+- **Tests:** legacy documents, malformed roles, mixed native/sketch-edge records, deterministic/idempotent forward migration.
+- **Acceptance:** Readers accept legacy and canonical records; no alternate ID/reference hierarchy appears.
+- **Rollback:** Revert code only while readers still accept canonical role fields; preserve durable revision/export recovery rather than attempting data downgrade.
+- **Review risk:** Medium; schema reader/defaulting is separate from writers.
+
+### WU3 — Atomic role command
+
+- **Objective:** Add editor-core role mutation for native elements and sketch-edge targets without changing topology operations.
+- **Likely surfaces:** domain/validation, `packages/editor-core/src/index.ts`, command/history tests, persistence round-trip tests.
+- **Out of scope:** topology propagation, `REFERENCE` role, native-to-sketch conversion, generic parameter model, DOF persistence.
+- **Dependencies:** WU1–WU2.
+- **Coexistence:** Existing entities/IDs and relation forms remain unchanged; role is additive metadata.
+- **Tests:** role command identity/history/no-op; invalid target/role rejection; role conversion preserves existing references.
+- **Acceptance:** Role mutation is one atomic editor-core command; web never writes role state directly.
+- **Rollback:** Disable role writers/commands while retaining read compatibility; no destructive role-data rewrite.
+- **Review risk:** Medium; command-only slice.
+
+### WU4 — Role topology propagation
+
+- **Objective:** Carry existing role metadata through stable topology mappings after WU3 commands exist.
+- **Likely surfaces:** `packages/editor-core/src/topology.ts`, `trim.ts`, `index.ts`, topology/kernel tests.
+- **Out of scope:** role UI/styling, profile/export filtering, broad tool migration.
+- **Dependencies:** WU3.
+- **Coexistence:** Legacy records normalize to normal; existing references/relationship forms remain unchanged.
+- **Tests:** split-child inheritance; trim survivor retention; path/segment remapping; ambiguous merge diagnostics; deleted-reference atomic rejection.
+- **Acceptance:** Stable mappings, not array order or proximity, determine propagation; failures leave topology and role state unchanged.
+- **Rollback:** Revert propagation adapter independently while retaining role reads/writes.
+- **Review risk:** High; topology-only slice with no UI/schema work.
+
+### WU5 — Derived role consumers and fabricable filtering
+
+- **Objective:** Add editor construction presentation while keeping geometric profile derivation separate from fabricable/export filtering.
+- **Likely surfaces:** geometry profile/topology functions, renderer-svg, export consumers, renderer/geometry tests.
+- **Out of scope:** Renderer rewrite, manufacturing feature model, hiding construction from editor interaction.
+- **Dependencies:** WU2–WU4.
+- **Coexistence:** Geometric/editor profiles remain role-neutral where topology needs them. A new derived fabricable/export filter excludes construction unless converted to normal.
+- **Tests:** construction remains selectable/snappable/constrainable; editor geometry remains correct; fabricable output excludes construction; export/editor styling remain distinct.
+- **Acceptance:** No renderer style becomes role truth; no profile filtering mutates source geometry.
+- **Rollback:** Disable fabricable filter and construction styling while preserving role reads/writes.
+- **Review risk:** Medium; split profile semantics from renderer/export presentation.
+
+### WU6 — Relation and dimension capability commands
+
+- **Objective:** Move persistent relation/dimension eligibility decisions behind editor-core and bounded constraint capabilities.
+- **Likely surfaces:** editor-core, constraints, validation, geometry dimension helpers, App dimension orchestration, targeted tests.
+- **Out of scope:** New solver capabilities, parameter registry, conversion among connections/positional coincidences/constraints.
+- **Dependencies:** WU1; WU2–WU5 only when relations must honor construction roles.
+- **Coexistence:** Non-driving dimensions and native direct-edit behavior remain supported. Existing relation forms remain explicit and non-equivalent.
+- **Tests:** unsupported driving rejection before mutation; native-line angular behavior; supported promotion retaining `ElementId`; atomic solver failure; no-op/history invariants.
+- **Acceptance:** Web presents capability results; editor-core owns accepted persistent mutations.
+- **Rollback:** Revert new command routing while preserving old valid dimension/relation records.
+- **Review risk:** Medium; separate eligibility from layout/value-editor work.
+
+### WU7 — Snap, inference, and automatic-relation lifecycle
+
+- **Objective:** Consolidate candidate → validation → solve → commit behavior without treating every snap as a constraint.
+- **Likely surfaces:** web interaction/App, geometry pure helpers, constraints, editor-core/kernel, targeted tests.
+- **Out of scope:** New package, spatial index, caching, solver rewrite, universal snap persistence.
+- **Dependencies:** WU1 and WU6.
+- **Coexistence:** `connections`, `positionalCoincidences`, solver constraints, and shared sketch nodes stay distinct. Guides/candidates remain transient.
+- **Tests:** candidate-only snap leaves snapshot unchanged; rejected/redundant/conflicting automatic relations persist nothing; accepted operation has atomic history; relation kind is explicit.
+- **Acceptance:** Existing `auto:*` behavior is compatible but follows one observable bounded lifecycle.
+- **Rollback:** Command-level fallback to prior creation paths; retained persisted data remains valid.
+- **Review risk:** High; review contract/core before tool wiring.
+
+### WU8 — Derived definition state
+
+- **Objective:** Project normalized bounded definition state from current solver/component diagnostics without persisting it.
+- **Likely surfaces:** constraints, geometry solver adapters, sketch kernel, renderer state consumers and focused tests.
+- **Out of scope:** Tool migration, Piece-state auto-synchronization, rectangle decomposition, broad interaction rewrite.
+- **Dependencies:** WU1; WU4 for role visibility; WU6–WU7 for relation behavior.
+- **Coexistence:** `defined` normalizes to `fully-defined`; `PieceSnapshot.state` remains independent.
+- **Tests:** aggregate precedence `invalid → conflict → overdefined → underdefined → fully-defined`; derived state has no snapshot mutation; role does not incorrectly remove supported solver visibility.
+- **Acceptance:** Definition state is deterministic, recomputable, and renderer-consumed without becoming persisted truth.
+- **Rollback:** Disable normalized projection while retaining existing component diagnostics.
+- **Review risk:** Medium; mathematical normalization only, no tool UI migration.
+
+### WU9 — Individual tool integration slices
+
+- **Objective:** Migrate explicit tool contracts one representation at a time without removing native entities.
+- **Likely surfaces:** relevant web App/interaction paths, editor-core commands/session, geometry helpers, renderer, and focused tests per tool.
+- **Out of scope:** Definition-state projection, schema changes, persistence migration, broad interaction rewrite.
+- **Dependencies:** WU3–WU8 as applicable to each tool.
+- **Coexistence:** Click Line stays sketch-backed and drag Line native unless a separately approved product decision changes either; native Rectangle remains unchanged.
+- **Tests:** each slice proves representation, preview, commit, relation, solve, cancellation, rollback, and role/reference preservation for its named tool.
+- **Acceptance:** Tool behavior is declared and tested per slice; no cross-tool rewrite.
+- **Rollback:** Revert one tool adapter/slice at a time.
+- **Review risk:** High; chain Line, optional parametric-rectangle operation, circle/arc, spline, then move/edit/trim.
+
+**Optional sub-slice: parametric rectangle operation** — add an explicit editor-core operation that creates a bounded four-edge sketch rectangle only after a separate product decision. Preserve `RectangleElement`; never silently convert it.
+
+### WU10 — Persistence and recovery compatibility gate
+
+- **Objective:** Prove durable/recovery compatibility before browser UX migration or cleanup.
+- **Likely surfaces:** persistence, validation, web stores/App/appPersistence/appRecovery, package tests.
+- **Out of scope:** UX/E2E expansion, performance work, deleting legacy paths.
+- **Dependencies:** WU2–WU9.
+- **Coexistence:** Old records, three relationship forms, native entities, durable Dexie revisions, and recovery mirrors remain supported.
+- **Tests:** durable save/load after role writes; old omitted roles; invalid role rejection; mirror arbitration/stale revisions/failed writes; code-revert reader scenario against newer records.
+- **Acceptance:** Recovery mirror is never described as durable history; readers handle compatible newer records.
+- **Rollback:** Restore prior code path and load last valid revision/export; no automatic persisted-data downgrade.
+- **Review risk:** High; persistence-only compatibility slice.
+
+### WU11 — Focused UX/E2E and performance evidence
+
+- **Objective:** Prove a small critical UX set and measure baseline cost before any optimization.
+- **Likely surfaces:** web interaction/App, renderer, selected E2E and package tests, measurement harnesses if approved.
+- **Out of scope:** persistence migration, cleanup, worker/index/cache implementation.
+- **Dependencies:** WU6–WU10.
+- **Tests:** representative role conversion; construction display; cancel/rollback; one persisted workflow. Measure pointermove, preview solve, commit solve, render cost, and complexity scale.
+- **Acceptance:** Browser evidence remains focused; p50/p95/p99 and render/iteration baselines exist before optimization decisions.
+- **Rollback:** Revert UX slice independently; retain compatible persistence/schema.
+- **Review risk:** Medium; UX and measurement report separate commits.
+
+### WU12 — Cleanup only after migration proof
+
+- **Objective:** Remove duplication only after all consumers, fixtures, readers, and compatibility paths are proven migrated.
+- **Dependencies:** WU1–WU11 and explicit approval.
+- **Acceptance:** no production consumers; old fixtures load; topology/reference, undo/redo, persistence/recovery suites pass; relation forms still have explicit policy; separate review approves behavior removal.
+- **Rollback:** Revert cleanup independently; retain schemas/adapters.
+- **Review risk:** Medium; never mix with migration behavior.
+
+## J.3 Implementation order and gates
+
+```text
+Gate A — approve contracts/characterization
+WU1 → WU2 → WU3 → WU4 → WU5 → WU6 → WU7 → WU8 → WU9 → WU10 → WU11 → WU12
+```
+
+- **Gate B:** approve each schema-writing, topology-role, and solver-adjacent slice.
+- **Gate C:** approve measured performance results before optimization.
+- **Gate D:** approve compatibility/recovery and cleanup evidence before removal.
+- No implementation begins until the completed audit is explicitly accepted.
 
 ---
 
@@ -1191,26 +1350,67 @@ Current E2E coverage is workflow/smoke evidence, not a replacement for mathemati
 
 ## K.2 Target strategy
 
-> Pending T7 after current behavior and gaps are fully traced.
+| Layer | Required evidence |
+|---|---|
+| Domain/validation | role defaults, malformed values, legacy/new schema fixtures, stable references, deterministic forward migration |
+| Geometry | role-neutral topology/profile derivation, circle/arc/spline/trim mapping, fabricable filter as separate derived output |
+| Constraints/solver | capability eligibility, redundancy/conflict, rank/DOF, aggregate definition precedence |
+| Editor-core | atomic commands, rollback, history/no-op, role propagation, relation commit, dimension promotion |
+| Persistence/recovery | legacy load, canonical round trip, stale revisions, mirror arbitration, failed writes, code-revert reader compatibility |
+| Web interaction | gesture representation, transient snap/inference, cancellation, selected/hovered and construction feedback |
+| Renderer/export | accepted state projection, construction styling, diagnostics, editor-vs-fabricable filtering |
+| E2E | a small set of critical approved flows; never used as the mathematical solver proof |
+
+All implementation slices follow strict behavior-first work: encode a failing or characterizing focused test, implement the smallest change, verify the relevant package, then run the repository gates at the approved integration boundary.
+
+Repository quality gates remain, in order:
+
+```text
+corepack pnpm lint
+corepack pnpm typecheck
+corepack pnpm test
+corepack pnpm test:e2e
+corepack pnpm build
+```
+
+No verification command was run during this audit-planning task.
 
 ---
 
 # L. Risks
 
-## Baseline risks to investigate
+## L.1 Compatibility and rollback
 
-These are investigation targets, not confirmed failures:
+- **Forward-only schema migration:** current migrations do not downgrade. Mitigation: optional/default role reads, forward-compatible readers, revision/export recovery, explicit code-revert tests, and no destructive rewrite.
+- **Role topology propagation:** current role metadata does not exist. Mitigation: add stable-mapping inheritance only in atomic topology commands; ambiguous merge/remap rejects diagnostically.
+- **Relationship semantic loss:** connections, positional coincidences, solver constraints, and shared nodes differ. Mitigation: no implicit conversion and relation-kind-specific commands.
+- **Reference breakage:** split/trim/path replacements can invalidate dependent dimensions/relations. Mitigation: explicit topology maps, atomic validation, and regression fixtures.
+- **Definition/piece-state drift:** DOF is derived and piece lifecycle persisted. Mitigation: retain independence until an explicit product rule and test proves synchronization.
 
-- divergence between persisted geometry and solved/derived geometry;
-- ambiguity between explicit connections, positional coincidences, and solver constraints;
-- duplicate automatic relations or over-definition;
-- preview/commit disagreement;
-- topology edits invalidating stable dimension/constraint references;
-- incomplete migration of future construction roles;
-- mismatch between component DOF and persisted piece state;
-- inconsistent dimension-driving semantics across entity types;
-- pointer-move cost from repeated snap, inference, solve, and React rendering;
-- export and profile behavior if construction geometry is introduced.
+## L.2 UX and behavior
+
+- **Preview/commit divergence:** multiple preview channels exist. Mitigation: immutable preview, atomic commit, critical flow integration tests, and visible rollback messaging.
+- **Gesture ambiguity:** click Line and drag Line differ. Mitigation: preserve behavior initially; declare representation and cancellation semantics per tool before migration.
+- **Construction ambiguity:** editor geometry and fabricable output differ. Mitigation: visually distinguish construction, retain interaction, and use a separate fabricable/export filter.
+- **Unsupported relation/dimension promotion:** capability is bounded. Mitigation: reject before mutation with explicit diagnostics; preserve valid non-driving annotations.
+- **Spanish UI copy:** UI changes risk language inconsistency. Mitigation: preserve existing Spanish copy in each web slice.
+
+## L.3 Performance and review workload
+
+- **Pointer-move cost:** snap → inference → preview → solve/render may regress. Mitigation: measure p50/p95/p99 latency, candidate/proposal counts, iterations, render counts, and document complexity before optimization.
+- **Premature optimization:** workers, spatial indexes, caches, and debounce redesign lack evidence. Mitigation: forbid them until a measured regression and separate approval.
+- **Oversized review:** schema, topology, tools, renderer, and persistence can overwhelm one PR. Mitigation: WU chain; never combine schema writes, tool migration, and cleanup.
+
+## L.4 UX contract
+
+- **Snap:** candidate marker only; no persistence before confirmed command.
+- **Inference:** guides/proposals are feedback, not model truth.
+- **Automatic relation indicator:** show accepted or clearly proposed state; rejected proposal disappears and persists nothing.
+- **Construction:** visually distinct, selectable, snappable, constrainable, dimensionable, and solver-visible where supported.
+- **Selected/hovered:** transient UI only.
+- **Definition:** `underdefined`, `fully-defined`, `overdefined`, `conflict`, and `invalid` are derived states.
+- **Conflict:** report rejected solve/commit and preserve the prior document.
+- **Fabricable export:** construction exclusion belongs to the separate fabricable filter, not editor geometry.
 
 ---
 
@@ -1236,5 +1436,5 @@ Preliminary answer: **the repository contains several split and overlapping resp
 | T4 — Responsibility/tool matrices | Complete | Section D; independently verified; committed as `64410c3` |
 | T5 — Findings and disposition | Complete | Sections E and F; independently verified; committed as `ecdedc9` |
 | T6 — Target architecture/contracts | Complete | Sections G, H.4, and I; independently verified; committed as `0b4816b` |
-| T7 — Migration/testing/performance/UX/rollback | In progress | — |
+| T7 — Migration/testing/performance/UX/rollback | Evidence complete; independently verified; awaiting human review and commit authorization | Sections J, K.2, and L; no blocking factual inaccuracies |
 | T8 — Review and approval gate | Pending | — |

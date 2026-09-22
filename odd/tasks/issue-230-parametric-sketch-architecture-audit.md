@@ -72,8 +72,8 @@ Produce a repository-evidence-based audit of KOND's current parametric sketch ar
 - [ ] **T7 — Define migration, testing, performance, UX, and rollback plans**
   - Order migration work units by verified dependencies.
   - Define coexistence, acceptance criteria, rollback, schema compatibility, and review-size boundaries.
-  - Status: in progress.
-  - Evidence: pending.
+  - Status: evidence complete; awaiting human review and explicit commit authorization.
+  - Evidence: report sections J, K.2, and L; independent review corrected forward-only migration language and split role command/topology propagation, derived definition/tool migration, persistence/recovery, UX/performance, and cleanup into independently gated slices. Final verification found no blockers and confirmed product source unchanged.
   - Commit: pending explicit authorization.
 
 - [ ] **T8 — Review and approval gate**
