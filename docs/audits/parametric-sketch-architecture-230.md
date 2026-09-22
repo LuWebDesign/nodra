@@ -522,8 +522,8 @@ Preliminary answer: **the repository contains several split and overlapping resp
 | Task | Status | Evidence |
 |---|---|---|
 | T1 — Baseline and capability inventory | Complete | Baseline `9434cfdd`; independently verified; committed as `0af8d7a` |
-| T2 — Architecture and sources of truth | Evidence complete; independently verified; awaiting human review and commit authorization | Sections B.4, B.5, C.4, and H; no blocking factual inaccuracies |
-| T3 — Required end-to-end flows | Pending | — |
+| T2 — Architecture and sources of truth | Complete | Sections B.4, B.5, C.4, and H; independently verified; committed as `4204f59` |
+| T3 — Required end-to-end flows | In progress | — |
 | T4 — Responsibility/tool matrices | Pending | — |
 | T5 — Findings and disposition | Pending | — |
 | T6 — Target architecture/contracts | Pending | — |

@@ -33,16 +33,17 @@ Produce a repository-evidence-based audit of KOND's current parametric sketch ar
   - Status: complete.
   - Commit: `0af8d7a16cb8be02ea08e89ddb2bc6439614f3d8` (`docs(architecture): establish issue 230 audit baseline`).
 
-- [ ] **T2 — Map current architecture and sources of truth**
+- [x] **T2 — Map current architecture and sources of truth**
   - Identify ownership of geometry, constraints, dimensions, solved state, selection, interaction state, history, rendering, and persistence.
   - Produce a current-state dependency/call-flow diagram.
-  - Status: evidence complete; awaiting human review and explicit commit authorization.
+  - Status: complete.
   - Evidence: report sections B.4, B.5, C.4, and H; three independent verification passes corrected call ordering, rollback ownership, topology-path scope, and project/document preservation wording; final verification found no blockers and `git diff --check` passed.
-  - Commit: pending explicit authorization.
+  - Commit: `4204f599cfc1606c6a5bf630b59880e81a98b30f` (`docs(architecture): map current sketch state ownership`).
 
 - [ ] **T3 — Trace required end-to-end flows**
   - Trace line creation, rectangle creation, entity snap, dimension creation/editing, and geometry movement through real calls and tests.
   - Record preview/commit, solver, validation, persistence, rendering, and undo behavior.
+  - Status: in progress.
   - Evidence: pending.
   - Commit: pending explicit authorization.
 
