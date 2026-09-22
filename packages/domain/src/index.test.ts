@@ -26,6 +26,14 @@ describe("domain contracts", () => {
     const arc = { type: "arc" as const, id: elementId("arc-1"), layerId: layerId("design"), center: { x: 10, y: 10 }, radius: 5, startAngle: 0, endAngle: Math.PI, direction: "counterclockwise" as const, style: { stroke: "#000", strokeWidth: 0.2 } };
     expect(withElements(createDocument("doc-1", [{ id: layerId("design"), name: "Design", visible: true, order: 0 }]), [arc]).elements).toEqual([arc]);
   });
+  it("supports independently persisted geometry roles on native elements and sketch edges", () => {
+    const role: import("./index.js").GeometryRole = "construction";
+    const element: import("./index.js").ElementBase = { role };
+    const edge: import("./index.js").SketchEdge = { id: "edge", startNodeId: "a", endNodeId: "b", role };
+    expect(element.role).toBe("construction");
+    expect(edge.role).toBe("construction");
+  });
+
   it("accepts spline elements as native document elements", () => {
     const layer = { id: layerId("design"), name: "Design", visible: true, order: 0 } as const;
     const spline = { type: "spline" as const, id: elementId("spline-1"), layerId: layer.id, nodes: [{ id: "a", anchor: { x: 0, y: 0 }, continuity: "smooth" as const }, { id: "b", anchor: { x: 10, y: 0 }, continuity: "smooth" as const }], closed: false, style: { stroke: "#000", strokeWidth: 0.2 } };

@@ -4,13 +4,14 @@ export type SchemaVersion = typeof CURRENT_SCHEMA_VERSION;
 export type DocumentId = string & { readonly __brand: "DocumentId" };
 export type LayerId = string & { readonly __brand: "LayerId" };
 export type ElementId = string & { readonly __brand: "ElementId" };
+export type GeometryRole = "normal" | "construction";
 export type FeatureId = string & { readonly __brand: "FeatureId" };
 export type PageId = string & { readonly __brand: "PageId" };
 export type PieceId = string & { readonly __brand: "PieceId" };
 export type Revision = number & { readonly __brand: "Revision" };
 
 export interface PointMm { readonly x: number; readonly y: number }
-export interface ElementBase { readonly pieceId?: PieceId }
+export interface ElementBase { readonly pieceId?: PieceId; readonly role?: GeometryRole }
 export interface SizeMm { readonly width: number; readonly height: number }
 export interface Transform {
   readonly position: PointMm;
@@ -104,7 +105,7 @@ export interface LineElement {
   readonly operation?: OperationMetadata;
 }
 export interface SketchNode { readonly id: string; readonly point: PointMm }
-export interface SketchEdge { readonly id: string; readonly startNodeId: string; readonly endNodeId: string }
+export interface SketchEdge { readonly id: string; readonly startNodeId: string; readonly endNodeId: string; readonly role?: GeometryRole }
 export type SketchConstraintKind = "horizontal" | "vertical" | "coincident" | "parallel" | "perpendicular" | "equal" | "distance-horizontal" | "distance-vertical" | "distance" | "angle" | "fixed";
 export interface SketchPointReference { readonly elementId: ElementId; readonly nodeId: string }
 export interface SketchEdgeReference { readonly elementId: ElementId; readonly edgeId: string }

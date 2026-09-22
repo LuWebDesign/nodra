@@ -91,7 +91,21 @@ Produce a repository-evidence-based audit of KOND's current parametric sketch ar
   - Out of scope: product behavior, schema, solver changes, role writers, WU2+.
   - Status: complete.
   - Evidence: `packages/editor-core/src/index.test.ts` characterizes non-driving dimension identity/references and repeated same-value numerical drift/history; `tests/e2e/project-workflow.spec.ts` proves canceled pre-commit line draft is absent after reload and committed line IDs persist. Independent verification: 198/198 editor-core tests and 3/3 targeted Playwright tests passed. Click-vs-drag representation remains package-evidence-only because no stable public browser selector exists.
-  - Commit: pending WU1 evidence commit.
+  - Commit: `ad2c13caabd8cfa1393c5904c957cad0fc123e97` (`test(editor): characterize sketch dimension boundaries`).
+
+- [x] **WU2 — Schema read compatibility and validation**
+  - Authorization: explicitly approved; this was the only newly authorized WU.
+  - Scope: forward-compatible read/default behavior and validation for target `normal | construction` roles, with legacy records normalized to `normal`.
+  - Out of scope: role writer/commands, UI, renderer/export, topology propagation, schema downgrade, WU3+.
+  - Status: complete.
+  - Evidence: all native schemas (including dimension/path/spline) and individual sketch edges accept optional roles, default omissions to `normal`, and reject invalid values. Legacy v9 migration, serialization and persistence round trips pass. Independent verification: 76/76 focused tests, typecheck, and lint passed.
+  - Commit: pending WU2 commit.
+
+- [ ] **WU3 — Atomic role command**
+  - Authorization: not granted.
+  - Scope after approval: editor-core command-only role mutation for native elements and sketch-edge targets.
+  - Out of scope: topology propagation, UI, renderer/export, schema changes, WU4+.
+  - Status: blocked pending explicit authorization.
 
 ## Deliverable
 

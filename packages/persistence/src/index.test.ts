@@ -181,7 +181,17 @@ describe("DexieProjectRepository", () => {
         }
       });
 
-      it("round-trips native arc elements through project persistence", async () => {
+      it("round-trips mixed native and sketch-edge geometry roles through project persistence", async () => {
+    db = await repository();
+    const base = document();
+    const sketch = { type: "sketch" as const, id: elementId("sketch-roles"), layerId: layerId("layer-1"), nodes: [{ id: "a", point: { x: 0, y: 0 } }, { id: "b", point: { x: 10, y: 0 } }, { id: "c", point: { x: 20, y: 0 } }], edges: [{ id: "normal", startNodeId: "a", endNodeId: "b" }, { id: "construction", startNodeId: "b", endNodeId: "c", role: "construction" as const }], style: { stroke: "#000", strokeWidth: 1 } };
+    const source = { ...base, elements: [{ type: "line" as const, id: elementId("construction-line"), layerId: layerId("layer-1"), start: { x: 0, y: 0 }, end: { x: 10, y: 0 }, rotation: 0, role: "construction" as const, style: { stroke: "#000", strokeWidth: 1 } }, sketch] };
+    expect((await db.saveProject(metadata, source)).ok).toBe(true);
+    const recovered = await db.getProject(metadata.id);
+    expect(recovered.ok && recovered.revision.document).toMatchObject({ elements: [{ role: "construction" }, { role: "normal", edges: [{ role: "normal" }, { role: "construction" }] }] });
+  });
+
+  it("round-trips native arc elements through project persistence", async () => {
     db = await repository();
     const source = { ...document(), elements: [{ type: "arc" as const, id: elementId("arc-1"), layerId: layerId("layer-1"), center: { x: 20, y: 20 }, radius: 10, startAngle: 0, endAngle: Math.PI / 2, direction: "clockwise" as const, style: { stroke: "#000", strokeWidth: 1 } }] };
     expect((await db.saveProject(metadata, source)).ok).toBe(true);
