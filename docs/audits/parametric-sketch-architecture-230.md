@@ -130,6 +130,123 @@ This is a baseline diagram, not yet the detailed call graph required by issue #2
 | Durable browser repository | `@nodra/persistence` | Dexie-backed repository |
 | Recovery/autosave orchestration | `apps/web` | `appPersistence.ts`, `appRecovery.ts`, `App.tsx` |
 
+## B.4 Current sources of truth
+
+| State | Canonical current owner | Lifecycle | Writers and readers | Overlap or limitation |
+|---|---|---|---|---|
+| Persisted geometry | Domain `Element` records inside `DocumentSnapshot` / `ProjectSnapshot` | Persisted | editor-core commands write; geometry, constraints, renderer, validation, and persistence read | Active editor documents and project pages are synchronized through `documentFromProject` / `projectFromDocument`. |
+| Sketch topology intent | `SketchElement.nodes` and `.edges` | Persisted | editor-core topology commands write; solver, profiles, dimensions, renderer, and web read | Derived curve/profile/mixed-topology graphs coexist but are not persisted truth. |
+| Local constraints | `SketchElement.constraints` | Persisted intent | editor-core relation commands write; geometry/constraints/kernel read | Solved coordinates are derived and can later be committed into snapshots. |
+| Document constraints | `DocumentSnapshot.constraints` | Persisted intent | editor-core and web global-constraint wrappers write; constraints/kernel/renderer read | Uses the same domain constraint shape as local constraints; normalization reconstructs scope. |
+| Explicit connections | `DocumentSnapshot.connections` | Persisted metadata | confirmed creation commits write; editor-core preservation, validation, and persistence read | Separate from positional coincidences and solver `coincident` constraints. |
+| Positional coincidences | `DocumentSnapshot.positionalCoincidences` | Persisted enforced relation | positional commands write; editor-core replacement/transform paths enforce | Geometric meaning overlaps with explicit connections and solver coincidence. |
+| Dimensions | `DimensionElement` | Persisted annotation and optional driving metadata | web creates; editor-core updates; geometry, renderer, hit testing, and inspector read | Display geometry is derived; references retain stable IDs plus legacy index compatibility. |
+| Driving values | Constraint values and dimension/circle driving fields | Persisted values/flags | constraint and dimension commands write; solvers and inspector read | No standalone parameter registry; contracts differ by sketch, circle, and dimension path. |
+| Solved geometry | Solver output; committed node coordinates after accepted commands | Derived, then sometimes committed | geometry/constraints/kernel derive; editor-core replacement paths commit accepted coordinates | Persisted coordinates represent the latest accepted result while constraints retain design intent. |
+| Residuals, diagnostics, DOF | constraints functions and kernel recomputation results | Derived/transient | solver functions produce; renderer, web, and commands consume | Geometry status, component state, and piece lifecycle state are separate systems. |
+| Selection | `EditorState.selection` for editor commands | Transient | editor-core selection commands and web handlers write; tools/inspector/rendering read | `useSelectionStore` also carries narrower UI selection context. |
+| Tool and gesture state | `App.tsx`, `interaction.ts`, Zustand stores, editor gesture state | Transient | pointer/keyboard handlers write; preview, overlays, and commands read | State is split across React state, refs, Zustand, and editor-core gestures. |
+| Preview state | `EditorState.gesture` plus tool-specific drafts/guides | Transient | gesture APIs and React setters write; App overlays/render input read | Several preview channels coexist; cancel must restore the gesture base. |
+| Undo/redo | `EditorState.undo` / `.redo`, plus sketch-session checkpoints | Transient runtime history | `dispatch`, gesture commit, and sketch-session reducer write; UI commands read | Sketch sessions establish a second bounded history/checkpoint boundary. |
+| Validation | `@nodra/validation` schemas and reference checks | Boundary computation | editor-core, persistence, renderer, and recovery invoke | Kernel, geometry, and constraints add narrower admissibility and rollback rules. |
+| Rendering | renderer-svg projection functions | Derived output | no model writer; web supplies snapshots and consumes SVG | Constraint state and profile geometry are recomputed rather than read from a persisted solved-state cache. |
+| Durable persistence | `DexieProjectRepository` revision records | Durable | web save queue/repository writes; startup/dashboard read | Stores project revisions, not editor undo stacks. |
+| Recovery mirrors | `ProjectMirror` in localStorage | Best-effort recovery copy | web effects write; startup arbitration reads | Duplicates project snapshots but is explicitly not durable history. |
+| Project/piece status | `PieceSnapshot.state` | Persisted lifecycle metadata | dashboard/sketch-association flows write; web/persistence read | Coexists with derived constraint states and has no verified synchronization contract with component DOF. |
+
+## B.5 Current call and data flows
+
+### Runtime composition
+
+```text
+Pointer / keyboard
+  → App.tsx transient state and handlers
+    → interaction.ts picking, snapping, and visual guides
+    → editor-core command / gesture
+      → command.apply()
+      → sketch-kernel recomputation only on sketch-specific paths
+        → solveConstraintComponents()
+        → solveSketchConstraints()
+        → residuals / component state / rank / DOF / diagnostics
+        → profile and mixed-topology derivation
+      → final command-result document validation
+      → accepted EditorState document + selection + history
+
+Conditional App consumers of accepted state
+  ├→ projectFromDocument() when project synchronization is required
+  ├→ recovery mirror and durable-save scheduling only for eligible committed state
+  └→ renderSvg() / profile overlays from current document or explicit preview input
+```
+
+### Sketch mutation and topology
+
+```text
+Sketch-specific creation/replacement path
+  → createSketchLine / appendSketchEdge / sketch replacement
+    → enforce positional coincidences where applicable
+    → remove dangling document constraints where applicable
+    → recompute sketch kernel
+      → validate candidate
+      → solve local/document constraints
+      → derive profiles/topology
+      → return rollback result on invalid/conflicting state
+    → editor-core rejects rollback or commits accepted elements/revision
+  → dispatch()
+    → transaction(before, after, selection) only for an accepted change
+
+Generic topology command
+  → replaceTopology()
+    → reference remap / cleanup / validation
+    → accepted document or no-op/error
+  (no automatic sketch-kernel recomputation unless routed through a sketch-specific path)
+```
+
+### Project/document synchronization
+
+```text
+ProjectSnapshot pages + piece ownership
+  → documentFromProject()
+  → active editor DocumentSnapshot
+  → editor-core commands
+  → projectFromDocument()
+  → updated ProjectSnapshot
+    → unrelated pages remain outside the active-document replacement
+    → piece-owned element association is recalculated for the active scope
+    → feature references are preserved only when their ownership/reference conditions remain valid
+```
+
+### Persistence and recovery
+
+```text
+Committed ProjectSnapshot
+  ├→ saveProjectMirror() → localStorage best-effort copy
+  └→ DexieProjectRepository.saveProject()
+       → validate project/document
+       → identity + revision checks
+       → durable revision transaction
+
+Startup
+  → load newest valid Dexie revision
+  → load and validate ProjectMirror
+  → selectRecoveredProject() by revision and savedAt
+  → documentFromProject() → editor state
+```
+
+### Rendering
+
+```text
+Validated DocumentSnapshot
+  → renderSvg()
+    → visible-layer filtering
+    → constraint component states
+    → dimension geometry
+    → escaped SVG projection
+
+Explicit piece/selection profile scope
+  → sketchProfileResult()
+  → renderSketchProfileSvg()
+```
+
 ---
 
 # C. Responsibility Map
@@ -197,6 +314,31 @@ Key evidence:
 
 `COUPLED` in this table is an audit observation, not automatically a defect. Some cross-package orchestration is expected. T2–T5 must determine whether each coupling is intentional, stable, duplicated, or behaviorally harmful.
 
+## C.4 Confirmed ownership overlaps
+
+The following overlaps are verified architectural facts; their severity and behavioral consequences remain pending T3–T5.
+
+1. **Constraint representation** — local constraints live on sketches; document constraints live on the document; both use compatible domain shapes and are merged by normalization. Web global-constraint wrappers add solve-and-apply orchestration.
+2. **Coincidence and connection semantics** — explicit connections, positional coincidences, and solver `coincident` constraints are persisted under separate contracts with partially overlapping geometric meaning.
+3. **Solved geometry and intent** — constraints persist design intent; solver output is derived; accepted editor-core paths can commit solved coordinates into the next document snapshot.
+4. **Topology representations** — persisted sketch nodes/edges, curve adapters/pieces, profile loops/regions, and kernel mixed topology coexist at different projection stages.
+5. **Definition status** — constraint components expose parametric state and DOF, while pieces persist a separate lifecycle state; no synchronization contract is currently verified.
+6. **Interaction state** — editor-core owns transactional gesture semantics, while React state, refs, and Zustand own tool-specific drafts, hover, guides, modes, viewport, and persistence status.
+7. **Validation layers** — validation owns schema/reference validity; command paths own cleanup; `recomputeSketchKernel` determines rollback and editor-core rejects that result without recording a transaction; geometry, constraints, and renderer impose narrower admissibility rules.
+8. **Persistence representations** — Dexie revisions are durable; localStorage mirrors are best-effort recovery copies governed by web arbitration.
+9. **Dimensions and parameters** — dimension driving metadata, circle constraint values, and sketch constraint values exist without one general parameter source.
+
+### Unresolved T2 hypotheses
+
+- Persisted solved coordinates may diverge from persisted constraint intent on mutation paths not yet traced.
+- Piece lifecycle state may be deliberately coarse or may become stale relative to component DOF.
+- The three coincidence/connection representations may be intentional product semantics or accidental duplication.
+- Multiple topology projections may be valid boundaries or may produce inconsistent edits.
+- App-level interaction state may exceed composition responsibility, but file size or state count alone does not prove a defect.
+- Dimension-driving coverage may be intentionally bounded rather than architecturally inconsistent.
+- Preview solving may affect pointer performance; no performance measurement has yet been taken.
+- Project/document conversion preservation requires dedicated cross-page and cross-piece evidence.
+
 ---
 
 # D. Tool Coupling Matrix
@@ -252,17 +394,44 @@ No component will be marked `REMOVE` without verified consumers, tests, responsi
 
 # H. Data Model
 
-> Pending T2, T3, and T6.
+## H.1 Current persisted model
 
-The target section must address:
+The current parametric model stores geometry and intent together in validated snapshots:
 
-- geometry entities and stable references;
-- local and document constraints;
-- dimensions and parameters;
-- construction role semantics;
-- solved geometry versus persisted intent;
-- DOF and sketch state;
-- schema migration and compatibility.
+- sketch geometry is a stable node/edge graph;
+- local constraints are owned by each sketch;
+- document constraints connect references at document scope;
+- explicit connections and positional coincidences are separate persisted relationship records;
+- dimensions are elements with stable references and optional driving metadata;
+- constraint values are embedded in constraints rather than a general parameter registry;
+- accepted solved coordinates can become the next persisted geometry snapshot;
+- project pieces persist a coarse lifecycle state independently of solver component state.
+
+## H.2 Current derived model
+
+The following are recomputed and are not independent persisted truth:
+
+- solved previews;
+- residuals and diagnostics;
+- connected constraint components;
+- Jacobian rank and degrees of freedom;
+- component definition/conflict state;
+- curve topology, mixed topology, contours, loops, and profile regions;
+- dimension display geometry;
+- SVG output.
+
+## H.3 Current transient model
+
+Selection, gesture bases, pointer interaction, drafts, hover, guides, viewport, sketch-session checkpoints, and undo/redo stacks remain runtime state. They do not belong to domain snapshots or durable project history.
+
+## H.4 Missing or unresolved current contracts
+
+- No construction-geometry role exists.
+- No unified parameter entity exists.
+- No verified synchronization exists between DOF/component state and `PieceSnapshot.state`.
+- Coincidence meaning is distributed across three persisted relation forms.
+- Stable reference migration is supported, but topology-changing flow evidence remains for T3.
+- The target model and compatibility strategy remain deferred to T6 and T7.
 
 ---
 
@@ -353,7 +522,7 @@ Preliminary answer: **the repository contains several split and overlapping resp
 | Task | Status | Evidence |
 |---|---|---|
 | T1 — Baseline and capability inventory | Complete | Baseline `9434cfdd`; independently verified; committed as `0af8d7a` |
-| T2 — Architecture and sources of truth | In progress | — |
+| T2 — Architecture and sources of truth | Evidence complete; independently verified; awaiting human review and commit authorization | Sections B.4, B.5, C.4, and H; no blocking factual inaccuracies |
 | T3 — Required end-to-end flows | Pending | — |
 | T4 — Responsibility/tool matrices | Pending | — |
 | T5 — Findings and disposition | Pending | — |

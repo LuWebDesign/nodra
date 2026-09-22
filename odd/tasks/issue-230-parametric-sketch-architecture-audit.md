@@ -36,7 +36,8 @@ Produce a repository-evidence-based audit of KOND's current parametric sketch ar
 - [ ] **T2 — Map current architecture and sources of truth**
   - Identify ownership of geometry, constraints, dimensions, solved state, selection, interaction state, history, rendering, and persistence.
   - Produce a current-state dependency/call-flow diagram.
-  - Evidence: pending.
+  - Status: evidence complete; awaiting human review and explicit commit authorization.
+  - Evidence: report sections B.4, B.5, C.4, and H; three independent verification passes corrected call ordering, rollback ownership, topology-path scope, and project/document preservation wording; final verification found no blockers and `git diff --check` passed.
   - Commit: pending explicit authorization.
 
 - [ ] **T3 — Trace required end-to-end flows**
