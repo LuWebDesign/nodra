@@ -1,5 +1,6 @@
 import {
   type DocumentSnapshot,
+  type GeometryRole,
   type Element,
   type ElementId,
   type FeatureId,
@@ -158,7 +159,7 @@ const enforcePositionalCoincidences = (document: DocumentSnapshot, proposed: rea
 type IntersectSource = Extract<Element, { readonly type: "rectangle" | "circle" | "ellipse" | "contour" }>;
 const stableJson = (value: unknown): string => JSON.stringify(value, (_, candidate: unknown) => candidate && typeof candidate === "object" && !Array.isArray(candidate) ? Object.fromEntries(Object.entries(candidate).sort(([first], [second]) => first.localeCompare(second))) : candidate);
 const isIntersectSource = (element: Element | undefined): element is IntersectSource => element?.type === "rectangle" || element?.type === "circle" || element?.type === "ellipse" || element?.type === "contour";
-const intersectOutput = (feature: ParametricFeature, sources: readonly [IntersectSource, IntersectSource]): ContourElement => {
+const intersectOutput = (feature: ParametricFeature, sources: readonly [IntersectSource, IntersectSource]): ContourElement & { readonly role: "normal" } => {
   const contours = shapeResultContours("intersection", sources);
   if (contours.length === 0) throw new Error("Intersect produced an empty result");
   const points = contours.flatMap((contour) => contour.points);
@@ -168,7 +169,7 @@ const intersectOutput = (feature: ParametricFeature, sources: readonly [Intersec
     type: "contour", id: feature.outputs[0]!.elementId, layerId: first.layerId,
     position: { x: Math.min(...xs), y: Math.min(...ys) },
     size: { width: Math.max(...xs) - Math.min(...xs), height: Math.max(...ys) - Math.min(...ys) },
-    contours, fillRule: "evenodd", rotation: 0, flipX: false, flipY: false, style: first.style,
+    contours, fillRule: "evenodd", rotation: 0, flipX: false, flipY: false, role: "normal", style: first.style,
     ...(first.operation ? { operation: first.operation } : {}),
     ...(first.pieceId ? { pieceId: first.pieceId } : {}),
   };
@@ -358,6 +359,38 @@ const updateArcRadius = (document: DocumentSnapshot, target: ArcElement, radius:
       }
       return replaceElements(document, document.elements.map((element) => element.type === "arc" ? replacements.get(element.id) ?? element : element));
 };
+
+export type GeometryRoleTarget =
+  | { readonly kind: "element"; readonly elementId: ElementId }
+  | { readonly kind: "sketch-edge"; readonly elementId: ElementId; readonly edgeId: string };
+
+const isGeometryRole = (value: unknown): value is GeometryRole => value === "normal" || value === "construction";
+const validatedGeometryRoleResult = (document: DocumentSnapshot): CommandResult => {
+  const checked = validateDocument(document);
+  return checked.success
+    ? { success: true, document }
+    : { success: false, error: checked.error, diagnostics: [{ kind: "validation", code: "invalid-document", message: checked.error }] };
+};
+
+/** Changes only the addressed native element or sketch edge role. */
+export const setGeometryRole = (target: GeometryRoleTarget, role: GeometryRole): EditorCommand => ({
+  name: `geometry-role:set:${target.kind}:${target.elementId}`,
+  apply: (document) => {
+    if (!isGeometryRole(role)) return { success: false, error: "Invalid geometry role" };
+    const element = document.elements.find((candidate) => candidate.id === target.elementId);
+    if (!element) return { success: false, error: `Element not found: ${target.elementId}` };
+    if (target.kind === "element") {
+      if ((element.role ?? "normal") === role) return { success: true, document };
+      return validatedGeometryRoleResult(withElements(document, document.elements.map((candidate) => candidate.id === element.id ? { ...candidate, role } : candidate)));
+    }
+    if (element.type !== "sketch") return { success: false, error: "Sketch edge target requires a sketch element" };
+    const edge = element.edges.find((candidate) => candidate.id === target.edgeId);
+    if (!edge) return { success: false, error: `Sketch edge not found: ${target.edgeId}` };
+    if ((edge.role ?? "normal") === role) return { success: true, document };
+    const updatedSketch: SketchElement = { ...element, edges: element.edges.map((candidate) => candidate.id === edge.id ? { ...candidate, role } : candidate) };
+    return validatedGeometryRoleResult(withElements(document, document.elements.map((candidate) => candidate.id === element.id ? updatedSketch : candidate)));
+  },
+});
 
 export const createElement = (element: Element, connections: readonly ExplicitConnection[] = []): EditorCommand => ({
   name: `create:${element.type}`,

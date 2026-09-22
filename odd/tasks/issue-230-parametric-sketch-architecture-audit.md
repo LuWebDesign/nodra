@@ -101,10 +101,18 @@ Produce a repository-evidence-based audit of KOND's current parametric sketch ar
   - Evidence: all native schemas (including dimension/path/spline) and individual sketch edges accept optional roles, default omissions to `normal`, and reject invalid values. Legacy v9 migration, serialization and persistence round trips pass. Independent verification: 76/76 focused tests, typecheck, and lint passed.
   - Commit: pending WU2 commit.
 
-- [ ] **WU3 — Atomic role command**
-  - Authorization: not granted.
-  - Scope after approval: editor-core command-only role mutation for native elements and sketch-edge targets.
+- [x] **WU3 — Atomic role command**
+  - Authorization: explicitly approved; this was the only newly authorized WU.
+  - Scope: editor-core command-only role mutation for native elements and sketch-edge targets.
   - Out of scope: topology propagation, UI, renderer/export, schema changes, WU4+.
+  - Status: complete.
+  - Evidence: `setGeometryRole` is atomic for native/edge targets, preserves same-role identity and history no-ops, and supports undo/redo. Tests prove target isolation and preservation of geometry, nodes, constraints, dimensions/references, connections, positional coincidences, and parent/sibling roles. Canonical `normal` intersect output now preserves up-to-date rebuild no-op identity/history. Independent verification: 202/202 editor-core tests, typecheck, and lint passed.
+  - Commit: pending WU3 commit.
+
+- [ ] **WU4 — Topology role propagation**
+  - Authorization: not granted.
+  - Scope after approval: role propagation/remapping through split, trim, cut, and topology replacement.
+  - Out of scope: UI, renderer/export, automatic relations, WU5+.
   - Status: blocked pending explicit authorization.
 
 ## Deliverable

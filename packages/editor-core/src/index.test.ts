@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createDocument, elementId, featureId, layerId, type ArcElement, type DimensionElement, type Element, type EllipseElement, type CircleElement, type LineElement, type GlyphElement, type PathElement, type PointMm, type RectangleElement, type SketchElement, type SplineElement, type TextElement } from "@nodra/domain";
-import { addCircleConstraint, addDocumentConstraint, deleteDocumentConstraint, addSketchConstraint, addSketchSegmentRelation, addToSelection, appendSketchEdge, appendSplineNode, beginGesture, cancelGesture, clearSelection, closePath, closeSplineElement, commitGesture, createEditor, createElement, createIntersectFeature, rebuildParametricFeatures, addPositionalConnection, addPositionalCoincidence, deletePositionalCoincidence, createPathCubicNode, createSketchLine, cutContourSegment, cutLineAtPoint, cutPathSegment, cutSegment, cutSketchEdge, splitPathLineAt, deleteContourNodes, deleteElement, deleteElementNodes, deletePathNodes, deleteSketchConstraint, dispatch, duplicateElements, flipElements, insertContourNode, invalidDimensionIdsForShapeOperation, moveElement, moveElements, movePathNode, movePathHandle, openPath, previewGesture, previewGestureFromBase, redo, reversePath, removeFromSelection, reorderLayer, resizeElement, resizeElementToDimensions, resizeElements, resizeElementsToDimensions, rotateElementsAroundCenter, select, selectForPointerDown, setDimensionDriving, updateCircleConstraint, deleteCircleConstraint, solveCircle, setLayerVisibility, setPathJoin, shapeOperation, splitPathSegment, toggleSelection, topologyEditForPathSegmentReplacement, topologyReferenceKey, undo, updateContourNode, updateDimensionValue, updateElement, updateElementNode, updateElementStyles, updateSketchConstraint, updateDocumentConstraint, updateSplineHandle, updateSplineNode } from "./index.js";
+import { addCircleConstraint, addDocumentConstraint, deleteDocumentConstraint, addSketchConstraint, addSketchSegmentRelation, addToSelection, appendSketchEdge, appendSplineNode, beginGesture, cancelGesture, clearSelection, closePath, closeSplineElement, commitGesture, createEditor, createElement, createIntersectFeature, rebuildParametricFeatures, addPositionalConnection, addPositionalCoincidence, deletePositionalCoincidence, createPathCubicNode, createSketchLine, cutContourSegment, cutLineAtPoint, cutPathSegment, cutSegment, cutSketchEdge, splitPathLineAt, deleteContourNodes, deleteElement, deleteElementNodes, deletePathNodes, deleteSketchConstraint, dispatch, duplicateElements, flipElements, insertContourNode, invalidDimensionIdsForShapeOperation, moveElement, moveElements, movePathNode, movePathHandle, openPath, previewGesture, previewGestureFromBase, redo, reversePath, removeFromSelection, reorderLayer, resizeElement, resizeElementToDimensions, resizeElements, resizeElementsToDimensions, rotateElementsAroundCenter, select, selectForPointerDown, setDimensionDriving, updateCircleConstraint, deleteCircleConstraint, solveCircle, setLayerVisibility, setPathJoin, shapeOperation, splitPathSegment, toggleSelection, topologyEditForPathSegmentReplacement, topologyReferenceKey, undo, updateContourNode, updateDimensionValue, updateElement, updateElementNode, updateElementStyles, updateSketchConstraint, updateDocumentConstraint, updateSplineHandle, updateSplineNode, setGeometryRole } from "./index.js";
 import { boundsOfElements, realGeometryNodes } from "@nodra/geometry";
 import type { Direction } from "@nodra/geometry";
 import { appendLinePoint } from "./index.js";
@@ -16,6 +16,69 @@ const arc: ArcElement = { type: "arc", id: elementId("arc"), layerId: layerId("d
 const glyph: GlyphElement = { type: "glyph", id: elementId("glyph"), layerId: layerId("default"), position: { x: 0, y: 0 }, size: { width: 20, height: 20 }, glyph: "O", fillRule: "evenodd", rotation: 0, style: rectangle.style, contours: [{ nodes: [{ id: "ga", anchor: { x: 0, y: 0 }, join: "smooth" }, { id: "gb", anchor: { x: 10, y: 0 }, join: "smooth" }, { id: "gc", anchor: { x: 10, y: 10 }, join: "smooth" }, { id: "gd", anchor: { x: 0, y: 10 }, join: "smooth" }], segments: [{ id: "fixture-segment-2", type: "cubicBezier", startNodeId: "ga", endNodeId: "gb", control1: { x: 3, y: -2 }, control2: { x: 7, y: -2 } }, { id: "fixture-segment-3", type: "cubicBezier", startNodeId: "gb", endNodeId: "gc", control1: { x: 12, y: 3 }, control2: { x: 12, y: 7 } }, { id: "fixture-segment-4", type: "cubicBezier", startNodeId: "gc", endNodeId: "gd", control1: { x: 7, y: 12 }, control2: { x: 3, y: 12 } }, { id: "fixture-segment-5", type: "cubicBezier", startNodeId: "gd", endNodeId: "ga", control1: { x: -2, y: 7 }, control2: { x: -2, y: 3 } }] }] };
 
 describe("editor core", () => {
+  it("sets native and individual sketch-edge geometry roles atomically", () => {
+    const native: LineElement = { type: "line", id: elementId("role-line"), layerId: rectangle.layerId, start: { x: 0, y: 0 }, end: { x: 10, y: 0 }, rotation: 0, style: rectangle.style };
+    const sketch: SketchElement = { type: "sketch", id: elementId("role-sketch"), layerId: rectangle.layerId, nodes: [{ id: "a", point: { x: 0, y: 0 } }, { id: "b", point: { x: 10, y: 0 } }, { id: "c", point: { x: 20, y: 0 } }], edges: [{ id: "first", startNodeId: "a", endNodeId: "b" }, { id: "second", startNodeId: "b", endNodeId: "c", role: "construction" }], style: rectangle.style };
+    const initial = createEditor({ ...document, elements: [native, sketch] });
+    const nativeChanged = dispatch(initial, setGeometryRole({ kind: "element", elementId: native.id }, "construction"));
+    expect(nativeChanged.document.elements[0]).toEqual({ ...native, role: "construction" });
+    expect(nativeChanged.document.elements[1]).toEqual(sketch);
+    const edgeChanged = dispatch(nativeChanged, setGeometryRole({ kind: "sketch-edge", elementId: sketch.id, edgeId: "first" }, "construction"));
+    expect(edgeChanged.document.elements[0]).toEqual(nativeChanged.document.elements[0]);
+    expect(edgeChanged.document.elements[1]).toEqual({ ...sketch, edges: [{ ...sketch.edges[0], role: "construction" }, sketch.edges[1]] });
+    expect(edgeChanged.undo).toHaveLength(2);
+    expect(redo(undo(edgeChanged)).document).toEqual(edgeChanged.document);
+  });
+
+  it("rejects geometry-role failures atomically and preserves same-role identity", () => {
+    const native: LineElement = { type: "line", id: elementId("role-failure-line"), layerId: rectangle.layerId, start: { x: 0, y: 0 }, end: { x: 10, y: 0 }, rotation: 0, style: rectangle.style };
+    const sketch: SketchElement = { type: "sketch", id: elementId("role-failure-sketch"), layerId: rectangle.layerId, nodes: [{ id: "a", point: { x: 0, y: 0 } }, { id: "b", point: { x: 10, y: 0 } }], edges: [{ id: "edge", startNodeId: "a", endNodeId: "b", role: "normal" }], style: rectangle.style };
+    const initial = createEditor({ ...document, elements: [native, sketch] });
+    for (const command of [
+      setGeometryRole({ kind: "element", elementId: elementId("missing") }, "construction"),
+      setGeometryRole({ kind: "sketch-edge", elementId: native.id, edgeId: "edge" }, "construction"),
+      setGeometryRole({ kind: "sketch-edge", elementId: sketch.id, edgeId: "missing" }, "construction"),
+      setGeometryRole({ kind: "element", elementId: native.id }, "invalid" as "normal"),
+    ]) expect(dispatch(initial, command)).toBe(initial);
+    expect(dispatch(initial, setGeometryRole({ kind: "element", elementId: native.id }, "normal"))).toBe(initial);
+    expect(dispatch(initial, setGeometryRole({ kind: "sketch-edge", elementId: sketch.id, edgeId: "edge" }, "normal"))).toBe(initial);
+  });
+
+  it("sets one geometry role in one history transaction without changing non-role state", () => {
+    const sketch = createSketchLine(elementId("role-history-sketch"), rectangle.layerId, rectangle.style, { x: 0, y: 0 }, { x: 10, y: 0 });
+    const initial = createEditor({ ...document, elements: [sketch] });
+    const changed = dispatch(initial, setGeometryRole({ kind: "sketch-edge", elementId: sketch.id, edgeId: sketch.edges[0]!.id }, "construction"));
+    expect(changed.document.revision).toBe(1);
+    expect(changed.undo).toHaveLength(1);
+    expect(undo(changed).document).toEqual(initial.document);
+    expect(redo(undo(changed)).document).toEqual(changed.document);
+    const resultSketch = changed.document.elements[0] as SketchElement;
+    expect(resultSketch.nodes).toEqual(sketch.nodes);
+    expect(resultSketch.constraints).toEqual(sketch.constraints);
+    expect(resultSketch.style).toEqual(sketch.style);
+  });
+
+  it("changes only the targeted geometry role while preserving WU3 editor state", () => {
+    const sketch = { type: "sketch" as const, id: elementId("role-preservation-sketch"), layerId: rectangle.layerId, role: "construction" as const, nodes: [{ id: "a", point: { x: 0, y: 0 } }, { id: "b", point: { x: 10, y: 0 } }, { id: "c", point: { x: 20, y: 0 } }], edges: [{ id: "target", startNodeId: "a", endNodeId: "b", role: "normal" as const }, { id: "sibling", startNodeId: "b", endNodeId: "c", role: "construction" as const }], constraints: [{ id: "local-role-preservation-constraint", kind: "horizontal" as const, references: [{ elementId: elementId("role-preservation-sketch"), nodeId: "a" }, { elementId: elementId("role-preservation-sketch"), nodeId: "b" }] as const }], style: rectangle.style };
+    const anchor: CircleElement = { type: "circle", id: elementId("role-preservation-anchor"), layerId: rectangle.layerId, center: { x: 10, y: 0 }, radius: 2, style: rectangle.style };
+    const dimensionWithReferences: DimensionElement = { ...dimension, id: elementId("role-preservation-dimension"), references: [{ kind: "node", elementId: sketch.id, nodeIndex: 0, nodeId: "a" }, { kind: "node", elementId: sketch.id, nodeIndex: 1, nodeId: "b" }] };
+    const sketchConstraint = { id: "role-preservation-constraint", kind: "horizontal" as const, references: [{ elementId: sketch.id, nodeId: "a" }, { elementId: sketch.id, nodeId: "b" }] as const };
+    const connection = { id: "role-preservation-connection", first: { elementId: sketch.id, node: { kind: "sketch" as const, nodeId: "a" } }, second: { elementId: anchor.id, node: { kind: "named" as const, name: "center" as const } } };
+    const positionalCoincidence = { id: "role-preservation-coincidence", first: { elementId: sketch.id, node: { kind: "sketch" as const, nodeId: "b" } }, second: { elementId: anchor.id, node: { kind: "named" as const, name: "center" as const } } };
+    const initial = createEditor({ ...document, elements: [sketch, dimensionWithReferences, anchor], constraints: [sketchConstraint], connections: [connection], positionalCoincidences: [positionalCoincidence] });
+    const changed = dispatch(initial, setGeometryRole({ kind: "sketch-edge", elementId: sketch.id, edgeId: "target" }, "construction"));
+    const resultSketch = changed.document.elements[0] as typeof sketch;
+    expect(resultSketch).toEqual({ ...sketch, edges: [{ ...sketch.edges[0], role: "construction" }, sketch.edges[1]] });
+    expect(resultSketch.nodes).toEqual(sketch.nodes);
+    expect(resultSketch.constraints).toEqual(sketch.constraints);
+    expect(changed.document.elements.slice(1)).toEqual(initial.document.elements.slice(1));
+    expect(changed.document.constraints).toEqual(initial.document.constraints);
+    expect(changed.document.connections).toEqual(initial.document.connections);
+    expect(changed.document.positionalCoincidences).toEqual(initial.document.positionalCoincidences);
+    expect(resultSketch.role).toBe(sketch.role);
+    expect(resultSketch.edges[1]).toEqual(sketch.edges[1]);
+  });
+
   it("cuts a circle exactly into one canonical arc and supports undo/redo", () => {
     const circle: CircleElement = { type: "circle", id: elementId("exact-circle"), layerId: layerId("default"), center: { x: 10, y: 10 }, radius: 5, style: { ...rectangle.style, fill: "red" }, operation: { operation: "cut", order: 2 } };
     const cutter: LineElement = { type: "line", id: elementId("exact-circle-cutter"), layerId: layerId("default"), start: { x: 0, y: 10 }, end: { x: 20, y: 10 }, rotation: 0, style: rectangle.style };
@@ -58,7 +121,7 @@ describe("editor core", () => {
     const sketchInitial = createEditor({ ...document, elements: [circle, closedSketch] });
     const sketchResult = dispatch(sketchInitial, cutSegment(circle.id, 0, { x: 10, y: 5 }));
     expect(sketchResult.document.elements[0]).toMatchObject({ type: "arc", id: circle.id });
-    expect(sketchResult.document.elements[1]).toEqual(sketchInitial.document.elements[1]);
+    expect(sketchResult.document.elements[1]).toEqual({ ...sketchInitial.document.elements[1], role: "normal", edges: sketchInitial.document.elements[1]?.type === "sketch" ? sketchInitial.document.elements[1].edges.map((edge) => ({ ...edge, role: edge.role ?? "normal" })) : [] });
   });
 
   it("keeps circle Trim dependencies only through valid stable arc references", () => {
@@ -231,7 +294,7 @@ describe("editor core", () => {
 
     const removed = dispatch(initial, deleteElement(first.id));
 
-    expect(removed.document.elements).toEqual([second]);
+    expect(removed.document.elements).toEqual([{ ...second, role: "normal", edges: second.edges.map((edge) => ({ ...edge, role: edge.role ?? "normal" })) }]);
     expect(removed.document.constraints).toEqual([]);
     expect(removed.undo).toHaveLength(1);
     expect(undo(removed).document).toEqual(initial.document);
@@ -303,7 +366,7 @@ describe("editor core", () => {
         const initial = createEditor({ ...document, elements: [sketch, dimension] });
         const constrained = dispatch(initial, addSketchConstraint(sketch.id, relation));
         expect((constrained.document.elements[0] as SketchElement).constraints?.map((constraint) => constraint.id)).toEqual(["width", "auto:top:horizontal", "auto:right:vertical", "auto:left:vertical", relation.id]);
-        expect(constrained.document.elements[1]).toEqual(initial.document.elements[1]);
+        expect(constrained.document.elements[1]).toEqual({ ...initial.document.elements[1], role: "normal" });
         expect(constrained.undo).toHaveLength(1);
       });
 
@@ -757,7 +820,7 @@ describe("editor core", () => {
     const result = cut.document.elements.find((element): element is SketchElement => element.id === square.id && element.type === "sketch");
 
     expect(result?.nodes).toEqual(square.nodes);
-    expect(result?.edges).toEqual(square.edges.slice(1));
+    expect(result?.edges).toEqual(square.edges.slice(1).map((edge) => ({ ...edge, role: edge.role ?? "normal" })));
     expect(cut.document.connections).toEqual([connection]);
     expect(cut.undo).toHaveLength(1);
     expect(undo(cut).document).toEqual(initial.document);
@@ -786,7 +849,7 @@ describe("editor core", () => {
     expect(cutSketch?.nodes.map((node) => node.id)).toEqual(["a", "b", "c", "d"]);
     expect(result?.constraints).toEqual([relation]);
     expect(result?.nodes.find((node) => node.id === "d")?.point.y).toBeCloseTo(10);
-    expect(annotated.document.elements.find((element) => element.id === linked.id)).toEqual(linked);
+    expect(annotated.document.elements.find((element) => element.id === linked.id)).toEqual({ ...linked, role: "normal" });
     expect(linked.references).toEqual([{ kind: "node", elementId: sketch.id, nodeIndex: cIndex, nodeId: "c" }, { kind: "node", elementId: sketch.id, nodeIndex: dIndex, nodeId: "d" }]);
     expect(annotated.undo).toHaveLength(3);
     expect(reverted.document).toEqual(cut.document);
@@ -900,7 +963,7 @@ describe("editor core", () => {
     expect(nextVertical.edges).toHaveLength(2);
     expect(nextHorizontal.nodes.some((node) => node.point.x === 10 && node.point.y === 0)).toBe(true);
     expect(nextVertical.nodes.some((node) => node.point.x === 10 && node.point.y === 0)).toBe(true);
-    expect(state.document.elements.find((element) => element.id === untouched.id)).toEqual(untouched);
+    expect(state.document.elements.find((element) => element.id === untouched.id)).toEqual({ ...untouched, role: "normal", edges: untouched.edges.map((edge) => ({ ...edge, role: edge.role ?? "normal" })) });
     expect(state.undo).toHaveLength(1);
     expect(undo(state).document).toEqual(initial.document);
   });
@@ -1191,7 +1254,7 @@ it("converts a zero-radius rectangle to an open path when cutting one edge", () 
         const sketch = createSketchLine(elementId("created-sketch"), layerId("default"), rectangle.style, { x: 0, y: 0 }, { x: 10, y: 0 });
         const initial = createEditor(document);
         const preview = previewGesture(beginGesture(initial), createElement(sketch));
-        expect(preview.document.elements).toEqual([sketch]);
+        expect(preview.document.elements).toEqual([{ ...sketch, role: "normal", edges: sketch.edges.map((edge) => ({ ...edge, role: edge.role ?? "normal" })) }]);
         expect(preview.undo).toHaveLength(0);
         expect(cancelGesture(preview).document).toEqual(initial.document);
         const committed = commitGesture(preview);
@@ -1480,7 +1543,7 @@ it("converts a zero-radius rectangle to an open path when cutting one edge", () 
     const initial = createEditor({ ...document, elements: [target, radius] });
     const resized = dispatch(initial, updateDimensionValue(radius.id, 15));
     expect(resized.document.elements[0]).toMatchObject({ type: "arc", radius: 15, center: target.center, startAngle: target.startAngle, endAngle: target.endAngle, direction: target.direction });
-    expect(resized.document.elements[1]).toEqual(initial.document.elements[1]);
+    expect(resized.document.elements[1]).toEqual({ ...initial.document.elements[1], role: "normal" });
     expect(resized.undo).toHaveLength(1);
     expect(undo(resized).document).toEqual(initial.document);
     const diameter = radial("diameter");
@@ -1611,7 +1674,7 @@ it("converts a zero-radius rectangle to an open path when cutting one edge", () 
      const sketch = createSketchLine(elementId("reference-sketch"), layerId("default"), rectangle.style, { x: 0, y: 0 }, { x: 10, y: 10 });
      const linked: DimensionElement = { type: "dimension", id: elementId("cross-object-dimension"), layerId: sketch.layerId, kind: "aligned", references: [{ kind: "node", elementId: sketch.id, nodeIndex: 0, nodeId: sketch.nodes[0]!.id }, { kind: "node", elementId: rectangle.id, nodeIndex: 0, nodeId: "nw" }], offset: { x: 0, y: -8 }, precision: 2, units: "mm", rotation: 0, style: rectangle.style };
      const state = dispatch(createEditor({ ...document, elements: [sketch, rectangle, linked] }), updateDimensionValue(linked.id, 20));
-     expect(state.document.elements[0]).toEqual(sketch);
+     expect(state.document.elements[0]).toEqual({ ...sketch, role: "normal", edges: sketch.edges.map((edge) => ({ ...edge, role: edge.role ?? "normal" })) });
      const movedCorner = (state.document.elements[1] as RectangleElement).position;
      expect(Math.hypot(movedCorner.x - sketch.nodes[0]!.point.x, movedCorner.y - sketch.nodes[0]!.point.y)).toBeCloseTo(20);
      expect(state.document.elements).toHaveLength(3);
@@ -1647,8 +1710,8 @@ it("characterizes a non-driving sketch dimension update and repeated-value histo
      expect(updatedSketch.nodes[0]?.point).toEqual(sketch.nodes[0]?.point);
      expect(updatedSketch.nodes[1]?.point.x).toBeCloseTo(Math.sqrt(200));
      expect(updatedSketch.nodes[1]?.point.y).toBeCloseTo(Math.sqrt(200));
-     expect(updatedSketch.edges).toEqual(sketch.edges);
-     expect(updatedDimension).toEqual(linked);
+     expect(updatedSketch.edges).toEqual(sketch.edges.map((edge) => ({ ...edge, role: edge.role ?? "normal" })));
+     expect(updatedDimension).toEqual({ ...linked, role: "normal" });
      expect(updatedDimension.driving).toBeUndefined();
      expect(updatedDimension.constraintId).toBeUndefined();
      expect(updated.undo).toHaveLength(1);
@@ -1944,7 +2007,7 @@ it("moves a dimension by changing only its placement offset and supports undo", 
   it("creates a CircleElement with canonical center and radius geometry", () => {
     const circle: CircleElement = { type: "circle", id: elementId("created-circle"), layerId: layerId("default"), center: { x: 24, y: 18 }, radius: 7.5, style: rectangle.style };
     const state = dispatch(createEditor(document), createElement(circle));
-    expect(state.document.elements).toEqual([circle]);
+    expect(state.document.elements).toEqual([{ ...circle, role: "normal" }]);
     expect(state.undo).toHaveLength(1);
     expect(undo(state).document.elements).toEqual([]);
   });
@@ -2210,10 +2273,14 @@ it("moves a dimension by changing only its placement offset and supports undo", 
     const staleDocument = { ...created.document, elements: [rectangle, { ...second, position: { x: 8, y: 2 } }, staleOutput], featureTree: { version: 1 as const, features: created.document.featureTree!.features.map((feature) => ({ ...feature, status: "needs-rebuild" as const })) } };
     const stale = createEditor(staleDocument);
     const rebuilt = dispatch(stale, rebuildParametricFeatures(featureId("rebuild-intersect")));
-    expect(rebuilt.document.elements[2]).toMatchObject({ id: "rebuild-intersect:output", position: { x: 8, y: 2 }, size: { width: 3, height: 5 } });
+    expect(rebuilt.document.elements[2]).toMatchObject({ id: "rebuild-intersect:output", position: { x: 8, y: 2 }, size: { width: 3, height: 5 }, role: "normal" });
+    expect(rebuilt.document.elements[2]).toHaveProperty("role", "normal");
     expect(rebuilt.document.featureTree?.features[0]).toMatchObject({ status: "up-to-date" });
     expect(rebuilt.undo).toHaveLength(1);
-    expect(dispatch(rebuilt, rebuildParametricFeatures())).toBe(rebuilt);
+    const upToDate = dispatch(rebuilt, rebuildParametricFeatures());
+    expect(upToDate).toBe(rebuilt);
+    expect(upToDate.document.revision).toBe(rebuilt.document.revision);
+    expect(upToDate.undo).toBe(rebuilt.undo);
   });
 
   it("updates intersect output status atomically when a validated source replacement no longer overlaps", () => {
@@ -2260,7 +2327,10 @@ it("moves a dimension by changing only its placement offset and supports undo", 
     const missingSource = { ...created.document, elements: created.document.elements.filter((element) => element.id !== second.id) };
     expect(rebuild.apply(missingSource)).toEqual({ success: false, error: "Intersect feature malformed-intersect has a missing source" });
     const missingSourceState = createEditor(missingSource);
-    expect(dispatch(missingSourceState, rebuild)).toBe(missingSourceState);
+    const missingSourceResult = dispatch(missingSourceState, rebuild);
+    expect(missingSourceResult).toBe(missingSourceState);
+    expect(missingSourceResult.document.revision).toBe(missingSourceState.document.revision);
+    expect(missingSourceResult.undo).toBe(missingSourceState.undo);
     const missingOutput = { ...created.document, elements: created.document.elements.filter((element) => element.id !== "malformed-intersect:output") };
     expect(rebuild.apply(missingOutput)).toEqual({ success: false, error: "Intersect feature malformed-intersect has a missing output" });
     const line: LineElement = { type: "line", id: second.id, layerId: second.layerId, start: { x: 0, y: 0 }, end: { x: 1, y: 1 }, rotation: 0, style: second.style };
@@ -2379,7 +2449,7 @@ it("moves a dimension by changing only its placement offset and supports undo", 
     const source = { ...document, elements: [rectangle, invalid, second, survivor, unrelated] };
     expect(invalidDimensionIdsForShapeOperation(source, [rectangle.id, second.id], "weld")).toEqual([invalid.id]);
     const result = dispatch(select(createEditor(source), [rectangle.id, second.id]), shapeOperation([rectangle.id, second.id], "weld"));
-    expect(result.document.elements).toContainEqual(survivor);
+    expect(result.document.elements).toContainEqual({ ...survivor, role: "normal" });
     expect(result.document.elements).not.toContainEqual(invalid);
     expect(result.undo).toHaveLength(1);
     expect(undo(result).document.elements).toEqual(source.elements);
