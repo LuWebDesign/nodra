@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { elementId, type DocumentConstraint, type SketchElement } from "@nodra/domain";
+import { elementId, type DocumentConstraint, type SketchConstraint, type SketchElement } from "@nodra/domain";
+import { solveSketchConstraints } from "@nodra/geometry";
 import { constraintComponentStatesForDocument, constraintComponentsForDocument, constraintDofMetadataForDocument, constraintInputsForDocument, constraintResidualsForDocument, constraintStateForElement, normalizedConstraintsForDocument, parametricCapabilitiesForElement, solveConstraintComponents } from "./index.js";
 import { documentWith, fixtureLayer, fixtureStyle, sketch } from "./test-fixtures.js";
 
@@ -40,6 +41,50 @@ describe("parametric constraint boundary", () => {
     expect(constraintComponentStatesForDocument(document)).toEqual([{ nodeKeys: [JSON.stringify(["sketch", "a"]), JSON.stringify(["sketch", "b"])], state: "fully-defined", diagnostics: [] }]);
   });
 
+  it("projects a raw defined solver result to fully-defined without mutating the document", () => {
+    const source = sketch([
+      { id: "fixed-a", kind: "fixed", references: [{ elementId: elementId("sketch"), nodeId: "a" }] },
+      { id: "join", kind: "coincident", references: [{ elementId: elementId("sketch"), nodeId: "a" }, { elementId: elementId("sketch"), nodeId: "b" }] },
+    ]);
+    const document = documentWith([source]);
+    const before = structuredClone(document);
+
+    expect(solveSketchConstraints(source).status).toBe("defined");
+    expect(constraintStateForElement(document, source.id)).toMatchObject({ state: "fully-defined" });
+    expect(document).toEqual(before);
+  });
+
+  it("recomputes component definition states deterministically without mutating the snapshot", () => {
+    const source = sketch([
+      { id: "fixed-a", kind: "fixed", references: [{ elementId: elementId("sketch"), nodeId: "a" }] },
+      { id: "join", kind: "coincident", references: [{ elementId: elementId("sketch"), nodeId: "a" }, { elementId: elementId("sketch"), nodeId: "b" }] },
+    ]);
+    const document = documentWith([source]);
+    const before = structuredClone(document);
+
+    const first = constraintComponentStatesForDocument(document);
+    const second = constraintComponentStatesForDocument(document);
+
+    expect(first).toEqual(second);
+    expect(first[0]?.state).toBe("fully-defined");
+    expect(document).toEqual(before);
+    expect(document.elements[0]).toBe(source);
+  });
+
+  it("retains supported construction edges in solver component states", () => {
+    const construction = {
+      ...sketch([
+        { id: "fixed-a", kind: "fixed" as const, references: [{ elementId: elementId("sketch"), nodeId: "a" }] },
+        { id: "join", kind: "coincident" as const, references: [{ elementId: elementId("sketch"), nodeId: "a" }, { elementId: elementId("sketch"), nodeId: "b" }] },
+      ]),
+      edges: [{ id: "construction-edge", startNodeId: "a", endNodeId: "b", role: "construction" as const }],
+    };
+
+    expect(constraintComponentStatesForDocument(documentWith([construction]))).toEqual([
+      { nodeKeys: [JSON.stringify(["sketch", "a"]), JSON.stringify(["sketch", "b"])], state: "fully-defined", diagnostics: [] },
+    ]);
+  });
+
   it("derives a fully-defined local subcomponent without including unrelated sketch nodes", () => {
     const scoped: SketchElement = {
       ...sketch(),
@@ -55,6 +100,23 @@ describe("parametric constraint boundary", () => {
 
     expect(states.find((state) => state.nodeKeys.length === 2)).toEqual({ nodeKeys: [JSON.stringify(["sketch", "a"]), JSON.stringify(["sketch", "b"])], state: "fully-defined", diagnostics: [] });
     expect(states.find((state) => state.nodeKeys.length === 1)).toMatchObject({ state: "underdefined", diagnostics: [] });
+  });
+
+  it("applies invalid, conflict, overdefined, underdefined, and fully-defined component precedence", () => {
+    const references = [{ elementId: elementId("sketch"), nodeId: "a" }, { elementId: elementId("sketch"), nodeId: "b" }] as const;
+    const unsupported = { id: "unsupported", kind: "horizontal" as const, references, value: 10 };
+    const redundant = [{ id: "redundant-a", kind: "horizontal" as const, references }, { id: "redundant-b", kind: "horizontal" as const, references }];
+    const conflict = { id: "conflict", kind: "distance-horizontal" as const, value: 30, references };
+    const fixed = { id: "fixed-a", kind: "fixed" as const, references: [references[0]] as const };
+    const joined = { id: "join", kind: "coincident" as const, references };
+    const query = (localConstraints: readonly SketchConstraint[], globals: readonly DocumentConstraint[] = []) => constraintComponentStatesForDocument(documentWith([sketch(localConstraints)], globals))[0]?.state;
+
+    expect(query([])).toBe("underdefined");
+    expect(query([fixed, joined])).toBe("fully-defined");
+    const redundantGlobals = redundant.map((constraint) => ({ ...constraint, id: `global-${constraint.id}` }));
+    expect(constraintComponentStatesForDocument(documentWith([sketch()], redundantGlobals))[0]?.state).toBe("overdefined");
+    expect(constraintComponentStatesForDocument(documentWith([sketch()], [...redundantGlobals, conflict]))[0]?.state).toBe("conflict");
+    expect(query([unsupported], [...redundantGlobals, conflict])).toBe("invalid");
   });
 
   it("classifies an unsupported local constraint as invalid", () => {
