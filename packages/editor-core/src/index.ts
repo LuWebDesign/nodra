@@ -618,8 +618,8 @@ export const cutSketchEdge = (sketchId: ElementId, segmentIndex: number, cutPoin
         const splitEdges = new Map<number, readonly [{ readonly id: string; readonly startNodeId: string; readonly endNodeId: string }, { readonly id: string; readonly startNodeId: string; readonly endNodeId: string }]>();
         const splitNodes = targets.map((target) => {
           const splitNodeId = sketchNodeId();
-          const splitEdgeA = { id: sketchEdgeId(), startNodeId: target.edge.startNodeId, endNodeId: splitNodeId };
-          const splitEdgeB = { id: sketchEdgeId(), startNodeId: splitNodeId, endNodeId: target.edge.endNodeId };
+          const splitEdgeA = { id: sketchEdgeId(), startNodeId: target.edge.startNodeId, endNodeId: splitNodeId, ...(target.edge.role ? { role: target.edge.role } : {}) };
+          const splitEdgeB = { id: sketchEdgeId(), startNodeId: splitNodeId, endNodeId: target.edge.endNodeId, ...(target.edge.role ? { role: target.edge.role } : {}) };
           splitEdges.set(target.index, [splitEdgeA, splitEdgeB]);
           const parameter = parameterAt(target.first, target.last);
           return { id: splitNodeId, point: { x: target.first.x + (target.last.x - target.first.x) * parameter, y: target.first.y + (target.last.y - target.first.y) * parameter } };
@@ -712,8 +712,8 @@ const cutSketchEdgeDestructive = (sketchId: ElementId, segmentIndex: number, cut
         const splitEdges = new Map<number, readonly [{ readonly id: string; readonly startNodeId: string; readonly endNodeId: string }, { readonly id: string; readonly startNodeId: string; readonly endNodeId: string }]>();
         const splitNodes = targets.map((target) => {
           const splitNodeId = sketchNodeId();
-          const splitEdgeA = { id: sketchEdgeId(), startNodeId: target.edge.startNodeId, endNodeId: splitNodeId };
-          const splitEdgeB = { id: sketchEdgeId(), startNodeId: splitNodeId, endNodeId: target.edge.endNodeId };
+          const splitEdgeA = { id: sketchEdgeId(), startNodeId: target.edge.startNodeId, endNodeId: splitNodeId, ...(target.edge.role ? { role: target.edge.role } : {}) };
+          const splitEdgeB = { id: sketchEdgeId(), startNodeId: splitNodeId, endNodeId: target.edge.endNodeId, ...(target.edge.role ? { role: target.edge.role } : {}) };
           splitEdges.set(target.index, [splitEdgeA, splitEdgeB]);
           const parameter = parameterAt(target.first, target.last);
           return { id: splitNodeId, point: { x: target.first.x + (target.last.x - target.first.x) * parameter, y: target.first.y + (target.last.y - target.first.y) * parameter } };
@@ -787,7 +787,7 @@ export const appendLinePoint = (lineId: ElementId, point: PointMm): EditorComman
     const startId = `${line.id}:start`;
     const endId = `${line.id}:end`;
     const nodeId = `${line.id}:node:${crypto.randomUUID()}`;
-    const path: PathElement = { type: "path", id: line.id, layerId: line.layerId, nodes: [{ id: startId, anchor: line.start, join: "corner" }, { id: endId, anchor: line.end, join: "corner" }, { id: nodeId, anchor: point, join: "corner" }], segments: [{ id: pathSegmentId(), type: "line", startNodeId: startId, endNodeId: endId }, { id: pathSegmentId(), type: "line", startNodeId: endId, endNodeId: nodeId }], closed: false, style: line.style, ...(line.operation ? { operation: line.operation } : {}) };
+    const path: PathElement = { type: "path", id: line.id, layerId: line.layerId, nodes: [{ id: startId, anchor: line.start, join: "corner" }, { id: endId, anchor: line.end, join: "corner" }, { id: nodeId, anchor: point, join: "corner" }], segments: [{ id: pathSegmentId(), type: "line", startNodeId: startId, endNodeId: endId }, { id: pathSegmentId(), type: "line", startNodeId: endId, endNodeId: nodeId }], closed: false, style: line.style, ...(line.role ? { role: line.role } : {}), ...(line.operation ? { operation: line.operation } : {}) };
     return replaceElements(document, document.elements.map((element) => element.id === line.id ? path : element));
   },
 });
@@ -1604,7 +1604,9 @@ const cutStraightComponent = (document: DocumentSnapshot, elementIdToCut: Elemen
       segments[segments.length - 1] = { ...last, endNodeId: firstNodeId } as PathSegment;
       for (const [sourceKey, outputs] of nodeDestinations) nodeDestinations.set(sourceKey, outputs.map((output) => output.elementId === id && output.nodeId === removedNodeId ? { ...output, nodeId: firstNodeId } : output));
     }
-    return { type: "path", id, layerId: styleSource.layerId, nodes, segments, closed, style: closed ? styleSource.style : Object.fromEntries(Object.entries(styleSource.style).filter(([name]) => name !== "fill")) as typeof styleSource.style, ...("operation" in styleSource && styleSource.operation ? { operation: styleSource.operation } : {}) };
+    const sourceRoles = new Set(pieces.map(({ source, piece }) => source.type === "sketch" ? source.edges[piece.segmentIndex]?.role ?? "normal" : source.role ?? "normal"));
+    if (sourceRoles.size > 1) throw new Error("Cut cannot rebuild one path from mixed geometry roles");
+    return { type: "path", id, layerId: styleSource.layerId, nodes, segments, closed, style: closed ? styleSource.style : Object.fromEntries(Object.entries(styleSource.style).filter(([name]) => name !== "fill")) as typeof styleSource.style, ...(sourceRoles.has("construction") ? { role: "construction" as const } : {}), ...("operation" in styleSource && styleSource.operation ? { operation: styleSource.operation } : {}) };
   };
   const cyclePieces = (points: readonly PointMm[]): CutPieceGraph[] => points.map((start, index) => {
     const end = points[(index + 1) % points.length]!; const match = remaining.find(({ piece }) => edgeKey(piece.start, piece.end) === edgeKey(start, end))!;
@@ -1741,7 +1743,7 @@ export const cutContourSegment = (contourId: ElementId, ringIndex: number, segme
         const hit = lineSegmentIntersection(boundaryStart, boundaryEnd, start, end, 1e-7);
         if (!hit || hit.secondT <= 1e-7 || hit.secondT >= 1 - 1e-7) return element;
         const nodeId = externalNodeId(element.id);
-        return { type: "path", id: element.id, layerId: element.layerId, nodes: [{ id: `${element.id}:start`, anchor: start, join: "corner" }, { id: nodeId, anchor: hit.point, join: "corner" }, { id: `${element.id}:end`, anchor: end, join: "corner" }], segments: [{ id: `${element.id}:start-segment`, type: "line", startNodeId: `${element.id}:start`, endNodeId: nodeId }, { id: `${element.id}:end-segment`, type: "line", startNodeId: nodeId, endNodeId: `${element.id}:end` }], closed: false, style: element.style, ...(element.operation ? { operation: element.operation } : {}) };
+        return { type: "path", id: element.id, layerId: element.layerId, nodes: [{ id: `${element.id}:start`, anchor: start, join: "corner" }, { id: nodeId, anchor: hit.point, join: "corner" }, { id: `${element.id}:end`, anchor: end, join: "corner" }], segments: [{ id: `${element.id}:start-segment`, type: "line", startNodeId: `${element.id}:start`, endNodeId: nodeId }, { id: `${element.id}:end-segment`, type: "line", startNodeId: nodeId, endNodeId: `${element.id}:end` }], closed: false, style: element.style, ...(element.role ? { role: element.role } : {}), ...(element.operation ? { operation: element.operation } : {}) };
       }
       if (element.type !== "sketch") return element;
       const nodes = [...element.nodes];
@@ -1752,8 +1754,8 @@ export const cutContourSegment = (contourId: ElementId, ringIndex: number, segme
         const hit = lineSegmentIntersection(boundaryStart, boundaryEnd, start, end, 1e-7);
         if (!hit || hit.secondT <= 1e-7 || hit.secondT >= 1 - 1e-7) return [edge];
         const nodeId = externalNodeId(element.id); nodes.push({ id: nodeId, point: hit.point });
-        const first = { id: `${edge.id}:a`, startNodeId: edge.startNodeId, endNodeId: nodeId };
-            const second = { id: `${edge.id}:b`, startNodeId: nodeId, endNodeId: edge.endNodeId };
+        const first = { id: `${edge.id}:a`, startNodeId: edge.startNodeId, endNodeId: nodeId, ...(edge.role ? { role: edge.role } : {}) };
+            const second = { id: `${edge.id}:b`, startNodeId: nodeId, endNodeId: edge.endNodeId, ...(edge.role ? { role: edge.role } : {}) };
             affected.add(edge.id);
             sketchReferenceMap.set(topologyReferenceKey(sketchEdgeReference(element.id, edge.id)), { kind: "replaced", references: [sketchEdgeReference(element.id, first.id), sketchEdgeReference(element.id, second.id)] });
             return [first, second];
@@ -1770,6 +1772,7 @@ export const cutContourSegment = (contourId: ElementId, ringIndex: number, segme
       segments: nodes.slice(0, -1).map((node, index) => ({ id: pathSegmentId(), type: "line" as const, startNodeId: node.id, endNodeId: nodes[index + 1]!.id })),
       closed: false,
       style: Object.fromEntries(Object.entries(contour.style).filter(([name]) => name !== "fill")) as typeof contour.style,
+      ...(contour.role ? { role: contour.role } : {}),
       ...(contour.operation ? { operation: contour.operation } : {}),
     };
     const remainingRings = contour.contours.filter((_, index) => index !== ringIndex);
@@ -1842,7 +1845,7 @@ const cutArcExact = (document: DocumentSnapshot, arc: ArcElement, cursor: PointM
   for (const [index, fragment] of ordered.entries()) {
     let id = arc.id;
     if (index > 0) { let suffix = 1; do { id = elementId(`${arc.id}:trim:${suffix++}`); } while (usedIds.has(id) || pieces.some((piece) => piece.id === id)); }
-    pieces.push({ type: "arc", id, layerId: arc.layerId, center: arc.center, radius: arc.radius, startAngle: angleAt(fragment.sourceInterval.t0), endAngle: angleAt(fragment.sourceInterval.t1), direction: arc.direction, style: arc.style, ...(arc.operation ? { operation: arc.operation } : {}) });
+    pieces.push({ type: "arc", id, layerId: arc.layerId, center: arc.center, radius: arc.radius, startAngle: angleAt(fragment.sourceInterval.t0), endAngle: angleAt(fragment.sourceInterval.t1), direction: arc.direction, style: arc.style, ...(arc.role ? { role: arc.role } : {}), ...(arc.operation ? { operation: arc.operation } : {}) });
   }
   const sourceNode = (reference: DimensionElement["references"][number]): "center" | "start" | "end" | undefined => {
     if (reference.elementId !== arc.id || !("nodeIndex" in reference)) return undefined;
@@ -1922,7 +1925,7 @@ const cutCircleCanonical = (document: DocumentSnapshot, target: TrimGeometryTarg
       const outputFragments = others.length > 0 && innerFragments.length > 0 && survivors.length > 1 ? [{ ...survivors[survivors.length - 1]!, curve: { ...survivors[survivors.length - 1]!.curve, startAngle: (survivors[survivors.length - 1]!.curve as Extract<typeof survivors[number]["curve"], { type: "arc" }>).startAngle, endAngle: (survivors[0]!.curve as Extract<typeof survivors[number]["curve"], { type: "arc" }>).endAngle } }] : survivors;
       if (!outputFragments.length) return { success: false, error: "Circle Trim produced degenerate geometry" };
       const normalizeTrimAngle = (angle: number): number => ((angle % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2);
-      const arcs: ArcElement[] = outputFragments.sort((a, b) => a.start.sourceParameter - b.start.sourceParameter).map((fragment, index) => { const curve = fragment.curve; if (curve.type !== "arc") throw new Error("Circle profile fragment is not an arc"); return { type: "arc", id: index ? elementId(`${circle.id}:trim:${index}`) : circle.id, layerId: circle.layerId, center: curve.center, radius: curve.radius, startAngle: normalizeTrimAngle(curve.startAngle), endAngle: normalizeTrimAngle(curve.endAngle), direction: curve.direction, style: circle.style, ...(circle.operation ? { operation: circle.operation } : {}) }; });
+      const arcs: ArcElement[] = outputFragments.sort((a, b) => a.start.sourceParameter - b.start.sourceParameter).map((fragment, index) => { const curve = fragment.curve; if (curve.type !== "arc") throw new Error("Circle profile fragment is not an arc"); return { type: "arc", id: index ? elementId(`${circle.id}:trim:${index}`) : circle.id, layerId: circle.layerId, center: curve.center, radius: curve.radius, startAngle: normalizeTrimAngle(curve.startAngle), endAngle: normalizeTrimAngle(curve.endAngle), direction: curve.direction, style: circle.style, ...(circle.role ? { role: circle.role } : {}), ...(circle.operation ? { operation: circle.operation } : {}) }; });
       const oldNodes = new Map(realGeometryNodes(circle).map((node) => [node.nodeId, node.point])); const close = (a: PointMm, b: PointMm): boolean => Math.hypot(a.x - b.x, a.y - b.y) <= GEOMETRY_EPSILON;
       const endpoint = (arc: ArcElement, name: "start" | "end"): PointMm => pointAt({ type: "arc", center: arc.center, radius: arc.radius, startAngle: arc.startAngle, endAngle: arc.endAngle, direction: arc.direction }, name === "start" ? 0 : 1);
       const mapReference = (reference: DimensionElement["references"][number]): DimensionElement["references"][number] | undefined => { if (reference.elementId !== circle.id) return reference; if (!("nodeId" in reference) || !reference.nodeId) return undefined; if (reference.nodeId === "center") return { ...reference, elementId: arcs[0]!.id, nodeId: "center", nodeIndex: 0 }; const point = oldNodes.get(reference.nodeId); const match = point && arcs.flatMap((arc) => (["start", "end"] as const).map((name) => ({ arc, name }))).find(({ arc, name }) => close(endpoint(arc, name), point)); return match ? { ...reference, elementId: match.arc.id, nodeId: match.name, nodeIndex: match.name === "start" ? 1 : 2 } : undefined; };
@@ -1958,6 +1961,7 @@ const cutCircleCanonical = (document: DocumentSnapshot, target: TrimGeometryTarg
   const arc: ArcElement = {
     type: "arc", id: circle.id, layerId: circle.layerId, center: circle.center, radius: circle.radius,
     startAngle, endAngle, direction: "clockwise", style: circle.style,
+    ...(circle.role ? { role: circle.role } : {}),
     ...(circle.operation ? { operation: circle.operation } : {}),
   };
   const endpointTolerance = GEOMETRY_EPSILON;
@@ -2166,8 +2170,8 @@ const cutOpenSingleCubicPath = (document: DocumentSnapshot, path: PathElement, c
     const originalEdge = transversal.edges[0]!;
     const transversalNodeId = sketchNodeId();
     const splitEdges: [SketchElement["edges"][number], SketchElement["edges"][number]] = [
-      { id: sketchEdgeId(), startNodeId: originalEdge.startNodeId, endNodeId: transversalNodeId },
-      { id: sketchEdgeId(), startNodeId: transversalNodeId, endNodeId: originalEdge.endNodeId },
+      { id: sketchEdgeId(), startNodeId: originalEdge.startNodeId, endNodeId: transversalNodeId, ...(originalEdge.role ? { role: originalEdge.role } : {}) },
+      { id: sketchEdgeId(), startNodeId: transversalNodeId, endNodeId: originalEdge.endNodeId, ...(originalEdge.role ? { role: originalEdge.role } : {}) },
     ];
     const nextSketch: SketchElement = {
       ...transversal,
@@ -2209,7 +2213,7 @@ const cutOpenSingleCubicPath = (document: DocumentSnapshot, path: PathElement, c
   const line = crossing.line;
   if (!line) return { success: false, error: "The cubic transversal is invalid" };
   const lineStartId = `${line.id}:start`; const lineEndId = `${line.id}:end`; const lineCornerId = `${line.id}:cut-corner`;
-  const splitLine: PathElement = { type: "path", id: line.id, layerId: line.layerId, nodes: [{ id: lineStartId, anchor: crossing.lineStart, join: "corner" }, { id: lineCornerId, anchor: splitPoint, join: "corner" }, { id: lineEndId, anchor: crossing.lineEnd, join: "corner" }], segments: [{ id: `${line.id}:cut-start`, type: "line", startNodeId: lineStartId, endNodeId: lineCornerId }, { id: `${line.id}:cut-end`, type: "line", startNodeId: lineCornerId, endNodeId: lineEndId }], closed: false, style: line.style, ...(line.operation ? { operation: line.operation } : {}) };
+  const splitLine: PathElement = { type: "path", id: line.id, layerId: line.layerId, nodes: [{ id: lineStartId, anchor: crossing.lineStart, join: "corner" }, { id: lineCornerId, anchor: splitPoint, join: "corner" }, { id: lineEndId, anchor: crossing.lineEnd, join: "corner" }], segments: [{ id: `${line.id}:cut-start`, type: "line", startNodeId: lineStartId, endNodeId: lineCornerId }, { id: `${line.id}:cut-end`, type: "line", startNodeId: lineCornerId, endNodeId: lineEndId }], closed: false, style: line.style, ...(line.role ? { role: line.role } : {}), ...(line.operation ? { operation: line.operation } : {}) };
   const lineElements = elements.map((element) => element.id === line.id ? splitLine : element);
   const sourceReference = pathSegmentReference(path.id, segment.id);
   const edit = topologyEditForReferenceDestinations(lineElements, [sourceReference], new Map([[topologyReferenceKey(sourceReference), [pathSegmentReference(path.id, survivorSegment.id)]]]), "The removed cubic side has no surviving segment");

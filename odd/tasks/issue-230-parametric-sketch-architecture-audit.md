@@ -6,7 +6,7 @@
 - Workflow: Organic Driven Development (ODD)
 - Current phase: Audit
 - Source changes: Forbidden during the audit
-- Implementation authorization: Not granted
+- Implementation authorization: WU4 topology role propagation explicitly authorized.
 - Issue: <https://github.com/LuWebDesign/nodra/issues/230>
 
 ## Goal
@@ -110,10 +110,13 @@ Produce a repository-evidence-based audit of KOND's current parametric sketch ar
   - Commit: pending WU3 commit.
 
 - [ ] **WU4 — Topology role propagation**
-  - Authorization: not granted.
-  - Scope after approval: role propagation/remapping through split, trim, cut, and topology replacement.
+  - Authorization: explicitly granted.
+  - Scope: role propagation/remapping through split, trim, cut, and topology replacement.
   - Out of scope: UI, renderer/export, automatic relations, WU5+.
-  - Status: blocked pending explicit authorization.
+  - Status: complete; independently verified.
+  - Discovery: direct split/trim/replacement constructors in `packages/editor-core/src/index.ts` omitted source roles, so validation silently defaulted replacements to `normal`. Pure one-source replacements now preserve their source role, including cubic-path transversal replacement edges.
+  - Decision: when planar cut reconstruction would combine `normal` and `construction` native sources into one path, reject that mixed-role reconstruction rather than inventing a precedence.
+  - Evidence: `packages/editor-core/src/index.ts` propagates roles through sketch-edge split/cut, native path/line replacement, contour reconstruction, arc/circle trim, and cubic-path transversal replacement. Regression tests prove these paths and atomic mixed-role rejection. Independent verification passed `corepack pnpm exec vitest run packages/editor-core/src/index.test.ts` (205/205) and `git diff --check`. No commit created.
 
 ## Deliverable
 

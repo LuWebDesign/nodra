@@ -79,6 +79,32 @@ describe("editor core", () => {
     expect(resultSketch.edges[1]).toEqual(sketch.edges[1]);
   });
 
+  it("preserves native and sketch-edge roles through topology replacements", () => {
+    const native: PathElement = { type: "path", id: elementId("role-cut-native"), layerId: rectangle.layerId, nodes: [{ id: "a", anchor: { x: 0, y: 0 }, join: "corner" }, { id: "b", anchor: { x: 20, y: 0 }, join: "corner" }], segments: [{ id: "role-cut-segment", type: "line", startNodeId: "a", endNodeId: "b" }], closed: false, role: "construction", style: rectangle.style };
+    const split = dispatch(createEditor({ ...document, elements: [native] }), splitPathLineAt(native.id, 0, 0.5, "role-cut-node"));
+    const replacement = split.document.elements.find((element) => element.id === native.id);
+    expect(replacement).toMatchObject({ type: "path", id: native.id, role: "construction" });
+
+    const sketch: SketchElement = { type: "sketch", id: elementId("role-cut-sketch"), layerId: rectangle.layerId, nodes: [{ id: "a", point: { x: 0, y: 0 } }, { id: "b", point: { x: 10, y: 0 } }], edges: [{ id: "target", startNodeId: "a", endNodeId: "b", role: "normal" }], style: rectangle.style };
+    const crossing: SketchElement = { type: "sketch", id: elementId("role-crossing-sketch"), layerId: rectangle.layerId, nodes: [{ id: "c", point: { x: 5, y: -5 } }, { id: "d", point: { x: 5, y: 5 } }], edges: [{ id: "crossing", startNodeId: "c", endNodeId: "d", role: "construction" }], style: rectangle.style };
+    const sketchSplit = dispatch(createEditor({ ...document, elements: [sketch, crossing] }), cutSegment(sketch.id, 0, { x: 5, y: 0 }));
+    const splitSketch = sketchSplit.document.elements.find((element): element is SketchElement => element.id === crossing.id);
+    expect(splitSketch?.edges).toHaveLength(2);
+    expect(splitSketch?.edges.every((edge) => edge.role === "construction")).toBe(true);
+  });
+
+  it("rejects a cut that would merge normal and construction native sources atomically", () => {
+    const target: LineElement = { type: "line", id: elementId("role-mixed-target"), layerId: rectangle.layerId, start: { x: 0, y: 0 }, end: { x: 10, y: 0 }, rotation: 0, role: "normal", style: rectangle.style };
+    const normal: LineElement = { type: "line", id: elementId("role-mixed-normal"), layerId: rectangle.layerId, start: { x: 10, y: 0 }, end: { x: 20, y: 0 }, rotation: 0, role: "normal", style: rectangle.style };
+    const construction: LineElement = { type: "line", id: elementId("role-mixed-construction"), layerId: rectangle.layerId, start: { x: 20, y: 0 }, end: { x: 30, y: 0 }, rotation: 0, role: "construction", style: rectangle.style };
+    const initial = createEditor({ ...document, elements: [target, normal, construction] });
+    const rejected = dispatch(initial, cutLineAtPoint(target.id, { x: 5, y: 0 }));
+    expect(rejected).toBe(initial);
+    expect(rejected.document).toBe(initial.document);
+    expect(rejected.document.elements).toEqual([target, normal, construction]);
+    expect(rejected.undo).toHaveLength(0);
+  });
+
   it("cuts a circle exactly into one canonical arc and supports undo/redo", () => {
     const circle: CircleElement = { type: "circle", id: elementId("exact-circle"), layerId: layerId("default"), center: { x: 10, y: 10 }, radius: 5, style: { ...rectangle.style, fill: "red" }, operation: { operation: "cut", order: 2 } };
     const cutter: LineElement = { type: "line", id: elementId("exact-circle-cutter"), layerId: layerId("default"), start: { x: 0, y: 10 }, end: { x: 20, y: 10 }, rotation: 0, style: rectangle.style };
@@ -549,6 +575,18 @@ describe("editor core", () => {
     expect(cut.undo).toHaveLength(1);
     expect(undo(cut).document).toEqual(initial.document);
     expect(redo(undo(cut)).document).toEqual(cut.document);
+  });
+
+  it("preserves a construction role when cutting a cubic against a sketch edge", () => {
+    const cubicPath: PathElement = { type: "path", id: elementId("cubic-role-path"), layerId: layerId("default"), closed: false, style: rectangle.style,
+      nodes: [{ id: "start", anchor: { x: 0, y: 0 }, join: "corner" }, { id: "end", anchor: { x: 10, y: 0 }, join: "corner" }],
+      segments: [{ id: "curve", type: "cubicBezier", startNodeId: "start", endNodeId: "end", control1: { x: 3, y: 6 }, control2: { x: 7, y: 6 } }] };
+    const transversal: SketchElement = { type: "sketch", id: elementId("cubic-role-transversal"), layerId: layerId("default"), style: rectangle.style,
+      nodes: [{ id: "top", point: { x: 5, y: -10 } }, { id: "bottom", point: { x: 5, y: 10 } }], edges: [{ id: "edge", startNodeId: "top", endNodeId: "bottom", role: "construction" }] };
+    const cut = dispatch(createEditor({ ...document, elements: [cubicPath, transversal] }), cutSegment(cubicPath.id, 0, { x: 8, y: 3 }));
+    const result = cut.document.elements.find((element): element is SketchElement => element.id === transversal.id && element.type === "sketch");
+    expect(result?.edges).toHaveLength(2);
+    expect(result?.edges.every((edge) => edge.role === "construction")).toBe(true);
   });
 
   it("cuts a cubic against a single visible sketch edge with exact topology and endpoint preservation", () => {
