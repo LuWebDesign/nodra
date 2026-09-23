@@ -394,11 +394,16 @@ export const setGeometryRole = (target: GeometryRoleTarget, role: GeometryRole):
 
 export const createElement = (element: Element, connections: readonly ExplicitConnection[] = []): EditorCommand => ({
   name: `create:${element.type}`,
-  apply: (document) => document.elements.some((current) => current.id === element.id)
-    ? { success: false, error: `Element already exists: ${element.id}` }
-     : element.type === "sketch"
-           ? replaceSketchElements({ ...document, connections: [...(document.connections ?? []), ...connections] }, [...document.elements, { ...element }])
-           : replaceElements({ ...document, connections: [...(document.connections ?? []), ...connections] }, [...document.elements, { ...element }]),
+  apply: (document) => {
+    if (document.elements.some((current) => current.id === element.id)) return { success: false, error: `Element already exists: ${element.id}` };
+    const persistentElement = element.type === "dimension" && element.driving === true && dimensionDrivingCapability(element, [...document.elements, element]) === "annotation"
+      ? Object.fromEntries(Object.entries({ ...element, driving: false }).filter(([key]) => key !== "constraintId")) as Element
+      : element;
+    const elements = [...document.elements, persistentElement];
+    return persistentElement.type === "sketch"
+      ? replaceSketchElements({ ...document, connections: [...(document.connections ?? []), ...connections] }, elements)
+      : replaceElements({ ...document, connections: [...(document.connections ?? []), ...connections] }, elements);
+  },
 });
 
 /** Creates only an enforced positional coincidence; legacy connections are untouched. */
@@ -2390,6 +2395,16 @@ export const insertFormaNode = (id: ElementId, address: ContourSegmentAddress, p
   },
 });
 
+export type DimensionDrivingCapability = "driving" | "annotation";
+
+/** Describes whether a dimension may persist a solver-driving relation. Construction geometry intentionally has the same capability as its normal counterpart. */
+export const dimensionDrivingCapability = (dimension: DimensionElement, elements: readonly Element[]): DimensionDrivingCapability => {
+  const target = elements.find((element) => element.id === dimension.references[0]?.elementId);
+  if (dimension.kind === "radius" || dimension.kind === "diameter") return target?.type === "circle" ? "driving" : "annotation";
+  if (target?.type !== "sketch") return "annotation";
+  return sketchConstraintForDimension(dimension, target, elements) ? "driving" : "annotation";
+};
+
 const sketchConstraintForDimension = (dimension: DimensionElement, sketch: SketchElement, elements: readonly Element[], value?: number): SketchConstraint | undefined => {
   const measuredValue = value ?? dimensionGeometry(dimension, elements)?.value;
   if (!Number.isFinite(measuredValue) || measuredValue === undefined || measuredValue <= 0) return undefined;
@@ -2418,6 +2433,8 @@ export const updateDimensionValue = (dimensionId: ElementId, value: number): Edi
     if (!Number.isFinite(value) || value <= 0) return { success: false, error: "Dimension value must be positive" };
     const dimension = document.elements.find((element): element is DimensionElement => element.id === dimensionId && element.type === "dimension");
     if (!dimension) return { success: false, error: "Dimension not found" };
+    const measuredValue = dimensionGeometry(dimension, document.elements)?.value;
+    if (dimension.driving !== true && measuredValue === value) return { success: true, document };
     const targetId = dimension.references[0].elementId;
     const target = document.elements.find((element) => element.id === targetId);
     // A cross-object dimension drives the second referenced node while the
@@ -2792,14 +2809,17 @@ export const setDimensionDriving = (dimensionId: ElementId, driving: boolean): E
     if (!dimension) return { success: false, error: "Dimension not found" };
     const targetId = dimension.references[0].elementId;
     const constraintId = dimension.constraintId ?? `dimension:${dimension.id}`;
-    const updatedDimension = driving ? { ...dimension, driving: true, constraintId } : Object.fromEntries(Object.entries({ ...dimension, driving: false }).filter(([key]) => key !== "constraintId")) as unknown as DimensionElement;
+    const capability = dimensionDrivingCapability(dimension, document.elements);
+    const requestedDriving = driving && capability === "driving";
+    const updatedDimension = requestedDriving ? { ...dimension, driving: true, constraintId } : Object.fromEntries(Object.entries({ ...dimension, driving: false }).filter(([key]) => key !== "constraintId")) as unknown as DimensionElement;
+    if (!requestedDriving && driving) return result(withElements(document, document.elements.map((element) => element.id === dimension.id ? updatedDimension : element)));
     if (dimension.kind === "radius" || dimension.kind === "diameter") {
       const target = document.elements.find((element): element is Extract<Element, { type: "circle" }> => element.id === targetId && isCircleElement(element));
       if (!target) return { success: false, error: "Driving dimension target is not a circle" };
       const existing = target.circleConstraints ?? [];
       const value = dimensionGeometry(dimension, document.elements)?.value;
       if (driving && (!value || !Number.isFinite(value) || value <= 0)) return { success: false, error: "Circular dimension has no valid value" };
-      const constraints = driving ? [...existing.filter((candidate) => candidate.id !== constraintId), { id: constraintId, kind: dimension.kind, value: value as number, driving: true }] : existing.filter((candidate) => candidate.id !== constraintId);
+      const constraints = requestedDriving ? [...existing.filter((candidate) => candidate.id !== constraintId), { id: constraintId, kind: dimension.kind, value: value as number, driving: true }] : existing.filter((candidate) => candidate.id !== constraintId);
       return replaceCircleElements(document, document.elements.map((element) => element.id === dimension.id ? updatedDimension : element.id === target.id ? { ...target, circleConstraints: constraints } : element));
 
     }
@@ -2807,8 +2827,8 @@ export const setDimensionDriving = (dimensionId: ElementId, driving: boolean): E
     if (!target) return { success: false, error: "Only sketch or circular dimensions can be driving" };
     const existing = target.constraints ?? [];
     const constraint = sketchConstraintForDimension({ ...dimension, constraintId }, target, document.elements);
-    if (driving && !constraint) return { success: false, error: "Sketch dimension cannot create a driving constraint" };
-    const constraints = driving ? [...existing.filter((candidate) => candidate.id !== constraintId), constraint!] : existing.filter((candidate) => candidate.id !== constraintId);
+    if (requestedDriving && !constraint) return { success: true, document };
+    const constraints = requestedDriving ? [...existing.filter((candidate) => candidate.id !== constraintId), constraint!] : existing.filter((candidate) => candidate.id !== constraintId);
     return replaceSketchElements(document, document.elements.map((element) => element.id === dimension.id ? updatedDimension : element.id === target.id ? { ...target, constraints } : element));
 
   },

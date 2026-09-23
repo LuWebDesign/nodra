@@ -123,7 +123,14 @@ Produce a repository-evidence-based audit of KOND's current parametric sketch ar
   - Scope: show construction geometry in the editor with a subdued dashed, no-fill presentation; apply that presentation independently to native elements and individual sketch edges; preserve ordinary interaction behavior; add a pure explicit fabricable projection that excludes construction without changing profile/topology APIs; hide construction in renderer `export` mode.
   - Out of scope: role writers, topology propagation, selection/snap/dimension/cut eligibility, schema/persistence changes, export format/parser, relation/dimension behavior, WU6+.
   - Status: complete; independently verified.
-  - Evidence: renderer presentation distinguishes native and individual sketch-edge construction geometry with a subdued dashed, no-fill style; normal geometry is unchanged. `projectFabricableDocument` provides a pure explicit construction-excluding projection, while renderer `export` mode hides construction. Independent verification passed `corepack pnpm exec vitest run packages/renderer-svg/src/index.test.ts` (26/26) and `git diff --check`. No commit created.
+  - Evidence: renderer presentation distinguishes native and individual sketch-edge construction geometry with a subdued dashed, no-fill style; normal geometry is unchanged. `projectFabricableDocument` provides a pure explicit construction-excluding projection, while renderer `export` mode hides construction. Independent verification passed `corepack pnpm exec vitest run packages/renderer-svg/src/index.test.ts` (26/26) and `git diff --check`. Commit: `cc8b049` (`feat(renderer): present construction geometry`).
+
+- [ ] **WU6 — Relation and dimension eligibility**
+  - Authorization: explicitly granted with the mapped recommendations.
+  - Scope: centralize persistent relation/dimension eligibility at the editor-core command boundary; unsupported driving requests create a non-driving annotation; native-line angular dimensions remain non-driving while direct native value editing remains supported; construction remains eligible wherever its geometric type is supported; correct repeated same-value non-driving dimension updates to be no-ops without history/revision changes.
+  - Out of scope: automatic-relation lifecycle, solver rewrite/capability additions, conversion among connections/positional coincidences/constraints, persistence/schema changes, renderer/export, tool/UI redesign, WU7+.
+  - Status: complete; independently verified.
+  - Evidence: `dimensionDrivingCapability` centralizes durable eligibility in editor-core and `App.tsx` consumes it. Unsupported driving normalizes to non-driving annotation; native-line angular dimensions remain non-driving; construction follows ordinary type eligibility; repeated same-value non-driving edits preserve document identity, revision, and history. Independent verification passed `corepack pnpm exec vitest run packages/editor-core/src/index.test.ts apps/web/src/App.test.tsx` (209/209) and `git diff --check`. No commit created.
 
 ## Deliverable
 

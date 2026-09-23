@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createDocument, elementId, featureId, layerId, type ArcElement, type DimensionElement, type Element, type EllipseElement, type CircleElement, type LineElement, type GlyphElement, type PathElement, type PointMm, type RectangleElement, type SketchElement, type SplineElement, type TextElement } from "@nodra/domain";
-import { addCircleConstraint, addDocumentConstraint, deleteDocumentConstraint, addSketchConstraint, addSketchSegmentRelation, addToSelection, appendSketchEdge, appendSplineNode, beginGesture, cancelGesture, clearSelection, closePath, closeSplineElement, commitGesture, createEditor, createElement, createIntersectFeature, rebuildParametricFeatures, addPositionalConnection, addPositionalCoincidence, deletePositionalCoincidence, createPathCubicNode, createSketchLine, cutContourSegment, cutLineAtPoint, cutPathSegment, cutSegment, cutSketchEdge, splitPathLineAt, deleteContourNodes, deleteElement, deleteElementNodes, deletePathNodes, deleteSketchConstraint, dispatch, duplicateElements, flipElements, insertContourNode, invalidDimensionIdsForShapeOperation, moveElement, moveElements, movePathNode, movePathHandle, openPath, previewGesture, previewGestureFromBase, redo, reversePath, removeFromSelection, reorderLayer, resizeElement, resizeElementToDimensions, resizeElements, resizeElementsToDimensions, rotateElementsAroundCenter, select, selectForPointerDown, setDimensionDriving, updateCircleConstraint, deleteCircleConstraint, solveCircle, setLayerVisibility, setPathJoin, shapeOperation, splitPathSegment, toggleSelection, topologyEditForPathSegmentReplacement, topologyReferenceKey, undo, updateContourNode, updateDimensionValue, updateElement, updateElementNode, updateElementStyles, updateSketchConstraint, updateDocumentConstraint, updateSplineHandle, updateSplineNode, setGeometryRole } from "./index.js";
+import { addCircleConstraint, addDocumentConstraint, deleteDocumentConstraint, addSketchConstraint, addSketchSegmentRelation, addToSelection, appendSketchEdge, appendSplineNode, beginGesture, cancelGesture, clearSelection, closePath, closeSplineElement, commitGesture, createEditor, createElement, createIntersectFeature, dimensionDrivingCapability, rebuildParametricFeatures, addPositionalConnection, addPositionalCoincidence, deletePositionalCoincidence, createPathCubicNode, createSketchLine, cutContourSegment, cutLineAtPoint, cutPathSegment, cutSegment, cutSketchEdge, splitPathLineAt, deleteContourNodes, deleteElement, deleteElementNodes, deletePathNodes, deleteSketchConstraint, dispatch, duplicateElements, flipElements, insertContourNode, invalidDimensionIdsForShapeOperation, moveElement, moveElements, movePathNode, movePathHandle, openPath, previewGesture, previewGestureFromBase, redo, reversePath, removeFromSelection, reorderLayer, resizeElement, resizeElementToDimensions, resizeElements, resizeElementsToDimensions, rotateElementsAroundCenter, select, selectForPointerDown, setDimensionDriving, updateCircleConstraint, deleteCircleConstraint, solveCircle, setLayerVisibility, setPathJoin, shapeOperation, splitPathSegment, toggleSelection, topologyEditForPathSegmentReplacement, topologyReferenceKey, undo, updateContourNode, updateDimensionValue, updateElement, updateElementNode, updateElementStyles, updateSketchConstraint, updateDocumentConstraint, updateSplineHandle, updateSplineNode, setGeometryRole } from "./index.js";
 import { boundsOfElements, realGeometryNodes } from "@nodra/geometry";
 import type { Direction } from "@nodra/geometry";
 import { appendLinePoint } from "./index.js";
@@ -16,6 +16,28 @@ const arc: ArcElement = { type: "arc", id: elementId("arc"), layerId: layerId("d
 const glyph: GlyphElement = { type: "glyph", id: elementId("glyph"), layerId: layerId("default"), position: { x: 0, y: 0 }, size: { width: 20, height: 20 }, glyph: "O", fillRule: "evenodd", rotation: 0, style: rectangle.style, contours: [{ nodes: [{ id: "ga", anchor: { x: 0, y: 0 }, join: "smooth" }, { id: "gb", anchor: { x: 10, y: 0 }, join: "smooth" }, { id: "gc", anchor: { x: 10, y: 10 }, join: "smooth" }, { id: "gd", anchor: { x: 0, y: 10 }, join: "smooth" }], segments: [{ id: "fixture-segment-2", type: "cubicBezier", startNodeId: "ga", endNodeId: "gb", control1: { x: 3, y: -2 }, control2: { x: 7, y: -2 } }, { id: "fixture-segment-3", type: "cubicBezier", startNodeId: "gb", endNodeId: "gc", control1: { x: 12, y: 3 }, control2: { x: 12, y: 7 } }, { id: "fixture-segment-4", type: "cubicBezier", startNodeId: "gc", endNodeId: "gd", control1: { x: 7, y: 12 }, control2: { x: 3, y: 12 } }, { id: "fixture-segment-5", type: "cubicBezier", startNodeId: "gd", endNodeId: "ga", control1: { x: -2, y: 7 }, control2: { x: -2, y: 3 } }] }] };
 
 describe("editor core", () => {
+  it("centralizes dimension driving eligibility without filtering construction geometry", () => {
+    const constructionLine: LineElement = { type: "line", id: elementId("capability-line"), layerId: rectangle.layerId, start: { x: 0, y: 0 }, end: { x: 10, y: 0 }, rotation: 0, role: "construction", style: rectangle.style };
+    const nativeAngular: DimensionElement = { ...dimension, id: elementId("capability-angular"), kind: "angular", references: [{ kind: "line", elementId: constructionLine.id }, { kind: "line", elementId: constructionLine.id }] };
+    expect(dimensionDrivingCapability(nativeAngular, [constructionLine, nativeAngular])).toBe("annotation");
+    const sketch = createSketchLine(elementId("capability-sketch"), rectangle.layerId, rectangle.style, { x: 0, y: 0 }, { x: 10, y: 3 });
+    const sketchDimension: DimensionElement = { ...dimension, id: elementId("capability-sketch-dimension"), kind: "aligned", references: [{ kind: "node", elementId: sketch.id, nodeIndex: 0, nodeId: sketch.nodes[0]!.id }, { kind: "node", elementId: sketch.id, nodeIndex: 1, nodeId: sketch.nodes[1]!.id }] };
+    expect(dimensionDrivingCapability(sketchDimension, [sketch, sketchDimension])).toBe("driving");
+  });
+
+  it("normalizes unsupported driving annotations and makes repeated non-driving values no-ops", () => {
+    const line: LineElement = { type: "line", id: elementId("annotation-line"), layerId: rectangle.layerId, start: { x: 0, y: 0 }, end: { x: 10, y: 0 }, rotation: 0, style: rectangle.style };
+    const angular: DimensionElement = { ...dimension, id: elementId("annotation-angular"), kind: "angular", references: [{ kind: "line", elementId: line.id }, { kind: "line", elementId: line.id }], driving: true, constraintId: "unsupported" };
+    const created = dispatch(createEditor({ ...document, elements: [line] }), createElement(angular));
+    const stored = created.document.elements.find((element) => element.id === angular.id);
+    expect(stored).toMatchObject({ type: "dimension", driving: false });
+    expect(stored).not.toHaveProperty("constraintId");
+    const nonDrivingInitial = createEditor({ ...document, elements: [rectangle, dimension] });
+    const nonDriving = dispatch(nonDrivingInitial, updateDimensionValue(dimension.id, 10));
+    expect(nonDriving).toBe(nonDrivingInitial);
+    expect(nonDriving.document.revision).toBe(document.revision);
+  });
+
   it("sets native and individual sketch-edge geometry roles atomically", () => {
     const native: LineElement = { type: "line", id: elementId("role-line"), layerId: rectangle.layerId, start: { x: 0, y: 0 }, end: { x: 10, y: 0 }, rotation: 0, style: rectangle.style };
     const sketch: SketchElement = { type: "sketch", id: elementId("role-sketch"), layerId: rectangle.layerId, nodes: [{ id: "a", point: { x: 0, y: 0 } }, { id: "b", point: { x: 10, y: 0 } }, { id: "c", point: { x: 20, y: 0 } }], edges: [{ id: "first", startNodeId: "a", endNodeId: "b" }, { id: "second", startNodeId: "b", endNodeId: "c", role: "construction" }], style: rectangle.style };
@@ -1754,15 +1776,10 @@ it("characterizes a non-driving sketch dimension update and repeated-value histo
      expect(updatedDimension.constraintId).toBeUndefined();
      expect(updated.undo).toHaveLength(1);
      expect(undo(updated).document).toEqual(initial.document);
-     // Repeating the nominal value currently re-solves the unconstrained sketch and records another transaction.
      const repeated = dispatch(updated, updateDimensionValue(linked.id, 20));
-     expect(repeated).not.toBe(updated);
-     expect(repeated.undo).toHaveLength(2);
-     // The repeated solve changes the endpoint by floating-point drift, so this is not a semantic document no-op.
-     const repeatedSketch = repeated.document.elements[0] as SketchElement;
-     expect(repeatedSketch.nodes[1]?.point.x).toBeCloseTo(Math.sqrt(200));
-     expect(repeatedSketch.nodes[1]?.point.y).toBeCloseTo(Math.sqrt(200));
-     expect(repeatedSketch.nodes[1]?.point).not.toEqual(updatedSketch.nodes[1]?.point);
+     expect(repeated).toBe(updated);
+     expect(repeated.undo).toHaveLength(1);
+     expect(repeated.document.revision).toBe(updated.document.revision);
    });
 
 it("preserves a horizontal sketch relation while changing an angular dimension", () => {
