@@ -116,7 +116,14 @@ Produce a repository-evidence-based audit of KOND's current parametric sketch ar
   - Status: complete; independently verified.
   - Discovery: direct split/trim/replacement constructors in `packages/editor-core/src/index.ts` omitted source roles, so validation silently defaulted replacements to `normal`. Pure one-source replacements now preserve their source role, including cubic-path transversal replacement edges.
   - Decision: when planar cut reconstruction would combine `normal` and `construction` native sources into one path, reject that mixed-role reconstruction rather than inventing a precedence.
-  - Evidence: `packages/editor-core/src/index.ts` propagates roles through sketch-edge split/cut, native path/line replacement, contour reconstruction, arc/circle trim, and cubic-path transversal replacement. Regression tests prove these paths and atomic mixed-role rejection. Independent verification passed `corepack pnpm exec vitest run packages/editor-core/src/index.test.ts` (205/205) and `git diff --check`. No commit created.
+  - Evidence: `packages/editor-core/src/index.ts` propagates roles through sketch-edge split/cut, native path/line replacement, contour reconstruction, arc/circle trim, and cubic-path transversal replacement. Regression tests prove these paths and atomic mixed-role rejection. Independent verification passed `corepack pnpm exec vitest run packages/editor-core/src/index.test.ts` (205/205) and `git diff --check`. Commit: `3c0bd5b` (`feat(editor): propagate geometry roles through topology edits`).
+
+- [ ] **WU5 — Derived role consumers**
+  - Authorization: explicitly granted.
+  - Scope: show construction geometry in the editor with a subdued dashed, no-fill presentation; apply that presentation independently to native elements and individual sketch edges; preserve ordinary interaction behavior; add a pure explicit fabricable projection that excludes construction without changing profile/topology APIs; hide construction in renderer `export` mode.
+  - Out of scope: role writers, topology propagation, selection/snap/dimension/cut eligibility, schema/persistence changes, export format/parser, relation/dimension behavior, WU6+.
+  - Status: complete; independently verified.
+  - Evidence: renderer presentation distinguishes native and individual sketch-edge construction geometry with a subdued dashed, no-fill style; normal geometry is unchanged. `projectFabricableDocument` provides a pure explicit construction-excluding projection, while renderer `export` mode hides construction. Independent verification passed `corepack pnpm exec vitest run packages/renderer-svg/src/index.test.ts` (26/26) and `git diff --check`. No commit created.
 
 ## Deliverable
 

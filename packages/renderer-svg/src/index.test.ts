@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createDocument, elementId, layerId, withElements, type ArcElement, type DocumentSnapshot } from "@nodra/domain";
 import { buildSketchProfile } from "@nodra/geometry";
-    import { renderSketchProfileSvg, renderSvg } from "./index.js";
+import { projectFabricableDocument, renderSketchProfileSvg, renderSvg } from "./index.js";
 
 const layer = { id: layerId("design"), name: "Design", visible: true, order: 0 } as const;
 const style = { stroke: "#111", strokeWidth: 0.2 } as const;
@@ -27,6 +27,55 @@ describe("SVG renderer boundary", () => {
       expect(result.renderedElementIds).toEqual(["rect", "ellipse", "circle", "line"]);
     }
   });
+  it("subdues construction geometry in editor mode and preserves normal geometry", () => {
+    const source = withElements(createDocument("construction-editor", [layer]), [
+      { type: "line", id: elementId("construction-line"), layerId: layer.id, start: { x: 0, y: 0 }, end: { x: 10, y: 0 }, rotation: 0, role: "construction" as const, style },
+      { type: "line", id: elementId("normal-line"), layerId: layer.id, start: { x: 0, y: 10 }, end: { x: 10, y: 10 }, rotation: 0, style },
+    ]);
+    const result = renderSvg(source, { zoom: 1, panMm: { x: 0, y: 0 } });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.svg).toContain('data-element-id="construction-line"');
+      expect(result.svg).toContain('data-element-id="construction-line" x1="0" y1="0" x2="10" y2="0" transform="translate(5 0) rotate(0) scale(1 1) translate(-5 0)" stroke="#111" stroke-width="0.2" fill="none" stroke-dasharray="6 4"');
+      expect(result.svg).toContain('data-element-id="normal-line"');
+      expect(result.svg).not.toContain('data-element-id="normal-line" x1="0" y1="10" x2="10" y2="10" transform="translate(5 10) rotate(0) scale(1 1) translate(-5 -10)" stroke="#111" stroke-width="0.2" fill="none" stroke-dasharray="6 4"');
+    }
+  });
+
+  it("styles construction sketch edges individually in mixed-role sketches", () => {
+    const source = withElements(createDocument("construction-sketch", [layer]), [{
+      type: "sketch", id: elementId("mixed-sketch"), layerId: layer.id,
+      nodes: [{ id: "a", point: { x: 0, y: 0 } }, { id: "b", point: { x: 10, y: 0 } }, { id: "c", point: { x: 10, y: 10 } }],
+      edges: [{ id: "normal-edge", startNodeId: "a", endNodeId: "b" }, { id: "construction-edge", startNodeId: "b", endNodeId: "c", role: "construction" }], style,
+    }]);
+    const result = renderSvg(source, { zoom: 1, panMm: { x: 0, y: 0 } });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.svg).toContain('<line x1="0" y1="0" x2="10" y2="0" />');
+      expect(result.svg).toContain('<line x1="10" y1="0" x2="10" y2="10" stroke-dasharray="6 4" />');
+    }
+  });
+
+  it("projects only fabricable geometry for export without mutating the source", () => {
+    const source = withElements(createDocument("fabricable", [layer]), [
+      { type: "line", id: elementId("normal-line"), layerId: layer.id, start: { x: 0, y: 0 }, end: { x: 10, y: 0 }, rotation: 0, style },
+      { type: "line", id: elementId("construction-line"), layerId: layer.id, start: { x: 0, y: 10 }, end: { x: 10, y: 10 }, rotation: 0, role: "construction" as const, style },
+      { type: "sketch", id: elementId("mixed-sketch"), layerId: layer.id, nodes: [{ id: "a", point: { x: 0, y: 20 } }, { id: "b", point: { x: 10, y: 20 } }, { id: "c", point: { x: 10, y: 30 } }], edges: [{ id: "normal-edge", startNodeId: "a", endNodeId: "b" }, { id: "construction-edge", startNodeId: "b", endNodeId: "c", role: "construction" }], style },
+    ]);
+    const before = structuredClone(source);
+    const projection = projectFabricableDocument(source);
+    expect(projection.elements.map((element) => element.id)).toEqual(["normal-line", "mixed-sketch"]);
+    expect((projection.elements[1] as Extract<typeof projection.elements[number], { type: "sketch" }>).edges.map((edge) => edge.id)).toEqual(["normal-edge"]);
+    expect(source).toEqual(before);
+    const exported = renderSvg(source, { zoom: 1, panMm: { x: 0, y: 0 } }, { mode: "export" });
+    expect(exported.success).toBe(true);
+    if (exported.success) {
+      expect(exported.renderedElementIds).toEqual(["normal-line", "mixed-sketch"]);
+      expect(exported.svg).not.toContain("construction-line");
+      expect(exported.svg).not.toContain("construction-edge");
+    }
+  });
+
   it("renders sketch definition state through the shared constraint boundary", () => {
     const underdefined = { type: "sketch" as const, id: elementId("underdefined"), layerId: layer.id, nodes: [{ id: "a", point: { x: 0, y: 0 } }, { id: "b", point: { x: 20, y: 0 } }], edges: [{ id: "ab", startNodeId: "a", endNodeId: "b" }], constraints: [], style };
     const defined = { ...underdefined, id: elementId("defined"), nodes: [{ id: "a", point: { x: 0, y: 0 } }, { id: "b", point: { x: 20, y: 0 } }], constraints: [{ id: "fixed-a", kind: "fixed" as const, references: [{ elementId: elementId("defined"), nodeId: "a" }] as const }, { id: "horizontal", kind: "horizontal" as const, references: [{ elementId: elementId("defined"), nodeId: "a" }, { elementId: elementId("defined"), nodeId: "b" }] as const }, { id: "length", kind: "distance-horizontal" as const, references: [{ elementId: elementId("defined"), nodeId: "a" }, { elementId: elementId("defined"), nodeId: "b" }] as const, value: 20 }] };
