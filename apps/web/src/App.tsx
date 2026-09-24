@@ -615,9 +615,9 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
     recoveredNotice.current = false;
     if (!persistenceReady) return;
     if (sketchSessionRef.current.status === "active" || sketchSessionRef.current.status === "confirming-cancel") return;
-    saveProjectMirror(project);
+    const mirrorSaved = saveProjectMirror(project);
     const officiallySaved = lastOfficialSave.current?.projectId === project.id && lastOfficialSave.current.snapshot === JSON.stringify(project);
-    if ((!preserveRecoveryNotice && !officiallySaved) || !online) persist.set(online ? "pending" : "offline", online ? "Cambios pendientes; recuperación local actualizada" : "Sin conexión — la edición permanece local");
+    if ((!preserveRecoveryNotice && !officiallySaved) || !online) persist.set(online ? "pending" : "offline", online ? mirrorSaved ? "Cambios pendientes; recuperación local actualizada" : "Cambios pendientes; no se pudo actualizar la recuperación local" : mirrorSaved ? "Sin conexión — la edición permanece local" : "Sin conexión — no se pudo guardar la recuperación local");
   }, [activePieceId, activeProjectMetadata.id, persistenceReady, project, online, view, mode]);
 
   const dimensionPreview = dimensionDraft?.phase === "placement" && documentCursorPoint ? dimensionDraft.first.kind === "node" && dimensionDraft.second.kind === "node" ? newDimension("layer-1", dimensionDraft.first.hit, dimensionDraft.second.hit, documentCursorPoint, tool === "radius" ? "radius" : dimensionMode) : dimensionDraft.first.kind === "line" && dimensionDraft.second.kind === "line" ? newAngularDimension("layer-1", dimensionDraft.first, dimensionDraft.second, documentCursorPoint) : undefined : undefined;
