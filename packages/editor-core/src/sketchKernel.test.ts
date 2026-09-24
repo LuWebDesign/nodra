@@ -13,6 +13,12 @@ const square = (constraints?: readonly SketchConstraint[]): SketchElement => ({
   ...(constraints ? { constraints } : {}), style,
 });
 const documentFor = (...elements: readonly Element[]): ReturnType<typeof createDocument> => ({ ...createDocument("doc", [layer]), elements });
+const normalizedRoles = (input: ReturnType<typeof documentFor>): ReturnType<typeof documentFor> => ({
+  ...input,
+  elements: input.elements.map((element) => element.type === "sketch"
+    ? { ...element, role: element.role ?? "normal", edges: element.edges.map((edge) => ({ ...edge, role: edge.role ?? "normal" })) }
+    : { ...element, role: element.role ?? "normal" }),
+});
     const circle = (circleConstraints?: CircleElement["circleConstraints"]): CircleElement => ({ type: "circle", id: elementId("circle"), layerId: layer.id, center: { x: 1, y: 2 }, radius: 3, style, ...(circleConstraints ? { circleConstraints } : {}) });
 
 const fixed = (id: string, nodeId: string): SketchConstraint => ({ id, kind: "fixed", references: [{ elementId: elementId("square"), nodeId }] });
@@ -51,7 +57,7 @@ describe("sketch kernel", () => {
             const result = recomputeSketchKernel(input);
             expect(result.derivedMixedTopology.intersections[0]?.kind).toBe("overlap");
             expect(result.derivedMixedTopology.diagnostics.map((diagnostic) => diagnostic.code)).toContain("overlap");
-            expect(result.document).toEqual(input);
+            expect(result.document).toEqual(normalizedRoles(input));
           });
 
       it("exposes an exact mixed line/arc loop as deterministic derived graph metadata", () => {
@@ -106,14 +112,16 @@ describe("sketch kernel", () => {
         const input = documentFor(circle([{ id: "z", kind: "radius", value: 4 }, { id: "a", kind: "diameter", value: 10 }]));
         const result = recomputeSketchKernel(input);
         expect(result.rollback).toBe(true);
-        expect(result.document).toEqual(input);
+        expect(result.document).toEqual(normalizedRoles(input));
         expect(result.circleConstraintDiagnostics).toEqual([{ code: "circle-constraint-conflict", circleId: circle().id, constraintIds: ["z"], message: "Circle constraints are in conflict: z" }]);
       });
 
-      it("preserves unconstrained native circles", () => {
+      it("preserves unconstrained native circles without mutating the input fixture", () => {
         const input = documentFor(circle());
+        const before = JSON.stringify(input);
         const result = recomputeSketchKernel(input);
-        expect(result.document.elements).toEqual(input.elements);
+        expect(result.document.elements).toEqual(normalizedRoles(input).elements);
+        expect(JSON.stringify(input)).toBe(before);
       });
 
       it("keeps circle recomputation revision-immutable", () => {
@@ -175,7 +183,7 @@ describe("sketch kernel", () => {
     const result = recomputeSketchKernel(input);
     expect(result.rollback).toBe(true);
     expect(result.committed).toBe(false);
-    expect(result.document).toEqual(input);
+    expect(result.document).toEqual(normalizedRoles(input));
     expect(result.constraintDiagnostics.length).toBeGreaterThan(0);
   });
 
@@ -189,7 +197,7 @@ describe("sketch kernel", () => {
         expect(result.committed).toBe(false);
         expect(result.rollback).toBe(true);
         expect(result.profileReady).toBe(false);
-        expect(result.document).toEqual(input);
+        expect(result.document).toEqual(normalizedRoles(input));
         expect(result.topologyDiagnostics).toEqual(expect.arrayContaining([
           expect.objectContaining({ code: "invalid-topology", message: expect.stringContaining("source-provenance-mismatch") }),
         ]));

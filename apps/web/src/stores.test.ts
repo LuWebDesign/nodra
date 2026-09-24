@@ -44,7 +44,9 @@ describe("document store persistence boundary", () => {
 
     const next = useDocumentStore.getState();
     expect(next.project.revision).toBe(1);
-    expect(next.project.pages[0]?.elements).toEqual([{ ...sketch, pieceId: piece.id }]);
+    expect(next.project.pages[0]?.elements).toEqual([{ ...sketch, pieceId: piece.id, role: "normal", edges: sketch.edges.map((edge) => ({ ...edge, role: "normal" })) }]);
+    expect(sketch).not.toHaveProperty("role");
+    expect(sketch.edges[0]).not.toHaveProperty("role");
     expect(next.project.pieces[0]).toMatchObject({ state: "underdefined", sketches: [{ pageId: "page-1", sketchId: "sketch-1" }] });
 
   });
