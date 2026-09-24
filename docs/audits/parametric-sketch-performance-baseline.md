@@ -1,6 +1,6 @@
 # WU11-C1 package performance measurements
 
-Status: measurement harness and report repaired; WU11-C1 remains pending independent verification and commit. These are machine-specific package/API measurements, not product targets or browser latency claims.
+Status: measurement harness and report repaired; WU11-C1 independently verified and committed as `772cf85`, with ledger closure `9eb5dc4`. These are machine-specific package/API measurements, not product targets or browser latency claims.
 
 ## Method and scope
 
@@ -34,3 +34,24 @@ Observed on Windows 10 (build 26200), x64, AMD Ryzen 7 5700G with Radeon Graphic
 ## Interpretation limits
 
 No universal baseline or latency threshold is asserted. These values describe one observed machine/run and fixed public API workloads only. They do not establish end-to-end UI responsiveness, pointer delivery cost, rendering-frame cost, or isolated commit-only cost. No product source or behavior changed.
+
+## WU11-C2 — Browser hover pointermove-to-frame proxy
+
+This is a browser-level **hover event-to-next-animation-frame proxy**, not an isolated pointer handler, solver, render, or paint measurement. A capture-phase `document` listener arms for one real Playwright mouse `pointermove`, reads that event's `timeStamp`, and records `performance.now()` inside the next `requestAnimationFrame` callback. The 20 warmups and 120 serial measured samples per scale use an armed-event handshake: one arm, one mouse move, one first matching event, one RAF result. The observer has bounded per-sample timeout and explicit `arm`/`take`/`dispose` lifecycle; disposal removes the listener, cancels pending RAF/timeout, settles a pending promise, and removes its window property in a per-scale `finally`. Samples must be finite and nonnegative before nearest-rank calculation. Using the RAF callback's timestamp directly yielded an observed negative sample on a failed attempt, so elapsed time uses `performance.now()` at callback execution instead. Percentiles use nearest rank (`sorted[ceil(p*n)-1]`). There are no latency assertions.
+
+Each workload is independently created in the public UI: create a project, create a piece, choose Rectángulo, and place the requested number of native rectangles by two public canvas clicks each. The measured DOM contract is exactly 10, 25, or 50 `rect[data-element-id]` elements. Hover sample coordinates follow the fixed deterministic path `page origin + (38 + (i mod 17)*2, 38 + (i mod 13)*2)` CSS pixels, outside the placed geometry. The document's `data-document-element-ids` and `data-document-revision` are asserted unchanged from before through after sampling. Exact runner: `corepack pnpm exec playwright test tests/e2e/editor.pointermove-frame.spec.ts --project=workflow-chromium --workers=1 --retries=0`.
+
+Observed runs: Windows 10 x64 host (browser UA Windows NT 10.0; Win64; x64), Chromium 140.0.7339.16, devicePixelRatio 1, viewport 1440×1000 CSS pixels, repository revision `9eb5dc4821a7704a3585a9b26d54ffe40ace1b57` before these audit changes. Each row is 120 measured samples following 20 warmups; milliseconds:
+
+| Run with corrected callback clock | Native rectangles | p50 | p95 | p99 |
+|---|---:|---:|---:|---:|
+| Writer | 10 | 10.900 | 12.800 | 13.500 |
+| Writer | 25 | 10.500 | 14.700 | 71.600 |
+| Writer | 50 | 9.700 | 20.200 | 34.900 |
+| Independent verifier | 10 | 10.500 | 12.400 | 13.300 |
+| Independent verifier | 25 | 10.600 | 14.600 | 15.400 |
+| Independent verifier | 50 | 9.900 | 19.500 | 40.000 |
+
+The writer's corrected-clock run passed 2 Playwright tests (including setup) in 20.0 seconds; its measured workflow took 16.4 seconds. The independent verifier's corrected-clock run passed 2 in 20.3 seconds. Earlier exploratory runs used the RAF timestamp rather than the callback clock and are excluded from this table because that clock choice produced a negative sample on a later attempt; their results are not comparable. The difference between the two valid p99 tails illustrates run-to-run variation, not a regression or universal guarantee. `playwright.config.ts` has `testDir: ./tests/e2e`; the `workflow-chromium` project's ignore list excludes only `editor.setup.ts` and `app.smoke.spec.ts`. Therefore root `corepack pnpm test:e2e` discovery includes and runs this additional ~16-second measured workflow (plus setup), not only the smoke test. No config exclusion or product source was changed.
+
+These values include browser input delivery, event dispatch, synchronous event-path work that precedes the RAF callback, and scheduler/frame timing. They do not attribute cost to pointer-handler code, solver, DOM/SVG render, compositor, or paint, and must not be compared as isolated package-operation latency. Results are one machine/browser run, not a universal target; workload uses native rectangles and hover only, not drag-preview. The independent verifier confirmed DOM-count/revision checks and reran the focused browser proxy. Root lint, typecheck, 760 unit tests, E2E (81 passed, 1 skipped), build and `git diff --check` passed before this report-only correction; build emitted a non-blocking chunk-size warning.
