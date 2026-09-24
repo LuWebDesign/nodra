@@ -1335,6 +1335,25 @@ it("converts a zero-radius rectangle to an open path when cutting one edge", () 
         expect(applied.document.connections).toMatchObject([{ id: connection.id, first: { elementId: linePath.id, node: { kind: "path" } } }]);
         expect(applied.document.connections?.[0]?.first.node).not.toMatchObject({ nodeId: "b" });
       });
+      it("keeps click-created sketches and drag-created native lines as separate representations", () => {
+        const initial = createEditor(document);
+        const sketch = createSketchLine(elementId("line-click-sketch"), layerId("default"), rectangle.style, { x: 0, y: 0 }, { x: 10, y: 0 });
+        const createdSketch = dispatch(initial, createElement(sketch));
+        const extendedSketch = dispatch(createdSketch, appendSketchEdge(sketch.id, sketch.nodes[1]!.id, { x: 10, y: 10 }));
+        expect(extendedSketch.document.elements[0]).toMatchObject({ type: "sketch", edges: [{}, {}] });
+
+        const nativeLine: LineElement = { type: "line", id: elementId("line-drag-native"), layerId: layerId("default"), start: { x: 20, y: 0 }, end: { x: 30, y: 0 }, rotation: 0, style: rectangle.style };
+        const dragPreview = previewGesture(beginGesture(extendedSketch), createElement(nativeLine));
+        expect(dragPreview.document.elements.map((element) => element.type)).toEqual(["sketch", "line"]);
+        expect(dragPreview.undo).toHaveLength(extendedSketch.undo.length);
+        expect(cancelGesture(dragPreview).document).toEqual(extendedSketch.document);
+
+        const committedDrag = commitGesture(previewGesture(beginGesture(extendedSketch), createElement(nativeLine)));
+        expect(committedDrag.document.elements.map((element) => element.type)).toEqual(["sketch", "line"]);
+        expect(committedDrag.undo).toHaveLength(extendedSketch.undo.length + 1);
+        expect(undo(committedDrag).document).toEqual(extendedSketch.document);
+      });
+
       it("generalizes a committed native line when a third node is added", () => {
     const line = { type: "line" as const, id: elementId("click-line"), layerId: layerId("default"), start: { x: 0, y: 0 }, end: { x: 10, y: 0 }, rotation: 0, style: rectangle.style };
     const state = dispatch(dispatch(createEditor(document), createElement(line)), appendLinePoint(line.id, { x: 10, y: 10 }));

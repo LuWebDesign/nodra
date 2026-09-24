@@ -265,6 +265,7 @@ export function App() {
       const sketchSessionRef = useRef(sketchSession);
       sketchSessionRef.current = sketchSession;
   const interaction = useRef<ActiveInteraction | undefined>(undefined);
+  const replayingLineClick = useRef(false);
   const creationDraftRef = useRef<CreationDraft | undefined>(undefined);
       const releasePointerCapture = (pointerId: number) => {
         const target = canvas.current;
@@ -1313,6 +1314,12 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
         }
         return;
       }
+      if (tool === "line" && !replayingLineClick.current) {
+        event.currentTarget.setPointerCapture(event.pointerId);
+        setEditorState(beginGesture(editorRef.current));
+        interaction.current = { pointerId: event.pointerId, lastX: event.clientX, lastY: event.clientY, kind: "draw", dragged: false, start: point, startClient: { x: event.clientX, y: event.clientY }, tool, ids: [id()] };
+        return;
+      }
       if (tool === "line") {
         const creationPoint = creationPointForClick ?? point;
         const draft = creationDraftRef.current;
@@ -1759,6 +1766,16 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
   const finishPointer = (event: PointerEvent<HTMLDivElement | HTMLButtonElement>, cancelled: boolean) => {
     const active = interaction.current;
     if (!active || active.pointerId !== event.pointerId) return;
+    const canvasBounds = canvas.current?.getBoundingClientRect();
+    if (active.kind === "draw" && active.tool === "line" && !cancelled && !active.dragged && canvasBounds && event.clientX >= canvasBounds.left && event.clientX <= canvasBounds.right && event.clientY >= canvasBounds.top && event.clientY <= canvasBounds.bottom) {
+      setEditorState(cancelGesture(editorRef.current));
+      interaction.current = undefined;
+      if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+      replayingLineClick.current = true;
+      onCanvasPointerDown(event as PointerEvent<HTMLDivElement>);
+      replayingLineClick.current = false;
+      return;
+    }
     if (active.kind === "marquee") {
       if (!cancelled && active.start && active.dragged && active.document) {
         if (tool === "forma") {
