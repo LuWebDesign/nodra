@@ -120,11 +120,13 @@ describe("sketch kernel", () => {
         expect(result.circleConstraintDiagnostics).toEqual([{ code: "circle-constraint-conflict", circleId: circle().id, constraintIds: ["z"], message: "Circle constraints are in conflict: z" }]);
       });
 
-      it("preserves unconstrained native circles", () => {
+      it("preserves unconstrained native circles without mutating the input fixture", () => {
         const input = documentFor(circle());
+        const before = JSON.stringify(input);
         const result = recomputeSketchKernel(input);
         expect(result.document.elements).toEqual(normalizedRoles(input).elements);
         expect(input.elements).toEqual([circle()]);
+        expect(JSON.stringify(input)).toBe(before);
       });
 
       it("keeps circle recomputation revision-immutable", () => {
