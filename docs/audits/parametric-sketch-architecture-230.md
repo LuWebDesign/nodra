@@ -37,6 +37,10 @@ System existence is classified as `YES | PARTIAL | NO`. Architectural condition 
 
 ---
 
+## WU11-C1 — Package/API performance baseline
+
+The bounded custom sample run, method, and observed measurements are recorded in [the performance report](parametric-sketch-performance-baseline.md). It measures named public package operations, not browser pointer latency: `solveConstraintComponents`, `renderSvg` generation, and editor flows. The editor preview timing encloses `createEditor → beginGesture → moveElements → previewGestureFromBase`; the commit timing encloses that complete sequence plus `commitGesture`. Neither is an isolated preview/commit solve. Each sample case has 20 warmups and 100 measured calls, with nearest-rank p50/p95/p99; SVG UTF-8 bytes and solver convergence/iterations/diagnostics were collected outside timed sections. Adaptive Vitest `bench` statistics are distinct and not used as the table results; fixed collection uses Vitest's existing `vite-node` module runner. No product optimization or product-source edit was made. WU11-C1 remains pending independent verification and commit.
+
 # A. Executive Summary
 
 > Status: final evidence synthesis; implementation remains explicitly unauthorized.
