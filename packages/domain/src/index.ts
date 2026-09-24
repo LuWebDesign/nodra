@@ -68,7 +68,7 @@ export interface CircleElement {
   readonly circleConstraints?: readonly CircleConstraint[];
 }
 export type ArcDirection = "clockwise" | "counterclockwise";
-export interface ArcElement {
+export interface ArcElement extends ElementBase {
   readonly type: "arc";
   readonly id: ElementId;
   readonly layerId: LayerId;
@@ -92,7 +92,7 @@ export interface EllipseElement {
   readonly style: VisualStyle;
   readonly operation?: OperationMetadata;
 }
-export interface LineElement {
+export interface LineElement extends ElementBase {
   readonly type: "line";
   readonly id: ElementId;
   readonly layerId: LayerId;
@@ -173,7 +173,7 @@ export interface PathCubicSegment {
   readonly control2: PointMm;
 }
 export type PathSegment = PathLineSegment | PathCubicSegment;
-export interface PathElement {
+export interface PathElement extends ElementBase {
   readonly type: "path";
   readonly id: ElementId;
   readonly layerId: LayerId;
@@ -192,7 +192,7 @@ export interface HandleOffset { readonly dx: number; readonly dy: number }
 /** Shared document-space Bézier node primitive for future native editors. */
 export interface BezierNode { readonly id: string; readonly anchor: PointMm; readonly inHandle?: HandleOffset; readonly outHandle?: HandleOffset }
 export interface SplineNode extends BezierNode { readonly continuity: SplineContinuity }
-export interface SplineElement { readonly type: "spline"; readonly id: ElementId; readonly layerId: LayerId; readonly nodes: readonly SplineNode[]; readonly closed: boolean; readonly style: VisualStyle; readonly operation?: OperationMetadata }
+export interface SplineElement extends ElementBase { readonly type: "spline"; readonly id: ElementId; readonly layerId: LayerId; readonly nodes: readonly SplineNode[]; readonly closed: boolean; readonly style: VisualStyle; readonly operation?: OperationMetadata }
 export interface TextElement { readonly type: "text"; readonly id: ElementId; readonly layerId: LayerId; readonly position: PointMm; readonly size: SizeMm; readonly text: string; readonly fontFamily: string; readonly fontSize: number; readonly fontWeight: "normal" | "bold"; readonly fontStyle: "normal" | "italic"; readonly textAlign: "left" | "center" | "right"; readonly lineHeight: number; readonly scaleX?: number; readonly scaleY?: number; readonly rotation: number; readonly style: VisualStyle; readonly operation?: OperationMetadata }
 /** A single closed outline compound. Coordinates are document-space millimetres. */
 export interface GlyphContour { readonly nodes: readonly PathNode[]; readonly segments: readonly PathSegment[] }

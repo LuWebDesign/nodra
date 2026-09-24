@@ -396,8 +396,8 @@ export const createElement = (element: Element, connections: readonly ExplicitCo
   name: `create:${element.type}`,
   apply: (document) => {
     if (document.elements.some((current) => current.id === element.id)) return { success: false, error: `Element already exists: ${element.id}` };
-    const persistentElement = element.type === "dimension" && element.driving === true && dimensionDrivingCapability(element, [...document.elements, element]) === "annotation"
-      ? Object.fromEntries(Object.entries({ ...element, driving: false }).filter(([key]) => key !== "constraintId")) as Element
+    const persistentElement: Element = element.type === "dimension" && element.driving === true && dimensionDrivingCapability(element, [...document.elements, element]) === "annotation"
+      ? (({ constraintId: _constraintId, ...annotation }) => { void _constraintId; return { ...annotation, driving: false }; })(element)
       : element;
     const elements = [...document.elements, persistentElement];
     return persistentElement.type === "sketch"

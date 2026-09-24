@@ -339,7 +339,7 @@ export function renderSketchProfileSvg(profile: SketchProfileResult, viewport: V
 }
 
 export function projectFabricableDocument(document: DocumentSnapshot): DocumentSnapshot {
-  const elements = document.elements.flatMap((element) => {
+  const elements = document.elements.flatMap<Element>((element) => {
     if (element.role === "construction") return [];
     if (element.type !== "sketch") return [element];
     const edges = element.edges.filter((edge) => edge.role !== "construction");
