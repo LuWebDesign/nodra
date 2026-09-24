@@ -21,7 +21,7 @@
   - Change only the `radius-first` and `radius-second` arc angle expressions in `packages/editor-core/src/trim.test.ts`; no production arc changes.
   - Verified with R1b: root lint, typecheck, unit (745/745), E2E (73 passed, 1 skipped), build and diff check all passed. Work-unit commit `c27d1bf`.
 
-- [ ] **R2 — Reconcile descendant chain branches without rewriting original history**
-  - Make child07–12 inherit the repaired child06 while preserving original feature commits and keeping each immediate-parent PR diff clean.
-  - Resolve already-applied test expectations at the later WU7-V commit deliberately; verify slice budgets and each branch's gates before publication.
-  - Tracker remains draft/no-merge; remaining tools and WU12 are excluded.
+- [x] **R2 — Reconcile descendant chain branches without rewriting original history**
+  - Child07 (`77b4667`) inherits corrected child06; child08 (`e975edd`), child09 (`489cb21`), child10 (`5c66549`), child11 (`8d502a2`), and child12 (`a3a366e`) each merge the corrected immediate parent while retaining the original slice head as first parent. Child08 conflict resolution preserved WU7-V's `TextElement` inheritance and both input-immutability assertions. Original feature branch still points to `9467331`.
+  - Independent full root gates passed on every reconciled tip. Units: 745/756/757/760/760/760 passed for child07–12; E2E: 73/73/77/80/81/82 passed respectively, with one existing skip each. Lint, typecheck and build passed; non-blocking Vite chunk warnings. Consecutive PR diffs: 298/277/323/255/314/76 lines, all under 400.
+  - Tracker remains draft/no-merge; remaining tools and WU12 are excluded. No remote branches or PRs published yet.
