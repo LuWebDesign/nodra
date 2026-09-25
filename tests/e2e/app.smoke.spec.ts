@@ -526,6 +526,74 @@ test("cuts both overlapping native circles through canonical hover arcs and undo
   await expect(page.locator(".page-svg svg path[data-element-id]")).toHaveCount(0);
 });
 
+test("Rectangle lifecycle keeps its draft provisional and persists one native rectangle", async ({ page }) => {
+  await page.goto("/modelo");
+  const pageBounds = await visibleBoundingBox(page.locator(".page"));
+  const canvasBounds = await visibleBoundingBox(page.locator(".canvas"));
+  const left = Math.max(pageBounds.x, canvasBounds.x);
+  const top = Math.max(pageBounds.y, canvasBounds.y);
+  const right = Math.min(pageBounds.x + pageBounds.width, canvasBounds.x + canvasBounds.width);
+  const bottom = Math.min(pageBounds.y + pageBounds.height, canvasBounds.y + canvasBounds.height);
+  expect(right - left).toBeGreaterThan(80);
+  expect(bottom - top).toBeGreaterThan(60);
+  const start = { x: left + 20, y: top + 20 };
+  const end = { x: Math.min(start.x + 60, right - 10), y: Math.min(start.y + 40, bottom - 10) };
+  const rectangle = page.locator('.page-svg svg rect[data-element-id]');
+  const sketchGroups = page.locator('.page-svg svg g[data-element-id]');
+  const draft = page.locator(".creation-pending-overlay");
+  const initialRevision = await page.locator(".page").getAttribute("data-document-revision");
+  const initialElementIds = await page.locator(".page").getAttribute("data-document-element-ids");
+  expect(initialRevision).not.toBeNull();
+  expect(initialElementIds).not.toBeNull();
+  const expectUnchangedDocument = async () => {
+    await expect(page.locator(".page")).toHaveAttribute("data-document-revision", initialRevision!);
+    await expect(page.locator(".page")).toHaveAttribute("data-document-element-ids", initialElementIds!);
+    await expect(rectangle).toHaveCount(0);
+    await expect(sketchGroups).toHaveCount(0);
+  };
+
+  await page.getByRole("button", { name: "Rectángulo" }).click();
+  await page.mouse.click(start.x, start.y);
+  await page.mouse.move(end.x, end.y);
+  await expect(draft).toBeVisible();
+  await expectUnchangedDocument();
+  await page.keyboard.press("Escape");
+  await expect(draft).toHaveCount(0);
+  await expectUnchangedDocument();
+
+  await page.mouse.click(start.x, start.y);
+  await page.mouse.move(end.x, end.y);
+  await expect(draft).toBeVisible();
+  await expectUnchangedDocument();
+  await page.getByRole("button", { name: "Seleccion" }).click();
+  await expect(draft).toHaveCount(0);
+  await expectUnchangedDocument();
+
+  await page.reload();
+  await expectUnchangedDocument();
+  await page.getByRole("button", { name: "Rectángulo" }).click();
+  await page.mouse.click(start.x, start.y);
+  await page.mouse.move(end.x, end.y);
+  await expect(draft).toBeVisible();
+  const revisionBeforeCommit = await page.locator(".page").getAttribute("data-document-revision");
+  await page.mouse.click(end.x, end.y);
+  await expect(draft).toHaveCount(0);
+  await expect(rectangle).toHaveCount(1);
+  await expect(sketchGroups).toHaveCount(0);
+  await expect(page.locator(".page")).not.toHaveAttribute("data-document-revision", revisionBeforeCommit!);
+  const rectangleId = await rectangle.getAttribute("data-element-id");
+  expect(rectangleId).toBeTruthy();
+
+  await page.getByRole("button", { name: "Deshacer" }).click();
+  await expect(rectangle).toHaveCount(0);
+  await page.getByRole("button", { name: "Rehacer" }).click();
+  await expect(page.locator(`.page-svg svg rect[data-element-id="${rectangleId}"]`)).toHaveCount(1);
+  await expect(sketchGroups).toHaveCount(0);
+  await page.reload();
+  await expect(page.locator(`.page-svg svg rect[data-element-id="${rectangleId}"]`)).toHaveCount(1);
+  await expect(sketchGroups).toHaveCount(0);
+});
+
 test("edits rectangle dimensions around its center with proportional lock and undo", async ({ page }) => {
   await page.goto("/modelo");
   await drawRectangle(page);
