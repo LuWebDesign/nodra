@@ -526,6 +526,74 @@ test("cuts both overlapping native circles through canonical hover arcs and undo
   await expect(page.locator(".page-svg svg path[data-element-id]")).toHaveCount(0);
 });
 
+test("Rectangle lifecycle keeps its draft provisional and persists one native rectangle", async ({ page }) => {
+  await page.goto("/modelo");
+  const pageBounds = await visibleBoundingBox(page.locator(".page"));
+  const canvasBounds = await visibleBoundingBox(page.locator(".canvas"));
+  const left = Math.max(pageBounds.x, canvasBounds.x);
+  const top = Math.max(pageBounds.y, canvasBounds.y);
+  const right = Math.min(pageBounds.x + pageBounds.width, canvasBounds.x + canvasBounds.width);
+  const bottom = Math.min(pageBounds.y + pageBounds.height, canvasBounds.y + canvasBounds.height);
+  expect(right - left).toBeGreaterThan(80);
+  expect(bottom - top).toBeGreaterThan(60);
+  const start = { x: left + 20, y: top + 20 };
+  const end = { x: Math.min(start.x + 60, right - 10), y: Math.min(start.y + 40, bottom - 10) };
+  const rectangle = page.locator('.page-svg svg rect[data-element-id]');
+  const sketchGroups = page.locator('.page-svg svg g[data-element-id]');
+  const draft = page.locator(".creation-pending-overlay");
+  const initialRevision = await page.locator(".page").getAttribute("data-document-revision");
+  const initialElementIds = await page.locator(".page").getAttribute("data-document-element-ids");
+  expect(initialRevision).not.toBeNull();
+  expect(initialElementIds).not.toBeNull();
+  const expectUnchangedDocument = async () => {
+    await expect(page.locator(".page")).toHaveAttribute("data-document-revision", initialRevision!);
+    await expect(page.locator(".page")).toHaveAttribute("data-document-element-ids", initialElementIds!);
+    await expect(rectangle).toHaveCount(0);
+    await expect(sketchGroups).toHaveCount(0);
+  };
+
+  await page.getByRole("button", { name: "Rectángulo" }).click();
+  await page.mouse.click(start.x, start.y);
+  await page.mouse.move(end.x, end.y);
+  await expect(draft).toBeVisible();
+  await expectUnchangedDocument();
+  await page.keyboard.press("Escape");
+  await expect(draft).toHaveCount(0);
+  await expectUnchangedDocument();
+
+  await page.mouse.click(start.x, start.y);
+  await page.mouse.move(end.x, end.y);
+  await expect(draft).toBeVisible();
+  await expectUnchangedDocument();
+  await page.getByRole("button", { name: "Seleccion" }).click();
+  await expect(draft).toHaveCount(0);
+  await expectUnchangedDocument();
+
+  await page.reload();
+  await expectUnchangedDocument();
+  await page.getByRole("button", { name: "Rectángulo" }).click();
+  await page.mouse.click(start.x, start.y);
+  await page.mouse.move(end.x, end.y);
+  await expect(draft).toBeVisible();
+  const revisionBeforeCommit = await page.locator(".page").getAttribute("data-document-revision");
+  await page.mouse.click(end.x, end.y);
+  await expect(draft).toHaveCount(0);
+  await expect(rectangle).toHaveCount(1);
+  await expect(sketchGroups).toHaveCount(0);
+  await expect(page.locator(".page")).not.toHaveAttribute("data-document-revision", revisionBeforeCommit!);
+  const rectangleId = await rectangle.getAttribute("data-element-id");
+  expect(rectangleId).toBeTruthy();
+
+  await page.getByRole("button", { name: "Deshacer" }).click();
+  await expect(rectangle).toHaveCount(0);
+  await page.getByRole("button", { name: "Rehacer" }).click();
+  await expect(page.locator(`.page-svg svg rect[data-element-id="${rectangleId}"]`)).toHaveCount(1);
+  await expect(sketchGroups).toHaveCount(0);
+  await page.reload();
+  await expect(page.locator(`.page-svg svg rect[data-element-id="${rectangleId}"]`)).toHaveCount(1);
+  await expect(sketchGroups).toHaveCount(0);
+});
+
 test("edits rectangle dimensions around its center with proportional lock and undo", async ({ page }) => {
   await page.goto("/modelo");
   await drawRectangle(page);
@@ -714,6 +782,126 @@ test("keeps the profile preview aligned for a selected rectangle with an inner c
   await expect(sketch).toHaveCount(1);
   await expect(sketch.locator('path[fill-rule="evenodd"]')).toHaveAttribute("d", /Z/);
   await expect(sketch.locator("line")).toHaveCount(3);
+});
+
+test("does not replay a short Line gesture released outside the canvas", async ({ page }) => {
+  await page.goto("/modelo");
+  const bounds = await page.locator(".page").boundingBox();
+  const toolbar = await page.getByRole("button", { name: "Rectángulo" }).boundingBox();
+  expect(bounds).not.toBeNull();
+  expect(toolbar).not.toBeNull();
+  const start = { x: bounds!.x + 140, y: bounds!.y + 140 };
+  await page.getByRole("button", { name: "Línea" }).click();
+  const canvas = page.locator(".canvas");
+  await canvas.evaluate((element) => {
+    element.addEventListener("pointerdown", (event) => {
+      element.setAttribute("data-captured-pointer-id", String((event as PointerEvent).pointerId));
+    }, { once: true, capture: true });
+  });
+  await page.mouse.move(start.x, start.y);
+  await page.mouse.down();
+  const pointerId = Number(await canvas.getAttribute("data-captured-pointer-id"));
+  expect(Number.isInteger(pointerId)).toBe(true);
+  await canvas.evaluate((element, input) => element.dispatchEvent(new PointerEvent("pointerup", {
+    bubbles: true,
+    pointerId: input.pointerId,
+    pointerType: "mouse",
+    clientX: input.release.x,
+    clientY: input.release.y,
+  })), { pointerId, release: { x: toolbar!.x + toolbar!.width / 2, y: toolbar!.y + toolbar!.height / 2 } });
+  await page.mouse.up();
+  await expect(page.locator('.page-svg svg g[data-element-id]')).toHaveCount(0);
+  await expect(page.locator('.page-svg svg > g > line[data-element-id]')).toHaveCount(0);
+  await expect(page.locator(".creation-pending-overlay")).toHaveCount(0);
+});
+
+test("cancels a short Line gesture on Escape or pointercancel", async ({ page }) => {
+  await page.goto("/modelo");
+  const bounds = await page.locator(".page").boundingBox();
+  expect(bounds).not.toBeNull();
+  const start = { x: bounds!.x + 140, y: bounds!.y + 140 };
+  const canvas = page.locator(".canvas");
+  await page.getByRole("button", { name: "Línea" }).click();
+
+  await page.mouse.move(start.x, start.y);
+  await page.mouse.down();
+  await page.mouse.move(start.x + 80, start.y + 50);
+  await expect(page.locator('.page-svg svg > g > line[data-element-id]')).toHaveCount(1);
+  await page.keyboard.press("Escape");
+  await page.mouse.up();
+  await expect(page.locator('.page-svg svg g[data-element-id]')).toHaveCount(0);
+  await expect(page.locator('.page-svg svg > g > line[data-element-id]')).toHaveCount(0);
+
+  await canvas.evaluate((element) => {
+    element.addEventListener("pointerdown", (event) => {
+      element.setAttribute("data-captured-pointer-id", String((event as PointerEvent).pointerId));
+    }, { once: true, capture: true });
+  });
+  await page.mouse.move(start.x + 100, start.y + 80);
+  await page.mouse.down();
+  const pointerId = Number(await canvas.getAttribute("data-captured-pointer-id"));
+  expect(Number.isInteger(pointerId)).toBe(true);
+  await canvas.evaluate((element, id) => element.dispatchEvent(new PointerEvent("pointercancel", { bubbles: true, pointerId: id, pointerType: "mouse" })), pointerId);
+  await page.mouse.up();
+  await expect(page.locator('.page-svg svg g[data-element-id]')).toHaveCount(0);
+  await expect(page.locator('.page-svg svg > g > line[data-element-id]')).toHaveCount(0);
+});
+
+test("does not replay a short Line gesture after switching tools while held", async ({ page }) => {
+  await page.goto("/modelo");
+  const bounds = await page.locator(".page").boundingBox();
+  expect(bounds).not.toBeNull();
+  const start = { x: bounds!.x + 180, y: bounds!.y + 160 };
+  await page.getByRole("button", { name: "Línea" }).click();
+  await page.mouse.move(start.x, start.y);
+  await page.mouse.down();
+  await page.getByRole("button", { name: "Rectángulo" }).evaluate((button) => (button as HTMLButtonElement).click());
+  await page.mouse.up();
+  await expect(page.locator('.page-svg svg g[data-element-id]')).toHaveCount(0);
+  await expect(page.locator('.page-svg svg > g > line[data-element-id]')).toHaveCount(0);
+  await expect(page.locator(".creation-pending-overlay")).toHaveCount(0);
+});
+
+test("Line clicks create sketch edges while drags create separate native lines", async ({ page }) => {
+  await page.goto("/modelo");
+  const bounds = await page.locator(".page").boundingBox();
+  expect(bounds).not.toBeNull();
+  const first = { x: bounds!.x + 120, y: bounds!.y + 120 };
+  const second = { x: first.x + 90, y: first.y + 35 };
+  const dragStart = { x: bounds!.x + bounds!.width * 0.65, y: bounds!.y + bounds!.height * 0.65 };
+  const dragEnd = { x: bounds!.x + bounds!.width * 0.85, y: bounds!.y + bounds!.height * 0.82 };
+
+  await page.getByRole("button", { name: "Línea" }).click();
+  await page.mouse.click(first.x, first.y);
+  await page.mouse.click(second.x, second.y);
+
+  const sketch = page.locator('.page-svg svg g[data-element-id]').filter({ has: page.locator(":scope > line") });
+  await expect(sketch).toHaveCount(1);
+  const sketchId = await sketch.getAttribute("data-element-id");
+  expect(sketchId).not.toBeNull();
+  await expect(sketch.locator(":scope > line")).toHaveCount(1);
+  await expect(page.locator('.page-svg svg > g > line[data-element-id]')).toHaveCount(0);
+
+  const committedRevision = await page.locator(".page").getAttribute("data-document-revision");
+  await page.getByRole("button", { name: "Seleccion" }).click();
+  await page.getByRole("button", { name: "Línea" }).click();
+  await page.mouse.move(dragStart.x, dragStart.y);
+  await page.mouse.down();
+  await page.mouse.move(dragEnd.x, dragEnd.y, { steps: 5 });
+  const nativeLine = page.locator('.page-svg svg > g > line[data-element-id]');
+  await expect(nativeLine).toHaveCount(1);
+  await expect(page.locator(".page")).toHaveAttribute("data-document-revision", committedRevision!);
+  await page.mouse.up();
+
+  await expect(nativeLine).toHaveCount(1);
+  const nativeLineId = await nativeLine.getAttribute("data-element-id");
+  expect(nativeLineId).not.toBeNull();
+  expect(nativeLineId).not.toBe(sketchId);
+  await expect(sketch).toHaveCount(1);
+  await expect(sketch.locator(":scope > line")).toHaveCount(1);
+  await page.getByRole("button", { name: "Deshacer" }).click();
+  await expect(nativeLine).toHaveCount(0);
+  await expect(sketch.locator(":scope > line")).toHaveCount(1);
 });
 
 test("keeps a path selected after creating a dimension", async ({ page }) => {
