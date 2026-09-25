@@ -21,6 +21,12 @@
   - Change only the `radius-first` and `radius-second` arc angle expressions in `packages/editor-core/src/trim.test.ts`; no production arc changes.
   - Verified with R1b: root lint, typecheck, unit (745/745), E2E (73 passed, 1 skipped), build and diff check all passed. Work-unit commit `c27d1bf`.
 
+- [ ] **R3 — Reject orphaned references in fabricable export (PR #239)**
+  - Authorized policy: fail closed rather than prune annotations or relations. A source may validate while filtering construction geometry makes its dimensions or constraints invalid.
+  - Writer evidence: regression covers dimension references to removed construction elements, sketch constraints to removed construction edges, and invalid construction geometry filtered out by direct projection; verifies renderer rejection, direct projection rejection with typed validation issues, unchanged source, editor render, and valid export projection. `projectFabricableDocument` keeps its public `DocumentSnapshot` success return and throws `FabricableDocumentProjectionError` for invalid source or post-filter projection; export rendering catches only that expected error. No Circle, Trim, profiles, Extrude or unrelated behavior touched.
+  - RED: focused renderer suite failed (27 passed, 1 failed) because direct projection returned success after removing malformed construction geometry. GREEN: focused renderer suite passed (28/28). Independent verifier passed root lint, typecheck, unit (747/747), E2E (73 passed, 1 skipped), build and diff check. One transient ESLint host failure was not reproducible on retry; build chunk warning was non-blocking. Child07 worktree diff versus child06 is 372 lines, within 400. Commit evidence pending.
+  - Keep #239 within 400 changed lines; run root gates before commit. Propagate the corrected parent into #240–#244 and verify each child independently before declaring the chain ready.
+
 - [ ] **R2 — Reconcile descendant chain branches without rewriting original history**
   - Make child07–12 inherit the repaired child06 while preserving original feature commits and keeping each immediate-parent PR diff clean.
   - Resolve already-applied test expectations at the later WU7-V commit deliberately; verify slice budgets and each branch's gates before publication.
