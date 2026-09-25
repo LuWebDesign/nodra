@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createDocument, elementId, layerId, withElements, type ArcElement, type DocumentSnapshot } from "@nodra/domain";
 import { buildSketchProfile } from "@nodra/geometry";
-    import { renderSketchProfileSvg, renderSvg } from "./index.js";
+import { FabricableDocumentProjectionError, projectFabricableDocument, renderSketchProfileSvg, renderSvg } from "./index.js";
 
 const layer = { id: layerId("design"), name: "Design", visible: true, order: 0 } as const;
 const style = { stroke: "#111", strokeWidth: 0.2 } as const;
@@ -27,6 +27,94 @@ describe("SVG renderer boundary", () => {
       expect(result.renderedElementIds).toEqual(["rect", "ellipse", "circle", "line"]);
     }
   });
+  it("subdues construction geometry in editor mode and preserves normal geometry", () => {
+    const source = withElements(createDocument("construction-editor", [layer]), [
+      { type: "line", id: elementId("construction-line"), layerId: layer.id, start: { x: 0, y: 0 }, end: { x: 10, y: 0 }, rotation: 0, role: "construction" as const, style },
+      { type: "line", id: elementId("normal-line"), layerId: layer.id, start: { x: 0, y: 10 }, end: { x: 10, y: 10 }, rotation: 0, style },
+    ]);
+    const result = renderSvg(source, { zoom: 1, panMm: { x: 0, y: 0 } });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.svg).toContain('data-element-id="construction-line"');
+      expect(result.svg).toContain('data-element-id="construction-line" x1="0" y1="0" x2="10" y2="0" transform="translate(5 0) rotate(0) scale(1 1) translate(-5 0)" stroke="#111" stroke-width="0.2" fill="none" stroke-dasharray="6 4"');
+      expect(result.svg).toContain('data-element-id="normal-line"');
+      expect(result.svg).not.toContain('data-element-id="normal-line" x1="0" y1="10" x2="10" y2="10" transform="translate(5 10) rotate(0) scale(1 1) translate(-5 -10)" stroke="#111" stroke-width="0.2" fill="none" stroke-dasharray="6 4"');
+    }
+  });
+
+  it("styles construction sketch edges individually in mixed-role sketches", () => {
+    const source = withElements(createDocument("construction-sketch", [layer]), [{
+      type: "sketch", id: elementId("mixed-sketch"), layerId: layer.id,
+      nodes: [{ id: "a", point: { x: 0, y: 0 } }, { id: "b", point: { x: 10, y: 0 } }, { id: "c", point: { x: 10, y: 10 } }],
+      edges: [{ id: "normal-edge", startNodeId: "a", endNodeId: "b" }, { id: "construction-edge", startNodeId: "b", endNodeId: "c", role: "construction" }], style,
+    }]);
+    const result = renderSvg(source, { zoom: 1, panMm: { x: 0, y: 0 } });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.svg).toContain('<line x1="0" y1="0" x2="10" y2="0" />');
+      expect(result.svg).toContain('<line x1="10" y1="0" x2="10" y2="10" stroke-dasharray="6 4" />');
+    }
+  });
+
+  it("projects only fabricable geometry for export without mutating the source", () => {
+    const source = withElements(createDocument("fabricable", [layer]), [
+      { type: "line", id: elementId("normal-line"), layerId: layer.id, start: { x: 0, y: 0 }, end: { x: 10, y: 0 }, rotation: 0, style },
+      { type: "line", id: elementId("construction-line"), layerId: layer.id, start: { x: 0, y: 10 }, end: { x: 10, y: 10 }, rotation: 0, role: "construction" as const, style },
+      { type: "sketch", id: elementId("mixed-sketch"), layerId: layer.id, nodes: [{ id: "a", point: { x: 0, y: 20 } }, { id: "b", point: { x: 10, y: 20 } }, { id: "c", point: { x: 10, y: 30 } }], edges: [{ id: "normal-edge", startNodeId: "a", endNodeId: "b" }, { id: "construction-edge", startNodeId: "b", endNodeId: "c", role: "construction" }], style },
+    ]);
+    const before = structuredClone(source);
+    const projection = projectFabricableDocument(source);
+    expect(projection.elements.map((element) => element.id)).toEqual(["normal-line", "mixed-sketch"]);
+    expect((projection.elements[1] as Extract<typeof projection.elements[number], { type: "sketch" }>).edges.map((edge) => edge.id)).toEqual(["normal-edge"]);
+    expect(source).toEqual(before);
+    const exported = renderSvg(source, { zoom: 1, panMm: { x: 0, y: 0 } }, { mode: "export" });
+    expect(exported.success).toBe(true);
+    if (exported.success) {
+      expect(exported.renderedElementIds).toEqual(["normal-line", "mixed-sketch"]);
+      expect(exported.svg).not.toContain("construction-line");
+      expect(exported.svg).not.toContain("construction-edge");
+    }
+  });
+
+  it("rejects invalid source geometry before removing construction geometry", () => {
+    const invalidConstruction = { type: "line" as const, id: elementId("invalid-construction"), layerId: layer.id, start: { x: Number.NaN, y: 0 }, end: { x: 10, y: 0 }, rotation: 0, role: "construction" as const, style };
+    const source = withElements(createDocument("invalid-construction", [layer]), [invalidConstruction]);
+
+    expect(() => projectFabricableDocument(source)).toThrow(FabricableDocumentProjectionError);
+    try {
+      projectFabricableDocument(source);
+      throw new Error("Expected invalid source projection to throw");
+    } catch (error) {
+      expect(error).toBeInstanceOf(FabricableDocumentProjectionError);
+      expect((error as FabricableDocumentProjectionError).issues).toEqual(expect.arrayContaining([expect.stringContaining("start.x")]));
+    }
+  });
+
+  it("rejects fabricable projections with references to removed construction geometry", () => {
+    const construction = { type: "line" as const, id: elementId("construction-dimension-target"), layerId: layer.id, start: { x: 0, y: 0 }, end: { x: 10, y: 0 }, rotation: 0, role: "construction" as const, style };
+    const dimension = { type: "dimension" as const, id: elementId("dependent-dimension"), layerId: layer.id, kind: "aligned" as const, references: [{ kind: "node" as const, elementId: construction.id, nodeIndex: 0, nodeId: "start" }, { kind: "node" as const, elementId: construction.id, nodeIndex: 1, nodeId: "end" }] as const, offset: { x: 0, y: 5 }, precision: 2, units: "mm" as const, rotation: 0 as const, style };
+    const source = withElements(createDocument("orphan-dimension", [layer]), [construction, dimension]);
+    const before = structuredClone(source);
+
+    try {
+      projectFabricableDocument(source);
+      throw new Error("Expected orphaned dimension projection to throw");
+    } catch (error) {
+      expect(error).toBeInstanceOf(FabricableDocumentProjectionError);
+      expect((error as FabricableDocumentProjectionError).issues).toEqual(expect.arrayContaining([expect.stringContaining("references")]));
+    }
+    expect(renderSvg(source, { zoom: 1, panMm: { x: 0, y: 0 } }, { mode: "export" })).toMatchObject({ success: false, reason: "invalid", issues: expect.arrayContaining([expect.stringContaining("references")]) });
+    expect(renderSvg(source, { zoom: 1, panMm: { x: 0, y: 0 } }).success).toBe(true);
+    expect(source).toEqual(before);
+
+    const sketch = { type: "sketch" as const, id: elementId("construction-edge-sketch"), layerId: layer.id, nodes: [{ id: "a", point: { x: 0, y: 0 } }, { id: "b", point: { x: 10, y: 0 } }, { id: "c", point: { x: 10, y: 10 } }], edges: [{ id: "fabricable-edge", startNodeId: "a", endNodeId: "b" }, { id: "removed-edge", startNodeId: "b", endNodeId: "c", role: "construction" as const }], constraints: [{ id: "depends-on-removed-edge", kind: "horizontal" as const, references: [{ elementId: elementId("construction-edge-sketch"), edgeId: "removed-edge" }] as const }], style };
+    const constrained = withElements(createDocument("orphan-edge", [layer]), [sketch]);
+    const constrainedBefore = structuredClone(constrained);
+    expect(() => projectFabricableDocument(constrained)).toThrow(FabricableDocumentProjectionError);
+    expect(renderSvg(constrained, { zoom: 1, panMm: { x: 0, y: 0 } }, { mode: "export" })).toMatchObject({ success: false, reason: "invalid", issues: expect.arrayContaining([expect.stringContaining("references")]) });
+    expect(constrained).toEqual(constrainedBefore);
+  });
+
   it("renders sketch definition state through the shared constraint boundary", () => {
     const underdefined = { type: "sketch" as const, id: elementId("underdefined"), layerId: layer.id, nodes: [{ id: "a", point: { x: 0, y: 0 } }, { id: "b", point: { x: 20, y: 0 } }], edges: [{ id: "ab", startNodeId: "a", endNodeId: "b" }], constraints: [], style };
     const defined = { ...underdefined, id: elementId("defined"), nodes: [{ id: "a", point: { x: 0, y: 0 } }, { id: "b", point: { x: 20, y: 0 } }], constraints: [{ id: "fixed-a", kind: "fixed" as const, references: [{ elementId: elementId("defined"), nodeId: "a" }] as const }, { id: "horizontal", kind: "horizontal" as const, references: [{ elementId: elementId("defined"), nodeId: "a" }, { elementId: elementId("defined"), nodeId: "b" }] as const }, { id: "length", kind: "distance-horizontal" as const, references: [{ elementId: elementId("defined"), nodeId: "a" }, { elementId: elementId("defined"), nodeId: "b" }] as const, value: 20 }] };
@@ -38,6 +126,50 @@ describe("SVG renderer boundary", () => {
       expect(result.svg).toContain('data-element-id="defined" stroke="#111827"');
     }
   });
+  it("colors a sketch by the highest-precedence state across disconnected components", () => {
+    const source = {
+      type: "sketch" as const,
+      id: elementId("aggregate-state"),
+      layerId: layer.id,
+      nodes: [
+        { id: "defined-a", point: { x: 0, y: 0 } }, { id: "defined-b", point: { x: 10, y: 0 } },
+        { id: "underdefined-a", point: { x: 20, y: 0 } }, { id: "underdefined-b", point: { x: 30, y: 0 } },
+        { id: "overdefined-a", point: { x: 40, y: 0 } }, { id: "overdefined-b", point: { x: 50, y: 0 } },
+        { id: "conflict-a", point: { x: 60, y: 0 } }, { id: "conflict-b", point: { x: 70, y: 0 } },
+      ],
+      edges: [{ id: "visible", startNodeId: "defined-a", endNodeId: "defined-b" }],
+      constraints: [
+        { id: "fixed-defined", kind: "fixed" as const, references: [{ elementId: elementId("aggregate-state"), nodeId: "defined-a" }] as const },
+        { id: "join-defined", kind: "coincident" as const, references: [{ elementId: elementId("aggregate-state"), nodeId: "defined-a" }, { elementId: elementId("aggregate-state"), nodeId: "defined-b" }] as const },
+        ],
+      style,
+    };
+    const base = withElements(createDocument("aggregate-state", [layer]), [source]);
+    const document = { ...base, constraints: [
+      { id: "conflict-10", kind: "distance-horizontal" as const, value: 10, references: [{ elementId: source.id, nodeId: "conflict-a" }, { elementId: source.id, nodeId: "conflict-b" }] },
+      { id: "conflict-20", kind: "distance-horizontal" as const, value: 20, references: [{ elementId: source.id, nodeId: "conflict-a" }, { elementId: source.id, nodeId: "conflict-b" }] },
+      { id: "over-1", kind: "horizontal" as const, references: [{ elementId: source.id, nodeId: "overdefined-a" }, { elementId: source.id, nodeId: "overdefined-b" }] },
+      { id: "over-2", kind: "horizontal" as const, references: [{ elementId: source.id, nodeId: "overdefined-a" }, { elementId: source.id, nodeId: "overdefined-b" }] },
+    ] };
+    const result = renderSvg(document, { zoom: 1, panMm: { x: 0, y: 0 } });
+
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.svg).toContain('data-element-id="aggregate-state" stroke="#ef4444"');
+
+    const renderWith = (localIds: readonly string[], globalIds: readonly string[], expectedStroke: string) => {
+      const variant = {
+        ...base,
+        elements: [{ ...source, constraints: source.constraints?.filter((constraint) => localIds.includes(constraint.id)) }],
+        constraints: document.constraints.filter((constraint) => globalIds.includes(constraint.id)),
+      };
+      const rendered = renderSvg(variant, { zoom: 1, panMm: { x: 0, y: 0 } });
+      expect(rendered.success && rendered.svg).toContain(`data-element-id="aggregate-state" stroke="${expectedStroke}"`);
+    };
+    renderWith(["fixed-defined", "join-defined"], ["conflict-10", "conflict-20", "over-1", "over-2"], "#ef4444");
+    renderWith(["fixed-defined", "join-defined"], ["over-1", "over-2"], "#f59e0b");
+    renderWith(["fixed-defined", "join-defined"], [], "#2563eb");
+  });
+
   it("keeps editor diagnostic colors out of export rendering", () => {
     const underdefined = { type: "sketch" as const, id: elementId("export-sketch"), layerId: layer.id, nodes: [{ id: "a", point: { x: 0, y: 0 } }, { id: "b", point: { x: 20, y: 0 } }], edges: [{ id: "ab", startNodeId: "a", endNodeId: "b" }], constraints: [], style };
     const document = withElements(createDocument("export-constraint-colors", [layer]), [underdefined]);

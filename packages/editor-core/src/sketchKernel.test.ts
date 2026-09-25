@@ -54,10 +54,12 @@ describe("sketch kernel", () => {
             const first = { ...circle(), id: elementId("overlap-a"), center: { x: 0, y: 0 }, radius: 5 };
             const second = { ...circle(), id: elementId("overlap-b"), center: { x: 0, y: 0 }, radius: 5 };
             const input = documentFor(first, second);
+            const before = JSON.stringify(input);
             const result = recomputeSketchKernel(input);
             expect(result.derivedMixedTopology.intersections[0]?.kind).toBe("overlap");
             expect(result.derivedMixedTopology.diagnostics.map((diagnostic) => diagnostic.code)).toContain("overlap");
             expect(result.document).toEqual(normalizedRoles(input));
+            expect(JSON.stringify(input)).toBe(before);
           });
 
       it("exposes an exact mixed line/arc loop as deterministic derived graph metadata", () => {
@@ -110,9 +112,11 @@ describe("sketch kernel", () => {
 
       it("rolls back atomically and reports deterministic native circle conflicts", () => {
         const input = documentFor(circle([{ id: "z", kind: "radius", value: 4 }, { id: "a", kind: "diameter", value: 10 }]));
+        const before = JSON.stringify(input);
         const result = recomputeSketchKernel(input);
         expect(result.rollback).toBe(true);
         expect(result.document).toEqual(normalizedRoles(input));
+        expect(JSON.stringify(input)).toBe(before);
         expect(result.circleConstraintDiagnostics).toEqual([{ code: "circle-constraint-conflict", circleId: circle().id, constraintIds: ["z"], message: "Circle constraints are in conflict: z" }]);
       });
 
@@ -121,6 +125,7 @@ describe("sketch kernel", () => {
         const before = JSON.stringify(input);
         const result = recomputeSketchKernel(input);
         expect(result.document.elements).toEqual(normalizedRoles(input).elements);
+        expect(input.elements).toEqual([circle()]);
         expect(JSON.stringify(input)).toBe(before);
       });
 
@@ -180,15 +185,18 @@ describe("sketch kernel", () => {
 
   it("rolls back conflicting constraints", () => {
     const input = documentFor(square([fixed("fixed-a", "a"), fixed("fixed-b", "a")]));
+    const before = JSON.stringify(input);
     const result = recomputeSketchKernel(input);
     expect(result.rollback).toBe(true);
     expect(result.committed).toBe(false);
     expect(result.document).toEqual(normalizedRoles(input));
+    expect(JSON.stringify(input)).toBe(before);
     expect(result.constraintDiagnostics.length).toBeGreaterThan(0);
   });
 
   it("rolls back a candidate when canonical profile provenance is tampered", () => {
         const input = documentFor(square());
+        const before = JSON.stringify(input);
         const result = recomputeSketchKernel(input, undefined, (profileInput) => {
           const profile = sketchProfileResult(profileInput);
           const first = profile.parametricFragments[0];
@@ -198,6 +206,7 @@ describe("sketch kernel", () => {
         expect(result.rollback).toBe(true);
         expect(result.profileReady).toBe(false);
         expect(result.document).toEqual(normalizedRoles(input));
+        expect(JSON.stringify(input)).toBe(before);
         expect(result.topologyDiagnostics).toEqual(expect.arrayContaining([
           expect.objectContaining({ code: "invalid-topology", message: expect.stringContaining("source-provenance-mismatch") }),
         ]));

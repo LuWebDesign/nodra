@@ -33,6 +33,25 @@ beforeEach(() => {
 });
 
 describe("app persistence", () => {
+  it("reports mirror write failure and preserves the previously saved mirror", () => {
+    expect(saveProjectMirror(project)).toBe(true);
+    const savedMirror = storage.get(projectMirrorKey(project.id));
+    expect(savedMirror).toBeDefined();
+    const failingStorage = { ...localStorageMock, setItem: () => { throw new Error("quota exceeded"); } };
+    Object.defineProperty(globalThis, "localStorage", { configurable: true, value: failingStorage });
+    expect(saveProjectMirror(project)).toBe(false);
+    expect(loadProjectMirror(project.id)).toEqual(JSON.parse(savedMirror!));
+    expect(storage.get(projectMirrorKey(project.id))).toBe(savedMirror);
+  });
+
+  it("tolerates stale mirror cleanup failure and leaves the existing mirror readable", () => {
+    expect(saveProjectMirror(project)).toBe(true);
+    const savedMirror = storage.get(projectMirrorKey(project.id));
+    Object.defineProperty(globalThis, "localStorage", { configurable: true, value: { ...localStorageMock, removeItem: () => { throw new Error("storage unavailable"); } } });
+    expect(() => removeProjectMirror(project.id)).not.toThrow();
+    expect(loadProjectMirror(project.id)).toEqual(JSON.parse(savedMirror!));
+  });
+
   it("round trips collapsed pages and project mirrors", () => {
     saveLastAppLocation({ view: "editor", mode: "prepare" });
     expect(JSON.parse(storage.get("nodra:last-app-location") ?? "null")).toEqual({ view: "editor", mode: "prepare" });

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { createDocument, createProject, elementId, layerId, projectPage, withElements } from "@nodra/domain";
+import { createDocument, createProject, elementId, layerId, projectPage, withElements, type DimensionElement } from "@nodra/domain";
+import { dimensionDrivingCapability } from "@nodra/editor-core";
 import { profilePreviewForSelection } from "./App.js";
 
 const square = () => [
@@ -8,6 +9,14 @@ const square = () => [
   { type: "line" as const, id: elementId("bottom"), layerId: layerId("layer-1"), start: { x: 10, y: 10 }, end: { x: 0, y: 10 }, rotation: 0, style: { stroke: "#000", strokeWidth: 1 } },
   { type: "line" as const, id: elementId("left"), layerId: layerId("layer-1"), start: { x: 0, y: 10 }, end: { x: 0, y: 0 }, rotation: 0, style: { stroke: "#000", strokeWidth: 1 } },
 ];
+
+describe("editor dimension capability wiring", () => {
+  it("keeps native-line angular dimensions as annotations, including construction lines", () => {
+    const line = { type: "line" as const, id: elementId("app-capability-line"), layerId: layerId("layer-1"), start: { x: 0, y: 0 }, end: { x: 10, y: 0 }, rotation: 0, role: "construction" as const, style: { stroke: "#000", strokeWidth: 1 } };
+    const angular: DimensionElement = { type: "dimension", id: elementId("app-capability-dimension"), layerId: line.layerId, kind: "angular", references: [{ kind: "line", elementId: line.id }, { kind: "line", elementId: line.id }], offset: { x: 0, y: -5 }, precision: 2, units: "mm", rotation: 0, style: line.style };
+    expect(dimensionDrivingCapability(angular, [line, angular])).toBe("annotation");
+  });
+});
 
 describe("selection profile preview wiring", () => {
   it("derives and renders only an explicitly selected closed scope", () => {
