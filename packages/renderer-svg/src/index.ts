@@ -214,7 +214,15 @@ export function renderSvg(document: unknown, viewport: unknown, options: unknown
   const checkedViewport = viewportResult(viewport);
   if (!checkedViewport.success) return { success: false, reason: "invalid", error: checkedViewport.error, issues: [checkedViewport.error] };
 
-  const renderDocument = mode === "export" ? projectFabricableDocument(checked.data) : checked.data;
+  let renderDocument = checked.data;
+  if (mode === "export") {
+    try {
+      renderDocument = projectFabricableDocument(checked.data);
+    } catch (error) {
+      if (!(error instanceof FabricableDocumentProjectionError)) throw error;
+      return { success: false, reason: "invalid", error: error.message, issues: error.issues };
+    }
+  }
   const visibleLayers = new Set(renderDocument.layers.filter((layer) => layer.visible).map((layer) => layer.id));
   const elements = [...renderDocument.elements].filter((element) => visibleLayers.has(element.layerId));
   const orderedLayers = new Map([...checked.data.layers].sort((a, b) => a.order - b.order).map((layer, index) => [layer.id, index]));
@@ -338,14 +346,35 @@ export function renderSketchProfileSvg(profile: SketchProfileResult, viewport: V
   }
 }
 
+export class FabricableDocumentProjectionError extends Error {
+  readonly issues: readonly string[];
+
+  constructor(message: string, issues: readonly string[]) {
+    super(message);
+    this.name = "FabricableDocumentProjectionError";
+    this.issues = issues;
+  }
+}
+
 export function projectFabricableDocument(document: DocumentSnapshot): DocumentSnapshot {
-  const elements = document.elements.flatMap<Element>((element) => {
+  const source = validateDocument(document);
+  if (!source.success) {
+    const issues = source.issues.slice(0, MAX_ISSUES).map((issue) => `${issue.path.join(".") || "document"}: ${issue.message}`);
+    throw new FabricableDocumentProjectionError(source.error.slice(0, 512), issues);
+  }
+  const elements = source.data.elements.flatMap<Element>((element) => {
     if (element.role === "construction") return [];
     if (element.type !== "sketch") return [element];
     const edges = element.edges.filter((edge) => edge.role !== "construction");
     return edges.length > 0 ? [{ ...element, edges }] : [];
   });
-  return { ...document, elements };
+  const projected = { ...source.data, elements };
+  const checked = validateDocument(projected);
+  if (!checked.success) {
+    const issues = checked.issues.slice(0, MAX_ISSUES).map((issue) => `${issue.path.join(".") || "document"}: ${issue.message}`);
+    throw new FabricableDocumentProjectionError(checked.error.slice(0, 512), issues);
+  }
+  return checked.data;
 }
 
 export const svgRenderer: SvgRenderer = { render: renderSvg };
