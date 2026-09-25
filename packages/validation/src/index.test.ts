@@ -6,6 +6,38 @@ describe("native document validation", () => {
   it("accepts an empty project without requiring a piece", () => {
     expect(validateProject(createEmptyProject(createDocument("empty-project"))).success).toBe(true);
   });
+
+  it("normalizes native and sketch-edge geometry roles independently and idempotently", () => {
+    const base = createDocument("roles", [{ id: layerId("layer-1"), name: "Design", visible: true, order: 0 }]);
+    const line = { type: "line" as const, id: "line", layerId: "layer-1", start: { x: 0, y: 0 }, end: { x: 10, y: 0 }, rotation: 0, role: "construction" as const, style: { stroke: "#000", strokeWidth: 1 } };
+    const sketch = { type: "sketch" as const, id: "sketch", layerId: "layer-1", nodes: [{ id: "a", point: { x: 0, y: 0 } }, { id: "b", point: { x: 10, y: 0 } }, { id: "c", point: { x: 20, y: 0 } }], edges: [{ id: "normal", startNodeId: "a", endNodeId: "b" }, { id: "construction", startNodeId: "b", endNodeId: "c", role: "construction" as const }], style: { stroke: "#000", strokeWidth: 1 } };
+    const dimension = { type: "dimension" as const, id: "dimension", layerId: "layer-1", kind: "horizontal" as const, references: [{ elementId: "line", nodeIndex: 0 }, { elementId: "line", nodeIndex: 1 }], offset: { x: 0, y: -5 }, precision: 2, units: "mm" as const, rotation: 0 as const, style: { stroke: "#000", strokeWidth: 1 } };
+    const path = { type: "path" as const, id: "path", layerId: "layer-1", nodes: [{ id: "a", anchor: { x: 0, y: 0 }, join: "corner" as const }, { id: "b", anchor: { x: 10, y: 0 }, join: "corner" as const }], segments: [{ id: "ab", type: "line" as const, startNodeId: "a", endNodeId: "b" }], closed: false, style: { stroke: "#000", strokeWidth: 1 } };
+    const spline = { type: "spline" as const, id: "spline", layerId: "layer-1", nodes: [{ id: "a", anchor: { x: 0, y: 0 }, continuity: "smooth" as const }, { id: "b", anchor: { x: 10, y: 0 }, continuity: "smooth" as const }], closed: false, style: { stroke: "#000", strokeWidth: 1 } };
+    const checked = validateDocument({ ...base, elements: [line, sketch, dimension, path, spline] });
+    expect(checked.success).toBe(true);
+    if (checked.success) {
+      expect(checked.data.elements).toMatchObject([{ id: "line", role: "construction" }, { id: "sketch", role: "normal", edges: [{ id: "normal", role: "normal" }, { id: "construction", role: "construction" }] }, { id: "dimension", role: "normal" }, { id: "path", role: "normal" }, { id: "spline", role: "normal" }]);
+      expect(validateDocument(checked.data)).toEqual(checked);
+      expect(parseDocument(serializeDocument(checked.data))).toMatchObject({ success: true, data: checked.data });
+    }
+    const project = createProject(base);
+    const projectChecked = validateProject({ ...project, pages: [{ ...project.pages[0]!, elements: [line] }] });
+    expect(projectChecked.success).toBe(true);
+    if (projectChecked.success) expect(projectChecked.data.pages[0]?.elements[0]).toMatchObject({ role: "construction" });
+  });
+
+  it("rejects malformed geometry roles", () => {
+    const base = createDocument("invalid-roles", [{ id: layerId("layer-1"), name: "Design", visible: true, order: 0 }]);
+    const line = { type: "line" as const, id: "line", layerId: "layer-1", start: { x: 0, y: 0 }, end: { x: 10, y: 0 }, rotation: 0, style: { stroke: "#000", strokeWidth: 1 } };
+    for (const role of ["profile", 1, null, "", "normal "]) expect(validateDocument({ ...base, elements: [{ ...line, role }] }).success).toBe(false);
+    const sketch = { type: "sketch" as const, id: "sketch", layerId: "layer-1", nodes: [{ id: "a", point: { x: 0, y: 0 } }, { id: "b", point: { x: 10, y: 0 } }], edges: [{ id: "ab", startNodeId: "a", endNodeId: "b", role: null }], style: { stroke: "#000", strokeWidth: 1 } };
+    expect(validateDocument({ ...base, elements: [sketch] }).success).toBe(false);
+    const dimension = { type: "dimension" as const, id: "dimension", layerId: "layer-1", kind: "horizontal" as const, references: [{ elementId: "line", nodeIndex: 0 }, { elementId: "line", nodeIndex: 1 }], offset: { x: 0, y: -5 }, precision: 2, units: "mm" as const, rotation: 0 as const, style: { stroke: "#000", strokeWidth: 1 } };
+    const path = { type: "path" as const, id: "path", layerId: "layer-1", nodes: [{ id: "a", anchor: { x: 0, y: 0 }, join: "corner" as const }, { id: "b", anchor: { x: 10, y: 0 }, join: "corner" as const }], segments: [{ id: "ab", type: "line" as const, startNodeId: "a", endNodeId: "b" }], closed: false, style: { stroke: "#000", strokeWidth: 1 } };
+    const spline = { type: "spline" as const, id: "spline", layerId: "layer-1", nodes: [{ id: "a", anchor: { x: 0, y: 0 }, continuity: "smooth" as const }, { id: "b", anchor: { x: 10, y: 0 }, continuity: "smooth" as const }], closed: false, style: { stroke: "#000", strokeWidth: 1 } };
+    for (const element of [dimension, path, spline]) expect(validateDocument({ ...base, elements: [line, { ...element, role: "invalid" }] }).success).toBe(false);
+  });
   it("validates positional coincidence addresses and geometry without changing legacy connections", () => {
     const base = createDocument("coincidence", [{ id: layerId("layer-1"), name: "Design", visible: true, order: 0 }]);
     const style = { stroke: "#000", strokeWidth: 1 };
