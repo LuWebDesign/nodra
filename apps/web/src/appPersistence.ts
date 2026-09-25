@@ -57,8 +57,11 @@ export const loadProjectMirror = (projectId: string): ProjectMirror | undefined 
     return checked.success && checked.data.id === projectId ? { format: PROJECT_MIRROR_FORMAT, project: checked.data, savedAt: value.savedAt } : undefined;
   } catch { return undefined; }
 };
-export const saveProjectMirror = (project: ProjectSnapshot): void => {
-  try { localStorage.setItem(projectMirrorKey(project.id), JSON.stringify({ format: PROJECT_MIRROR_FORMAT, project, savedAt: Date.now() } satisfies ProjectMirror)); } catch { /* best-effort reload mirror */ }
+export const saveProjectMirror = (project: ProjectSnapshot): boolean => {
+  try {
+    localStorage.setItem(projectMirrorKey(project.id), JSON.stringify({ format: PROJECT_MIRROR_FORMAT, project, savedAt: Date.now() } satisfies ProjectMirror));
+    return true;
+  } catch { /* best-effort reload mirror */ return false; }
 };
 export const removeProjectMirror = (projectId: string): void => {
   try { localStorage.removeItem(projectMirrorKey(projectId)); } catch { /* best-effort mirror cleanup */ }
