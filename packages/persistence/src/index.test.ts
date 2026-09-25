@@ -181,7 +181,38 @@ describe("DexieProjectRepository", () => {
         }
       });
 
-      it("round-trips native arc elements through project persistence", async () => {
+  it("rejects invalid native and sketch-edge roles without replacing the valid revision", async () => {
+    db = await repository();
+    const base = document();
+    const line = { type: "line" as const, id: elementId("construction-line"), layerId: layerId("layer-1"), start: { x: 0, y: 0 }, end: { x: 10, y: 0 }, rotation: 0, role: "construction" as const, style: { stroke: "#000", strokeWidth: 1 } };
+    const sketch = { type: "sketch" as const, id: elementId("sketch-roles"), layerId: layerId("layer-1"), nodes: [{ id: "a", point: { x: 0, y: 0 } }, { id: "b", point: { x: 10, y: 0 } }], edges: [{ id: "edge", startNodeId: "a", endNodeId: "b", role: "construction" as const }], style: { stroke: "#000", strokeWidth: 1 } };
+    const valid = { ...base, elements: [line, sketch], revision: revision(1) };
+    expect((await db.saveProject(metadata, valid)).ok).toBe(true);
+
+    const invalidNative = { ...valid, revision: revision(2), elements: [{ ...line, role: "invalid" }, sketch] } as unknown as typeof valid;
+    const nativeResult = await db.saveProject(metadata, invalidNative);
+    expect(nativeResult).toMatchObject({ ok: false, status: "failed", revision: 2 });
+    const afterNativeFailure = await db.getProject(metadata.id);
+    expect(afterNativeFailure.ok && afterNativeFailure.revision).toMatchObject({ revision: 1, document: valid });
+
+    const invalidEdge = { ...valid, revision: revision(3), elements: [line, { ...sketch, edges: [{ ...sketch.edges[0]!, role: "invalid" }] }] } as unknown as typeof valid;
+    const edgeResult = await db.saveProject(metadata, invalidEdge);
+    expect(edgeResult).toMatchObject({ ok: false, status: "failed", revision: 3 });
+    const afterEdgeFailure = await db.getProject(metadata.id);
+    expect(afterEdgeFailure.ok && afterEdgeFailure.revision).toMatchObject({ revision: 1, document: valid });
+  });
+
+  it("round-trips mixed native and sketch-edge geometry roles through project persistence", async () => {
+    db = await repository();
+    const base = document();
+    const sketch = { type: "sketch" as const, id: elementId("sketch-roles"), layerId: layerId("layer-1"), nodes: [{ id: "a", point: { x: 0, y: 0 } }, { id: "b", point: { x: 10, y: 0 } }, { id: "c", point: { x: 20, y: 0 } }], edges: [{ id: "normal", startNodeId: "a", endNodeId: "b" }, { id: "construction", startNodeId: "b", endNodeId: "c", role: "construction" as const }], style: { stroke: "#000", strokeWidth: 1 } };
+    const source = { ...base, elements: [{ type: "line" as const, id: elementId("construction-line"), layerId: layerId("layer-1"), start: { x: 0, y: 0 }, end: { x: 10, y: 0 }, rotation: 0, role: "construction" as const, style: { stroke: "#000", strokeWidth: 1 } }, sketch] };
+    expect((await db.saveProject(metadata, source)).ok).toBe(true);
+    const recovered = await db.getProject(metadata.id);
+    expect(recovered.ok && recovered.revision.document).toMatchObject({ elements: [{ role: "construction" }, { role: "normal", edges: [{ role: "normal" }, { role: "construction" }] }] });
+  });
+
+  it("round-trips native arc elements through project persistence", async () => {
     db = await repository();
     const source = { ...document(), elements: [{ type: "arc" as const, id: elementId("arc-1"), layerId: layerId("layer-1"), center: { x: 20, y: 20 }, radius: 10, startAngle: 0, endAngle: Math.PI / 2, direction: "clockwise" as const, style: { stroke: "#000", strokeWidth: 1 } }] };
     expect((await db.saveProject(metadata, source)).ok).toBe(true);

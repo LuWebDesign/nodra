@@ -42,10 +42,11 @@ function viewportResult(input: unknown): { success: true; data: Viewport } | { s
 const DEFAULT_FILL_OPACITY = 0.22;
 
 function visualAttributes(element: Element): string {
-  if (element.type === "dimension") return `stroke="${escapeAttribute(element.style.stroke)}" stroke-width="${number(element.style.strokeWidth)}" fill="none"`;
+  const construction = element.role === "construction";
+  if (element.type === "dimension") return `stroke="${escapeAttribute(element.style.stroke)}" stroke-width="${number(element.style.strokeWidth)}" fill="none"${construction ? ` stroke-dasharray="6 4"` : ""}`;
   const closed = element.type === "path" || element.type === "spline" ? element.closed : element.type !== "arc" && element.type !== "line" && element.type !== "sketch";
-  const fill = closed ? escapeAttribute(element.style.fill ?? element.style.stroke) : "none";
-  return `stroke="${escapeAttribute(element.style.stroke)}" stroke-width="${number(element.style.strokeWidth)}" fill="${fill}"${closed ? ` fill-opacity="${DEFAULT_FILL_OPACITY}"` : ""}`;
+  const fill = construction ? "none" : closed ? escapeAttribute(element.style.fill ?? element.style.stroke) : "none";
+  return `stroke="${escapeAttribute(element.style.stroke)}" stroke-width="${number(element.style.strokeWidth)}" fill="${fill}"${closed && !construction ? ` fill-opacity="${DEFAULT_FILL_OPACITY}"` : ""}${construction ? ` stroke-dasharray="6 4"` : ""}`;
 }
 
 function renderArc(element: Extract<Element, { type: "arc" }>, viewport: Viewport): string {
@@ -106,8 +107,8 @@ function renderElement(element: Element, viewport: Viewport, document: DocumentS
     const profile = buildSketchProfile(element);
         const loops = new Map(profile.loops.map((loop) => [loop.id, loop]));
     const contours = profile.regions.flatMap((region) => [region.outerLoopId, ...region.holeLoopIds]).map((loopId) => loops.get(loopId)?.points ?? []).filter((contour) => contour.length > 0).map((contour) => contour.map((point, index) => { const current = screen(point); return `${index === 0 ? "M" : "L"}${number(current.x)} ${number(current.y)}`; }).join(" ") + " Z").join(" ");
-    const faces = contours ? `<path data-sketch-fill="true" d="${escapeAttribute(contours)}" fill="${fill}" fill-opacity="${DEFAULT_FILL_OPACITY}" stroke="none" fill-rule="evenodd" />` : "";
-    const lines = element.edges.map((edge) => { const start = nodes.get(edge.startNodeId); const end = nodes.get(edge.endNodeId); return start && end ? `<line x1="${number(start.x)}" y1="${number(start.y)}" x2="${number(end.x)}" y2="${number(end.y)}" />` : ""; }).join("");
+    const faces = contours && element.role !== "construction" ? `<path data-sketch-fill="true" d="${escapeAttribute(contours)}" fill="${fill}" fill-opacity="${DEFAULT_FILL_OPACITY}" stroke="none" fill-rule="evenodd" />` : "";
+    const lines = element.edges.map((edge) => { const start = nodes.get(edge.startNodeId); const end = nodes.get(edge.endNodeId); return start && end ? `<line x1="${number(start.x)}" y1="${number(start.y)}" x2="${number(end.x)}" y2="${number(end.y)}"${edge.role === "construction" ? ` stroke-dasharray="6 4"` : ""} />` : ""; }).join("");
     return `<g data-element-id="${escapeAttribute(element.id)}" ${sketchAttributes}>${faces}${lines}</g>`;
   }
   if (element.type === "contour") {
@@ -175,6 +176,7 @@ function splineToPathElement(element: SplineElement): PathElement {
     closed: element.closed,
     style: element.style,
     ...(element.operation ? { operation: element.operation } : {}),
+    ...(element.role ? { role: element.role } : {}),
   };
 }
 
@@ -212,19 +214,28 @@ export function renderSvg(document: unknown, viewport: unknown, options: unknown
   const checkedViewport = viewportResult(viewport);
   if (!checkedViewport.success) return { success: false, reason: "invalid", error: checkedViewport.error, issues: [checkedViewport.error] };
 
-  const visibleLayers = new Set(checked.data.layers.filter((layer) => layer.visible).map((layer) => layer.id));
-  const elements = [...checked.data.elements].filter((element) => visibleLayers.has(element.layerId));
+  let renderDocument = checked.data;
+  if (mode === "export") {
+    try {
+      renderDocument = projectFabricableDocument(checked.data);
+    } catch (error) {
+      if (!(error instanceof FabricableDocumentProjectionError)) throw error;
+      return { success: false, reason: "invalid", error: error.message, issues: error.issues };
+    }
+  }
+  const visibleLayers = new Set(renderDocument.layers.filter((layer) => layer.visible).map((layer) => layer.id));
+  const elements = [...renderDocument.elements].filter((element) => visibleLayers.has(element.layerId));
   const orderedLayers = new Map([...checked.data.layers].sort((a, b) => a.order - b.order).map((layer, index) => [layer.id, index]));
   elements.sort((a, b) => (orderedLayers.get(a.layerId) ?? 0) - (orderedLayers.get(b.layerId) ?? 0));
   const sketchConstraintStates = new Map<string, ConstraintState>();
   if (mode === "editor") {
     const statePriority: Record<ConstraintState, number> = { "fully-defined": 0, underdefined: 1, overdefined: 2, conflict: 3, invalid: 4 };
     const stateByNodeKey = new Map<string, ConstraintState>();
-    constraintComponentStatesForDocument(checked.data).forEach((component) => component.nodeKeys.forEach((key) => {
+    constraintComponentStatesForDocument(renderDocument).forEach((component) => component.nodeKeys.forEach((key) => {
       const current = stateByNodeKey.get(key);
       if (current === undefined || statePriority[component.state] > statePriority[current]) stateByNodeKey.set(key, component.state);
     }));
-    checked.data.elements.filter((element) => element.type === "sketch").forEach((sketch) => {
+    renderDocument.elements.filter((element) => element.type === "sketch").forEach((sketch) => {
       const state = sketch.nodes.reduce<ConstraintState>((current, node) => {
         const candidate = stateByNodeKey.get(JSON.stringify([sketch.id, node.id])) ?? "underdefined";
         return statePriority[candidate] > statePriority[current] ? candidate : current;
@@ -232,7 +243,7 @@ export function renderSvg(document: unknown, viewport: unknown, options: unknown
       sketchConstraintStates.set(sketch.id, state);
     });
   }
-  const contents = elements.map((element) => element.type === "dimension" ? renderDimension(element, checkedViewport.data, checked.data.elements) : renderElement(element, checkedViewport.data, checked.data, sketchConstraintStates, mode)).join("");
+  const contents = elements.map((element) => element.type === "dimension" ? renderDimension(element, checkedViewport.data, renderDocument.elements) : renderElement(element, checkedViewport.data, renderDocument, sketchConstraintStates, mode)).join("");
   return { success: true, svg: `<svg xmlns="http://www.w3.org/2000/svg" data-units="mm" width="${number(checked.data.page.width)}" height="${number(checked.data.page.height)}" viewBox="0 0 ${number(checked.data.page.width)} ${number(checked.data.page.height)}"><g>${contents}</g></svg>`, renderedElementIds: elements.map((element) => element.id) };
 }
 
@@ -333,6 +344,37 @@ export function renderSketchProfileSvg(profile: SketchProfileResult, viewport: V
     const message = error instanceof Error ? error.message : "Unsupported profile geometry";
     return { success: false, reason: "unsupported", error: message, issues: [message] };
   }
+}
+
+export class FabricableDocumentProjectionError extends Error {
+  readonly issues: readonly string[];
+
+  constructor(message: string, issues: readonly string[]) {
+    super(message);
+    this.name = "FabricableDocumentProjectionError";
+    this.issues = issues;
+  }
+}
+
+export function projectFabricableDocument(document: DocumentSnapshot): DocumentSnapshot {
+  const source = validateDocument(document);
+  if (!source.success) {
+    const issues = source.issues.slice(0, MAX_ISSUES).map((issue) => `${issue.path.join(".") || "document"}: ${issue.message}`);
+    throw new FabricableDocumentProjectionError(source.error.slice(0, 512), issues);
+  }
+  const elements = source.data.elements.flatMap<Element>((element) => {
+    if (element.role === "construction") return [];
+    if (element.type !== "sketch") return [element];
+    const edges = element.edges.filter((edge) => edge.role !== "construction");
+    return edges.length > 0 ? [{ ...element, edges }] : [];
+  });
+  const projected = { ...source.data, elements };
+  const checked = validateDocument(projected);
+  if (!checked.success) {
+    const issues = checked.issues.slice(0, MAX_ISSUES).map((issue) => `${issue.path.join(".") || "document"}: ${issue.message}`);
+    throw new FabricableDocumentProjectionError(checked.error.slice(0, 512), issues);
+  }
+  return checked.data;
 }
 
 export const svgRenderer: SvgRenderer = { render: renderSvg };

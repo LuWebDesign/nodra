@@ -3,6 +3,7 @@ import { CURRENT_SCHEMA_VERSION, createDefaultPiece, hasBounds, type DocumentSna
 
 const finite = z.number().finite();
 const nonEmptyId = z.string().min(1);
+const geometryRole = z.enum(["normal", "construction"]).default("normal");
 const point = z.object({ x: finite, y: finite }).strict();
 const size = z.object({ width: finite.gt(0), height: finite.gt(0) }).strict();
 const style = z.object({ stroke: z.string().min(1), fill: z.string().min(1).optional(), strokeWidth: finite.gt(0) }).strict();
@@ -13,19 +14,19 @@ const visualLineEndpoints = (line: { readonly start: PointMm; readonly end: Poin
   return [rotate(line.start), rotate(line.end)];
 };
 const pieceOwnership = { pieceId: nonEmptyId.optional() };
-    const common = { id: nonEmptyId, layerId: nonEmptyId, ...pieceOwnership, rotation: finite, flipX: z.boolean().default(false), flipY: z.boolean().default(false), style, operation: operation.optional() };
+    const common = { id: nonEmptyId, layerId: nonEmptyId, ...pieceOwnership, role: geometryRole, rotation: finite, flipX: z.boolean().default(false), flipY: z.boolean().default(false), style, operation: operation.optional() };
 const cornerRadii = z.object({ topLeft: finite.min(0), topRight: finite.min(0), bottomRight: finite.min(0), bottomLeft: finite.min(0) }).strict();
 const rectangle = z.object({ ...common, type: z.literal("rectangle"), position: point, size, cornerRadius: finite.min(0).default(0), cornerRadii: cornerRadii.optional() }).strict();
 const circleConstraint = z.object({ id: nonEmptyId, kind: z.enum(["center-horizontal", "center-vertical", "radius", "diameter"]), value: finite, driving: z.boolean().optional() }).strict().superRefine((value, ctx) => {
   if ((value.kind === "radius" || value.kind === "diameter") && value.value <= 0) ctx.addIssue({ code: "custom", message: "Circle size constraints require a positive value", path: ["value"] });
 });
-const circle = z.object({ id: nonEmptyId, layerId: nonEmptyId, ...pieceOwnership, type: z.literal("circle"), center: point, radius: finite.gt(0), style, operation: operation.optional(), circleConstraints: z.array(circleConstraint).optional() }).strict().superRefine((value, ctx) => {
+const circle = z.object({ id: nonEmptyId, layerId: nonEmptyId, ...pieceOwnership, role: geometryRole, type: z.literal("circle"), center: point, radius: finite.gt(0), style, operation: operation.optional(), circleConstraints: z.array(circleConstraint).optional() }).strict().superRefine((value, ctx) => {
   const constraints = value.circleConstraints ?? [];
   const ids = constraints.map((constraint) => constraint.id);
   if (new Set(ids).size !== ids.length) ctx.addIssue({ code: "custom", message: "Circle constraint IDs must be unique", path: ["circleConstraints"] });
 });
 // Schema 9 adds arcs as a canonical open circular primitive; ellipse remains the legacy oval primitive.
-const arc = z.object({ id: nonEmptyId, layerId: nonEmptyId, ...pieceOwnership, type: z.literal("arc"), center: point, radius: finite.gt(0), startAngle: finite.min(0).lt(2 * Math.PI), endAngle: finite.min(0).lt(2 * Math.PI), direction: z.enum(["clockwise", "counterclockwise"]), style, operation: operation.optional() }).strict().superRefine((value, ctx) => {
+const arc = z.object({ id: nonEmptyId, layerId: nonEmptyId, ...pieceOwnership, role: geometryRole, type: z.literal("arc"), center: point, radius: finite.gt(0), startAngle: finite.min(0).lt(2 * Math.PI), endAngle: finite.min(0).lt(2 * Math.PI), direction: z.enum(["clockwise", "counterclockwise"]), style, operation: operation.optional() }).strict().superRefine((value, ctx) => {
   if (value.startAngle === value.endAngle) ctx.addIssue({ code: "custom", message: "Arc start and end angles must differ", path: ["endAngle"] });
 });
 const ellipse = z.object({ ...common, type: z.literal("ellipse"), position: point, size }).strict();
@@ -55,7 +56,7 @@ const nodeReference = z.object({ kind: z.literal("node"), elementId: nonEmptyId,
 const lineReference = z.object({ kind: z.literal("line"), elementId: nonEmptyId, edgeId: nonEmptyId.optional(), edgeIndex: finite.int().nonnegative().optional() }).strict();
 const legacyNodeReference = z.object({ elementId: nonEmptyId, nodeIndex: finite.int().nonnegative(), nodeId: nonEmptyId.optional() }).strict().transform((reference) => ({ kind: "node" as const, ...reference }));
 const dimensionReference = z.union([z.discriminatedUnion("kind", [nodeReference, lineReference]), legacyNodeReference]);
-const dimension = z.object({ id: nonEmptyId, layerId: nonEmptyId, ...pieceOwnership, type: z.literal("dimension"), kind: z.enum(["aligned", "horizontal", "vertical", "angular", "radius", "diameter"]), references: z.tuple([dimensionReference, dimensionReference]), offset: point, precision: finite.int().min(0).max(6), units: z.literal("mm"), rotation: z.literal(0), style, driving: z.boolean().optional(), constraintId: nonEmptyId.optional() }).strict().superRefine((value, ctx) => {
+const dimension = z.object({ id: nonEmptyId, layerId: nonEmptyId, ...pieceOwnership, role: geometryRole, type: z.literal("dimension"), kind: z.enum(["aligned", "horizontal", "vertical", "angular", "radius", "diameter"]), references: z.tuple([dimensionReference, dimensionReference]), offset: point, precision: finite.int().min(0).max(6), units: z.literal("mm"), rotation: z.literal(0), style, driving: z.boolean().optional(), constraintId: nonEmptyId.optional() }).strict().superRefine((value, ctx) => {
   const [first, second] = value.references;
   if (value.kind === "angular") {
     if (first.kind !== "line" || second.kind !== "line") ctx.addIssue({ code: "custom", message: "Angular dimensions require line references", path: ["references"] });
@@ -73,12 +74,12 @@ const contour = z.object({ ...common, type: z.literal("contour"), position: poin
   });
 });
 const sketchNode = z.object({ id: nonEmptyId, point }).strict();
-const sketchEdge = z.object({ id: nonEmptyId, startNodeId: nonEmptyId, endNodeId: nonEmptyId }).strict();
+const sketchEdge = z.object({ id: nonEmptyId, startNodeId: nonEmptyId, endNodeId: nonEmptyId, role: geometryRole }).strict();
 const sketchPointReference = z.object({ elementId: nonEmptyId, nodeId: nonEmptyId }).strict();
 const sketchEdgeReference = z.object({ elementId: nonEmptyId, edgeId: nonEmptyId }).strict();
 const sketchConstraintReference = z.union([sketchPointReference, sketchEdgeReference]);
 const sketchConstraint = z.object({ id: nonEmptyId, kind: z.enum(["horizontal", "vertical", "coincident", "parallel", "perpendicular", "equal", "distance-horizontal", "distance-vertical", "distance", "angle", "fixed"]), references: z.array(sketchConstraintReference).min(1).max(4), value: finite.positive().optional() }).strict();
-const sketch = z.object({ id: nonEmptyId, layerId: nonEmptyId, ...pieceOwnership, type: z.literal("sketch"), nodes: z.array(sketchNode).min(2), edges: z.array(sketchEdge).min(1), constraints: z.array(sketchConstraint).optional(), style, operation: operation.optional() }).strict().superRefine((value, ctx) => {
+const sketch = z.object({ id: nonEmptyId, layerId: nonEmptyId, ...pieceOwnership, role: geometryRole, type: z.literal("sketch"), nodes: z.array(sketchNode).min(2), edges: z.array(sketchEdge).min(1), constraints: z.array(sketchConstraint).optional(), style, operation: operation.optional() }).strict().superRefine((value, ctx) => {
   const nodeIds = value.nodes.map((node) => node.id); const edgeIds = value.edges.map((edge) => edge.id);
   if (new Set(nodeIds).size !== nodeIds.length) ctx.addIssue({ code: "custom", message: "Sketch node IDs must be unique", path: ["nodes"] });
   if (new Set(edgeIds).size !== edgeIds.length) ctx.addIssue({ code: "custom", message: "Sketch edge IDs must be unique", path: ["edges"] });
@@ -107,7 +108,7 @@ const pathNode = z.object({ id: nonEmptyId, anchor: point, join: z.enum(["corner
 const pathLineSegment = z.object({ id: nonEmptyId, type: z.literal("line"), startNodeId: nonEmptyId, endNodeId: nonEmptyId }).strict();
 const pathCubicSegment = z.object({ id: nonEmptyId, type: z.literal("cubicBezier"), startNodeId: nonEmptyId, endNodeId: nonEmptyId, control1: point, control2: point }).strict();
 const pathSegment = z.discriminatedUnion("type", [pathLineSegment, pathCubicSegment]);
-const path = z.object({ id: nonEmptyId, layerId: nonEmptyId, ...pieceOwnership, type: z.literal("path"), nodes: z.array(pathNode).min(2), segments: z.array(pathSegment).min(1), closed: z.boolean(), rotation: finite.optional(), flipX: z.boolean().optional(), flipY: z.boolean().optional(), style, operation: operation.optional() }).strict().superRefine((value, ctx) => {
+const path = z.object({ id: nonEmptyId, layerId: nonEmptyId, ...pieceOwnership, role: geometryRole, type: z.literal("path"), nodes: z.array(pathNode).min(2), segments: z.array(pathSegment).min(1), closed: z.boolean(), rotation: finite.optional(), flipX: z.boolean().optional(), flipY: z.boolean().optional(), style, operation: operation.optional() }).strict().superRefine((value, ctx) => {
   const nodeIds = value.nodes.map((node) => node.id); const segmentIds = value.segments.map((segment) => segment.id);
   if (new Set(nodeIds).size !== nodeIds.length) ctx.addIssue({ code: "custom", message: "Path node IDs must be unique", path: ["nodes"] });
   if (new Set(segmentIds).size !== segmentIds.length) ctx.addIssue({ code: "custom", message: "Path segment IDs must be unique", path: ["segments"] });
@@ -122,7 +123,7 @@ const path = z.object({ id: nonEmptyId, layerId: nonEmptyId, ...pieceOwnership, 
   });
 });
 export const splineNodeSchema = z.object({ id: nonEmptyId, anchor: point, continuity: z.enum(["corner", "smooth", "symmetric"]), inHandle: z.object({ dx: finite, dy: finite }).strict().optional(), outHandle: z.object({ dx: finite, dy: finite }).strict().optional() }).strict();
-export const splineElementSchema = z.object({ id: nonEmptyId, layerId: nonEmptyId, ...pieceOwnership, type: z.literal("spline"), nodes: z.array(splineNodeSchema).min(2), closed: z.boolean(), style, operation: operation.optional() }).strict().superRefine((value, ctx) => {
+export const splineElementSchema = z.object({ id: nonEmptyId, layerId: nonEmptyId, ...pieceOwnership, role: geometryRole, type: z.literal("spline"), nodes: z.array(splineNodeSchema).min(2), closed: z.boolean(), style, operation: operation.optional() }).strict().superRefine((value, ctx) => {
   const nodeIds = value.nodes.map((node) => node.id);
   if (new Set(nodeIds).size !== nodeIds.length) ctx.addIssue({ code: "custom", message: "Spline node IDs must be unique", path: ["nodes"] });
 });
