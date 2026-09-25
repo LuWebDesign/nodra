@@ -112,12 +112,12 @@ const targetFor = (current: DocumentSnapshot, element: DocumentSnapshot["element
     const cutterCircle: CircleElement = { ...circle, id: elementId("trim-cutter-circle"), center: { x: 5, y: 5 }, radius: 3 };
     const mixed = documentWith(rectangle, cutterCircle);
     const mixedResult = dispatch(createEditor(mixed), trimSegment(targetFor(mixed, rectangle, { x: 5, y: 0 })));
-    expect(mixedResult.document.elements.find((element) => element.id === cutterCircle.id)).toEqual(cutterCircle);
+    expect(mixedResult.document.elements.find((element) => element.id === cutterCircle.id)).toEqual({ ...cutterCircle, role: "normal" });
     const first: CircleElement = { ...circle, id: elementId("trim-circle-first"), center: { x: 0, y: 0 }, radius: 5 };
     const second: CircleElement = { ...circle, id: elementId("trim-circle-second"), center: { x: 8, y: 0 }, radius: 5 };
     const circles = documentWith(first, second);
     const circleResult = dispatch(createEditor(circles), trimSegment(targetFor(circles, first, { x: 0, y: 5 })));
-    expect(circleResult.document.elements.find((element) => element.id === second.id)).toEqual(second);
+    expect(circleResult.document.elements.find((element) => element.id === second.id)).toEqual({ ...second, role: "normal" });
     expect(circleResult.document.elements.find((element) => element.id === first.id)?.type).toBe("arc");
   });
   it("classifies outer, hole, and open-loop profiles", () => {
@@ -165,7 +165,7 @@ const targetFor = (current: DocumentSnapshot, element: DocumentSnapshot["element
     expect(committed.document).not.toEqual(current);
     const afterFirst = committed.document;
     const secondCurrent = afterFirst.elements.find((element) => element.id === second.id);
-    expect(secondCurrent).toEqual(second);
+    expect(secondCurrent).toEqual({ ...second, role: "normal" });
     const secondTarget = targetFor(afterFirst, secondCurrent!, { x: 1, y: 0 });
     const finalPreview = trimPreview(afterFirst, secondTarget);
     const final = dispatch(createEditor(afterFirst), trimSegment(secondTarget));
@@ -184,8 +184,8 @@ const targetFor = (current: DocumentSnapshot, element: DocumentSnapshot["element
   });
   it("recomputes shared circle intersections when a surviving arc radius changes", () => {
     const angle = Math.atan2(4, 3);
-    const first: ArcElement = { type: "arc", id: elementId("radius-first"), layerId: layer, center: { x: 0, y: 0 }, radius: 5, startAngle: angle, endAngle: -angle, direction: "clockwise", style };
-    const second: ArcElement = { type: "arc", id: elementId("radius-second"), layerId: layer, center: { x: 6, y: 0 }, radius: 5, startAngle: -Math.PI + angle, endAngle: Math.PI - angle, direction: "clockwise", style };
+    const first: ArcElement = { type: "arc", id: elementId("radius-first"), layerId: layer, center: { x: 0, y: 0 }, radius: 5, startAngle: angle, endAngle: 2 * Math.PI - angle, direction: "clockwise", style };
+    const second: ArcElement = { type: "arc", id: elementId("radius-second"), layerId: layer, center: { x: 6, y: 0 }, radius: 5, startAngle: Math.PI + angle, endAngle: Math.PI - angle, direction: "clockwise", style };
     const dimension = { type: "dimension" as const, id: elementId("radius-dimension"), layerId: layer, kind: "radius" as const, driving: true, constraintId: "radius-dimension", references: [{ kind: "node" as const, elementId: first.id, nodeIndex: 0, nodeId: "center" }, { kind: "node" as const, elementId: first.id, nodeIndex: 1, nodeId: "start" }] as const, offset: { x: 0, y: -8 }, precision: 2, units: "mm" as const, rotation: 0 as const, style };
     const initial = documentWith(first, second, dimension);
     const updated = dispatch(createEditor(initial), updateDimensionValue(dimension.id, 6));
