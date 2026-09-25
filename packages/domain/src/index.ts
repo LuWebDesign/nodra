@@ -39,7 +39,7 @@ export interface Layer {
   readonly order: number;
 }
 export interface CornerRadii { readonly topLeft: number; readonly topRight: number; readonly bottomRight: number; readonly bottomLeft: number }
-export interface RectangleElement {
+export interface RectangleElement extends ElementBase {
   readonly type: "rectangle";
   readonly id: ElementId;
   readonly layerId: LayerId;
@@ -57,7 +57,7 @@ export interface RectangleElement {
 }
 export type CircleConstraintKind = "center-horizontal" | "center-vertical" | "radius" | "diameter";
 export interface CircleConstraint { readonly id: string; readonly kind: CircleConstraintKind; readonly value?: number; readonly driving?: boolean }
-export interface CircleElement {
+export interface CircleElement extends ElementBase {
   readonly type: "circle";
   readonly id: ElementId;
   readonly layerId: LayerId;
@@ -80,7 +80,7 @@ export interface ArcElement extends ElementBase {
   readonly style: VisualStyle;
   readonly operation?: OperationMetadata;
 }
-export interface EllipseElement {
+export interface EllipseElement extends ElementBase {
   readonly type: "ellipse";
   readonly id: ElementId;
   readonly layerId: LayerId;
@@ -111,7 +111,7 @@ export interface SketchPointReference { readonly elementId: ElementId; readonly 
 export interface SketchEdgeReference { readonly elementId: ElementId; readonly edgeId: string }
 export type SketchConstraintReference = SketchPointReference | SketchEdgeReference;
 export interface SketchConstraint { readonly id: string; readonly kind: SketchConstraintKind; readonly references: readonly [SketchConstraintReference, ...SketchConstraintReference[]]; readonly value?: number }
-export interface SketchElement { readonly type: "sketch"; readonly id: ElementId; readonly layerId: LayerId; readonly nodes: readonly SketchNode[]; readonly edges: readonly SketchEdge[]; readonly constraints?: readonly SketchConstraint[]; readonly style: VisualStyle; readonly operation?: OperationMetadata }
+export interface SketchElement extends ElementBase { readonly type: "sketch"; readonly id: ElementId; readonly layerId: LayerId; readonly nodes: readonly SketchNode[]; readonly edges: readonly SketchEdge[]; readonly constraints?: readonly SketchConstraint[]; readonly style: VisualStyle; readonly operation?: OperationMetadata }
 /** Page-level parametric constraint; references may span multiple sketch elements. */
 export type DocumentConstraint = SketchConstraint;
 export type DimensionKind = "aligned" | "horizontal" | "vertical" | "angular" | "radius" | "diameter";
@@ -120,7 +120,7 @@ export type DimensionReference =
   | { readonly kind: "line"; readonly elementId: ElementId; readonly edgeId?: string; readonly edgeIndex?: number }
   /** Legacy node references are accepted at the boundary and normalized by validation. */
   | { readonly elementId: ElementId; readonly nodeIndex: number; readonly nodeId?: string };
-export interface DimensionElement {
+export interface DimensionElement extends ElementBase {
   readonly type: "dimension";
   readonly id: ElementId;
   readonly layerId: LayerId;
@@ -138,7 +138,7 @@ export interface DimensionElement {
 export interface Contour {
   readonly points: readonly PointMm[];
 }
-export interface ContourElement {
+export interface ContourElement extends ElementBase {
   readonly type: "contour";
   readonly id: ElementId;
   readonly layerId: LayerId;
@@ -193,11 +193,11 @@ export interface HandleOffset { readonly dx: number; readonly dy: number }
 export interface BezierNode { readonly id: string; readonly anchor: PointMm; readonly inHandle?: HandleOffset; readonly outHandle?: HandleOffset }
 export interface SplineNode extends BezierNode { readonly continuity: SplineContinuity }
 export interface SplineElement extends ElementBase { readonly type: "spline"; readonly id: ElementId; readonly layerId: LayerId; readonly nodes: readonly SplineNode[]; readonly closed: boolean; readonly style: VisualStyle; readonly operation?: OperationMetadata }
-export interface TextElement { readonly type: "text"; readonly id: ElementId; readonly layerId: LayerId; readonly position: PointMm; readonly size: SizeMm; readonly text: string; readonly fontFamily: string; readonly fontSize: number; readonly fontWeight: "normal" | "bold"; readonly fontStyle: "normal" | "italic"; readonly textAlign: "left" | "center" | "right"; readonly lineHeight: number; readonly scaleX?: number; readonly scaleY?: number; readonly rotation: number; readonly style: VisualStyle; readonly operation?: OperationMetadata }
+export interface TextElement extends ElementBase { readonly type: "text"; readonly id: ElementId; readonly layerId: LayerId; readonly position: PointMm; readonly size: SizeMm; readonly text: string; readonly fontFamily: string; readonly fontSize: number; readonly fontWeight: "normal" | "bold"; readonly fontStyle: "normal" | "italic"; readonly textAlign: "left" | "center" | "right"; readonly lineHeight: number; readonly scaleX?: number; readonly scaleY?: number; readonly rotation: number; readonly style: VisualStyle; readonly operation?: OperationMetadata }
 /** A single closed outline compound. Coordinates are document-space millimetres. */
 export interface GlyphContour { readonly nodes: readonly PathNode[]; readonly segments: readonly PathSegment[] }
 /** Editable outline for one laid-out font glyph; multiple contours preserve holes. */
-export interface GlyphElement { readonly type: "glyph"; readonly id: ElementId; readonly layerId: LayerId; readonly position: PointMm; readonly size: SizeMm; readonly glyph: string; readonly contours: readonly GlyphContour[]; readonly fillRule: "evenodd"; readonly rotation: number; readonly flipX?: boolean; readonly flipY?: boolean; readonly style: VisualStyle; readonly operation?: OperationMetadata }
+export interface GlyphElement extends ElementBase { readonly type: "glyph"; readonly id: ElementId; readonly layerId: LayerId; readonly position: PointMm; readonly size: SizeMm; readonly glyph: string; readonly contours: readonly GlyphContour[]; readonly fillRule: "evenodd"; readonly rotation: number; readonly flipX?: boolean; readonly flipY?: boolean; readonly style: VisualStyle; readonly operation?: OperationMetadata }
 export type Element = (RectangleElement | CircleElement | ArcElement | EllipseElement | LineElement | SketchElement | DimensionElement | ContourElement | PathElement | SplineElement | TextElement | GlyphElement) & ElementBase;
 export interface ParametricFeature {
   readonly id: FeatureId;

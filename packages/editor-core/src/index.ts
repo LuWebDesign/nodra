@@ -71,6 +71,12 @@ export interface EditorState {
   readonly gesture: { readonly base: DocumentSnapshot; readonly preview: DocumentSnapshot } | undefined;
 }
 
+/** A transient inference result accepted by the sketch-edge command boundary. */
+export type AutomaticSketchRelationCandidate = Readonly<{
+  readonly kind: "horizontal" | "vertical" | "perpendicular";
+  readonly references: SketchConstraint["references"];
+}>;
+
 const result = (document: DocumentSnapshot): CommandResult => {
   const checked = validateDocument(document);
   return checked.success
@@ -523,7 +529,7 @@ export const deleteDocumentConstraint = (constraintId: string): EditorCommand =>
   },
 });
 
-export const appendSketchEdge = (sketchId: ElementId, fromNodeId: string, point: PointMm, toNodeId?: string): EditorCommand => ({
+export const appendSketchEdge = (sketchId: ElementId, fromNodeId: string, point: PointMm, toNodeId?: string, candidate?: AutomaticSketchRelationCandidate): EditorCommand => ({
   name: `sketch-create-edge:${sketchId}`,
   apply: (document) => {
     const sketch = document.elements.find((element): element is SketchElement => element.id === sketchId && element.type === "sketch");
@@ -539,7 +545,6 @@ export const appendSketchEdge = (sketchId: ElementId, fromNodeId: string, point:
     const end = existingTarget?.point ?? point;
     const dx = Math.abs(end.x - start.x); const dy = Math.abs(end.y - start.y);
     const relationKind = dy <= dx * 0.1 ? "horizontal" : dx <= dy * 0.1 ? "vertical" : undefined;
-    const relation: SketchConstraint | undefined = relationKind ? { id: `auto:${edgeId}:${relationKind}`, kind: relationKind, references: [{ elementId: sketch.id, nodeId: fromNodeId }, { elementId: sketch.id, nodeId: endNodeId }] } : undefined;
     const previous = sketch.edges.at(-1);
     const previousStart = previous ? sketch.nodes.find((node) => node.id === previous.startNodeId)?.point : undefined;
     const previousEnd = previous ? sketch.nodes.find((node) => node.id === previous.endNodeId)?.point : undefined;
@@ -548,10 +553,37 @@ export const appendSketchEdge = (sketchId: ElementId, fromNodeId: string, point:
     const previousRelationKind = previousAbsDy <= previousAbsDx * 0.1 ? "horizontal" : previousAbsDx <= previousAbsDy * 0.1 ? "vertical" : undefined;
     const currentDx = end.x - start.x; const currentDy = end.y - start.y;
     const axisRelationsAlreadyPerpendicular = relationKind !== undefined && previousRelationKind !== undefined && relationKind !== previousRelationKind;
-    const perpendicular = !axisRelationsAlreadyPerpendicular && previous && previousEnd && previousStart && Math.hypot(previousDx, previousDy) > 1e-9 && Math.hypot(currentDx, currentDy) > 1e-9 && Math.abs(previousDx * currentDx + previousDy * currentDy) <= Math.hypot(previousDx, previousDy) * Math.hypot(currentDx, currentDy) * 0.1 ? { id: `auto:${edgeId}:perpendicular`, kind: "perpendicular" as const, references: [{ elementId: sketch.id, nodeId: previous.startNodeId }, { elementId: sketch.id, nodeId: previous.endNodeId }, { elementId: sketch.id, nodeId: fromNodeId }, { elementId: sketch.id, nodeId: endNodeId }] as const } : undefined;
-    const autoRelations = [relation, perpendicular].filter((candidate): candidate is SketchConstraint => candidate !== undefined);
+    const inferredPerpendicular = !axisRelationsAlreadyPerpendicular && previous && previousEnd && previousStart && Math.hypot(previousDx, previousDy) > 1e-9 && Math.hypot(currentDx, currentDy) > 1e-9 && Math.abs(previousDx * currentDx + previousDy * currentDy) <= Math.hypot(previousDx, previousDy) * Math.hypot(currentDx, currentDy) * 0.1 ? { id: `auto:${edgeId}:perpendicular`, kind: "perpendicular" as const, references: [{ elementId: sketch.id, nodeId: previous.startNodeId }, { elementId: sketch.id, nodeId: previous.endNodeId }, { elementId: sketch.id, nodeId: fromNodeId }, { elementId: sketch.id, nodeId: endNodeId }] as const } : undefined;
+    const inferredAxis: SketchConstraint | undefined = relationKind ? { id: `auto:${edgeId}:${relationKind}`, kind: relationKind, references: [{ elementId: sketch.id, nodeId: fromNodeId }, { elementId: sketch.id, nodeId: endNodeId }] } : undefined;
+    const autoRelations = candidate ? [] : [inferredAxis, inferredPerpendicular].filter((relation): relation is SketchConstraint => relation !== undefined);
     const next: SketchElement = { ...sketch, nodes: existingTarget ? sketch.nodes : [...sketch.nodes, { id: endNodeId, point }], edges: [...sketch.edges, { id: edgeId, startNodeId: fromNodeId, endNodeId }], ...(autoRelations.length ? { constraints: [...(sketch.constraints ?? []), ...autoRelations] } : {}) };
-    return replaceSketchElements(document, document.elements.map((element) => element.id === sketchId ? next : element));
+    if (!candidate) return replaceSketchElements(document, document.elements.map((element) => element.id === sketchId ? next : element));
+    if (!(["horizontal", "vertical", "perpendicular"] as const).includes(candidate.kind) || !Array.isArray(candidate.references) || !candidate.references.every((reference) => reference !== null && typeof reference === "object")) return { success: false, error: "Automatic relation candidate is unsupported" };
+
+    const nodeReferences = candidate.references.filter((reference): reference is Extract<SketchConstraint["references"][number], { readonly nodeId: string }> => "nodeId" in reference);
+    const validReferences = nodeReferences.length === candidate.references.length && nodeReferences.every((reference) => reference.elementId === sketch.id && next.nodes.some((node) => node.id === reference.nodeId));
+    const appendedEdge = next.edges.find((edge) => edge.id === edgeId)!;
+    const pairMatches = (first: string, second: string, edge: typeof appendedEdge): boolean => (edge.startNodeId === first && edge.endNodeId === second) || (edge.startNodeId === second && edge.endNodeId === first);
+    const edgeForPair = (first: string | undefined, second: string | undefined): typeof appendedEdge | undefined => first && second ? next.edges.find((edge) => pairMatches(first, second, edge)) : undefined;
+    const firstPair = nodeReferences.length >= 2 ? edgeForPair(nodeReferences[0]?.nodeId, nodeReferences[1]?.nodeId) : undefined;
+    const secondPair = nodeReferences.length >= 4 ? edgeForPair(nodeReferences[2]?.nodeId, nodeReferences[3]?.nodeId) : undefined;
+    const tiedToAppendedEdge = candidate.kind === "horizontal" || candidate.kind === "vertical"
+      ? candidate.references.length === 2 && validReferences && firstPair?.id === appendedEdge.id
+      : candidate.references.length === 4 && validReferences && firstPair !== undefined && secondPair !== undefined && firstPair.id !== secondPair.id && (firstPair.id === appendedEdge.id || secondPair.id === appendedEdge.id);
+    if (!tiedToAppendedEdge || Math.hypot(currentDx, currentDy) <= 1e-9) return { success: false, error: "Automatic relation candidate is malformed or degenerate" };
+    const relation: SketchConstraint = { id: `auto:${edgeId}:${candidate.kind}`, kind: candidate.kind, references: candidate.references };
+    const referenceKey = (reference: SketchConstraint["references"][number]): string => "nodeId" in reference ? `node:${reference.nodeId}` : `edge:${reference.edgeId}`;
+    const canonicalReferences = (constraint: SketchConstraint): string => {
+      if (constraint.kind === "perpendicular" && constraint.references.length === 4) {
+        const first = constraint.references.slice(0, 2).map(referenceKey).sort().join("|");
+        const second = constraint.references.slice(2).map(referenceKey).sort().join("|");
+        return [first, second].sort().join("||");
+      }
+      return constraint.references.map(referenceKey).sort().join("|");
+    };
+    if (next.constraints?.some((existing) => existing.kind === relation.kind && canonicalReferences(existing) === canonicalReferences(relation))) return { success: false, error: "Automatic relation candidate is redundant" };
+    const constrained: SketchElement = { ...next, constraints: [...(next.constraints ?? []), relation] };
+    return solveSketchCandidate(document, constrained, constrained.constraints!);
   },
 });
 const remapSketchEdgeDimensionReferences = (edit: TopologyEditResult, sketchId: ElementId, beforeEdges: SketchElement["edges"], afterEdges: SketchElement["edges"]): readonly Element[] => edit.elements.flatMap<Element>((element) => {

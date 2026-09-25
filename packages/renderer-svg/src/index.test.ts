@@ -126,6 +126,50 @@ describe("SVG renderer boundary", () => {
       expect(result.svg).toContain('data-element-id="defined" stroke="#111827"');
     }
   });
+  it("colors a sketch by the highest-precedence state across disconnected components", () => {
+    const source = {
+      type: "sketch" as const,
+      id: elementId("aggregate-state"),
+      layerId: layer.id,
+      nodes: [
+        { id: "defined-a", point: { x: 0, y: 0 } }, { id: "defined-b", point: { x: 10, y: 0 } },
+        { id: "underdefined-a", point: { x: 20, y: 0 } }, { id: "underdefined-b", point: { x: 30, y: 0 } },
+        { id: "overdefined-a", point: { x: 40, y: 0 } }, { id: "overdefined-b", point: { x: 50, y: 0 } },
+        { id: "conflict-a", point: { x: 60, y: 0 } }, { id: "conflict-b", point: { x: 70, y: 0 } },
+      ],
+      edges: [{ id: "visible", startNodeId: "defined-a", endNodeId: "defined-b" }],
+      constraints: [
+        { id: "fixed-defined", kind: "fixed" as const, references: [{ elementId: elementId("aggregate-state"), nodeId: "defined-a" }] as const },
+        { id: "join-defined", kind: "coincident" as const, references: [{ elementId: elementId("aggregate-state"), nodeId: "defined-a" }, { elementId: elementId("aggregate-state"), nodeId: "defined-b" }] as const },
+        ],
+      style,
+    };
+    const base = withElements(createDocument("aggregate-state", [layer]), [source]);
+    const document = { ...base, constraints: [
+      { id: "conflict-10", kind: "distance-horizontal" as const, value: 10, references: [{ elementId: source.id, nodeId: "conflict-a" }, { elementId: source.id, nodeId: "conflict-b" }] },
+      { id: "conflict-20", kind: "distance-horizontal" as const, value: 20, references: [{ elementId: source.id, nodeId: "conflict-a" }, { elementId: source.id, nodeId: "conflict-b" }] },
+      { id: "over-1", kind: "horizontal" as const, references: [{ elementId: source.id, nodeId: "overdefined-a" }, { elementId: source.id, nodeId: "overdefined-b" }] },
+      { id: "over-2", kind: "horizontal" as const, references: [{ elementId: source.id, nodeId: "overdefined-a" }, { elementId: source.id, nodeId: "overdefined-b" }] },
+    ] };
+    const result = renderSvg(document, { zoom: 1, panMm: { x: 0, y: 0 } });
+
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.svg).toContain('data-element-id="aggregate-state" stroke="#ef4444"');
+
+    const renderWith = (localIds: readonly string[], globalIds: readonly string[], expectedStroke: string) => {
+      const variant = {
+        ...base,
+        elements: [{ ...source, constraints: source.constraints?.filter((constraint) => localIds.includes(constraint.id)) }],
+        constraints: document.constraints.filter((constraint) => globalIds.includes(constraint.id)),
+      };
+      const rendered = renderSvg(variant, { zoom: 1, panMm: { x: 0, y: 0 } });
+      expect(rendered.success && rendered.svg).toContain(`data-element-id="aggregate-state" stroke="${expectedStroke}"`);
+    };
+    renderWith(["fixed-defined", "join-defined"], ["conflict-10", "conflict-20", "over-1", "over-2"], "#ef4444");
+    renderWith(["fixed-defined", "join-defined"], ["over-1", "over-2"], "#f59e0b");
+    renderWith(["fixed-defined", "join-defined"], [], "#2563eb");
+  });
+
   it("keeps editor diagnostic colors out of export rendering", () => {
     const underdefined = { type: "sketch" as const, id: elementId("export-sketch"), layerId: layer.id, nodes: [{ id: "a", point: { x: 0, y: 0 } }, { id: "b", point: { x: 20, y: 0 } }], edges: [{ id: "ab", startNodeId: "a", endNodeId: "b" }], constraints: [], style };
     const document = withElements(createDocument("export-constraint-colors", [layer]), [underdefined]);

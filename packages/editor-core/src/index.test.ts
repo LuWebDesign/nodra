@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createDocument, elementId, featureId, layerId, type ArcElement, type DimensionElement, type Element, type EllipseElement, type CircleElement, type LineElement, type GlyphElement, type PathElement, type PointMm, type RectangleElement, type SketchElement, type SplineElement, type TextElement } from "@nodra/domain";
-import { addCircleConstraint, addDocumentConstraint, deleteDocumentConstraint, addSketchConstraint, addSketchSegmentRelation, addToSelection, appendSketchEdge, appendSplineNode, beginGesture, cancelGesture, clearSelection, closePath, closeSplineElement, commitGesture, createEditor, createElement, createIntersectFeature, dimensionDrivingCapability, rebuildParametricFeatures, addPositionalConnection, addPositionalCoincidence, deletePositionalCoincidence, createPathCubicNode, createSketchLine, cutContourSegment, cutLineAtPoint, cutPathSegment, cutSegment, cutSketchEdge, splitPathLineAt, deleteContourNodes, deleteElement, deleteElementNodes, deletePathNodes, deleteSketchConstraint, dispatch, duplicateElements, flipElements, insertContourNode, invalidDimensionIdsForShapeOperation, moveElement, moveElements, movePathNode, movePathHandle, openPath, previewGesture, previewGestureFromBase, redo, reversePath, removeFromSelection, reorderLayer, resizeElement, resizeElementToDimensions, resizeElements, resizeElementsToDimensions, rotateElementsAroundCenter, select, selectForPointerDown, setDimensionDriving, updateCircleConstraint, deleteCircleConstraint, solveCircle, setLayerVisibility, setPathJoin, shapeOperation, splitPathSegment, toggleSelection, topologyEditForPathSegmentReplacement, topologyReferenceKey, undo, updateContourNode, updateDimensionValue, updateElement, updateElementNode, updateElementStyles, updateSketchConstraint, updateDocumentConstraint, updateSplineHandle, updateSplineNode, setGeometryRole } from "./index.js";
+import { addCircleConstraint, addDocumentConstraint, deleteDocumentConstraint, addSketchConstraint, addSketchSegmentRelation, addToSelection, appendSketchEdge, appendSplineNode, beginGesture, cancelGesture, clearSelection, closePath, closeSplineElement, commitGesture, createEditor, createElement, createIntersectFeature, dimensionDrivingCapability, rebuildParametricFeatures, addPositionalConnection, addPositionalCoincidence, deletePositionalCoincidence, createPathCubicNode, createSketchLine, cutContourSegment, cutLineAtPoint, cutPathSegment, cutSegment, cutSketchEdge, splitPathLineAt, deleteContourNodes, deleteElement, deleteElementNodes, deletePathNodes, deleteSketchConstraint, dispatch, duplicateElements, flipElements, insertContourNode, invalidDimensionIdsForShapeOperation, moveElement, moveElements, movePathNode, movePathHandle, openPath, previewGesture, previewGestureFromBase, redo, reversePath, removeFromSelection, reorderLayer, resizeElement, resizeElementToDimensions, resizeElements, resizeElementsToDimensions, rotateElementsAroundCenter, select, selectForPointerDown, setDimensionDriving, updateCircleConstraint, deleteCircleConstraint, solveCircle, setLayerVisibility, setPathJoin, shapeOperation, splitPathSegment, toggleSelection, topologyEditForPathSegmentReplacement, topologyReferenceKey, undo, updateContourNode, updateDimensionValue, updateElement, updateElementNode, updateElementStyles, updateSketchConstraint, updateDocumentConstraint, updateSplineHandle, updateSplineNode, setGeometryRole, type AutomaticSketchRelationCandidate } from "./index.js";
 import { boundsOfElements, realGeometryNodes } from "@nodra/geometry";
 import type { Direction } from "@nodra/geometry";
 import { appendLinePoint } from "./index.js";
@@ -490,6 +490,81 @@ describe("editor core", () => {
         expect((updated.document.elements[0] as SketchElement).constraints).toEqual([]);
         expect(undo(updated).document).toEqual(initial.document);
       });
+
+      it("rejects an invalid automatic relation candidate atomically", () => {
+    const sketch = createSketchLine(elementId("automatic-relation-invalid"), layerId("default"), rectangle.style, { x: 0, y: 0 }, { x: 10, y: 0 });
+    const initial = createEditor({ ...document, elements: [sketch] });
+    const candidate: AutomaticSketchRelationCandidate = { kind: "horizontal", references: [{ elementId: sketch.id, nodeId: sketch.nodes[0]!.id }, { elementId: elementId("other-sketch"), nodeId: sketch.nodes[0]!.id }] };
+    expect(dispatch(initial, appendSketchEdge(sketch.id, sketch.nodes[1]!.id, { x: 10, y: 10 }, undefined, candidate))).toBe(initial);
+  });
+
+      it("does not mutate the document while inspecting a transient relation candidate", () => {
+    const base = createSketchLine(elementId("automatic-relation-transient"), layerId("default"), rectangle.style, { x: 0, y: 0 }, { x: 10, y: 0 });
+    const sketch: SketchElement = { ...base, nodes: [...base.nodes, { id: "automatic-relation-transient-end", point: { x: 10, y: 10 } }] };
+    const initial = createEditor({ ...document, elements: [sketch] });
+    const candidate: AutomaticSketchRelationCandidate = { kind: "vertical", references: [{ elementId: sketch.id, nodeId: sketch.nodes[1]!.id }, { elementId: sketch.id, nodeId: "automatic-relation-transient-end" }] };
+    const command = appendSketchEdge(sketch.id, sketch.nodes[1]!.id, { x: 10, y: 10 }, "automatic-relation-transient-end", candidate);
+    const applied = command.apply(initial.document);
+    expect(applied.success).toBe(true);
+    expect(initial.document.elements).toEqual([sketch]);
+    expect(initial.undo).toHaveLength(0);
+    expect(dispatch(initial, command)).not.toBe(initial);
+  });
+
+      it("creates an accepted automatic relation with geometry in one transaction", () => {
+    const base = createSketchLine(elementId("automatic-relation-valid"), layerId("default"), rectangle.style, { x: 0, y: 0 }, { x: 10, y: 0 });
+    const sketch: SketchElement = { ...base, nodes: [...base.nodes, { id: "automatic-relation-end", point: { x: 10, y: 10 } }] };
+    const initial = createEditor({ ...document, elements: [sketch] });
+    const candidate: AutomaticSketchRelationCandidate = { kind: "vertical", references: [{ elementId: sketch.id, nodeId: sketch.nodes[1]!.id }, { elementId: sketch.id, nodeId: "automatic-relation-end" }] };
+    const changed = dispatch(initial, appendSketchEdge(sketch.id, sketch.nodes[1]!.id, { x: 10, y: 10 }, "automatic-relation-end", candidate));
+    expect(changed.undo).toHaveLength(1);
+    expect((changed.document.elements[0] as SketchElement).constraints?.at(-1)).toMatchObject({ kind: "vertical", id: expect.stringMatching(/^auto:.*:vertical$/) });
+    expect(undo(changed).document).toEqual(initial.document);
+    expect(redo(undo(changed)).document).toEqual(changed.document);
+  });
+
+      it("preserves legacy continuation-perpendicular inference", () => {
+    const base: SketchElement = { type: "sketch", id: elementId("automatic-relation-legacy-perpendicular"), layerId: layerId("default"), nodes: [{ id: "a", point: { x: 0, y: 0 } }, { id: "b", point: { x: 10, y: 5 } }], edges: [{ id: "ab", startNodeId: "a", endNodeId: "b" }], style: rectangle.style };
+    const initial = createEditor({ ...document, elements: [base] });
+    const changed = dispatch(initial, appendSketchEdge(base.id, "b", { x: 15, y: -5 }));
+    const result = changed.document.elements[0] as SketchElement;
+    expect(result.constraints).toEqual([expect.objectContaining({ id: expect.stringMatching(/^auto:.*:perpendicular$/), kind: "perpendicular" })]);
+    const relation = result.constraints?.[0];
+    expect(relation?.references).toHaveLength(2);
+    expect(relation?.references.every((reference) => "edgeId" in reference && reference.elementId === base.id)).toBe(true);
+    expect(new Set(relation?.references.map((reference) => "edgeId" in reference ? reference.edgeId : undefined))).toEqual(new Set(["ab", result.edges[1]!.id]));
+  });
+
+      it("accepts an explicit perpendicular candidate when its edge pairs are reversed", () => {
+    const base = createSketchLine(elementId("automatic-relation-reversed-perpendicular"), layerId("default"), rectangle.style, { x: 0, y: 0 }, { x: 10, y: 0 });
+    const sketch: SketchElement = { ...base, nodes: [...base.nodes, { id: "automatic-relation-perpendicular-end", point: { x: 10, y: 10 } }] };
+    const initial = createEditor({ ...document, elements: [sketch] });
+    const candidate: AutomaticSketchRelationCandidate = { kind: "perpendicular", references: [{ elementId: sketch.id, nodeId: sketch.nodes[1]!.id }, { elementId: sketch.id, nodeId: "automatic-relation-perpendicular-end" }, { elementId: sketch.id, nodeId: sketch.nodes[0]!.id }, { elementId: sketch.id, nodeId: sketch.nodes[1]!.id }] };
+    const changed = dispatch(initial, appendSketchEdge(sketch.id, sketch.nodes[1]!.id, { x: 10, y: 10 }, "automatic-relation-perpendicular-end", candidate));
+    expect(changed).not.toBe(initial);
+    const relation = (changed.document.elements[0] as SketchElement).constraints?.at(-1);
+    expect(relation).toMatchObject({ kind: "perpendicular", id: expect.stringMatching(/^auto:.*:perpendicular$/) });
+    expect(relation?.references).toHaveLength(2);
+    expect(relation?.references.every((reference) => "edgeId" in reference)).toBe(true);
+    expect(new Set(relation?.references.map((reference) => "edgeId" in reference ? reference.edgeId : undefined)).size).toBe(2);
+  });
+
+  it("rejects degenerate, redundant, and solver-conflicting automatic candidates atomically", () => {
+    const degenerateSketch = createSketchLine(elementId("automatic-relation-degenerate"), layerId("default"), rectangle.style, { x: 0, y: 0 }, { x: 10, y: 0 });
+    const degenerate = createEditor({ ...document, elements: [degenerateSketch] });
+    const degenerateCandidate: AutomaticSketchRelationCandidate = { kind: "horizontal", references: [{ elementId: degenerateSketch.id, nodeId: degenerateSketch.nodes[1]!.id }, { elementId: degenerateSketch.id, nodeId: degenerateSketch.nodes[1]!.id }] };
+    expect(dispatch(degenerate, appendSketchEdge(degenerateSketch.id, degenerateSketch.nodes[1]!.id, degenerateSketch.nodes[1]!.point, undefined, degenerateCandidate))).toBe(degenerate);
+
+    const redundantSketch: SketchElement = { type: "sketch", id: elementId("automatic-relation-redundant"), layerId: layerId("default"), nodes: [{ id: "a", point: { x: 0, y: 0 } }, { id: "b", point: { x: 10, y: 5 } }, { id: "c", point: { x: 20, y: 5 } }], edges: [{ id: "ab", startNodeId: "a", endNodeId: "b" }], constraints: [{ id: "existing-horizontal", kind: "horizontal", references: [{ elementId: elementId("automatic-relation-redundant"), nodeId: "b" }, { elementId: elementId("automatic-relation-redundant"), nodeId: "c" }] }], style: rectangle.style };
+    const redundant = createEditor({ ...document, elements: [redundantSketch] });
+    const redundantCandidate: AutomaticSketchRelationCandidate = { kind: "horizontal", references: [{ elementId: redundantSketch.id, nodeId: "b" }, { elementId: redundantSketch.id, nodeId: "c" }] };
+    expect(dispatch(redundant, appendSketchEdge(redundantSketch.id, "b", { x: 20, y: 5 }, "c", redundantCandidate))).toBe(redundant);
+
+    const fixedSketch: SketchElement = { type: "sketch", id: elementId("automatic-relation-conflict"), layerId: layerId("default"), nodes: [{ id: "a", point: { x: 0, y: 0 } }, { id: "b", point: { x: 10, y: 5 } }, { id: "c", point: { x: 20, y: 8 } }], edges: [{ id: "ab", startNodeId: "a", endNodeId: "b" }], constraints: [{ id: "fixed-b", kind: "fixed", references: [{ elementId: elementId("automatic-relation-conflict"), nodeId: "b" }] }, { id: "fixed-c", kind: "fixed", references: [{ elementId: elementId("automatic-relation-conflict"), nodeId: "c" }] }], style: rectangle.style };
+    const conflict = createEditor({ ...document, elements: [fixedSketch] });
+    const conflictCandidate: AutomaticSketchRelationCandidate = { kind: "horizontal", references: [{ elementId: fixedSketch.id, nodeId: "b" }, { elementId: fixedSketch.id, nodeId: "c" }] };
+    expect(dispatch(conflict, appendSketchEdge(fixedSketch.id, "b", { x: 20, y: 8 }, "c", conflictCandidate))).toBe(conflict);
+  });
 
       it("creates sketch edges by reusing shared nodes", () => {
     const sketch = createSketchLine(elementId("sketch"), layerId("default"), rectangle.style, { x: 0, y: 0 }, { x: 10, y: 0 });
@@ -1260,6 +1335,25 @@ it("converts a zero-radius rectangle to an open path when cutting one edge", () 
         expect(applied.document.connections).toMatchObject([{ id: connection.id, first: { elementId: linePath.id, node: { kind: "path" } } }]);
         expect(applied.document.connections?.[0]?.first.node).not.toMatchObject({ nodeId: "b" });
       });
+      it("keeps click-created sketches and drag-created native lines as separate representations", () => {
+        const initial = createEditor(document);
+        const sketch = createSketchLine(elementId("line-click-sketch"), layerId("default"), rectangle.style, { x: 0, y: 0 }, { x: 10, y: 0 });
+        const createdSketch = dispatch(initial, createElement(sketch));
+        const extendedSketch = dispatch(createdSketch, appendSketchEdge(sketch.id, sketch.nodes[1]!.id, { x: 10, y: 10 }));
+        expect(extendedSketch.document.elements[0]).toMatchObject({ type: "sketch", edges: [{}, {}] });
+
+        const nativeLine: LineElement = { type: "line", id: elementId("line-drag-native"), layerId: layerId("default"), start: { x: 20, y: 0 }, end: { x: 30, y: 0 }, rotation: 0, style: rectangle.style };
+        const dragPreview = previewGesture(beginGesture(extendedSketch), createElement(nativeLine));
+        expect(dragPreview.document.elements.map((element) => element.type)).toEqual(["sketch", "line"]);
+        expect(dragPreview.undo).toHaveLength(extendedSketch.undo.length);
+        expect(cancelGesture(dragPreview).document).toEqual(extendedSketch.document);
+
+        const committedDrag = commitGesture(previewGesture(beginGesture(extendedSketch), createElement(nativeLine)));
+        expect(committedDrag.document.elements.map((element) => element.type)).toEqual(["sketch", "line"]);
+        expect(committedDrag.undo).toHaveLength(extendedSketch.undo.length + 1);
+        expect(undo(committedDrag).document).toEqual(extendedSketch.document);
+      });
+
       it("generalizes a committed native line when a third node is added", () => {
     const line = { type: "line" as const, id: elementId("click-line"), layerId: layerId("default"), start: { x: 0, y: 0 }, end: { x: 10, y: 0 }, rotation: 0, style: rectangle.style };
     const state = dispatch(dispatch(createEditor(document), createElement(line)), appendLinePoint(line.id, { x: 10, y: 10 }));
