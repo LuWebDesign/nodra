@@ -25,9 +25,8 @@
   - Authorized policy: fail closed rather than prune annotations or relations. A source may validate while filtering construction geometry makes its dimensions or constraints invalid.
   - Writer evidence: regression covers dimension references to removed construction elements, sketch constraints to removed construction edges, and invalid construction geometry filtered out by direct projection; verifies renderer rejection, direct projection rejection with typed validation issues, unchanged source, editor render, and valid export projection. `projectFabricableDocument` keeps its public `DocumentSnapshot` success return and throws `FabricableDocumentProjectionError` for invalid source or post-filter projection; export rendering catches only that expected error. No Circle, Trim, profiles, Extrude or unrelated behavior touched.
   - RED: focused renderer suite failed (27 passed, 1 failed) because direct projection returned success after removing malformed construction geometry. GREEN: focused renderer suite passed (28/28). Independent verifier passed root lint, typecheck, unit (747/747), E2E (73 passed, 1 skipped), build and diff check. One transient ESLint host failure was not reproducible on retry; build chunk warning was non-blocking. Child07 diff versus child06 is 372 lines, within 400. Work-unit commit `e69d8de` (`fix(renderer): reject orphaned fabricable projections`).
-  - Propagate the corrected parent into #240–#244 under R2 and verify each child independently before declaring the chain ready.
 
-- [ ] **R2 — Reconcile descendant chain branches without rewriting original history**
-  - Make child07–12 inherit the repaired child06 while preserving original feature commits and keeping each immediate-parent PR diff clean.
-  - Resolve already-applied test expectations at the later WU7-V commit deliberately; verify slice budgets and each branch's gates before publication.
-  - Tracker remains draft/no-merge; remaining tools and WU12 are excluded.
+- [x] **R2 — Reconcile descendant chain branches without rewriting original history**
+  - Corrected child07 (`a038e51`) is inherited by child08 (`8cf9bca`), child09 (`be8dee9`), child10 (`63c673b`), child11 (`16e1013`) and child12 (`b078964`); all preserve their original slice commits. Original feature branch remains at `9467331`.
+  - Independent root lint, typecheck, unit, E2E and build passed at every corrected tip. Unit counts for child07–12: 747/758/759/762/762/762; E2E passed: 73/73/77/80/81/82, with one existing skip each. Corrected child diffs: 372/277/323/255/314/85 lines, all under 400. Build chunk warning is non-blocking.
+  - Tracker #232 stays draft/no-merge; remaining tools and WU12 excluded. Remote PR checks still need verification after push.
