@@ -28,5 +28,5 @@
 
 - [x] **R2 — Reconcile descendant chain branches without rewriting original history**
   - Corrected child07 (`a038e51`) is inherited by child08 (`8cf9bca`), child09 (`be8dee9`), child10 (`63c673b`), child11 (`16e1013`) and child12 (`b078964`); all preserve their original slice commits. Original feature branch remains at `9467331`.
-  - Independent root lint, typecheck, unit, E2E and build passed at every corrected tip. Unit counts for child07–12: 747/758/759/762/762/762; E2E passed: 73/73/77/80/81/82, with one existing skip each. Corrected child diffs: 372/277/323/255/314/82 lines, all under 400. Build chunk warning is non-blocking.
+  - Independent root lint, typecheck, unit, E2E and build passed at every corrected tip. Unit counts for child07–12: 747/758/759/762/762/762; E2E passed: 73/73/77/80/81/82, with one existing skip each. Corrected child diffs: 372/277/323/255/314/85 lines, all under 400. Build chunk warning is non-blocking.
   - Tracker #232 stays draft/no-merge; remaining tools and WU12 excluded. Remote PR checks still need verification after push.
