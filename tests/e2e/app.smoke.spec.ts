@@ -784,6 +784,38 @@ test("keeps the profile preview aligned for a selected rectangle with an inner c
   await expect(sketch.locator("line")).toHaveCount(3);
 });
 
+test("cancels a Line gesture released outside the canvas", async ({ page }) => {
+  await page.goto("/modelo");
+  const pageBounds = await page.locator(".page").boundingBox();
+  const canvasBounds = await page.locator(".canvas").boundingBox();
+  const sidebarBounds = await page.locator(".project-tree").boundingBox();
+  expect(pageBounds).not.toBeNull();
+  expect(canvasBounds).not.toBeNull();
+  expect(sidebarBounds).not.toBeNull();
+  const start = { x: pageBounds!.x + 140, y: pageBounds!.y + 140 };
+  const release = { x: sidebarBounds!.x + sidebarBounds!.width / 2, y: sidebarBounds!.y + sidebarBounds!.height / 2 };
+  expect(start.x).toBeGreaterThanOrEqual(canvasBounds!.x);
+  expect(start.x).toBeLessThanOrEqual(canvasBounds!.x + canvasBounds!.width);
+  expect(release.x).toBeLessThan(canvasBounds!.x);
+  const pageLocator = page.locator(".page");
+  const revision = await pageLocator.getAttribute("data-document-revision");
+  const ids = await pageLocator.getAttribute("data-document-element-ids");
+  await page.getByRole("button", { name: "Línea" }).click();
+  await page.mouse.move(start.x, start.y);
+  await page.mouse.down();
+  await page.mouse.move(release.x, release.y, { steps: 12 });
+  await expect(page.locator('.page-svg svg > g > line[data-element-id]')).toHaveCount(1);
+  await page.mouse.up();
+  await expect(page.locator('.page-svg svg g[data-element-id]')).toHaveCount(0);
+  await expect(page.locator('.page-svg svg > g > line[data-element-id]')).toHaveCount(0);
+  await expect(page.locator(".creation-pending-overlay")).toHaveCount(0);
+  await expect(pageLocator).toHaveAttribute("data-document-revision", revision!);
+  await expect(pageLocator).toHaveAttribute("data-document-element-ids", ids!);
+  await page.reload();
+  await expect(page.locator('.page-svg svg g[data-element-id]')).toHaveCount(0);
+  await expect(page.locator('.page-svg svg > g > line[data-element-id]')).toHaveCount(0);
+});
+
 test("does not replay a short Line gesture released outside the canvas", async ({ page }) => {
   await page.goto("/modelo");
   const bounds = await page.locator(".page").boundingBox();

@@ -1841,7 +1841,8 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
      } else if (active.kind === "draw") {
       const end = active.start ? pointAt(event) : undefined;
       const zeroLengthLine = active.tool === "line" && active.start && end && active.start.x === end.x && active.start.y === end.y;
-      if (cancelled || !active.dragged || zeroLengthLine) setEditorState(cancelGesture(editorRef.current));
+      const lineReleasedOutsideCanvas = active.tool === "line" && canvasBounds && (event.clientX < canvasBounds.left || event.clientX > canvasBounds.right || event.clientY < canvasBounds.top || event.clientY > canvasBounds.bottom);
+      if (cancelled || !active.dragged || zeroLengthLine || lineReleasedOutsideCanvas) setEditorState(cancelGesture(editorRef.current));
       else if (active.start && active.tool && isDrawingTool(active.tool) && active.tool !== "arc" && active.ids?.[0] && end) {
         const element = newElement(active.tool, editorRef.current.document.layers[0]?.id ?? "layer-1", active.start, end, active.ids[0]);
         const command = active.previewed ? updateElement(element.id, element.type === "line" ? { start: element.start, end: element.end } : element.type === "circle" ? { center: element.center, radius: element.radius } : isPropertyElement(element) ? { position: element.position, size: element.size } : {}) : createElement(element);
