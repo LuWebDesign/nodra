@@ -38,6 +38,68 @@ async function drawLine(page: Page, start: { x: number; y: number }, end: { x: n
   await page.mouse.click(end.x, end.y);
 }
 
+test("Line keeps jitter clicks, ignores intermediate gestures, and accepts deliberate native drags", async ({ page }) => {
+  await page.goto("/modelo");
+  const bounds = await page.locator(".page").boundingBox();
+  expect(bounds).not.toBeNull();
+  const start = { x: bounds!.x + 100, y: bounds!.y + 100 };
+  await page.getByRole("button", { name: "Línea", exact: true }).click();
+  await page.mouse.move(start.x, start.y);
+  await page.mouse.down();
+  await page.mouse.move(start.x + 8, start.y + 2);
+  await page.mouse.up();
+  await expect(page.locator(".page")).toHaveAttribute("data-document-element-ids", "");
+
+  await page.mouse.move(start.x, start.y);
+  await page.mouse.down();
+  await page.mouse.move(start.x + 15, start.y + 2);
+  await page.waitForTimeout(170);
+  await page.mouse.up();
+  await expect(page.locator(".page")).toHaveAttribute("data-document-element-ids", "");
+
+  // Start this case with no click-created draft so it proves native drag creation alone.
+  await page.reload();
+  const freshBounds = await page.locator(".page").boundingBox();
+  expect(freshBounds).not.toBeNull();
+  const dragStart = { x: freshBounds!.x + 100, y: freshBounds!.y + 100 };
+  await page.getByRole("button", { name: "Línea", exact: true }).click();
+  await page.mouse.move(dragStart.x, dragStart.y);
+  await page.mouse.down();
+  await page.waitForTimeout(170);
+  await page.mouse.move(dragStart.x + 55, dragStart.y + 25, { steps: 1 });
+  await page.mouse.up();
+  await expect(page.locator('.page-svg svg > g > line[data-element-id]')).toHaveCount(1);
+});
+
+test("Line does not replay a click after a deliberate drag returns near its start", async ({ page }) => {
+  await page.goto("/modelo");
+  const bounds = await page.locator(".page").boundingBox();
+  expect(bounds).not.toBeNull();
+  const first = { x: bounds!.x + 100, y: bounds!.y + 100 };
+  const second = { x: first.x + 100, y: first.y };
+  const gestureStart = { x: bounds!.x + 350, y: bounds!.y + 220 };
+  await page.getByRole("button", { name: "Línea", exact: true }).click();
+  await page.mouse.click(first.x, first.y);
+  await page.mouse.click(second.x, second.y);
+  const sketch = page.locator('.page-svg svg g[data-element-id]').filter({ has: page.locator(":scope > line") });
+  await expect(sketch).toHaveCount(1);
+  await expect(sketch.locator(":scope > line")).toHaveCount(1);
+  const revision = await page.locator(".page").getAttribute("data-document-revision");
+  const ids = await page.locator(".page").getAttribute("data-document-element-ids");
+
+  await page.mouse.move(gestureStart.x, gestureStart.y);
+  await page.mouse.down();
+  await page.waitForTimeout(170);
+  await page.mouse.move(gestureStart.x + 60, gestureStart.y + 30, { steps: 1 });
+  await page.mouse.move(gestureStart.x + 4, gestureStart.y + 2, { steps: 1 });
+  await page.mouse.up();
+
+  await expect(sketch.locator(":scope > line")).toHaveCount(1);
+  await expect(page.locator('.page-svg svg > g > line[data-element-id]')).toHaveCount(0);
+  await expect(page.locator(".page")).toHaveAttribute("data-document-revision", revision!);
+  await expect(page.locator(".page")).toHaveAttribute("data-document-element-ids", ids!);
+});
+
 async function visibleBoundingBox(locator: Locator) {
   await expect(locator).toBeVisible();
   let box: { x: number; y: number; width: number; height: number } | null = null;
@@ -926,7 +988,8 @@ test("Line uses clicks only, preserves rapid click continuity, and ignores drags
 
   await page.mouse.move(dragStart.x, dragStart.y);
   await page.mouse.down();
-  await page.mouse.move(dragEnd.x, dragEnd.y, { steps: 12 });
+  // A long but fast pointer displacement must remain inert: duration is a separate gate.
+  await page.mouse.move(dragEnd.x, dragEnd.y, { steps: 1 });
   await page.mouse.up();
 
   await expect(sketch).toHaveCount(1);

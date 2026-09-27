@@ -153,6 +153,7 @@ test("changes one native line role from the inspector with history and persisted
   await page.mouse.move(start.x, start.y);
   await page.mouse.down();
   await page.mouse.move(end.x, end.y, { steps: 5 });
+  await page.waitForTimeout(170);
   await page.mouse.up();
 
   const line = page.locator('.page-svg svg > g > line[data-element-id]');
