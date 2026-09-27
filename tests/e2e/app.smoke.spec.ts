@@ -71,6 +71,41 @@ test("Line keeps jitter clicks, ignores intermediate gestures, and accepts delib
   await expect(page.locator('.page-svg svg > g > line[data-element-id]')).toHaveCount(1);
 });
 
+test("native dragged Line deletion in the default workspace survives reload", async ({ page }) => {
+  await page.goto("/modelo");
+  const pageElement = page.locator(".page");
+  const bounds = await pageElement.boundingBox();
+  expect(bounds).not.toBeNull();
+  const start = { x: bounds!.x + 150, y: bounds!.y + 150 };
+  const end = { x: start.x + 110, y: start.y + 55 };
+  await page.getByRole("button", { name: "Línea", exact: true }).click();
+  await page.mouse.move(start.x, start.y);
+  await page.mouse.down();
+  await page.mouse.move(end.x, end.y, { steps: 5 });
+  await page.waitForTimeout(170);
+  await page.mouse.up();
+
+  const line = page.locator('.page-svg svg > g > line[data-element-id]');
+  await expect(line).toHaveCount(1);
+  const lineId = await line.getAttribute("data-element-id");
+  expect(lineId).toBeTruthy();
+  const revisionBeforeDelete = Number(await pageElement.getAttribute("data-document-revision"));
+  const initialIds = await pageElement.getAttribute("data-document-element-ids");
+  expect(initialIds).toContain(lineId!);
+
+  await page.getByRole("button", { name: "Seleccion" }).click();
+  await page.mouse.click((start.x + end.x) / 2, (start.y + end.y) / 2);
+  await expect(line).toHaveCount(1);
+  await page.keyboard.press("Delete");
+  await expect(line).toHaveCount(0);
+  await expect.poll(async () => Number(await pageElement.getAttribute("data-document-revision"))).toBeGreaterThan(revisionBeforeDelete);
+  await expect(pageElement).not.toHaveAttribute("data-document-element-ids", new RegExp(lineId!));
+
+  await page.reload();
+  await expect(page.locator('.page-svg svg > g > line[data-element-id]')).toHaveCount(0);
+  await expect(page.locator(".page")).not.toHaveAttribute("data-document-element-ids", new RegExp(lineId!));
+});
+
 test("Line does not replay a click after a deliberate drag returns near its start", async ({ page }) => {
   await page.goto("/modelo");
   const bounds = await page.locator(".page").boundingBox();
