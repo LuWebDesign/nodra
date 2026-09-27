@@ -153,6 +153,7 @@ test("changes one native line role from the inspector with history and persisted
   await page.mouse.move(start.x, start.y);
   await page.mouse.down();
   await page.mouse.move(end.x, end.y, { steps: 5 });
+  await page.waitForTimeout(170);
   await page.mouse.up();
 
   const line = page.locator('.page-svg svg > g > line[data-element-id]');
@@ -274,6 +275,106 @@ test("changes the whole selected sketch role when no Forma edge is selected", as
   await page.getByRole("button", { name: "Rehacer" }).click();
   await expect.poll(() => edgeStyle(0)).toEqual({ strokeDasharray: "6px, 4px", fill: "none" });
   await expect.poll(() => edgeStyle(1)).toEqual({ strokeDasharray: "6px, 4px", fill: "none" });
+});
+
+test("native dragged Line deletion by body and marquee remains deleted after reload", async ({ page }) => {
+  await page.goto("/proyectos");
+  await page.getByRole("button", { name: "+ Nuevo proyecto" }).click();
+  await page.getByLabel("Nombre del proyecto").fill("Proyecto líneas eliminadas");
+  await page.getByRole("button", { name: "Crear proyecto" }).click();
+  await page.getByRole("region", { name: "Piezas" }).getByRole("button", { name: "+ Nueva pieza" }).click();
+  const dialog = page.getByRole("dialog", { name: "Nueva pieza" });
+  await dialog.getByLabel("Nombre de la pieza").fill("Pieza líneas eliminadas");
+  await dialog.getByRole("button", { name: "Crear pieza" }).click();
+
+  const pageElement = page.locator(".page");
+  const bounds = await pageElement.boundingBox();
+  const canvas = page.locator(".canvas");
+  const canvasBounds = await canvas.boundingBox();
+  expect(bounds).not.toBeNull();
+  expect(canvasBounds).not.toBeNull();
+  const firstStart = { x: bounds!.x + bounds!.width * 0.15, y: bounds!.y + bounds!.height * 0.2 };
+  const firstEnd = { x: bounds!.x + bounds!.width * 0.38, y: bounds!.y + bounds!.height * 0.38 };
+  const secondStart = { x: bounds!.x + bounds!.width * 0.5, y: bounds!.y + bounds!.height * 0.5 };
+  const secondEnd = { x: bounds!.x + bounds!.width * 0.73, y: bounds!.y + bounds!.height * 0.68 };
+  const inside = (point: { x: number; y: number }) => point.x > bounds!.x && point.x < bounds!.x + bounds!.width && point.y > bounds!.y && point.y < bounds!.y + bounds!.height && point.x > canvasBounds!.x && point.x < canvasBounds!.x + canvasBounds!.width && point.y > canvasBounds!.y && point.y < canvasBounds!.y + canvasBounds!.height;
+  for (const point of [firstStart, firstEnd, secondStart, secondEnd]) expect(inside(point), `Drag coordinate ${JSON.stringify(point)} must stay inside page ${JSON.stringify(bounds)} and canvas ${JSON.stringify(canvasBounds)}`).toBe(true);
+
+  const line = page.locator('.page-svg svg > g > line[data-element-id]');
+  const drawNativeLine = async (start: { x: number; y: number }, end: { x: number; y: number }, expectedCount: number) => {
+    const startDistance = await page.evaluate(({ start, end }) => Math.hypot(end.x - start.x, end.y - start.y), { start, end });
+    expect(startDistance).toBeGreaterThan(20);
+    await page.getByRole("button", { name: "Línea", exact: true }).click();
+    await page.mouse.move(start.x, start.y);
+    await page.mouse.down();
+    await page.mouse.move(end.x, end.y, { steps: 5 });
+    await page.waitForTimeout(170);
+    await page.mouse.up();
+    await expect(line).toHaveCount(expectedCount);
+    expect(await pageElement.getAttribute("data-document-element-ids")).not.toBe("");
+  };
+  await drawNativeLine(firstStart, firstEnd, 1);
+  const firstId = await line.first().getAttribute("data-element-id");
+  expect(firstId).toBeTruthy();
+  expect(await pageElement.getAttribute("data-document-element-ids")).toContain(firstId!);
+  await page.waitForTimeout(250);
+  await page.reload();
+  await expect(page.locator(`.page-svg svg > g > line[data-element-id="${firstId}"]`)).toHaveCount(1);
+  await drawNativeLine(secondStart, secondEnd, 2);
+  const secondId = await line.nth(1).getAttribute("data-element-id");
+  expect(secondId).toBeTruthy();
+  expect(secondId).not.toBe(firstId);
+  expect(await pageElement.getAttribute("data-document-element-ids")).toContain(secondId!);
+
+  const revisionBeforeBodyDelete = Number(await pageElement.getAttribute("data-document-revision"));
+  await page.getByRole("button", { name: "Seleccion" }).click();
+  await page.mouse.click((firstStart.x + firstEnd.x) / 2, (firstStart.y + firstEnd.y) / 2);
+  expect(await page.locator(`[data-real-node="${firstId}"]`).count()).toBeGreaterThanOrEqual(2);
+  await page.keyboard.press("Delete");
+  await expect(page.locator(`[data-real-node="${firstId}"]`)).toHaveCount(0);
+  await expect(line).toHaveCount(1);
+  await expect.poll(async () => Number(await pageElement.getAttribute("data-document-revision"))).toBeGreaterThan(revisionBeforeBodyDelete);
+  await expect(pageElement).not.toHaveAttribute("data-document-element-ids", new RegExp(firstId!));
+  await expect(pageElement).toHaveAttribute("data-document-element-ids", new RegExp(secondId!));
+  const revisionAfterBodyDelete = Number(await pageElement.getAttribute("data-document-revision"));
+  await page.waitForTimeout(250);
+
+  await page.reload();
+  await expect(page.locator('.page-svg svg > g > line[data-element-id]')).toHaveCount(1);
+  const remainingLine = page.locator(`.page-svg svg > g > line[data-element-id="${secondId}"]`);
+  await expect(remainingLine).toHaveCount(1);
+  const reloadedPage = page.locator(".page");
+  await expect(reloadedPage).not.toHaveAttribute("data-document-element-ids", new RegExp(firstId!));
+  await expect(reloadedPage).toHaveAttribute("data-document-element-ids", new RegExp(secondId!));
+  expect(Number(await reloadedPage.getAttribute("data-document-revision"))).toBeGreaterThanOrEqual(revisionAfterBodyDelete);
+
+  await page.getByRole("button", { name: "Seleccion" }).click();
+  const remainingBounds = await remainingLine.boundingBox();
+  expect(remainingBounds).not.toBeNull();
+  const marqueeStart = { x: remainingBounds!.x - 12, y: remainingBounds!.y - 12 };
+  const marqueeEnd = { x: remainingBounds!.x + remainingBounds!.width + 12, y: remainingBounds!.y + remainingBounds!.height + 12 };
+  expect(inside(marqueeStart)).toBe(true);
+  expect(inside(marqueeEnd)).toBe(true);
+  const revisionBeforeMarqueeDelete = Number(await reloadedPage.getAttribute("data-document-revision"));
+  await page.mouse.move(marqueeStart.x, marqueeStart.y);
+  await page.mouse.down();
+  await page.mouse.move(marqueeEnd.x, marqueeEnd.y, { steps: 5 });
+  await expect(page.locator(".marquee")).toBeVisible();
+  await page.mouse.up();
+  expect(await page.locator(`[data-real-node="${secondId}"]`).count()).toBeGreaterThanOrEqual(2);
+  await page.keyboard.press("Delete");
+  await expect(page.locator(`[data-real-node="${secondId}"]`)).toHaveCount(0);
+  await expect(line).toHaveCount(0);
+  await expect.poll(async () => Number(await reloadedPage.getAttribute("data-document-revision"))).toBeGreaterThan(revisionBeforeMarqueeDelete);
+  await expect(reloadedPage).not.toHaveAttribute("data-document-element-ids", new RegExp(secondId!));
+  const revisionAfterMarqueeDelete = Number(await reloadedPage.getAttribute("data-document-revision"));
+  await page.waitForTimeout(250);
+
+  await page.reload();
+  await expect(page.locator('.page-svg svg > g > line[data-element-id]')).toHaveCount(0);
+  expect(Number(await page.locator(".page").getAttribute("data-document-revision"))).toBeGreaterThanOrEqual(revisionAfterMarqueeDelete);
+  await expect(page.locator(".page")).not.toHaveAttribute("data-document-element-ids", new RegExp(firstId!));
+  await expect(page.locator(".page")).not.toHaveAttribute("data-document-element-ids", new RegExp(secondId!));
 });
 
 test("keeps deleted geometry absent from the persisted document after reload", async ({ page }) => {

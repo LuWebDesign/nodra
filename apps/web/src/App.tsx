@@ -124,6 +124,7 @@ type ActiveInteraction = {
   splineId?: ElementId;
   splineNodeId?: string;
   splineHandle?: "in" | "out";
+  pressedAt?: number;
 };
 type CreationDraft = { readonly tool: "rectangle" | "circle" | "line" | "arc"; readonly points: readonly PointMm[]; readonly pointer: PointMm; readonly snaps?: readonly (CreationSnap | undefined)[]; readonly elementId?: ElementId; readonly currentNodeId?: string };
 
@@ -1336,8 +1337,7 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
       }
       if (tool === "line" && !replayingLineClick.current) {
         event.currentTarget.setPointerCapture(event.pointerId);
-        setEditorState(beginGesture(editorRef.current));
-        interaction.current = { pointerId: event.pointerId, lastX: event.clientX, lastY: event.clientY, kind: "draw", dragged: false, start: point, startClient: { x: event.clientX, y: event.clientY }, tool, ids: [id()] };
+        interaction.current = { pointerId: event.pointerId, lastX: event.clientX, lastY: event.clientY, kind: "draw", dragged: false, start: point, startClient: { x: event.clientX, y: event.clientY }, pressedAt: performance.now(), tool, ids: [id()] };
         return;
       }
       if (tool === "line") {
@@ -1522,7 +1522,7 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
           const pickedBodyElement = editorRef.current.document.elements.find((element) => element.id === pickedElementId);
           const formaBodyHit = tool === "forma" && pickedBodyElement?.type === "dimension" ? undefined : pickedElementId;
           const hit = domDimensionId ?? formaNodeHit?.elementId ?? pathSegmentHit?.elementId ?? formaLineSegmentHit?.elementId ?? nodeHit?.elementId ?? formaBodyHit;
-    if (isDrawingTool(tool) && pointerDownIntent(tool, hit) === "draw") {
+    if (isDrawingTool(tool) && tool !== "line" && pointerDownIntent(tool, hit) === "draw") {
       event.currentTarget.setPointerCapture(event.pointerId);
       setEditorState(beginGesture(editorRef.current));
       interaction.current = { pointerId: event.pointerId, lastX: event.clientX, lastY: event.clientY, kind: "draw", dragged: false, start: point, startClient: { x: event.clientX, y: event.clientY }, tool, ids: [id()] };
@@ -1701,6 +1701,10 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
      }
     const active = interaction.current;
     if (!active || active.pointerId !== event.pointerId) return;
+    if (active.kind === "draw" && active.tool === "line") {
+      if (active.startClient && active.pressedAt !== undefined && movementExceedsThreshold(active.startClient, { x: event.clientX, y: event.clientY }, 20) && performance.now() - active.pressedAt >= 150) active.dragged = true;
+      return;
+    }
     if (active.kind === "marquee" && active.start && active.startClient) {
       if (!movementExceedsThreshold(active.startClient, { x: event.clientX, y: event.clientY })) return;
       active.dragged = true;
@@ -1787,13 +1791,29 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
     const active = interaction.current;
     if (!active || active.pointerId !== event.pointerId) return;
     const canvasBounds = canvas.current?.getBoundingClientRect();
-    if (active.kind === "draw" && active.tool === "line" && !cancelled && !active.dragged && canvasBounds && event.clientX >= canvasBounds.left && event.clientX <= canvasBounds.right && event.clientY >= canvasBounds.top && event.clientY <= canvasBounds.bottom) {
-      setEditorState(cancelGesture(editorRef.current));
+    const lineDistanceExceeded = active.kind === "draw" && active.tool === "line" && active.startClient !== undefined && movementExceedsThreshold(active.startClient, { x: event.clientX, y: event.clientY }, 20);
+    const lineHoldExceeded = active.pressedAt !== undefined && performance.now() - active.pressedAt >= 150;
+    const deliberateLineDrag = lineDistanceExceeded && lineHoldExceeded;
+    if (deliberateLineDrag) active.dragged = true;
+    const lineClick = active.kind === "draw" && active.tool === "line" && !active.dragged && active.startClient !== undefined && !movementExceedsThreshold(active.startClient, { x: event.clientX, y: event.clientY }, 12);
+    if (active.kind === "draw" && active.tool === "line" && !cancelled && lineClick && canvasBounds && event.clientX >= canvasBounds.left && event.clientX <= canvasBounds.right && event.clientY >= canvasBounds.top && event.clientY <= canvasBounds.bottom) {
       interaction.current = undefined;
       if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
       replayingLineClick.current = true;
       onCanvasPointerDown(event as PointerEvent<HTMLDivElement>);
       replayingLineClick.current = false;
+      return;
+    }
+    if (active.kind === "draw" && active.tool === "line") {
+      const outside = canvasBounds && (event.clientX < canvasBounds.left || event.clientX > canvasBounds.right || event.clientY < canvasBounds.top || event.clientY > canvasBounds.bottom);
+      if (deliberateLineDrag && !cancelled && !outside && active.start && active.ids?.[0]) {
+        const element = newElement("line", editorRef.current.document.layers[0]?.id ?? "layer-1", active.start, pointAt(event), active.ids[0]);
+        setEditorState(commitGesture(previewGesture(beginGesture(editorRef.current), createElement(element))));
+      } else setEditorState(cancelGesture(editorRef.current));
+      interaction.current = undefined;
+      if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+      setSnapGuide(undefined);
+      setAlignmentGuideState([]);
       return;
     }
     if (active.kind === "marquee") {
@@ -1841,7 +1861,8 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
      } else if (active.kind === "draw") {
       const end = active.start ? pointAt(event) : undefined;
       const zeroLengthLine = active.tool === "line" && active.start && end && active.start.x === end.x && active.start.y === end.y;
-      if (cancelled || !active.dragged || zeroLengthLine) setEditorState(cancelGesture(editorRef.current));
+      const lineReleasedOutsideCanvas = active.tool === "line" && canvasBounds && (event.clientX < canvasBounds.left || event.clientX > canvasBounds.right || event.clientY < canvasBounds.top || event.clientY > canvasBounds.bottom);
+      if (cancelled || !active.dragged || zeroLengthLine || lineReleasedOutsideCanvas) setEditorState(cancelGesture(editorRef.current));
       else if (active.start && active.tool && isDrawingTool(active.tool) && active.tool !== "arc" && active.ids?.[0] && end) {
         const element = newElement(active.tool, editorRef.current.document.layers[0]?.id ?? "layer-1", active.start, end, active.ids[0]);
         const command = active.previewed ? updateElement(element.id, element.type === "line" ? { start: element.start, end: element.end } : element.type === "circle" ? { center: element.center, radius: element.radius } : isPropertyElement(element) ? { position: element.position, size: element.size } : {}) : createElement(element);
