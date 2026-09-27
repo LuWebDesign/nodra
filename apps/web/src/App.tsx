@@ -1701,7 +1701,7 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
     const active = interaction.current;
     if (!active || active.pointerId !== event.pointerId) return;
     if (active.kind === "draw" && active.tool === "line") {
-      if (active.startClient && movementExceedsThreshold(active.startClient, { x: event.clientX, y: event.clientY })) active.dragged = true;
+      if (active.startClient && movementExceedsThreshold(active.startClient, { x: event.clientX, y: event.clientY }, 12)) active.dragged = true;
       return;
     }
     if (active.kind === "marquee" && active.start && active.startClient) {
@@ -1790,7 +1790,8 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
     const active = interaction.current;
     if (!active || active.pointerId !== event.pointerId) return;
     const canvasBounds = canvas.current?.getBoundingClientRect();
-    if (active.kind === "draw" && active.tool === "line" && !cancelled && !active.dragged && canvasBounds && event.clientX >= canvasBounds.left && event.clientX <= canvasBounds.right && event.clientY >= canvasBounds.top && event.clientY <= canvasBounds.bottom) {
+    if (active.kind === "draw" && active.tool === "line" && active.startClient && movementExceedsThreshold(active.startClient, { x: event.clientX, y: event.clientY }, 12)) active.dragged = true;
+     if (active.kind === "draw" && active.tool === "line" && !cancelled && !active.dragged && canvasBounds && event.clientX >= canvasBounds.left && event.clientX <= canvasBounds.right && event.clientY >= canvasBounds.top && event.clientY <= canvasBounds.bottom) {
       interaction.current = undefined;
       if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
       replayingLineClick.current = true;

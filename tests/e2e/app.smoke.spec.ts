@@ -936,6 +936,53 @@ test("Line uses clicks only, preserves rapid click continuity, and ignores drags
   await expect(page.locator(".page")).toHaveAttribute("data-document-element-ids", committedIds!);
 });
 
+test("rapid Line clicks progress one segment per click", async ({ page }) => {
+  await page.goto("/modelo");
+  const bounds = await visibleBoundingBox(page.locator(".page"));
+  await page.getByRole("button", { name: "Línea" }).click();
+  const points = [
+    { x: bounds.x + 120, y: bounds.y + 120 },
+    { x: bounds.x + 205, y: bounds.y + 155 },
+    { x: bounds.x + 280, y: bounds.y + 220 },
+    { x: bounds.x + 350, y: bounds.y + 175 },
+    { x: bounds.x + 420, y: bounds.y + 240 },
+  ];
+  const canvas = page.locator(".canvas");
+  const burst = await canvas.evaluate((element, clickPoints) => {
+    let pointerDowns = 0;
+    let pointerUps = 0;
+    element.addEventListener("pointerdown", () => { pointerDowns += 1; }, true);
+    element.addEventListener("pointerup", () => { pointerUps += 1; }, true);
+    // Scripted PointerEvents have no browser-managed active pointer; emulate capture APIs
+    // so the application can traverse its actual pointer handlers during this burst.
+    element.setPointerCapture = () => undefined;
+    element.hasPointerCapture = () => false;
+    element.releasePointerCapture = () => undefined;
+    for (const [index, point] of clickPoints.entries()) {
+      const pointerId = index + 1;
+      element.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, pointerId, pointerType: "mouse", isPrimary: true, button: 0, buttons: 1, clientX: point.x, clientY: point.y }));
+      element.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, pointerId, pointerType: "mouse", isPrimary: true, button: 0, buttons: 0, clientX: point.x, clientY: point.y }));
+    }
+    return { pointerDowns, pointerUps };
+  }, points);
+  expect(burst.pointerDowns).toBe(points.length);
+  expect(burst.pointerUps).toBe(points.length);
+
+  const sketch = page.locator('.page-svg svg g[data-element-id]').filter({ has: page.locator(":scope > line") });
+  await expect(sketch).toHaveCount(1);
+  await expect(sketch.locator(":scope > line")).toHaveCount(points.length - 1);
+  const linesBeforeJitter = await sketch.locator(":scope > line").count();
+  const revisionBeforeJitter = await page.locator(".page").getAttribute("data-document-revision");
+
+  const jitter = { x: points.at(-1)!.x + 7, y: points.at(-1)!.y + 5 };
+  await page.mouse.move(points.at(-1)!.x, points.at(-1)!.y);
+  await page.mouse.down();
+  await page.mouse.move(jitter.x, jitter.y, { steps: 1 });
+  await page.mouse.up();
+  await expect(sketch.locator(":scope > line")).toHaveCount(linesBeforeJitter + 1);
+  await expect(page.locator(".page")).not.toHaveAttribute("data-document-revision", revisionBeforeJitter!);
+});
+
 test("keeps a path selected after creating a dimension", async ({ page }) => {
   await page.goto("/modelo");
   const bounds = await page.locator(".page").boundingBox();
