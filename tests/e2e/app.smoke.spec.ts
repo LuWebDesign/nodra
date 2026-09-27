@@ -804,7 +804,7 @@ test("cancels a Line gesture released outside the canvas", async ({ page }) => {
   await page.mouse.move(start.x, start.y);
   await page.mouse.down();
   await page.mouse.move(release.x, release.y, { steps: 12 });
-  await expect(page.locator('.page-svg svg > g > line[data-element-id]')).toHaveCount(1);
+  await expect(page.locator('.page-svg svg > g > line[data-element-id]')).toHaveCount(0);
   await page.mouse.up();
   await expect(page.locator('.page-svg svg g[data-element-id]')).toHaveCount(0);
   await expect(page.locator('.page-svg svg > g > line[data-element-id]')).toHaveCount(0);
@@ -858,7 +858,7 @@ test("cancels a short Line gesture on Escape or pointercancel", async ({ page })
   await page.mouse.move(start.x, start.y);
   await page.mouse.down();
   await page.mouse.move(start.x + 80, start.y + 50);
-  await expect(page.locator('.page-svg svg > g > line[data-element-id]')).toHaveCount(1);
+  await expect(page.locator('.page-svg svg > g > line[data-element-id]')).toHaveCount(0);
   await page.keyboard.press("Escape");
   await page.mouse.up();
   await expect(page.locator('.page-svg svg g[data-element-id]')).toHaveCount(0);
@@ -894,46 +894,46 @@ test("does not replay a short Line gesture after switching tools while held", as
   await expect(page.locator(".creation-pending-overlay")).toHaveCount(0);
 });
 
-test("Line clicks create sketch edges while drags create separate native lines", async ({ page }) => {
+test("Line uses clicks only, preserves rapid click continuity, and ignores drags", async ({ page }) => {
   await page.goto("/modelo");
   const bounds = await page.locator(".page").boundingBox();
+  const canvasBounds = await page.locator(".canvas").boundingBox();
   expect(bounds).not.toBeNull();
+  expect(canvasBounds).not.toBeNull();
   const first = { x: bounds!.x + 120, y: bounds!.y + 120 };
   const second = { x: first.x + 90, y: first.y + 35 };
+  const third = { x: second.x + 75, y: second.y - 45 };
   const dragStart = { x: bounds!.x + bounds!.width * 0.65, y: bounds!.y + bounds!.height * 0.65 };
   const dragEnd = { x: bounds!.x + bounds!.width * 0.85, y: bounds!.y + bounds!.height * 0.82 };
+  expect(dragStart.x).toBeGreaterThan(canvasBounds!.x);
+  expect(dragStart.x).toBeLessThan(canvasBounds!.x + canvasBounds!.width);
+  expect(dragEnd.x).toBeGreaterThan(canvasBounds!.x);
+  expect(dragEnd.x).toBeLessThan(canvasBounds!.x + canvasBounds!.width);
+  expect(Math.hypot(dragEnd.x - dragStart.x, dragEnd.y - dragStart.y)).toBeGreaterThan(20);
 
   await page.getByRole("button", { name: "Línea" }).click();
   await page.mouse.click(first.x, first.y);
+  await page.mouse.move(second.x - 30, second.y + 25, { steps: 20 });
   await page.mouse.click(second.x, second.y);
+  await page.mouse.move(third.x - 25, third.y + 20, { steps: 20 });
+  await page.mouse.click(third.x, third.y);
 
   const sketch = page.locator('.page-svg svg g[data-element-id]').filter({ has: page.locator(":scope > line") });
   await expect(sketch).toHaveCount(1);
-  const sketchId = await sketch.getAttribute("data-element-id");
-  expect(sketchId).not.toBeNull();
-  await expect(sketch.locator(":scope > line")).toHaveCount(1);
-  await expect(page.locator('.page-svg svg > g > line[data-element-id]')).toHaveCount(0);
-
+  await expect(sketch.locator(":scope > line")).toHaveCount(2);
   const committedRevision = await page.locator(".page").getAttribute("data-document-revision");
-  await page.getByRole("button", { name: "Seleccion" }).click();
-  await page.getByRole("button", { name: "Línea" }).click();
+  const committedIds = await page.locator(".page").getAttribute("data-document-element-ids");
+
   await page.mouse.move(dragStart.x, dragStart.y);
   await page.mouse.down();
-  await page.mouse.move(dragEnd.x, dragEnd.y, { steps: 5 });
-  const nativeLine = page.locator('.page-svg svg > g > line[data-element-id]');
-  await expect(nativeLine).toHaveCount(1);
-  await expect(page.locator(".page")).toHaveAttribute("data-document-revision", committedRevision!);
+  await page.mouse.move(dragEnd.x, dragEnd.y, { steps: 12 });
   await page.mouse.up();
 
-  await expect(nativeLine).toHaveCount(1);
-  const nativeLineId = await nativeLine.getAttribute("data-element-id");
-  expect(nativeLineId).not.toBeNull();
-  expect(nativeLineId).not.toBe(sketchId);
   await expect(sketch).toHaveCount(1);
-  await expect(sketch.locator(":scope > line")).toHaveCount(1);
-  await page.getByRole("button", { name: "Deshacer" }).click();
-  await expect(nativeLine).toHaveCount(0);
-  await expect(sketch.locator(":scope > line")).toHaveCount(1);
+  await expect(sketch.locator(":scope > line")).toHaveCount(2);
+  await expect(page.locator('.page-svg svg > g > line[data-element-id]')).toHaveCount(0);
+  await expect(page.locator(".page")).toHaveAttribute("data-document-revision", committedRevision!);
+  await expect(page.locator(".page")).toHaveAttribute("data-document-element-ids", committedIds!);
 });
 
 test("keeps a path selected after creating a dimension", async ({ page }) => {

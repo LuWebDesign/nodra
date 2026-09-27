@@ -1336,7 +1336,6 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
       }
       if (tool === "line" && !replayingLineClick.current) {
         event.currentTarget.setPointerCapture(event.pointerId);
-        setEditorState(beginGesture(editorRef.current));
         interaction.current = { pointerId: event.pointerId, lastX: event.clientX, lastY: event.clientY, kind: "draw", dragged: false, start: point, startClient: { x: event.clientX, y: event.clientY }, tool, ids: [id()] };
         return;
       }
@@ -1522,7 +1521,7 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
           const pickedBodyElement = editorRef.current.document.elements.find((element) => element.id === pickedElementId);
           const formaBodyHit = tool === "forma" && pickedBodyElement?.type === "dimension" ? undefined : pickedElementId;
           const hit = domDimensionId ?? formaNodeHit?.elementId ?? pathSegmentHit?.elementId ?? formaLineSegmentHit?.elementId ?? nodeHit?.elementId ?? formaBodyHit;
-    if (isDrawingTool(tool) && pointerDownIntent(tool, hit) === "draw") {
+    if (isDrawingTool(tool) && tool !== "line" && pointerDownIntent(tool, hit) === "draw") {
       event.currentTarget.setPointerCapture(event.pointerId);
       setEditorState(beginGesture(editorRef.current));
       interaction.current = { pointerId: event.pointerId, lastX: event.clientX, lastY: event.clientY, kind: "draw", dragged: false, start: point, startClient: { x: event.clientX, y: event.clientY }, tool, ids: [id()] };
@@ -1701,6 +1700,10 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
      }
     const active = interaction.current;
     if (!active || active.pointerId !== event.pointerId) return;
+    if (active.kind === "draw" && active.tool === "line") {
+      if (active.startClient && movementExceedsThreshold(active.startClient, { x: event.clientX, y: event.clientY })) active.dragged = true;
+      return;
+    }
     if (active.kind === "marquee" && active.start && active.startClient) {
       if (!movementExceedsThreshold(active.startClient, { x: event.clientX, y: event.clientY })) return;
       active.dragged = true;
@@ -1788,12 +1791,18 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
     if (!active || active.pointerId !== event.pointerId) return;
     const canvasBounds = canvas.current?.getBoundingClientRect();
     if (active.kind === "draw" && active.tool === "line" && !cancelled && !active.dragged && canvasBounds && event.clientX >= canvasBounds.left && event.clientX <= canvasBounds.right && event.clientY >= canvasBounds.top && event.clientY <= canvasBounds.bottom) {
-      setEditorState(cancelGesture(editorRef.current));
       interaction.current = undefined;
       if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
       replayingLineClick.current = true;
       onCanvasPointerDown(event as PointerEvent<HTMLDivElement>);
       replayingLineClick.current = false;
+      return;
+    }
+    if (active.kind === "draw" && active.tool === "line") {
+      interaction.current = undefined;
+      if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+      setSnapGuide(undefined);
+      setAlignmentGuideState([]);
       return;
     }
     if (active.kind === "marquee") {
