@@ -420,6 +420,23 @@ describe("parametric constraint boundary", () => {
     expect(constraintDofMetadataForDocument(documentWith([source]))[0]).toMatchObject({ rank: 2, degreesOfFreedom: 4 });
   });
 
+  it("projects a document midpoint across sketches while leaving its source geometry untouched", () => {
+    const dependent = sketch();
+    const source: SketchElement = { ...sketch(), id: elementId("source-sketch"), nodes: [{ id: "s0", point: { x: 10, y: 2 } }, { id: "s1", point: { x: 30, y: 6 } }], edges: [{ id: "source-edge", startNodeId: "s0", endNodeId: "s1" }] };
+    const relation = { id: "cross-midpoint", kind: "midpoint" as const, references: [{ elementId: dependent.id, nodeId: "a" }, { elementId: source.id, edgeId: "source-edge" }] as const };
+    const document = { ...documentWith([dependent, source]), constraints: [relation] };
+    const solved = solveConstraintComponents(document);
+    const movedSource = { ...source, nodes: [{ id: "s0", point: { x: 20, y: 10 } }, { id: "s1", point: { x: 40, y: 30 } }] };
+    const afterMove = solveConstraintComponents({ ...document, elements: [dependent, movedSource] });
+
+    expect(normalizedConstraintsForDocument(document)[0]?.references).toHaveLength(3);
+    expect((solved.document.elements[0] as SketchElement).nodes[0]?.point).toEqual({ x: 20, y: 4 });
+    expect(source.nodes[0]?.point).toEqual({ x: 10, y: 2 });
+    expect((afterMove.document.elements[0] as SketchElement).nodes[0]?.point).toEqual({ x: 30, y: 20 });
+    expect(afterMove.document.elements[1]).toEqual(movedSource);
+    expect(afterMove.residuals).toEqual([expect.objectContaining({ supported: true, satisfied: true })]);
+  });
+
   it("keeps unsupported and missing entities distinguishable", () => {
     const line = { type: "line" as const, id: elementId("line"), layerId: fixtureLayer().id, start: { x: 0, y: 0 }, end: { x: 10, y: 0 }, rotation: 0, style: fixtureStyle() };
     const document = documentWith([line]);

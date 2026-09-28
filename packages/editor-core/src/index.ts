@@ -506,7 +506,13 @@ export const createSketchLine = (sketchId: ElementId, layer: LayerId, style: Vis
 };
 const constraintReferenceKey = (reference: SketchConstraint["references"][number]): string => JSON.stringify([reference.elementId, "nodeId" in reference ? "node" : "edge", "nodeId" in reference ? reference.nodeId : reference.edgeId]);
 const documentConstraintsEqual = (first: DocumentConstraint, second: DocumentConstraint): boolean => first.id === second.id && first.kind === second.kind && first.value === second.value && first.references.length === second.references.length && first.references.every((reference, index) => constraintReferenceKey(reference) === (second.references[index] ? constraintReferenceKey(second.references[index]) : undefined));
-const replaceDocumentConstraints = (document: DocumentSnapshot, constraints: readonly DocumentConstraint[]): CommandResult => result({ ...document, revision: nextRevision(document.revision), ...(constraints.length || document.constraints ? { constraints: [...constraints] } : {}) });
+const replaceDocumentConstraints = (document: DocumentSnapshot, constraints: readonly DocumentConstraint[]): CommandResult => {
+  const candidate = { ...document, revision: nextRevision(document.revision), ...(constraints.length || document.constraints ? { constraints: [...constraints] } : {}) };
+  if (!constraints.some((constraint) => constraint.kind === "midpoint")) return result(candidate);
+  const recomputed = recomputeSketchKernel(candidate);
+  if (!recomputed.committed) return { success: false, error: "Document constraints are in conflict", diagnostics: kernelDiagnostics(recomputed) };
+  return result(recomputed.document);
+};
 
 export const addDocumentConstraint = (constraint: DocumentConstraint): EditorCommand => ({
   name: `document-constraint-add:${constraint.id}`,
