@@ -53,6 +53,29 @@ describe("DexieProjectRepository", () => {
     expect(recovered.ok && recovered.revision.document).toMatchObject({ featureTree });
   });
 
+  it("round-trips a valid sketch midpoint constraint through the repository", async () => {
+    db = await repository();
+    const base = document();
+    const sketch = {
+      type: "sketch" as const,
+      id: elementId("midpoint-sketch"),
+      layerId: layerId("layer-1"),
+      nodes: [
+        { id: "source-start", point: { x: 10, y: 0 } },
+        { id: "source-end", point: { x: 10, y: 10 } },
+        { id: "midpoint", point: { x: 10, y: 5 } },
+      ],
+      edges: [{ id: "source", startNodeId: "source-start", endNodeId: "source-end" }],
+      constraints: [{ id: "source-midpoint", kind: "midpoint" as const, references: [{ elementId: elementId("midpoint-sketch"), nodeId: "midpoint" }, { elementId: elementId("midpoint-sketch"), edgeId: "source" }] as const }],
+      style: { stroke: "#000", strokeWidth: 1 },
+    };
+    const source = { ...base, elements: [sketch] };
+
+    expect((await db.saveProject(metadata, source)).ok).toBe(true);
+    const recovered = await db.getProject(metadata.id);
+    expect(recovered.ok && recovered.revision.document).toMatchObject({ elements: [{ nodes: sketch.nodes, constraints: sketch.constraints }] });
+  });
+
   it("round-trips explicit connections through the repository", async () => {
     db = await repository();
     const base = document();
