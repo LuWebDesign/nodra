@@ -42,6 +42,62 @@ function arcAngle(c: ArcCurve2D, t: number): number { const full = sweep(c); ret
 function arcPoint(c: ArcCurve2D, t: number): PointMm { const a = arcAngle(c, t); return { x: c.center.x + c.radius * Math.cos(a), y: c.center.y + c.radius * Math.sin(a) }; }
 
 const checkedPoint = (value: PointMm): PointMm => { if (![value.x, value.y].every(Number.isFinite)) throw new Error("curve calculation exceeds the numeric range"); return { x: value.x === 0 ? 0 : value.x, y: value.y === 0 ? 0 : value.y }; };
+/**
+ * Finds the point half-way along an open curve by traveled arc length.
+ * Cubic length uses adaptive Simpson integration (absolute tolerance
+ * 1e-10 * max(1, estimated length) mm, depth capped at 20); inversion uses
+ * at most 52 bisections. Lines and arcs are evaluated exactly. Degenerate
+ * curves and closed curves return undefined; malformed/non-finite input throws.
+ */
+export function halfArcLengthMidpoint(c: Curve2D): PointMm | undefined {
+  validate(c);
+  if (c.type === "circle" || (c.type === "arc" && c.fullTurn)) return undefined;
+  if (c.type === "line") {
+    const length = Math.hypot(c.end.x - c.start.x, c.end.y - c.start.y);
+    if (!Number.isFinite(length)) throw new Error("curve calculation exceeds the numeric range");
+    return length === 0 ? undefined : pointAt(c, 0.5);
+  }
+  if (c.type === "arc") {
+    const length = c.radius * sweep(c);
+    if (!Number.isFinite(length)) throw new Error("curve calculation exceeds the numeric range");
+    return length === 0 ? undefined : pointAt(c, 0.5);
+  }
+
+  const speed = (t: number): number => {
+    const derivative = cubicDerivative(c, t);
+    const value = Math.hypot(derivative.x, derivative.y);
+    if (!Number.isFinite(value)) throw new Error("curve calculation exceeds the numeric range");
+    return value;
+  };
+  const simpson = (a: number, b: number, fa: number, fm: number, fb: number): number => (b - a) * (fa + 4 * fm + fb) / 6;
+  const integrate = (a: number, b: number, tolerance: number): number => {
+    const fa = speed(a), fb = speed(b), middle = (a + b) / 2, fm = speed(middle);
+    const initial = simpson(a, b, fa, fm, fb);
+    const visit = (lo: number, hi: number, flo: number, fmid: number, fhi: number, estimate: number, error: number, depth: number): number => {
+      const mid = (lo + hi) / 2, leftMid = (lo + mid) / 2, rightMid = (mid + hi) / 2;
+      const fl = speed(leftMid), fr = speed(rightMid);
+      const left = simpson(lo, mid, flo, fl, fmid), right = simpson(mid, hi, fmid, fr, fhi);
+      const refined = left + right;
+      if (!Number.isFinite(refined)) throw new Error("curve calculation exceeds the numeric range");
+      if (depth === 20 || Math.abs(refined - estimate) <= 15 * error) return refined + (refined - estimate) / 15;
+      return visit(lo, mid, flo, fl, fmid, left, error / 2, depth + 1) + visit(mid, hi, fmid, fr, fhi, right, error / 2, depth + 1);
+    };
+    return visit(a, b, fa, fm, fb, initial, tolerance, 0);
+  };
+  const roughLength = (speed(0) + 4 * speed(0.5) + speed(1)) / 6;
+  const total = integrate(0, 1, 1e-10 * Math.max(1, roughLength));
+  if (!Number.isFinite(total)) throw new Error("curve calculation exceeds the numeric range");
+  if (total === 0) return undefined;
+  const tolerance = 1e-10 * Math.max(1, total);
+  let low = 0, high = 1;
+  for (let iteration = 0; iteration < 52; iteration += 1) {
+    const middle = (low + high) / 2;
+    if (integrate(0, middle, tolerance / 2) < total / 2) low = middle;
+    else high = middle;
+  }
+  return pointAt(c, (low + high) / 2);
+}
+
 export function pointAt(c: Curve2D, t0: number): PointMm {
   validate(c); const t = parameter(t0); let value: PointMm;
   if (c.type === "line") value = { x: (1 - t) * c.start.x + t * c.end.x, y: (1 - t) * c.start.y + t * c.end.y };
