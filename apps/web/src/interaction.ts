@@ -417,6 +417,7 @@ export function resolveLineInference(input: LineInferenceInput): LineInferenceCa
   };
   for (const element of document.elements) if (visible.has(element.layerId)) {
     for (const [index, node] of realGeometryNodes(element).entries()) {
+      if (element.id === activeSketchId && node.nodeId === input.originNodeId) continue;
       const kind = node.kind === "center" ? "center" : "node";
       const distance = Math.hypot(pointer.x - node.point.x, pointer.y - node.point.y);
       add({ point: node.point, kind, sourceIds: [element.id, node.nodeId ?? String(index)], guides: [{ source: pointer, target: node.point, kind }], ...(node.nodeId ? { nodeId: node.nodeId } : {}) }, distance, kind === "node" ? 0 : 1, `${element.id}:${index}`);

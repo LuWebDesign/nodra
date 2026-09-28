@@ -48,6 +48,15 @@ describe("Line inference resolver", () => {
     expect(resolveLineInference({ ...input, pointer: { x: 10, y: 9 }, priorCandidate: midpoint })?.kind).toBe("midpoint");
     expect(resolveLineInference({ ...input, document: { ...document, layers: [{ ...layer, visible: false }] } })?.kind).not.toBe("midpoint");
   });
+  it("excludes the active origin node from node candidates despite jitter and hysteresis", () => {
+    const origin = { x: 0, y: 0 };
+    const initial = resolveLineInference({ ...input, pointer: { x: 0, y: 0 }, origin, originNodeId: "a" })!;
+    expect(initial.kind).not.toBe("node");
+    const jittered = resolveLineInference({ ...input, pointer: { x: 7, y: 5 }, origin, originNodeId: "a", priorCandidate: initial });
+    expect(jittered?.kind).not.toBe("node");
+    expect(jittered?.nodeId).not.toBe("a");
+  });
+
   it("projects perpendicular to the known preceding same-sketch edge", () => {
     const bent = { ...sketch, nodes: [{ id: "a", point: { x: 0, y: 0 } }, { id: "b", point: { x: 20, y: 0 } }] };
     const result = resolveLineInference({ ...input, document: { ...document, elements: [bent] }, origin: { x: 20, y: 0 }, originNodeId: "b", priorEdgeId: "ab", pointer: { x: 23, y: 4 }, tolerancePx: 3, axisTolerancePx: 0.1 });
