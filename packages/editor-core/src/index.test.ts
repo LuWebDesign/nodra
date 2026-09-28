@@ -523,7 +523,75 @@ describe("editor core", () => {
     expect(redo(undo(changed)).document).toEqual(changed.document);
   });
 
-      it("preserves legacy continuation-perpendicular inference", () => {
+  it("creates an explicit midpoint relation to a pre-existing sketch edge in one undoable transaction", () => {
+    const base = createSketchLine(elementId("automatic-midpoint"), layerId("default"), rectangle.style, { x: 0, y: 0 }, { x: 10, y: 0 });
+    const sketch: SketchElement = { ...base, nodes: [...base.nodes, { id: "midpoint-source-end", point: { x: 10, y: 10 } }], edges: [...base.edges, { id: "midpoint-source", startNodeId: base.nodes[1]!.id, endNodeId: "midpoint-source-end" }] };
+    const initial = createEditor({ ...document, elements: [sketch] });
+    const candidate: AutomaticSketchRelationCandidate = { kind: "midpoint", references: [{ elementId: sketch.id, edgeId: "midpoint-source" }] };
+    const changed = dispatch(initial, appendSketchEdge(sketch.id, sketch.nodes[0]!.id, { x: 20, y: 10 }, undefined, candidate));
+    const resultSketch = changed.document.elements[0] as SketchElement;
+    const dependentNodeId = resultSketch.edges.at(-1)?.endNodeId;
+    expect(dependentNodeId).toBeDefined();
+    expect(resultSketch.nodes.find((node) => node.id === dependentNodeId)?.point).toEqual({ x: 10, y: 5 });
+    expect(resultSketch.constraints?.at(-1)).toMatchObject({ kind: "midpoint", references: [{ elementId: sketch.id, nodeId: dependentNodeId }, { elementId: sketch.id, edgeId: "midpoint-source" }] });
+    expect(changed.undo).toHaveLength(1);
+    expect(undo(changed).document).toEqual(initial.document);
+    expect(redo(undo(changed)).document).toEqual(changed.document);
+  });
+
+  it("keeps a midpoint dependent on a moved source endpoint and restores the relation on undo", () => {
+    const base = createSketchLine(elementId("midpoint-move"), layerId("default"), rectangle.style, { x: 0, y: 0 }, { x: 10, y: 0 });
+    const sketch: SketchElement = { ...base, nodes: [...base.nodes, { id: "source-end", point: { x: 10, y: 10 } }], edges: [...base.edges, { id: "source", startNodeId: base.nodes[1]!.id, endNodeId: "source-end" }] };
+    const created = dispatch(createEditor({ ...document, elements: [sketch] }), appendSketchEdge(sketch.id, sketch.nodes[0]!.id, { x: 20, y: 10 }, undefined, { kind: "midpoint", references: [{ elementId: sketch.id, edgeId: "source" }] }));
+    const beforeMove = created.document.elements[0] as SketchElement;
+    const dependentId = beforeMove.edges.at(-1)!.endNodeId;
+    const moved = dispatch(created, updateElementNode(beforeMove.id, 2, { x: 14, y: 10 }));
+    const afterMove = moved.document.elements[0] as SketchElement;
+    expect(afterMove.nodes.find((node) => node.id === "source-end")?.point).toEqual({ x: 14, y: 10 });
+    expect(afterMove.nodes.find((node) => node.id === dependentId)?.point).toEqual({ x: 12, y: 5 });
+    expect(afterMove.constraints).toContainEqual(expect.objectContaining({ kind: "midpoint" }));
+    expect(undo(moved).document).toEqual(created.document);
+  });
+
+  it("drops only a midpoint relation when its source edge is split or deleted", () => {
+    const make = (id: string) => {
+      const base = createSketchLine(elementId(id), layerId("default"), rectangle.style, { x: 0, y: 0 }, { x: 10, y: 0 });
+      const source: SketchElement = { ...base, nodes: [...base.nodes, { id: "source-end", point: { x: 10, y: 10 } }], edges: [...base.edges, { id: "source", startNodeId: base.nodes[1]!.id, endNodeId: "source-end" }], constraints: [{ id: "keep-horizontal", kind: "horizontal" as const, references: [{ elementId: base.id, nodeId: base.nodes[0]!.id }, { elementId: base.id, nodeId: base.nodes[1]!.id }] }] };
+      return dispatch(createEditor({ ...document, elements: [source] }), appendSketchEdge(source.id, source.nodes[0]!.id, { x: 20, y: 10 }, undefined, { kind: "midpoint", references: [{ elementId: source.id, edgeId: "source" }] }));
+    };
+    const splitInitial = make("midpoint-split");
+    const split = dispatch(splitInitial, cutSketchEdge(elementId("midpoint-split"), 1, { x: 10, y: 5 }));
+    expect((split.document.elements[0] as SketchElement).constraints?.map((constraint) => constraint.id)).toEqual(["keep-horizontal"]);
+    expect(undo(split).document).toEqual(splitInitial.document);
+
+    const deleteInitial = make("midpoint-delete");
+    const deleted = dispatch(deleteInitial, cutSketchEdge(elementId("midpoint-delete"), 1));
+    expect((deleted.document.elements[0] as SketchElement).constraints?.map((constraint) => constraint.id)).toEqual(["keep-horizontal"]);
+    expect(undo(deleted).document).toEqual(deleteInitial.document);
+  });
+
+  it("rejects malformed midpoint candidate references without changing document or history", () => {
+    const base = createSketchLine(elementId("automatic-midpoint-invalid"), layerId("default"), rectangle.style, { x: 0, y: 0 }, { x: 10, y: 0 });
+    const other = createSketchLine(elementId("automatic-midpoint-other"), layerId("default"), rectangle.style, { x: 0, y: 10 }, { x: 10, y: 10 });
+    const sketch: SketchElement = { ...base, nodes: [...base.nodes, { id: "midpoint-existing-end", point: { x: 5, y: 5 } }], edges: [...base.edges, { id: "midpoint-existing", startNodeId: base.nodes[0]!.id, endNodeId: "midpoint-existing-end" }] };
+    const initial = createEditor({ ...document, elements: [sketch, other] });
+    const candidates: AutomaticSketchRelationCandidate[] = [
+      { kind: "midpoint", references: [{ elementId: sketch.id, edgeId: "missing-edge" }] },
+      { kind: "midpoint", references: [{ elementId: other.id, edgeId: other.edges[0]!.id }] },
+      { kind: "midpoint", references: [{ elementId: sketch.id, nodeId: "midpoint-existing-end" }] } as unknown as AutomaticSketchRelationCandidate,
+      { kind: "midpoint", references: [{ elementId: sketch.id, edgeId: "midpoint-existing" }, { elementId: sketch.id, edgeId: "midpoint-existing" }] } as unknown as AutomaticSketchRelationCandidate,
+      { kind: "midpoint", references: null } as unknown as AutomaticSketchRelationCandidate,
+      { kind: "midpoint", references: { elementId: sketch.id, edgeId: "midpoint-existing" } } as unknown as AutomaticSketchRelationCandidate,
+    ];
+    for (const candidate of candidates) {
+      const rejected = dispatch(initial, appendSketchEdge(sketch.id, sketch.nodes[1]!.id, { x: 20, y: 10 }, undefined, candidate));
+      expect(rejected.document).toBe(initial.document);
+      expect(rejected.undo).toBe(initial.undo);
+      expect(rejected.redo).toBe(initial.redo);
+    }
+  });
+
+  it("preserves legacy continuation-perpendicular inference", () => {
     const base: SketchElement = { type: "sketch", id: elementId("automatic-relation-legacy-perpendicular"), layerId: layerId("default"), nodes: [{ id: "a", point: { x: 0, y: 0 } }, { id: "b", point: { x: 10, y: 5 } }], edges: [{ id: "ab", startNodeId: "a", endNodeId: "b" }], style: rectangle.style };
     const initial = createEditor({ ...document, elements: [base] });
     const changed = dispatch(initial, appendSketchEdge(base.id, "b", { x: 15, y: -5 }));

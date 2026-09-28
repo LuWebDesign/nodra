@@ -72,10 +72,10 @@ export interface EditorState {
 }
 
 /** A transient inference result accepted by the sketch-edge command boundary. */
-export type AutomaticSketchRelationCandidate = Readonly<{
-  readonly kind: "horizontal" | "vertical" | "perpendicular";
-  readonly references: SketchConstraint["references"];
-}>;
+type SketchConstraintReference = SketchConstraint["references"][number];
+export type AutomaticSketchRelationCandidate =
+  | Readonly<{ readonly kind: "horizontal" | "vertical" | "perpendicular"; readonly references: SketchConstraint["references"] }>
+  | Readonly<{ readonly kind: "midpoint"; readonly references: readonly [Extract<SketchConstraintReference, { readonly edgeId: string }>] }>;
 
 const result = (document: DocumentSnapshot): CommandResult => {
   const checked = validateDocument(document);
@@ -558,6 +558,18 @@ export const appendSketchEdge = (sketchId: ElementId, fromNodeId: string, point:
     const autoRelations = candidate ? [] : [inferredAxis, inferredPerpendicular].filter((relation): relation is SketchConstraint => relation !== undefined);
     const next: SketchElement = { ...sketch, nodes: existingTarget ? sketch.nodes : [...sketch.nodes, { id: endNodeId, point }], edges: [...sketch.edges, { id: edgeId, startNodeId: fromNodeId, endNodeId }], ...(autoRelations.length ? { constraints: [...(sketch.constraints ?? []), ...autoRelations] } : {}) };
     if (!candidate) return replaceSketchElements(document, document.elements.map((element) => element.id === sketchId ? next : element));
+    if (candidate.kind === "midpoint") {
+      if (!Array.isArray(candidate.references) || candidate.references.length !== 1) return { success: false, error: "Midpoint candidate requires an existing sketch edge" };
+      const reference = candidate.references[0];
+      if (existingTarget || !reference || typeof reference !== "object" || !("edgeId" in reference) || reference.elementId !== sketch.id) return { success: false, error: "Midpoint candidate requires an existing sketch edge" };
+      const sourceEdge = sketch.edges.find((edge) => edge.id === reference.edgeId);
+      const sourceStart = sketch.nodes.find((node) => node.id === sourceEdge?.startNodeId)?.point;
+      const sourceEnd = sketch.nodes.find((node) => node.id === sourceEdge?.endNodeId)?.point;
+      if (!sourceEdge || !sourceStart || !sourceEnd || Math.hypot(sourceEnd.x - sourceStart.x, sourceEnd.y - sourceStart.y) <= 1e-9) return { success: false, error: "Midpoint source edge is missing or degenerate" };
+      const relation: SketchConstraint = { id: `auto:${edgeId}:midpoint`, kind: "midpoint", references: [{ elementId: sketch.id, nodeId: endNodeId }, { elementId: sketch.id, edgeId: sourceEdge.id }] };
+      const constrained: SketchElement = { ...next, constraints: [...(next.constraints ?? []), relation] };
+      return replaceSketchElements(document, document.elements.map((element) => element.id === sketchId ? constrained : element));
+    }
     if (!(["horizontal", "vertical", "perpendicular"] as const).includes(candidate.kind) || !Array.isArray(candidate.references) || !candidate.references.every((reference) => reference !== null && typeof reference === "object")) return { success: false, error: "Automatic relation candidate is unsupported" };
 
     const nodeReferences = candidate.references.filter((reference): reference is Extract<SketchConstraint["references"][number], { readonly nodeId: string }> => "nodeId" in reference);
@@ -2897,9 +2909,11 @@ export const updateElementNode = (id: ElementId, nodeIndex: number, point: Point
     if (current.type === "sketch") {
       if (!node.nodeId) return { success: false, error: "Sketch node not found" };
       const candidate = { ...current, nodes: current.nodes.map((sketchNode) => sketchNode.id === node.nodeId ? { ...sketchNode, point } : sketchNode) };
-          const solved = solveSketchConstraints(candidate);
-          if (solved.status === "conflict" || solved.status === "overdefined") return { success: false, error: `Sketch constraints are ${solved.status}` };
-          return replaceSketchElements(document, document.elements.map((element) => element.id === id ? solved.sketch : element));
+      const constraints = candidate.constraints ?? [];
+      const solved = solveSketchConstraints({ ...candidate, constraints: constraints.filter((constraint) => constraint.kind !== "midpoint") });
+      if (solved.status === "conflict" || solved.status === "overdefined") return { success: false, error: `Sketch constraints are ${solved.status}` };
+      const solvedSketch = { ...solved.sketch, constraints };
+      return replaceSketchElements(document, document.elements.map((element) => element.id === id ? solvedSketch : element));
     }
     if (current.type === "path") {
       if (!node.nodeId) return { success: false, error: "Path node not found" };
