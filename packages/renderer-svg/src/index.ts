@@ -1,4 +1,4 @@
-import { CURRENT_SCHEMA_VERSION, isLineElement, type DocumentSnapshot, type Element, type PathElement, type SplineElement } from "@nodra/domain";
+import { CURRENT_SCHEMA_VERSION, isLineElement, type DocumentSnapshot, type Element, type PathElement, type SketchConstraint, type SketchElement, type SplineElement } from "@nodra/domain";
 import { constraintComponentStatesForDocument, constraintStateForElement, type ConstraintState } from "@nodra/constraints";
 import { dimensionGeometry, mmToScreen, buildSketchProfile, pointAt, type Curve2D, type CurveTopologyFragment, type SketchProfileResult, type Viewport } from "@nodra/geometry";
 import { validateDocument } from "@nodra/validation";
@@ -61,6 +61,42 @@ function renderArc(element: Extract<Element, { type: "arc" }>, viewport: Viewpor
   return `<path data-element-id="${escapeAttribute(element.id)}" d="${d}" ${visualAttributes(element)} />`;
 }
 
+function renderConstraintGlyph(constraint: SketchConstraint & { readonly owner: string }, document: DocumentSnapshot, viewport: Viewport, sketchId: string): string {
+  const sketches = document.elements.filter((element): element is SketchElement => element.type === "sketch");
+  const point = (reference: SketchConstraint["references"][number]) => "nodeId" in reference ? sketches.find((sketch) => sketch.id === reference.elementId)?.nodes.find((node) => node.id === reference.nodeId)?.point : undefined;
+  const edge = (reference: SketchConstraint["references"][number]) => "edgeId" in reference ? sketches.find((sketch) => sketch.id === reference.elementId)?.edges.find((candidate) => candidate.id === reference.edgeId) : undefined;
+  const edgePoints = (reference: SketchConstraint["references"][number]) => { const sketch = sketches.find((candidate) => candidate.id === reference.elementId); const found = edge(reference); return sketch && found ? [sketch.nodes.find((node) => node.id === found.startNodeId)?.point, sketch.nodes.find((node) => node.id === found.endNodeId)?.point] as const : undefined; };
+  const references = constraint.references;
+  let anchor: { x: number; y: number } | undefined;
+  if ((constraint.kind === "horizontal" || constraint.kind === "vertical") && references.length === 2) {
+    const first = point(references[0]!); const second = point(references[1]!);
+    const found = first && second ? sketches.flatMap((sketch) => sketch.edges.map((candidate) => ({ sketch, candidate }))).find(({ sketch, candidate }) => sketch.id === references[0]!.elementId && ((candidate.startNodeId === (references[0] as { nodeId: string }).nodeId && candidate.endNodeId === (references[1] as { nodeId: string }).nodeId) || (candidate.endNodeId === (references[0] as { nodeId: string }).nodeId && candidate.startNodeId === (references[1] as { nodeId: string }).nodeId))) : undefined;
+    if (found && found.sketch.id === sketchId) anchor = { x: (first!.x + second!.x) / 2, y: (first!.y + second!.y) / 2 };
+  } else if (constraint.kind === "perpendicular" && references.length === 2 && references.every((reference) => "edgeId" in reference)) {
+    const first = edgePoints(references[0]!); const second = edgePoints(references[1]!);
+    const target = references[1]!.elementId === sketchId ? second : references[0]!.elementId === sketchId ? first : undefined;
+    if (target?.[0] && target[1]) anchor = { x: (target[0].x + target[1].x) / 2, y: (target[0].y + target[1].y) / 2 };
+  } else if (constraint.kind === "perpendicular" && references.length === 4) {
+    const edgeForPair = (first: SketchConstraint["references"][number], second: SketchConstraint["references"][number]) => {
+      if ("edgeId" in first) return edgePoints(first);
+      if (!("nodeId" in first) || !("nodeId" in second) || first.elementId !== second.elementId) return undefined;
+      const sketch = sketches.find((candidate) => candidate.id === first.elementId);
+      const found = sketch?.edges.find((candidate) => candidate.startNodeId === first.nodeId && candidate.endNodeId === second.nodeId || candidate.endNodeId === first.nodeId && candidate.startNodeId === second.nodeId);
+      return sketch && found ? [sketch.nodes.find((node) => node.id === found.startNodeId)?.point, sketch.nodes.find((node) => node.id === found.endNodeId)?.point] as const : undefined;
+    };
+    const first = edgeForPair(references[0]!, references[1]!); const second = edgeForPair(references[2]!, references[3]!);
+    const target = references[2]!.elementId === sketchId ? second : references[0]!.elementId === sketchId ? first : undefined;
+    if (target?.[0] && target[1]) anchor = { x: (target[0].x + target[1].x) / 2, y: (target[0].y + target[1].y) / 2 };
+  } else if (constraint.kind === "midpoint") {
+    const dependent = point(references[0]!);
+    if (references.length === 2 && "edgeId" in references[1]!) { const source = edgePoints(references[1]!); if (dependent && references[0]!.elementId === sketchId && source?.[0] && source[1]) anchor = { x: (dependent.x + (source[0].x + source[1].x) / 2) / 2, y: (dependent.y + (source[0].y + source[1].y) / 2) / 2 }; }
+    else if (references.length === 3 && dependent && references[0]!.elementId === sketchId) anchor = dependent;
+  }
+  if (!anchor) return "";
+  const screen = mmToScreen(anchor, viewport); const label = constraint.kind === "perpendicular" ? "⊥" : constraint.kind === "midpoint" ? "M" : constraint.kind === "horizontal" ? "H" : "V";
+  return `<g data-constraint-id="${escapeAttribute(constraint.id)}" data-constraint-kind="${escapeAttribute(constraint.kind)}" data-constraint-owner="${escapeAttribute(constraint.owner)}" transform="translate(${number(screen.x)} ${number(screen.y)})" font-size="12" text-anchor="middle" dominant-baseline="central" pointer-events="none"><circle r="8" fill="#fff" stroke="#2563eb" stroke-width="1" /><text fill="#2563eb" stroke="none">${label}</text></g>`;
+}
+
 function renderElement(element: Element, viewport: Viewport, document: DocumentSnapshot, sketchConstraintStates: ReadonlyMap<string, ConstraintState>, mode: RenderMode): string {
   if (element.type === "arc") return renderArc(element, viewport);
   const screen = (point: { x: number; y: number }) => mmToScreen(point, viewport);
@@ -109,7 +145,9 @@ function renderElement(element: Element, viewport: Viewport, document: DocumentS
     const contours = profile.regions.flatMap((region) => [region.outerLoopId, ...region.holeLoopIds]).map((loopId) => loops.get(loopId)?.points ?? []).filter((contour) => contour.length > 0).map((contour) => contour.map((point, index) => { const current = screen(point); return `${index === 0 ? "M" : "L"}${number(current.x)} ${number(current.y)}`; }).join(" ") + " Z").join(" ");
     const faces = contours && element.role !== "construction" ? `<path data-sketch-fill="true" d="${escapeAttribute(contours)}" fill="${fill}" fill-opacity="${DEFAULT_FILL_OPACITY}" stroke="none" fill-rule="evenodd" />` : "";
     const lines = element.edges.map((edge) => { const start = nodes.get(edge.startNodeId); const end = nodes.get(edge.endNodeId); return start && end ? `<line x1="${number(start.x)}" y1="${number(start.y)}" x2="${number(end.x)}" y2="${number(end.y)}"${edge.role === "construction" ? ` stroke-dasharray="6 4"` : ""} />` : ""; }).join("");
-    return `<g data-element-id="${escapeAttribute(element.id)}" ${sketchAttributes}>${faces}${lines}</g>`;
+    const constraints = mode === "editor" ? [...(element.constraints ?? []).map((constraint) => ({ ...constraint, owner: element.id })), ...(document.constraints ?? []).filter((constraint) => constraint.references[0]?.elementId === element.id).map((constraint) => ({ ...constraint, owner: constraint.references[0]!.elementId }))] : [];
+    const glyphs = constraints.map((constraint) => renderConstraintGlyph(constraint, document, viewport, element.id)).join("");
+    return `<g data-element-id="${escapeAttribute(element.id)}" ${sketchAttributes}>${faces}${lines}${glyphs}</g>`;
   }
   if (element.type === "contour") {
     const path = element.contours.map((contour) => contour.points.map((point, index) => {
