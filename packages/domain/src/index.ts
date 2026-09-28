@@ -106,7 +106,7 @@ export interface LineElement extends ElementBase {
 }
 export interface SketchNode { readonly id: string; readonly point: PointMm }
 export interface SketchEdge { readonly id: string; readonly startNodeId: string; readonly endNodeId: string; readonly role?: GeometryRole }
-export type SketchConstraintKind = "horizontal" | "vertical" | "coincident" | "parallel" | "perpendicular" | "equal" | "distance-horizontal" | "distance-vertical" | "distance" | "angle" | "fixed";
+export type SketchConstraintKind = "horizontal" | "vertical" | "coincident" | "parallel" | "perpendicular" | "equal" | "distance-horizontal" | "distance-vertical" | "distance" | "angle" | "fixed" | "midpoint";
 export interface SketchPointReference { readonly elementId: ElementId; readonly nodeId: string }
 export interface SketchEdgeReference { readonly elementId: ElementId; readonly edgeId: string }
 export type SketchConstraintReference = SketchPointReference | SketchEdgeReference;

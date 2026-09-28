@@ -397,6 +397,29 @@ describe("parametric constraint boundary", () => {
     expect(preview.diagnostics).toEqual(expect.arrayContaining([expect.objectContaining({ code: "unsupported-constraint", constraintIds: [JSON.stringify(["document", null, "global-fixed"])], referenceKeys: [JSON.stringify(["sketch", "a"])] })]));
   });
 
+  it("drives a local midpoint node from either ordered endpoint without mutating old snapshots", () => {
+    const base = sketch();
+    const source: SketchElement = {
+      ...base,
+      nodes: [{ id: "a", point: { x: 0, y: 0 } }, { id: "b", point: { x: 10, y: 2 } }, { id: "c", point: { x: 8, y: 9 } }],
+      edges: [{ id: "ab", startNodeId: "a", endNodeId: "b" }],
+      constraints: [{ id: "mid-c", kind: "midpoint", references: [{ elementId: elementId("sketch"), nodeId: "c" }, { elementId: elementId("sketch"), edgeId: "ab" }] }],
+    };
+    const document = documentWith([source]);
+    const solved = solveConstraintComponents(document);
+    expect((solved.document.elements[0] as SketchElement).nodes[2]?.point).toEqual({ x: 5, y: 1 });
+    expect(solved.residuals).toEqual([expect.objectContaining({ supported: true, satisfied: true, residual: 0 })]);
+    expect(solveConstraintComponents(document).document.elements).toEqual(solved.document.elements);
+    expect(source.nodes[2]?.point).toEqual({ x: 8, y: 9 });
+
+    const moved = { ...source, nodes: [{ id: "a", point: { x: 10, y: 20 } }, { id: "b", point: { x: 30, y: 40 } }, source.nodes[2]!] };
+    const afterMove = solveConstraintComponents(documentWith([moved]));
+    expect((afterMove.document.elements[0] as SketchElement).nodes[2]?.point).toEqual({ x: 20, y: 30 });
+    const reversed = { ...moved, edges: [{ id: "ab", startNodeId: "b", endNodeId: "a" }] };
+    expect((solveConstraintComponents(documentWith([reversed])).document.elements[0] as SketchElement).nodes[2]?.point).toEqual({ x: 20, y: 30 });
+    expect(constraintDofMetadataForDocument(documentWith([source]))[0]).toMatchObject({ rank: 2, degreesOfFreedom: 4 });
+  });
+
   it("keeps unsupported and missing entities distinguishable", () => {
     const line = { type: "line" as const, id: elementId("line"), layerId: fixtureLayer().id, start: { x: 0, y: 0 }, end: { x: 10, y: 0 }, rotation: 0, style: fixtureStyle() };
     const document = documentWith([line]);

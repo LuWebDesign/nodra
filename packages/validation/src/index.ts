@@ -78,7 +78,7 @@ const sketchEdge = z.object({ id: nonEmptyId, startNodeId: nonEmptyId, endNodeId
 const sketchPointReference = z.object({ elementId: nonEmptyId, nodeId: nonEmptyId }).strict();
 const sketchEdgeReference = z.object({ elementId: nonEmptyId, edgeId: nonEmptyId }).strict();
 const sketchConstraintReference = z.union([sketchPointReference, sketchEdgeReference]);
-const sketchConstraint = z.object({ id: nonEmptyId, kind: z.enum(["horizontal", "vertical", "coincident", "parallel", "perpendicular", "equal", "distance-horizontal", "distance-vertical", "distance", "angle", "fixed"]), references: z.array(sketchConstraintReference).min(1).max(4), value: finite.positive().optional() }).strict();
+const sketchConstraint = z.object({ id: nonEmptyId, kind: z.enum(["horizontal", "vertical", "coincident", "parallel", "perpendicular", "equal", "distance-horizontal", "distance-vertical", "distance", "angle", "fixed", "midpoint"]), references: z.array(sketchConstraintReference).min(1).max(4), value: finite.positive().optional() }).strict();
 const sketch = z.object({ id: nonEmptyId, layerId: nonEmptyId, ...pieceOwnership, role: geometryRole, type: z.literal("sketch"), nodes: z.array(sketchNode).min(2), edges: z.array(sketchEdge).min(1), constraints: z.array(sketchConstraint).optional(), style, operation: operation.optional() }).strict().superRefine((value, ctx) => {
   const nodeIds = value.nodes.map((node) => node.id); const edgeIds = value.edges.map((edge) => edge.id);
   if (new Set(nodeIds).size !== nodeIds.length) ctx.addIssue({ code: "custom", message: "Sketch node IDs must be unique", path: ["nodes"] });
@@ -90,13 +90,22 @@ const sketch = z.object({ id: nonEmptyId, layerId: nonEmptyId, ...pieceOwnership
   constraints.forEach((constraint, index) => {
     if (constraint.references.some((reference) => reference.elementId !== value.id || ("nodeId" in reference ? !known.has(reference.nodeId) : !knownEdges.has(reference.edgeId)))) ctx.addIssue({ code: "custom", message: "Sketch constraint references unknown geometry", path: ["constraints", index, "references"] });
     const segmentRelation = constraint.kind === "parallel" || constraint.kind === "perpendicular" || constraint.kind === "equal";
+    const midpointRelation = constraint.kind === "midpoint" && constraint.references.length === 2 && "nodeId" in constraint.references[0]! && "edgeId" in constraint.references[1]!;
+    if (constraint.kind === "midpoint" && midpointRelation) {
+      const dependent = constraint.references[0]!; const edgeReference = constraint.references[1]!;
+      if ("nodeId" in dependent && "edgeId" in edgeReference) {
+        const edge = value.edges.find((candidate) => candidate.id === edgeReference.edgeId);
+        if (!edge || edgeReference.elementId !== value.id) ctx.addIssue({ code: "custom", message: "Midpoint reference must identify an edge in the dependent node's sketch", path: ["constraints", index, "references"] });
+        else if (dependent.nodeId === edge.startNodeId || dependent.nodeId === edge.endNodeId) ctx.addIssue({ code: "custom", message: "Midpoint dependent node must differ from both edge endpoints", path: ["constraints", index, "references", 0] });
+      }
+    }
     const canonicalSegments = segmentRelation && constraint.references.length === 2 && constraint.references.every((reference) => "edgeId" in reference);
     const distinctCanonicalSegments = canonicalSegments && "edgeId" in constraint.references[0]! && "edgeId" in constraint.references[1]! && constraint.references[0].edgeId !== constraint.references[1].edgeId;
     const legacySegments = segmentRelation && constraint.references.length === 4 && constraint.references.every((reference) => "nodeId" in reference);
     const legacyEdges = legacySegments ? [[constraint.references[0], constraint.references[1]], [constraint.references[2], constraint.references[3]]].map(([first, second]) => value.edges.filter((edge) => "nodeId" in first! && "nodeId" in second! && (edge.startNodeId === first.nodeId && edge.endNodeId === second.nodeId || edge.startNodeId === second.nodeId && edge.endNodeId === first.nodeId))) : [];
     const distinctLegacySegments = legacyEdges.length === 2 && legacyEdges.every((matches) => matches.length === 1) && legacyEdges[0]![0]!.id !== legacyEdges[1]![0]!.id;
     const expectedReferences = constraint.kind === "fixed" ? 1 : 2;
-    if (segmentRelation ? !distinctCanonicalSegments && !distinctLegacySegments : constraint.references.length !== expectedReferences || !constraint.references.every((reference) => "nodeId" in reference)) ctx.addIssue({ code: "custom", message: segmentRelation ? "Segment constraints require two edge references" : constraint.kind + " constraints require " + expectedReferences + " reference" + (expectedReferences === 1 ? "" : "s"), path: ["constraints", index, "references"] });
+    if (segmentRelation ? !distinctCanonicalSegments && !distinctLegacySegments : constraint.kind === "midpoint" ? !midpointRelation : constraint.references.length !== expectedReferences || !constraint.references.every((reference) => "nodeId" in reference)) ctx.addIssue({ code: "custom", message: segmentRelation ? "Segment constraints require two edge references" : constraint.kind === "midpoint" ? "Midpoint constraints require one node and one edge reference" : constraint.kind + " constraints require " + expectedReferences + " reference" + (expectedReferences === 1 ? "" : "s"), path: ["constraints", index, "references"] });
     if ((constraint.kind === "distance-horizontal" || constraint.kind === "distance-vertical" || constraint.kind === "distance" || constraint.kind === "angle") && (constraint.value === undefined || constraint.value <= 0)) ctx.addIssue({ code: "custom", message: "Distance constraints require a positive value", path: ["constraints", index, "value"] });
   });
   value.edges.forEach((edge, index) => {
@@ -257,12 +266,21 @@ export const validateDocumentConstraints = (elements: readonly z.infer<typeof el
     if (ids.has(constraint.id)) ctx.addIssue({ code: "custom", message: "Document constraint IDs must be unique", path: [...path, index, "id"] });
     ids.add(constraint.id);
     const segmentRelation = constraint.kind === "parallel" || constraint.kind === "perpendicular" || constraint.kind === "equal";
+    const midpointRelation = constraint.kind === "midpoint" && constraint.references.length === 2 && "nodeId" in constraint.references[0]! && "edgeId" in constraint.references[1]!;
+    if (constraint.kind === "midpoint") {
+      const dependent = midpointRelation ? constraint.references[0] : undefined;
+      const edgeReference = midpointRelation ? constraint.references[1] : undefined;
+      const ownerId = dependent && "nodeId" in dependent ? dependent.elementId : undefined;
+      const edge = edgeReference && "edgeId" in edgeReference ? sketches.get(ownerId!)?.edges.find((candidate) => candidate.id === edgeReference.edgeId) : undefined;
+      if (!midpointRelation || !dependent || !edgeReference || !ownerId || edgeReference.elementId !== ownerId || !edge) ctx.addIssue({ code: "custom", message: "Midpoint constraints require a dependent node followed by an edge in the same sketch", path: [...path, index, "references"] });
+      else if ("nodeId" in dependent && (dependent.nodeId === edge.startNodeId || dependent.nodeId === edge.endNodeId)) ctx.addIssue({ code: "custom", message: "Midpoint dependent node must differ from both edge endpoints", path: [...path, index, "references", 0] });
+    }
     const canonicalSegments = segmentRelation && constraint.references.length === 2 && constraint.references.every((reference) => "edgeId" in reference);
     const legacySegments = segmentRelation && constraint.references.length === 4 && constraint.references.every((reference) => "nodeId" in reference);
     const legacyEdges = legacySegments ? [[constraint.references[0], constraint.references[1]], [constraint.references[2], constraint.references[3]]].map(([first, second]) => { const sketch = sketches.get(first!.elementId); return sketch?.edges.filter((edge) => "nodeId" in first! && "nodeId" in second! && first.elementId === second.elementId && (edge.startNodeId === first.nodeId && edge.endNodeId === second.nodeId || edge.startNodeId === second.nodeId && edge.endNodeId === first.nodeId)) ?? []; }) : [];
     const distinctLegacySegments = legacyEdges.length === 2 && legacyEdges.every((matches) => matches.length === 1) && (legacyEdges[0]![0]!.id !== legacyEdges[1]![0]!.id || constraint.references[0]!.elementId !== constraint.references[2]!.elementId);
     const expectedReferences = constraint.kind === "fixed" ? 1 : 2;
-    if (segmentRelation ? !canonicalSegments && !distinctLegacySegments : constraint.references.length !== expectedReferences || !constraint.references.every((reference) => "nodeId" in reference)) ctx.addIssue({ code: "custom", message: segmentRelation ? "Segment constraints require two edge references" : constraint.kind + " constraints require " + expectedReferences + " reference" + (expectedReferences === 1 ? "" : "s"), path: [...path, index, "references"] });
+    if (segmentRelation ? !canonicalSegments && !distinctLegacySegments : constraint.kind === "midpoint" ? !midpointRelation : constraint.references.length !== expectedReferences || !constraint.references.every((reference) => "nodeId" in reference)) ctx.addIssue({ code: "custom", message: segmentRelation ? "Segment constraints require two edge references" : constraint.kind === "midpoint" ? "Midpoint constraints require one node and one edge reference" : constraint.kind + " constraints require " + expectedReferences + " reference" + (expectedReferences === 1 ? "" : "s"), path: [...path, index, "references"] });
     const usesValue = constraint.kind === "distance-horizontal" || constraint.kind === "distance-vertical" || constraint.kind === "distance" || constraint.kind === "angle";
     if (usesValue && (constraint.value === undefined || constraint.value <= 0)) ctx.addIssue({ code: "custom", message: "Distance constraints require a positive value", path: [...path, index, "value"] });
     if (!usesValue && constraint.value !== undefined) ctx.addIssue({ code: "custom", message: "This constraint kind must not define a value", path: [...path, index, "value"] });
@@ -272,6 +290,32 @@ export const validateDocumentConstraints = (elements: readonly z.infer<typeof el
       if (!target || ("nodeId" in reference ? !target.nodes.some((node) => node.id === reference.nodeId) : !target.edges.some((edge) => edge.id === reference.edgeId))) ctx.addIssue({ code: "custom", message: "Document constraint references unknown sketch geometry", path: [...path, index, "references", referenceIndex] });
     });
   });
+  const dependencies = new Map<string, string[]>();
+  const dependentNodeKeys = new Set<string>();
+  let hasDuplicateDependent = false;
+  const midpointConstraints: { constraint: z.infer<typeof sketchConstraint>; ownerId?: string }[] = [
+    ...[...sketches.values()].flatMap((sketch) => (sketch.constraints ?? []).map((constraint) => ({ constraint, ownerId: sketch.id }))),
+    ...constraints.filter((constraint) => constraint.kind === "midpoint").map((constraint) => ({ constraint })),
+  ];
+  for (const { constraint, ownerId } of midpointConstraints) {
+    if (constraint.references.length !== 2 || !("nodeId" in constraint.references[0]!) || !("edgeId" in constraint.references[1]!)) continue;
+    const dependent = constraint.references[0]; const edgeReference = constraint.references[1]; const sketchId = ownerId ?? dependent.elementId;
+    if (dependent.elementId !== sketchId || edgeReference.elementId !== sketchId) continue;
+    const edge = sketches.get(sketchId)?.edges.find((candidate) => candidate.id === edgeReference.edgeId);
+    if (!edge) continue;
+    const dependentKey = JSON.stringify([sketchId, dependent.nodeId]);
+    if (dependentNodeKeys.has(dependentKey)) hasDuplicateDependent = true;
+    dependentNodeKeys.add(dependentKey);
+    dependencies.set(dependentKey, [...(dependencies.get(dependentKey) ?? []), JSON.stringify([sketchId, edge.startNodeId]), JSON.stringify([sketchId, edge.endNodeId])]);
+  }
+  const visiting = new Set<string>(); const visited = new Set<string>();
+  const hasCycle = (node: string): boolean => {
+    if (visiting.has(node)) return true;
+    if (visited.has(node)) return false;
+    visiting.add(node); const cycle = (dependencies.get(node) ?? []).some(hasCycle); visiting.delete(node); visited.add(node); return cycle;
+  };
+  if (hasDuplicateDependent) ctx.addIssue({ code: "custom", message: "A node may have only one midpoint constraint", path: [...path] });
+  if ([...dependencies.keys()].some(hasCycle)) ctx.addIssue({ code: "custom", message: "Midpoint constraints must not form dependency cycles", path: [...path] });
 };
 const documentSchema = z.object({ schemaVersion: z.literal(CURRENT_SCHEMA_VERSION), ...documentFields, capabilities: z.object({ spline: z.literal(1).optional() }).strict().optional() }).strict().superRefine((value, ctx) => {
   const layerIds = new Set(value.layers.map((layer) => layer.id));

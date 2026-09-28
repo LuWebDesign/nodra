@@ -409,6 +409,31 @@ describe("native document validation", () => {
     if (defaulted.success) expect(defaulted.data.elements[0]).toMatchObject({ cornerRadius: 0 });
     expect(validateDocument({ ...legacy, elements: [{ ...legacy.elements[0], cornerRadius: -1 }] }).success).toBe(false);
   });
+  it("validates stable same-sketch midpoint relations and rejects malformed dependencies", () => {
+    const base = createDocument("midpoint-validation", [{ id: layerId("layer-1"), name: "Design", visible: true, order: 0 }]);
+    const nodes = [{ id: "a", point: { x: 0, y: 0 } }, { id: "b", point: { x: 10, y: 0 } }, { id: "c", point: { x: 5, y: 4 } }, { id: "d", point: { x: 5, y: 8 } }];
+    const edge = { id: "ab", startNodeId: "a", endNodeId: "b" };
+    const sketch = { type: "sketch" as const, id: "sketch", layerId: "layer-1", nodes, edges: [edge], style: { stroke: "#000", strokeWidth: 1 } };
+    const midpoint = { id: "mid-c", kind: "midpoint" as const, references: [{ elementId: "sketch", nodeId: "c" }, { elementId: "sketch", edgeId: "ab" }] as const };
+    expect(validateDocument({ ...base, elements: [{ ...sketch, edges: [edge, { id: "bd", startNodeId: "b", endNodeId: "d" }], constraints: [midpoint, { ...midpoint, id: "mid-c-again", references: [midpoint.references[0], { elementId: "sketch", edgeId: "bd" }] }] }] }).success).toBe(false);
+    expect(validateDocument({ ...base, elements: [{ ...sketch, edges: [edge, { id: "bd", startNodeId: "b", endNodeId: "d" }], constraints: [midpoint] }], constraints: [{ id: "global-mid-c", kind: "midpoint", references: [midpoint.references[0], { elementId: "sketch", edgeId: "bd" }] }] }).success).toBe(false);
+    expect(validateDocument({ ...base, elements: [{ ...sketch, constraints: [midpoint] }] }).success).toBe(true);
+    expect(validateDocument({ ...base, elements: [sketch] }).success).toBe(true); // Legacy documents without midpoint data remain valid.
+    expect(validateDocument({ ...base, elements: [{ ...sketch, constraints: [{ ...midpoint, references: [...midpoint.references].reverse() }] }] }).success).toBe(false);
+    expect(validateDocument({ ...base, elements: [{ ...sketch, constraints: [{ ...midpoint, references: [midpoint.references[0], { elementId: "other", edgeId: "ab" }] }] }] }).success).toBe(false);
+    const other = { ...sketch, id: "other", nodes: nodes.map((node) => ({ ...node, id: `other-${node.id}` })), edges: [{ id: "other-ab", startNodeId: "other-a", endNodeId: "other-b" }] };
+    const crossSketch = { id: "global-mid", kind: "midpoint" as const, references: [{ elementId: "sketch", nodeId: "c" }, { elementId: "other", edgeId: "other-ab" }] as const };
+    expect(validateDocument({ ...base, elements: [sketch, other], constraints: [crossSketch] }).success).toBe(false);
+    expect(validateDocument({ ...base, elements: [{ ...sketch, constraints: [{ ...midpoint, references: [{ elementId: "sketch", nodeId: "a" }, midpoint.references[1]] }] }] }).success).toBe(false);
+    expect(validateDocument({ ...base, elements: [{ ...sketch, constraints: [{ ...midpoint, references: [midpoint.references[0], { elementId: "sketch", edgeId: "missing" }] }] }] }).success).toBe(false);
+    const cyclic = { ...sketch, nodes: [...nodes, { id: "e", point: { x: 3, y: 3 } }], edges: [edge, { id: "cd", startNodeId: "c", endNodeId: "d" }, { id: "de", startNodeId: "d", endNodeId: "e" }, { id: "ec", startNodeId: "e", endNodeId: "c" }], constraints: [
+      midpoint,
+      { id: "mid-d", kind: "midpoint" as const, references: [{ elementId: "sketch", nodeId: "d" }, { elementId: "sketch", edgeId: "ec" }] as const },
+      { id: "mid-e", kind: "midpoint" as const, references: [{ elementId: "sketch", nodeId: "e" }, { elementId: "sketch", edgeId: "cd" }] as const },
+    ] };
+    expect(validateDocument({ ...base, elements: [cyclic] }).success).toBe(false);
+  });
+
   it("accepts closed contour paths and rejects open rings", () => {
     const base = createDocument("doc-1", [{ id: layerId("layer-1"), name: "Design", visible: true, order: 0 }]);
     const contour = { type: "contour", id: "path", layerId: "layer-1", position: { x: 0, y: 0 }, size: { width: 10, height: 10 }, contours: [{ points: [{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }, { x: 0, y: 0 }] }], fillRule: "evenodd", rotation: 0, style: { stroke: "#000", strokeWidth: 1 } };
