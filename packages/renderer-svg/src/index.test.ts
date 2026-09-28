@@ -13,6 +13,66 @@ const document = (): DocumentSnapshot => withElements(createDocument("doc-1", [l
 ]);
 
 describe("SVG renderer boundary", () => {
+  it("renders derived editor-only constraint glyphs from stable sketch references", () => {
+    const id = elementId("constraint-sketch");
+    const sketch = (nodes: readonly { id: string; point: { x: number; y: number } }[], edges: readonly { id: string; startNodeId: string; endNodeId: string }[]) => ({
+      type: "sketch" as const, id, layerId: layer.id, nodes, edges, style,
+      constraints: [
+        { id: 'horizontal"<&', kind: "horizontal" as const, references: [{ elementId: id, nodeId: "a" }, { elementId: id, nodeId: "b" }] as const },
+        { id: "vertical", kind: "vertical" as const, references: [{ elementId: id, nodeId: "b" }, { elementId: id, nodeId: "c" }] as const },
+        { id: "perpendicular", kind: "perpendicular" as const, references: [{ elementId: id, edgeId: "ab" }, { elementId: id, edgeId: "ef" }] as const },
+        { id: "midpoint", kind: "midpoint" as const, references: [{ elementId: id, nodeId: "d" }, { elementId: id, edgeId: "ab" }] as const },
+      ],
+    });
+    const nodes = [{ id: "a", point: { x: 0, y: 0 } }, { id: "b", point: { x: 10, y: 0 } }, { id: "c", point: { x: 10, y: 10 } }, { id: "d", point: { x: 5, y: 1 } }, { id: "e", point: { x: 20, y: 0 } }, { id: "f", point: { x: 20, y: 10 } }];
+    const edges = [{ id: "ab", startNodeId: "a", endNodeId: "b" }, { id: "bc", startNodeId: "b", endNodeId: "c" }, { id: "ef", startNodeId: "e", endNodeId: "f" }];
+    const source = withElements(createDocument("constraint-glyphs", [layer]), [sketch(nodes, edges)]);
+    const rendered = renderSvg(source, { zoom: 1, panMm: { x: 0, y: 0 } });
+    expect(rendered.success).toBe(true);
+    if (rendered.success) {
+      expect(rendered.svg).toContain('data-constraint-id="horizontal&quot;&lt;&amp;" data-constraint-kind="horizontal" data-constraint-owner="constraint-sketch"');
+      expect(rendered.svg).toContain(">H</text>"); expect(rendered.svg).toContain(">V</text>"); expect(rendered.svg).toContain(">⊥</text>"); expect(rendered.svg).toContain(">M</text>");
+      expect(rendered.svg).toContain('pointer-events="none"');
+      const moved = renderSvg(withElements(createDocument("constraint-glyphs", [layer]), [sketch(nodes.map((node) => node.id === "b" ? { ...node, point: { x: 20, y: 0 } } : node), [...edges].reverse())]), { zoom: 1, panMm: { x: 0, y: 0 } });
+      expect(moved.success).toBe(true);
+      if (moved.success) {
+        const movedAnchor = moved.svg.match(/data-constraint-id="midpoint"[^>]*transform="([^"]+)"/)?.[1];
+        const originalAnchor = rendered.svg.match(/data-constraint-id="midpoint"[^>]*transform="([^"]+)"/)?.[1];
+        expect(movedAnchor).not.toBe(originalAnchor);
+      }
+      const reordered = renderSvg(withElements(createDocument("constraint-glyphs", [layer]), [sketch([...nodes].reverse(), [...edges].reverse())]), { zoom: 1, panMm: { x: 0, y: 0 } });
+      expect(reordered.success).toBe(true);
+      if (reordered.success) {
+        expect(reordered.svg.match(/data-constraint-id=/g)).toHaveLength(rendered.svg.match(/data-constraint-id=/g)!.length);
+        expect(reordered.svg).toContain('data-constraint-id="perpendicular"');
+        expect(reordered.svg.match(/data-constraint-id="midpoint"[^>]*transform="([^"]+)"/)?.[1]).toBe(rendered.svg.match(/data-constraint-id="midpoint"[^>]*transform="([^"]+)"/)?.[1]);
+      }
+      const exported = renderSvg(source, { zoom: 1, panMm: { x: 0, y: 0 } }, { mode: "export" });
+      expect(exported.success && exported.svg).not.toContain("data-constraint-id");
+      const hidden = { ...source, layers: [{ ...layer, visible: false }] };
+      const hiddenResult = renderSvg(hidden, { zoom: 1, panMm: { x: 0, y: 0 } });
+      expect(hiddenResult.success && hiddenResult.svg).not.toContain("data-constraint-id");
+    }
+  });
+  it("renders a cross-sketch document constraint only on its first referenced sketch", () => {
+    const firstId = elementId("first-sketch");
+    const secondId = elementId("second-sketch");
+    const first = { type: "sketch" as const, id: firstId, layerId: layer.id, nodes: [{ id: "a", point: { x: 0, y: 0 } }, { id: "b", point: { x: 10, y: 0 } }], edges: [{ id: "ab", startNodeId: "a", endNodeId: "b" }], style };
+    const visibleLayer = { ...layer, id: layerId("visible"), order: 1 } as const;
+    const second = { type: "sketch" as const, id: secondId, layerId: visibleLayer.id, nodes: [{ id: "c", point: { x: 20, y: 0 } }, { id: "d", point: { x: 20, y: 10 } }], edges: [{ id: "cd", startNodeId: "c", endNodeId: "d" }], style };
+    const constraint = { id: "cross-perpendicular", kind: "perpendicular" as const, references: [{ elementId: firstId, edgeId: "ab" }, { elementId: secondId, edgeId: "cd" }] as const };
+    const source = { ...withElements(createDocument("cross-constraint", [layer, visibleLayer]), [first, second]), constraints: [constraint] };
+    const rendered = renderSvg(source, { zoom: 1, panMm: { x: 0, y: 0 } });
+    expect(rendered.success).toBe(true);
+    if (rendered.success) {
+      expect(rendered.svg.match(/data-constraint-id="cross-perpendicular"/g)).toHaveLength(1);
+      expect(rendered.svg).toContain('data-constraint-owner="first-sketch"');
+    }
+    const hiddenOwner = { ...source, layers: [{ ...layer, visible: false }, visibleLayer] };
+    const hiddenResult = renderSvg(hiddenOwner, { zoom: 1, panMm: { x: 0, y: 0 } });
+    expect(hiddenResult.success && hiddenResult.svg).not.toContain("cross-perpendicular");
+  });
+
   it("renders supported primitives using mm geometry converted through the viewport", () => {
     const result = renderSvg(document(), { zoom: 2, panMm: { x: 5, y: 10 } });
     expect(result.success).toBe(true);
