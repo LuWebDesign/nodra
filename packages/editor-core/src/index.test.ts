@@ -634,6 +634,49 @@ describe("editor core", () => {
     expect(dispatch(conflict, appendSketchEdge(fixedSketch.id, "b", { x: 20, y: 8 }, "c", conflictCandidate))).toBe(conflict);
   });
 
+  it("honors explicit line relation intent while preserving inferred legacy behavior", () => {
+    const legacy = createSketchLine(elementId("intent-legacy"), rectangle.layerId, rectangle.style, { x: 0, y: 0 }, { x: 10, y: 0 });
+    expect(legacy.constraints?.[0]?.kind).toBe("horizontal");
+    const none = createSketchLine(elementId("intent-none"), rectangle.layerId, rectangle.style, { x: 0, y: 0 }, { x: 10, y: 0 }, { kind: "none" });
+    expect(none.constraints).toBeUndefined();
+    const explicitVertical = createSketchLine(elementId("intent-vertical"), rectangle.layerId, rectangle.style, { x: 0, y: 0 }, { x: 10, y: 3 }, { kind: "vertical" });
+    expect(explicitVertical.constraints?.[0]).toMatchObject({ kind: "vertical", references: [{ elementId: explicitVertical.id, nodeId: explicitVertical.nodes[0]!.id }, { elementId: explicitVertical.id, nodeId: explicitVertical.nodes[1]!.id }] });
+
+    const initial = createEditor({ ...document, elements: [none] });
+    const appendedNone = dispatch(initial, appendSketchEdge(none.id, none.nodes[1]!.id, { x: 10, y: 10 }, undefined, undefined, { kind: "none" }));
+    expect((appendedNone.document.elements[0] as SketchElement).constraints).toBeUndefined();
+    const appendedHorizontal = dispatch(initial, appendSketchEdge(none.id, none.nodes[1]!.id, { x: 15, y: 4 }, undefined, undefined, { kind: "horizontal" }));
+    const resultSketch = appendedHorizontal.document.elements[0] as SketchElement;
+    expect(resultSketch.constraints?.[0]).toMatchObject({ kind: "horizontal", references: [{ elementId: none.id, nodeId: resultSketch.edges[1]!.startNodeId }, { elementId: none.id, nodeId: resultSketch.edges[1]!.endNodeId }] });
+    expect(dispatch(initial, appendSketchEdge(none.id, none.nodes[1]!.id, { x: 10, y: 10 }, undefined, { kind: "midpoint", references: [{ elementId: none.id, edgeId: "missing" }] }, { kind: "none" }))).toBe(initial);
+  });
+
+  it("appends an explicitly perpendicular edge using stable edge references and one undoable kernel mutation", () => {
+    const base = createSketchLine(elementId("intent-perpendicular"), rectangle.layerId, rectangle.style, { x: 0, y: 0 }, { x: 10, y: 2 }, { kind: "none" });
+    const initial = createEditor({ ...document, elements: [base] });
+    const changed = dispatch(initial, appendSketchEdge(base.id, base.nodes[1]!.id, { x: 12, y: 12 }, undefined, undefined, { kind: "perpendicular", sourceEdgeId: base.edges[0]!.id }));
+    const resultSketch = changed.document.elements[0] as SketchElement;
+    const relation = resultSketch.constraints?.at(-1);
+    expect(relation).toMatchObject({ kind: "perpendicular", references: [{ elementId: base.id, edgeId: base.edges[0]!.id }, { elementId: base.id, edgeId: resultSketch.edges[1]!.id }] });
+    expect(relation?.references.every((reference) => "edgeId" in reference)).toBe(true);
+    expect(resultSketch.constraints).toHaveLength(1);
+    expect(changed.undo).toHaveLength(1);
+    expect(undo(changed).document).toEqual(initial.document);
+
+    const disconnected = { ...base, nodes: [...base.nodes, { id: "unconnected", point: { x: 30, y: 30 } }] };
+    const degenerate = { ...base, nodes: [{ id: "a", point: { x: 0, y: 0 } }, { id: "b", point: { x: 0, y: 0 } }] };
+    for (const [sketch, fromNodeId, sourceEdgeId] of [
+      [base, base.nodes[1]!.id, "missing-edge"],
+      [disconnected, "unconnected", base.edges[0]!.id],
+      [degenerate, "b", base.edges[0]!.id],
+    ] as const) {
+      const state = createEditor({ ...document, elements: [sketch] });
+      const rejected = dispatch(state, appendSketchEdge(sketch.id, fromNodeId, { x: 10, y: 10 }, undefined, undefined, { kind: "perpendicular", sourceEdgeId }));
+      expect(rejected).toBe(state);
+      expect(rejected.undo).toHaveLength(0);
+    }
+  });
+
       it("creates sketch edges by reusing shared nodes", () => {
     const sketch = createSketchLine(elementId("sketch"), layerId("default"), rectangle.style, { x: 0, y: 0 }, { x: 10, y: 0 });
     const initial = createEditor({ ...document, elements: [sketch] });

@@ -1,9 +1,59 @@
 import { describe, expect, it } from "vitest";
 import { createDocument, elementId, layerId, type DocumentSnapshot } from "@nodra/domain";
 import { validateDocument } from "@nodra/validation";
-import { canActivateRotation, circleGeometry, centerPageInCanvas, clientPointToCanvas, clientPointToPage, creationGuides, directionalGuide, hasNonCollinearPoints, hoveredSelectionCenter, INITIAL_ZOOM, isDrawingTool, marqueeSelection, MAX_ZOOM, MIN_ZOOM, movementExceedsThreshold, nodeAlignmentGuides, normalizeBounds, normalizeDrag, pagePointToScreen, screenDeltaToMm, screenPointToMm, viewportPointToCanvas, containsBounds, elementsContainedBy, pickDimensionTarget, pickElement, pickFormaElement, pickFormaNode, pickFormaSegment, pickHoverNode, pickCutIntervalPreview, pickCuttableSegment, pickNode, pointerDownIntent, selectedNodeAnchor, selectionCenter, selectionFrame, snapCreationPoint, snapMoveDelta, visibleEditablePathNodeIndexes, visibleNativeCircularCenters, zoomAtPoint } from "./interaction.js";
+import { canActivateRotation, circleGeometry, centerPageInCanvas, clientPointToCanvas, clientPointToPage, creationGuides, directionalGuide, resolveLineInference, hasNonCollinearPoints, hoveredSelectionCenter, INITIAL_ZOOM, isDrawingTool, marqueeSelection, MAX_ZOOM, MIN_ZOOM, movementExceedsThreshold, nodeAlignmentGuides, normalizeBounds, normalizeDrag, pagePointToScreen, screenDeltaToMm, screenPointToMm, viewportPointToCanvas, containsBounds, elementsContainedBy, pickDimensionTarget, pickElement, pickFormaElement, pickFormaNode, pickFormaSegment, pickHoverNode, pickCutIntervalPreview, pickCuttableSegment, pickNode, pointerDownIntent, selectedNodeAnchor, selectionCenter, selectionFrame, snapCreationPoint, snapMoveDelta, visibleEditablePathNodeIndexes, visibleNativeCircularCenters, zoomAtPoint } from "./interaction.js";
 import { geometryPatch, geometryValue } from "./propertyBar.js";
 import { dimensionKindForNodes, dimensionOffsetForPlacement, pointMidpoint, sketchProfileResult } from "@nodra/geometry";
+
+describe("Line inference resolver", () => {
+  const layer = { id: layerId("infer-line"), name: "Sketch", visible: true, order: 0 };
+  const sketch = { type: "sketch" as const, id: elementId("infer-sketch"), layerId: layer.id, nodes: [{ id: "a", point: { x: 0, y: 0 } }, { id: "b", point: { x: 20, y: 0 } }], edges: [{ id: "ab", startNodeId: "a", endNodeId: "b" }], style: { stroke: "#000", strokeWidth: 1 } };
+  const document = { ...createDocument("infer-doc", [layer]), elements: [sketch] };
+  const input = { document, pointer: { x: 10, y: 1 }, zoom: 1, activeSketchId: sketch.id, origin: { x: 0, y: 10 } };
+
+  it("prefers a real node then resolves the active sketch edge midpoint with stable sources", () => {
+    expect(resolveLineInference({ ...input, pointer: { x: 0, y: 0 } })).toMatchObject({ kind: "node", sourceIds: [sketch.id, "a"], nodeId: "a" });
+    expect(resolveLineInference(input)).toMatchObject({ kind: "midpoint", point: { x: 10, y: 0 }, sourceIds: [sketch.id, "ab"] });
+  });
+  it("resolves first-click nodes and centers without sketch or origin context", () => {
+    const visible = { id: layerId("first-click"), name: "Visible", visible: true, order: 0 };
+    const line = { type: "line" as const, id: elementId("first-click-line"), layerId: visible.id, start: { x: 0, y: 0 }, end: { x: 10, y: 0 }, rotation: 0, style: { stroke: "#000", strokeWidth: 1 } };
+    const circle = { type: "circle" as const, id: elementId("first-click-circle"), layerId: visible.id, center: { x: 30, y: 0 }, radius: 5, style: line.style };
+    const emptyDocument = { ...createDocument("first-click-empty", [visible]), elements: [] };
+    const doc = { ...createDocument("first-click-document", [visible]), elements: [line, circle] };
+    expect(resolveLineInference({ document: doc, pointer: { x: 0, y: 0 }, zoom: 1 })).toMatchObject({ kind: "node", point: line.start, sourceIds: [line.id, "start"] });
+    expect(resolveLineInference({ document: doc, pointer: { x: 30, y: 0 }, zoom: 1, tolerancePx: 1 })).toMatchObject({ kind: "center", point: circle.center, sourceIds: [circle.id, "center"] });
+    expect(resolveLineInference({ document: emptyDocument, pointer: { x: 30, y: 0 }, zoom: 1 })).toBeUndefined();
+  });
+  it("resolves angular snaps only within the configured direction tolerance", () => {
+    const empty = { ...input, document: { ...document, elements: [] }, origin: { x: 0, y: 0 }, pointer: { x: 10, y: 2.5 }, tolerancePx: 8, axisTolerancePx: 0.1 };
+    expect(resolveLineInference(empty)?.kind).toBe("angular");
+    expect(resolveLineInference({ ...empty, lineGuidesEnabled: false })?.kind).not.toBe("angular");
+    expect(resolveLineInference({ ...empty, pointer: { x: 10, y: 1 } })).toBeUndefined();
+    expect(resolveLineInference({ ...empty, pointer: { x: 10, y: 0 } })?.kind).not.toBe("angular");
+    for (const pointer of [{ x: -10, y: 0 }, { x: 0, y: -10 }]) {
+      expect(resolveLineInference({ ...empty, pointer, angleIncrementDegrees: 90, angularToleranceDegrees: 5, axisTolerancePx: 0 })?.kind).not.toBe("angular");
+    }
+  });
+  it("uses the origin axis, ignores hidden and foreign-sketch midpoints, and retains hysteresis", () => {
+    expect(resolveLineInference({ ...input, pointer: { x: 10, y: 10 } })).toMatchObject({ kind: "axis", point: { x: 10, y: 10 } });
+    const noGeometry = { ...input, document: { ...document, elements: [] }, origin: { x: 0, y: 0 }, angularToleranceDegrees: 0.5 };
+    const axis = resolveLineInference({ ...noGeometry, pointer: { x: 0.5, y: 5 }, axisTolerancePx: 1 })!;
+    expect(axis.kind).toBe("axis");
+    expect(resolveLineInference({ ...noGeometry, pointer: { x: 1.6, y: 5 }, axisTolerancePx: 1, priorCandidate: axis })).toBeUndefined();
+    const foreign = { ...sketch, id: elementId("foreign-sketch") };
+    expect(resolveLineInference({ ...input, document: { ...document, elements: [foreign] }, pointer: { x: 10, y: 1 } })?.kind).not.toBe("midpoint");
+    const midpoint = resolveLineInference(input)!;
+    expect(resolveLineInference({ ...input, pointer: { x: 10, y: 5 }, priorCandidate: midpoint })?.kind).toBe("midpoint");
+    expect(resolveLineInference({ ...input, pointer: { x: 10, y: 9 }, priorCandidate: midpoint })?.kind).toBe("midpoint");
+    expect(resolveLineInference({ ...input, document: { ...document, layers: [{ ...layer, visible: false }] } })?.kind).not.toBe("midpoint");
+  });
+  it("projects perpendicular to the known preceding same-sketch edge", () => {
+    const bent = { ...sketch, nodes: [{ id: "a", point: { x: 0, y: 0 } }, { id: "b", point: { x: 20, y: 0 } }] };
+    const result = resolveLineInference({ ...input, document: { ...document, elements: [bent] }, origin: { x: 20, y: 0 }, originNodeId: "b", priorEdgeId: "ab", pointer: { x: 23, y: 4 }, tolerancePx: 3, axisTolerancePx: 0.1 });
+    expect(result).toMatchObject({ kind: "perpendicular", point: { x: 20, y: 4 }, sourceIds: [bent.id, "ab"] });
+  });
+});
 
 describe("native center datums", () => {
   it("returns only visible native circle and arc centers", () => {
