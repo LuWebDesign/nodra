@@ -77,6 +77,10 @@ export type AutomaticSketchRelationCandidate =
   | Readonly<{ readonly kind: "horizontal" | "vertical" | "perpendicular"; readonly references: SketchConstraint["references"] }>
   | Readonly<{ readonly kind: "midpoint"; readonly references: readonly [Extract<SketchConstraintReference, { readonly edgeId: string }>] }>;
 
+/** Explicit relation intent at the sketch-edge command boundary. */
+export type LineSketchRelationIntent = Readonly<{ readonly kind: "none" | "horizontal" | "vertical" }> | Readonly<{ readonly kind: "perpendicular"; readonly sourceEdgeId: string }>;
+type FirstLineSketchRelationIntent = Exclude<LineSketchRelationIntent, { readonly kind: "perpendicular" }>;
+
 const result = (document: DocumentSnapshot): CommandResult => {
   const checked = validateDocument(document);
   return checked.success
@@ -492,10 +496,11 @@ export const topologyEditForPathSegmentReplacement = (elements: readonly Element
   const originalReference = pathSegmentReference(pathId, originalSegmentId);
   return topologyEditForReferenceDestinations(elements, [originalReference], new Map([[topologyReferenceKey(originalReference), replacements.map((segment) => pathSegmentReference(pathId, segment.id))]]), "Path segment was removed");
 };
-export const createSketchLine = (sketchId: ElementId, layer: LayerId, style: VisualStyle, start: PointMm, end: PointMm): SketchElement => {
+export const createSketchLine = (sketchId: ElementId, layer: LayerId, style: VisualStyle, start: PointMm, end: PointMm, intent?: FirstLineSketchRelationIntent): SketchElement => {
   const startNodeId = sketchNodeId(); const endNodeId = sketchNodeId();
   const edgeId = sketchEdgeId(); const dx = Math.abs(end.x - start.x); const dy = Math.abs(end.y - start.y);
-  const relationKind = dy <= dx * 0.1 ? "horizontal" : dx <= dy * 0.1 ? "vertical" : undefined;
+  const inferredKind = dy <= dx * 0.1 ? "horizontal" : dx <= dy * 0.1 ? "vertical" : undefined;
+  const relationKind = intent ? intent.kind === "none" ? undefined : intent.kind : inferredKind;
   const relation: SketchConstraint | undefined = relationKind ? { id: `auto:${edgeId}:${relationKind}`, kind: relationKind, references: [{ elementId: sketchId, nodeId: startNodeId }, { elementId: sketchId, nodeId: endNodeId }] } : undefined;
   return { type: "sketch", id: sketchId, layerId: layer, nodes: [{ id: startNodeId, point: start }, { id: endNodeId, point: end }], edges: [{ id: edgeId, startNodeId, endNodeId }], ...(relation ? { constraints: [relation] } : {}), style };
 };
@@ -529,7 +534,7 @@ export const deleteDocumentConstraint = (constraintId: string): EditorCommand =>
   },
 });
 
-export const appendSketchEdge = (sketchId: ElementId, fromNodeId: string, point: PointMm, toNodeId?: string, candidate?: AutomaticSketchRelationCandidate): EditorCommand => ({
+export const appendSketchEdge = (sketchId: ElementId, fromNodeId: string, point: PointMm, toNodeId?: string, candidate?: AutomaticSketchRelationCandidate, intent?: LineSketchRelationIntent): EditorCommand => ({
   name: `sketch-create-edge:${sketchId}`,
   apply: (document) => {
     const sketch = document.elements.find((element): element is SketchElement => element.id === sketchId && element.type === "sketch");
@@ -544,7 +549,15 @@ export const appendSketchEdge = (sketchId: ElementId, fromNodeId: string, point:
     const start = sketch.nodes.find((node) => node.id === fromNodeId)!.point;
     const end = existingTarget?.point ?? point;
     const dx = Math.abs(end.x - start.x); const dy = Math.abs(end.y - start.y);
-    const relationKind = dy <= dx * 0.1 ? "horizontal" : dx <= dy * 0.1 ? "vertical" : undefined;
+    const inferredKind = dy <= dx * 0.1 ? "horizontal" : dx <= dy * 0.1 ? "vertical" : undefined;
+    if (candidate && intent) return { success: false, error: "Automatic candidate and explicit line relation intent are mutually exclusive" };
+    const perpendicularSource = intent?.kind === "perpendicular" ? sketch.edges.find((edge) => edge.id === intent.sourceEdgeId) : undefined;
+    if (intent?.kind === "perpendicular") {
+      const sourceStart = perpendicularSource && sketch.nodes.find((node) => node.id === perpendicularSource.startNodeId)?.point;
+      const sourceEnd = perpendicularSource && sketch.nodes.find((node) => node.id === perpendicularSource.endNodeId)?.point;
+      if (!perpendicularSource || ![perpendicularSource.startNodeId, perpendicularSource.endNodeId].includes(fromNodeId) || !sourceStart || !sourceEnd || Math.hypot(sourceEnd.x - sourceStart.x, sourceEnd.y - sourceStart.y) <= 1e-9) return { success: false, error: "Perpendicular source edge must exist, be connected to the start node, and be nondegenerate" };
+    }
+    const relationKind = intent ? intent.kind === "none" || intent.kind === "perpendicular" ? undefined : intent.kind : inferredKind;
     const previous = sketch.edges.at(-1);
     const previousStart = previous ? sketch.nodes.find((node) => node.id === previous.startNodeId)?.point : undefined;
     const previousEnd = previous ? sketch.nodes.find((node) => node.id === previous.endNodeId)?.point : undefined;
@@ -555,8 +568,14 @@ export const appendSketchEdge = (sketchId: ElementId, fromNodeId: string, point:
     const axisRelationsAlreadyPerpendicular = relationKind !== undefined && previousRelationKind !== undefined && relationKind !== previousRelationKind;
     const inferredPerpendicular = !axisRelationsAlreadyPerpendicular && previous && previousEnd && previousStart && Math.hypot(previousDx, previousDy) > 1e-9 && Math.hypot(currentDx, currentDy) > 1e-9 && Math.abs(previousDx * currentDx + previousDy * currentDy) <= Math.hypot(previousDx, previousDy) * Math.hypot(currentDx, currentDy) * 0.1 ? { id: `auto:${edgeId}:perpendicular`, kind: "perpendicular" as const, references: [{ elementId: sketch.id, nodeId: previous.startNodeId }, { elementId: sketch.id, nodeId: previous.endNodeId }, { elementId: sketch.id, nodeId: fromNodeId }, { elementId: sketch.id, nodeId: endNodeId }] as const } : undefined;
     const inferredAxis: SketchConstraint | undefined = relationKind ? { id: `auto:${edgeId}:${relationKind}`, kind: relationKind, references: [{ elementId: sketch.id, nodeId: fromNodeId }, { elementId: sketch.id, nodeId: endNodeId }] } : undefined;
-    const autoRelations = candidate ? [] : [inferredAxis, inferredPerpendicular].filter((relation): relation is SketchConstraint => relation !== undefined);
+    const autoRelations = candidate || intent?.kind === "none" || intent?.kind === "perpendicular" ? [] : intent ? [inferredAxis].filter((relation): relation is SketchConstraint => relation !== undefined) : [inferredAxis, inferredPerpendicular].filter((relation): relation is SketchConstraint => relation !== undefined);
     const next: SketchElement = { ...sketch, nodes: existingTarget ? sketch.nodes : [...sketch.nodes, { id: endNodeId, point }], edges: [...sketch.edges, { id: edgeId, startNodeId: fromNodeId, endNodeId }], ...(autoRelations.length ? { constraints: [...(sketch.constraints ?? []), ...autoRelations] } : {}) };
+    if (intent?.kind === "perpendicular") {
+      if (Math.hypot(currentDx, currentDy) <= 1e-9) return { success: false, error: "Perpendicular target edge must be nondegenerate" };
+      const relation: SketchConstraint = { id: `auto:${edgeId}:perpendicular`, kind: "perpendicular", references: [{ elementId: sketch.id, edgeId: perpendicularSource!.id }, { elementId: sketch.id, edgeId }] };
+      const constrained: SketchElement = { ...next, constraints: [...(next.constraints ?? []), relation] };
+      return replaceSketchElements(document, document.elements.map((element) => element.id === sketchId ? constrained : element));
+    }
     if (!candidate) return replaceSketchElements(document, document.elements.map((element) => element.id === sketchId ? next : element));
     if (candidate.kind === "midpoint") {
       if (!Array.isArray(candidate.references) || candidate.references.length !== 1) return { success: false, error: "Midpoint candidate requires an existing sketch edge" };

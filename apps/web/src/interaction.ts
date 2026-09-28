@@ -14,6 +14,23 @@ export interface CircleGeometry { readonly position: PointMm; readonly size: { r
 export interface CreationGuide { readonly source: PointMm; readonly target: PointMm; readonly kind: "node" | "center" }
 export interface DirectionalGuide { readonly source: PointMm; readonly target: PointMm; readonly angle: number; readonly snappedPoint: PointMm }
 export interface CreationSnap { readonly point: PointMm; readonly kind: "node" | "center"; readonly node?: NodeHit; readonly address?: import("@nodra/domain").ConnectableNodeAddress }
+export type LineInferenceKind = "node" | "center" | "midpoint" | "axis" | "angular" | "perpendicular";
+export interface LineInferenceCandidate { readonly point: PointMm; readonly kind: LineInferenceKind; readonly sourceIds: readonly string[]; readonly guides: readonly CreationGuide[]; readonly axis?: "vertical" | "horizontal"; readonly nodeId?: string }
+export interface LineInferenceInput {
+  readonly document: DocumentSnapshot;
+  readonly pointer: PointMm;
+  readonly zoom: number;
+  readonly activeSketchId?: ElementId;
+  readonly origin?: PointMm;
+  readonly originNodeId?: string;
+  readonly priorEdgeId?: string;
+  readonly angleIncrementDegrees?: number;
+  readonly angularToleranceDegrees?: number;
+  readonly lineGuidesEnabled?: boolean;
+  readonly priorCandidate?: LineInferenceCandidate;
+  readonly tolerancePx?: number;
+  readonly axisTolerancePx?: number;
+}
 export interface SnapGuide { readonly source: PointMm; readonly target: PointMm }
 export interface SnapMoveResult { readonly delta: PointMm; readonly guide: SnapGuide | undefined }
 export type AlignmentGuideOrientation = "vertical" | "horizontal";
@@ -382,6 +399,70 @@ export function snapCreationPoint(document: DocumentSnapshot, point: PointMm, zo
 export function creationGuides(document: DocumentSnapshot, point: PointMm, zoom: number, tolerancePx = 8): readonly CreationGuide[] {
   const snap = snapCreationPoint(document, point, zoom, tolerancePx);
   return snap ? [{ source: point, target: snap.point, kind: snap.kind }] : [];
+}
+
+/** Resolves visual-only candidates for Line construction. Hover never changes the document. */
+export function resolveLineInference(input: LineInferenceInput): LineInferenceCandidate | undefined {
+  const { document, pointer, zoom, activeSketchId, origin } = input;
+  const tolerance = input.tolerancePx ?? 8;
+  const axisTolerance = input.axisTolerancePx ?? tolerance;
+  if (![pointer.x, pointer.y, zoom, tolerance, axisTolerance, ...(origin ? [origin.x, origin.y] : [])].every(Number.isFinite) || zoom <= 0 || tolerance < 0 || axisTolerance < 0) throw new Error("line inference coordinates and tolerances must be valid");
+  const visible = new Set(document.layers.filter((layer) => layer.visible).map((layer) => layer.id));
+  const candidates: { candidate: LineInferenceCandidate; distance: number; priority: number; order: string }[] = [];
+  const prior = input.priorCandidate;
+  const sameCandidate = (candidate: LineInferenceCandidate): boolean => !!prior && candidate.kind === prior.kind && candidate.sourceIds.join("/") === prior.sourceIds.join("/") && candidate.axis === prior.axis && candidate.nodeId === prior.nodeId;
+  const add = (candidate: LineInferenceCandidate, distance: number, priority: number, order: string, limit = tolerance): void => {
+    const cap = sameCandidate(candidate) ? (candidate.kind === "axis" ? axisTolerance : tolerance) * 1.5 : limit;
+    if (distance * zoom <= cap) candidates.push({ candidate, distance, priority, order });
+  };
+  for (const element of document.elements) if (visible.has(element.layerId)) {
+    for (const [index, node] of realGeometryNodes(element).entries()) {
+      if (element.id === activeSketchId && node.nodeId === input.originNodeId) continue;
+      const kind = node.kind === "center" ? "center" : "node";
+      const distance = Math.hypot(pointer.x - node.point.x, pointer.y - node.point.y);
+      add({ point: node.point, kind, sourceIds: [element.id, node.nodeId ?? String(index)], guides: [{ source: pointer, target: node.point, kind }], ...(node.nodeId ? { nodeId: node.nodeId } : {}) }, distance, kind === "node" ? 0 : 1, `${element.id}:${index}`);
+    }
+  }
+  for (const center of visibleNativeCircularCenters(document)) {
+    const distance = Math.hypot(pointer.x - center.point.x, pointer.y - center.point.y);
+    add({ point: center.point, kind: "center", sourceIds: [center.elementId, "center"], guides: [{ source: pointer, target: center.point, kind: "center" }] }, distance, 1, `${center.elementId}:center`);
+  }
+  const sketch = activeSketchId ? document.elements.find((element) => element.type === "sketch" && element.id === activeSketchId && visible.has(element.layerId)) : undefined;
+  if (sketch?.type === "sketch") for (const edge of sketch.edges) {
+    const start = sketch.nodes.find((node) => node.id === edge.startNodeId)?.point;
+    const end = sketch.nodes.find((node) => node.id === edge.endNodeId)?.point;
+    if (!start || !end) continue;
+    const point = { x: (start.x + end.x) / 2, y: (start.y + end.y) / 2 };
+    add({ point, kind: "midpoint", sourceIds: [sketch.id, edge.id], guides: [{ source: pointer, target: point, kind: "node" }] }, Math.hypot(pointer.x - point.x, pointer.y - point.y), 2, `${sketch.id}:${edge.id}`);
+  }
+  if (origin) for (const [axis, value] of [["vertical", origin.x], ["horizontal", origin.y]] as const) {
+    const point = axis === "vertical" ? { x: value, y: pointer.y } : { x: pointer.x, y: value };
+    const distance = axis === "vertical" ? Math.abs(pointer.x - value) : Math.abs(pointer.y - value);
+    add({ point, kind: "axis", sourceIds: activeSketchId ? [activeSketchId] : [], guides: [{ source: origin, target: point, kind: "node" }], axis }, distance, 3, axis, axisTolerance);
+  }
+  const angle = origin && input.lineGuidesEnabled !== false ? directionalGuide(origin, pointer, input.angleIncrementDegrees ?? 15, input.angularToleranceDegrees ?? 5) : undefined;
+  const cardinalDistance = angle ? Math.min(...[0, 90, 180, 270].map((cardinal) => Math.abs(((angle.angle - cardinal + 180) % 360 + 360) % 360 - 180))) : 0;
+  if (angle && origin && cardinalDistance > 1e-9) {
+    const perpendicularDistance = Math.abs((pointer.x - origin.x) * Math.sin(angle.angle * Math.PI / 180) - (pointer.y - origin.y) * Math.cos(angle.angle * Math.PI / 180));
+    add({ point: angle.snappedPoint, kind: "angular", sourceIds: activeSketchId ? [activeSketchId] : [], guides: [{ source: origin!, target: angle.snappedPoint, kind: "node" }] }, perpendicularDistance, 4, `${angle.angle}`);
+  }
+  const priorEdge = origin && activeSketchId && sketch?.type === "sketch" && input.priorEdgeId ? sketch.edges.find((edge) => edge.id === input.priorEdgeId && (edge.startNodeId === input.originNodeId || edge.endNodeId === input.originNodeId)) : undefined;
+  const priorOtherNodeId = priorEdge && (priorEdge.startNodeId === input.originNodeId ? priorEdge.endNodeId : priorEdge.startNodeId);
+  const priorOther = priorOtherNodeId ? sketch?.type === "sketch" ? sketch.nodes.find((node) => node.id === priorOtherNodeId)?.point : undefined : undefined;
+  if (origin && activeSketchId && priorEdge && priorOther) {
+    const dx = priorOther.x - origin.x; const dy = priorOther.y - origin.y; const length = Math.hypot(dx, dy);
+    if (length > 0) {
+      const ux = -dy / length; const uy = dx / length; const amount = (pointer.x - origin.x) * ux + (pointer.y - origin.y) * uy;
+      const point = { x: origin.x + amount * ux, y: origin.y + amount * uy };
+      add({ point, kind: "perpendicular", sourceIds: [activeSketchId, priorEdge.id], guides: [{ source: origin, target: point, kind: "node" }] }, Math.hypot(pointer.x - point.x, pointer.y - point.y), 5, `${activeSketchId}:${priorEdge.id}`);
+    }
+  }
+  candidates.sort((a, b) => a.priority - b.priority || a.distance - b.distance || a.order.localeCompare(b.order));
+  const best = candidates[0];
+  if (!best) return undefined;
+  const retained = candidates.find((entry) => sameCandidate(entry.candidate));
+  if (retained && (retained.priority < best.priority || retained.priority === best.priority && retained.distance <= best.distance * 1.5)) return retained.candidate;
+  return best.candidate;
 }
 
 /** Returns the live direction angle from a line origin to the pointer. */

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent, type PointerEvent, type ReactNode, type WheelEvent } from "react";
 import { createDocument, createEmptyProject, createProject, documentFromProject, elementId, layerId, pageId, projectFromDocument, projectPage, type DocumentSnapshot, hasRotation, type ArcElement, type DimensionElement, type Element, type SketchConstraint, type ElementId, type PieceId, type PointMm, type ProjectSnapshot, type SplineElement, type TextElement, type ExplicitConnection } from "@nodra/domain";
-import { deleteDocumentConstraint, addPositionalCoincidence, deletePositionalCoincidence, addSketchConstraint, addToSelection, appendSketchEdge, appendSplineNode, beginGesture, cancelGesture, clearSelection, closePath, trimSegment, trimPreview, closeSplineElement, commitGesture, convertTextToGlyphs, createElement, createPathCubicNode, createPathNode, createSketchLine, deleteContourNodes, deleteElement, deleteElementNodes, deletePathNodes, deleteSketchConstraint, dispatch, duplicateElements, flipElements, insertFormaNode, invalidDimensionIdsForShapeOperation, moveElements, movePathHandle, movePathNode, openPath, updateSplineNode, previewGesture, previewGestureFromBase, redo, resizeElement, resizeElementToDimensions, resizeElements, resizeElementsToDimensions, rotateElement, updateDimensionValue, setDimensionDriving, setGeometryRole, rotateElementsAroundCenter, select, selectForPointerDown, setPathJoin, shapeOperation, splitPathSegment, undo, updateContourNode, updateElement, updateElementNode, updateElementStyles, updatePage, updateSketchConstraint, updateSplineHandle, type EditorCommand, type FlipAxis, type ShapeOperation, profileScopeForSelection, profileScopeForPiece, type TrimTarget, dimensionDrivingCapability } from "@nodra/editor-core";
+import { deleteDocumentConstraint, addPositionalCoincidence, deletePositionalCoincidence, addSketchConstraint, addToSelection, appendSketchEdge, appendSplineNode, beginGesture, cancelGesture, clearSelection, closePath, trimSegment, trimPreview, closeSplineElement, commitGesture, convertTextToGlyphs, createElement, createPathCubicNode, createPathNode, createSketchLine, deleteContourNodes, deleteElement, deleteElementNodes, deletePathNodes, deleteSketchConstraint, dispatch, duplicateElements, flipElements, insertFormaNode, invalidDimensionIdsForShapeOperation, moveElements, movePathHandle, movePathNode, openPath, updateSplineNode, previewGesture, previewGestureFromBase, redo, resizeElement, resizeElementToDimensions, resizeElements, resizeElementsToDimensions, rotateElement, updateDimensionValue, setDimensionDriving, setGeometryRole, rotateElementsAroundCenter, select, selectForPointerDown, setPathJoin, shapeOperation, splitPathSegment, undo, updateContourNode, updateElement, updateElementNode, updateElementStyles, updatePage, updateSketchConstraint, updateSplineHandle, type EditorCommand, type FlipAxis, type LineSketchRelationIntent, type ShapeOperation, profileScopeForSelection, profileScopeForPiece, type TrimTarget, dimensionDrivingCapability } from "@nodra/editor-core";
 import { constraintComponentStatesForDocument, constraintResidualsForDocument, type ConstraintState } from "@nodra/constraints";
 import { arcThroughThreePoints, boundsOfElements, connectableNodeAddress, contourVertexNodes, dimensionKindForPlacement, dimensionOffsetForAlignedPlacement, dimensionOffsetForPlacement, elementCenter, editableGeometryNodes, glyphGeometryNodes, groupCenter, groupHandlePoints, pathGeometryNodes, pointMidpoint, dimensionGeometry, realGeometryNodes, sketchProfileResult, solveSketchConstraints, resizeHandle, rotatedResizeHandles, rotationFromDrag, rotationHandlePoints, visibleBezierHandleGuides, type CurveFragment, type Direction, type GroupHandle, type ResizeHandle } from "@nodra/geometry";
 import { DexieProjectRepository, requestStoragePersistence, type FontRecord } from "@nodra/persistence";
@@ -18,7 +18,7 @@ import { pathJoinGuidance, pathJoinOptions } from "./pathJoins.js";
     import type { ProjectMetadata } from "@nodra/persistence";
 import { textSizeFor } from "./textMetrics.js";
 import { extractTextGlyphOutlines, fontFamilyFromFileName, FontOutlineError } from "./fontOutline.js";
-import { circleGeometry, creationGuides, cursorNodeGuides, directionalGuide, lineAngleDegrees, nodeAlignmentGuides, visibleNativeCircularCenters, type CreationGuide } from "./interaction.js";
+import { circleGeometry, creationGuides, directionalGuide, lineAngleDegrees, nodeAlignmentGuides, resolveLineInference, visibleNativeCircularCenters, type CreationGuide, type LineInferenceCandidate } from "./interaction.js";
 import { positionalConnectionPair, type PositionalConnectionPair, type PositionalNodeReference } from "./positionalSelection.js";
 import { pathForView, routeFromPath, type AppView } from "./appLocation.js";
 const defaultFonts = ["Arial", "Helvetica", "Times New Roman", "Courier New", "Inter"] as const;
@@ -176,6 +176,7 @@ export function App() {
   const [cursorPoint, setCursorPoint] = useState<PointMm>();
   const [documentCursorPoint, setDocumentCursorPoint] = useState<PointMm>();
   const [creationPoint, setCreationPoint] = useState<PointMm>();
+  const [lineInference, setLineInference] = useState<LineInferenceCandidate>();
   const [aspectLock, setAspectLock] = useState(false);
   const [cornerRadiusLock, setCornerRadiusLock] = useState(false);
   const [centerHover, setCenterHover] = useState<{ elementId: ElementId; point: PointMm }>();
@@ -269,6 +270,7 @@ export function App() {
   const interaction = useRef<ActiveInteraction | undefined>(undefined);
   const replayingLineClick = useRef(false);
   const creationDraftRef = useRef<CreationDraft | undefined>(undefined);
+  const lineInferenceRef = useRef<LineInferenceCandidate | undefined>(undefined);
       const releasePointerCapture = (pointerId: number) => {
         const target = canvas.current;
         if (!target) return;
@@ -486,6 +488,7 @@ export function App() {
         creationDraftRef.current = undefined;
         setCreationDraft(undefined);
         setCreationPoint(undefined);
+        lineInferenceRef.current = undefined;
         const active = interaction.current;
         if (!active) return;
         if (active.kind !== "pan") setEditorState(cancelGesture(editorRef.current));
@@ -768,6 +771,7 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
         creationDraftRef.current = undefined;
         setCreationDraft(undefined);
         setCreationPoint(undefined);
+        lineInferenceRef.current = undefined;
         setPenDraftPoint(undefined);
         setSplineDraftPoint(undefined);
         setActiveSplineId(undefined);
@@ -1250,6 +1254,30 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
     return { elementId: hit.elementId, segmentIndex: hit.segmentIndex, point, ...(hit.ringIndex === undefined ? {} : { ringIndex: hit.ringIndex }), scope, profile: sketchProfileResult(scope) };
   };
 
+  const resolveLineCandidate = (pointer: PointMm, draft = creationDraftRef.current) => {
+    if (tool !== "line") return undefined;
+    const sketch = draft?.elementId
+      ? editorRef.current.document.elements.find((element): element is Extract<Element, { type: "sketch" }> => element.id === draft.elementId && element.type === "sketch")
+      : undefined;
+    const priorEdgeId = sketch?.edges.findLast((edge) => edge.startNodeId === draft?.currentNodeId || edge.endNodeId === draft?.currentNodeId)?.id;
+    const origin = draft?.points.at(-1);
+    const candidate = resolveLineInference({
+      document: editorRef.current.document,
+      pointer,
+      zoom,
+      ...(sketch ? { activeSketchId: sketch.id } : {}),
+      ...(origin ? { origin } : {}),
+      ...(draft?.currentNodeId ? { originNodeId: draft.currentNodeId } : {}),
+      ...(priorEdgeId ? { priorEdgeId } : {}),
+      lineGuidesEnabled: project.preferences.lineGuidesEnabled,
+      ...(project.preferences.lineGuidesEnabled ? { angleIncrementDegrees: project.preferences.lineGuideAngle } : {}),
+      ...(lineInferenceRef.current ? { priorCandidate: lineInferenceRef.current } : {}),
+    });
+    lineInferenceRef.current = candidate;
+    setLineInference(candidate);
+    return candidate;
+  };
+
   const onCanvasPointerDown = (event: PointerEvent<HTMLDivElement>) => {
      // Commit before handling the next canvas target. This makes pointer-down
      // the authoritative boundary for a draft instead of relying on blur order.
@@ -1268,7 +1296,7 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
      setCenterHover(undefined);
        setCursorPoint(canvasPointAt(event));
        setDocumentCursorPoint(pointAt(event));
-       if (isDrawingTool(tool)) { const pointer = pointAt(event); const draft = creationDraftRef.current; const direction = project.preferences.lineGuidesEnabled && tool === "line" && draft?.points.length ? directionalGuide(draft.points.at(-1)!, pointer, project.preferences.lineGuideAngle, 3) : undefined; setLineCursorAngle(undefined); setCreationPoint(direction?.snappedPoint ?? pointer); }
+       if (isDrawingTool(tool)) { const pointer = pointAt(event); const draft = creationDraftRef.current; const direction = project.preferences.lineGuidesEnabled && tool === "line" && draft?.points.length ? directionalGuide(draft.points.at(-1)!, pointer, project.preferences.lineGuideAngle, 3) : undefined; setLineCursorAngle(undefined); setCreationPoint(tool === "line" ? resolveLineCandidate(pointer, draft)?.point ?? pointer : direction?.snappedPoint ?? pointer); }
      setSnapGuide(undefined);
      setAlignmentGuideState([]);
      if (tool !== "forma") setEditModeElementIds([]);
@@ -1341,19 +1369,30 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
         return;
       }
       if (tool === "line") {
-        const creationPoint = creationPointForClick ?? point;
         const draft = creationDraftRef.current;
-        const snappedSketchNode = creationSnap?.address?.kind === "sketch" && creationSnap.node ? { elementId: creationSnap.node.elementId, nodeId: creationSnap.address.nodeId } : undefined;
+        const candidate = resolveLineCandidate(point, draft);
+        const creationPoint = candidate?.point ?? point;
+        const candidateSource = candidate?.kind === "node" ? editorRef.current.document.elements.find((element) => element.id === candidate.sourceIds[0]) : undefined;
+        const candidateSnap = candidate?.kind === "node" && candidate.nodeId ? snapCreationPoint(editorRef.current.document, creationPoint, zoom) : undefined;
+        const candidateNode = candidateSource && candidateSnap?.node ? realGeometryNodes(candidateSource).find((node) => node.nodeId === candidate?.nodeId) : undefined;
+        const snappedSketchNode = candidateSource?.type === "sketch" && candidate?.nodeId ? { elementId: candidateSource.id, nodeId: candidate.nodeId } : undefined;
+        const matchingCandidateSnap = candidate && candidateSnap && candidateSnap.node && candidateSnap.node.elementId === candidate.sourceIds[0] && candidateNode?.nodeId === candidate.nodeId && candidateSnap.address && (candidateSnap.address.kind === "sketch" || candidateSnap.address.kind === "path" || candidateSnap.address.kind === "spline") && candidateSnap.address.nodeId === candidate.nodeId ? candidateSnap : undefined;
         if (!draft) {
-          const nextDraft = { tool, points: [creationPoint], pointer: creationPoint, snaps: [creationSnap], ...(snappedSketchNode ? { elementId: snappedSketchNode.elementId, currentNodeId: snappedSketchNode.nodeId } : {}) } as const;
+          const nextDraft = { tool, points: [creationPoint], pointer: creationPoint, snaps: [matchingCandidateSnap], ...(snappedSketchNode ? { elementId: snappedSketchNode.elementId, currentNodeId: snappedSketchNode.nodeId } : {}) } as const;
          creationDraftRef.current = nextDraft;
          setCreationDraft(nextDraft);
+         lineInferenceRef.current = undefined;
        } else if (draft.points.length === 1 && !draft.elementId) {
-          const sketch = createSketchLine(id(), layerId(editorRef.current.document.layers[0]?.id ?? "layer-1"), { ...defaultStyle, strokeWidth: 1.5 }, draft.points[0]!, creationPoint);
-          const next = dispatch(editorRef.current, createElement(sketch, creationConnections(sketch, [...(draft.snaps ?? []), creationSnap])));
-          const nextDraft = { tool, points: [...draft.points, creationPoint], pointer: creationPoint, elementId: sketch.id, currentNodeId: sketch.nodes[1]!.id } as const;
+          const sketch = createSketchLine(id(), layerId(editorRef.current.document.layers[0]?.id ?? "layer-1"), { ...defaultStyle, strokeWidth: 1.5 }, draft.points[0]!, creationPoint, { kind: candidate?.kind === "axis" ? candidate.axis ?? "none" : "none" });
+          const next = dispatch(editorRef.current, createElement(sketch, creationConnections(sketch, [...(draft.snaps ?? []), matchingCandidateSnap])));
+          if (next === editorRef.current) return;
+          const persistedSketch = next.document.elements.find((element): element is Extract<Element, { type: "sketch" }> => element.id === sketch.id && element.type === "sketch");
+          if (!persistedSketch) return;
+          const endNode = persistedSketch.nodes[1]!;
+          const nextDraft = { tool, points: [...draft.points, endNode.point], pointer: endNode.point, elementId: sketch.id, currentNodeId: endNode.id } as const;
          creationDraftRef.current = nextDraft;
          setCreationDraft(nextDraft);
+         lineInferenceRef.current = undefined;
          const selectedNext = select(next, [sketch.id]);
           editorRef.current = selectedNext;
               if (creationPending) {
@@ -1365,14 +1404,32 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
               }
        } else if (draft.elementId && draft.currentNodeId) {
           const targetNodeId = snappedSketchNode?.elementId === draft.elementId ? snappedSketchNode.nodeId : undefined;
-          const next = dispatch(editorRef.current, appendSketchEdge(draft.elementId, draft.currentNodeId, creationPoint, targetNodeId));
+          let relation: LineSketchRelationIntent = { kind: "none" };
+          if (candidate?.kind === "axis") relation = { kind: candidate.axis ?? "horizontal" };
+          else if (candidate?.kind === "perpendicular" && candidate.sourceIds[1]) relation = { kind: "perpendicular", sourceEdgeId: candidate.sourceIds[1] };
+          const automatic = candidate?.kind === "midpoint" && candidate.sourceIds[1] ? { kind: "midpoint" as const, references: [{ elementId: draft.elementId, edgeId: candidate.sourceIds[1] }] as const } : undefined;
+          const next = dispatch(editorRef.current, appendSketchEdge(draft.elementId, draft.currentNodeId, creationPoint, targetNodeId, automatic, automatic ? undefined : relation));
+          if (next === editorRef.current) {
+            const currentSketch = editorRef.current.document.elements.find((element): element is Extract<Element, { type: "sketch" }> => element.id === draft.elementId && element.type === "sketch");
+            const target = targetNodeId && currentSketch?.nodes.find((node) => node.id === targetNodeId);
+            const alreadyConnected = targetNodeId !== undefined && targetNodeId !== draft.currentNodeId && currentSketch?.edges.some((edge) => (edge.startNodeId === draft.currentNodeId && edge.endNodeId === targetNodeId) || (edge.startNodeId === targetNodeId && edge.endNodeId === draft.currentNodeId));
+            if (target && alreadyConnected) {
+              const nextDraft = { ...draft, points: [...draft.points, target.point], pointer: target.point, currentNodeId: targetNodeId };
+              creationDraftRef.current = nextDraft;
+              setCreationDraft(nextDraft);
+            }
+            return;
+          }
           const sketch = next.document.elements.find((element): element is Extract<Element, { type: "sketch" }> => element.id === draft.elementId && element.type === "sketch");
           const appendedEdge = sketch?.edges.at(-1);
           const currentNodeId = targetNodeId ?? appendedEdge?.endNodeId ?? draft.currentNodeId;
-          const nextDraft = { ...draft, points: [...draft.points, creationPoint], pointer: creationPoint, currentNodeId };
+          const persistedEnd = appendedEdge ? sketch?.nodes.find((node) => node.id === appendedEdge.endNodeId)?.point : undefined;
+          const nextPoint = targetNodeId ? sketch?.nodes.find((node) => node.id === targetNodeId)?.point ?? creationPoint : persistedEnd ?? creationPoint;
+          const nextDraft = { ...draft, points: [...draft.points, nextPoint], pointer: nextPoint, currentNodeId };
          creationDraftRef.current = nextDraft;
          setCreationDraft(nextDraft);
          setEditorState(select(next, [draft.elementId]));
+         lineInferenceRef.current = undefined;
        }
        return;
      }
@@ -1668,7 +1725,7 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
   const onCanvasPointerMove = (event: PointerEvent<HTMLDivElement>) => {
        setCursorPoint(canvasPointAt(event));
       setDocumentCursorPoint(pointAt(event));
-       if (isDrawingTool(tool)) { const pointer = pointAt(event); const draft = creationDraftRef.current; const direction = project.preferences.lineGuidesEnabled && tool === "line" && draft?.points.length ? directionalGuide(draft.points.at(-1)!, pointer, project.preferences.lineGuideAngle, 3) : undefined; const nodeGuidesForMove = tool === "line" && draft?.points.length ? nodeAlignmentGuides(editorRef.current.document, draft.points.at(-1)!, pointer, zoom, 5) : []; const nodeGuidedPoint = nodeGuidesForMove.length ? pointAlignedToNodeGuides(pointer, nodeGuidesForMove) : undefined; setLineCursorAngle(tool === "line" && draft?.points.length ? direction?.angle ?? lineAngleDegrees(draft.points.at(-1)!, pointer) : undefined); setCreationPoint(nodeGuidedPoint ?? direction?.snappedPoint ?? pointer); }
+       if (isDrawingTool(tool)) { const pointer = pointAt(event); const draft = creationDraftRef.current; const direction = project.preferences.lineGuidesEnabled && tool === "line" && draft?.points.length ? directionalGuide(draft.points.at(-1)!, pointer, project.preferences.lineGuideAngle, 3) : undefined; const nodeGuidesForMove = tool === "line" && draft?.points.length ? nodeAlignmentGuides(editorRef.current.document, draft.points.at(-1)!, pointer, zoom, 5) : []; const nodeGuidedPoint = nodeGuidesForMove.length ? pointAlignedToNodeGuides(pointer, nodeGuidesForMove) : undefined; const lineCandidate = tool === "line" ? resolveLineCandidate(pointer, draft) : undefined; setLineCursorAngle(tool === "line" && draft?.points.length ? lineAngleDegrees(draft.points.at(-1)!, lineCandidate?.point ?? pointer) : undefined); setCreationPoint(lineCandidate?.point ?? (tool === "line" ? pointer : nodeGuidedPoint ?? direction?.snappedPoint ?? pointer)); }
       const feedbackTool = tool === "text" || tool === "pan" ? undefined : tool;
      if (tool === "cut" && !interaction.current) {
            const snapshot = editorRef.current.document;
@@ -1892,6 +1949,7 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
         if (session.status === "active" && (interaction.current || session.pending)) { event.preventDefault(); setSketchSession((current) => reduceSketchSession(current, { type: "escape" })); }
         creationDraftRef.current = undefined;
         setCreationDraft(undefined);
+        lineInferenceRef.current = undefined;
         if (interaction.current) {
            setEditorState(cancelGesture(editorRef.current));
            if (interaction.current.kind === "pen-place") setPenDraftPoint(undefined);
@@ -1904,6 +1962,7 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
            setDimensionNodeHover(undefined);
            creationDraftRef.current = undefined;
            setCreationDraft(undefined);
+           lineInferenceRef.current = undefined;
            setTransformMode("resize");
         return;
       }
@@ -2122,7 +2181,7 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
      const cutHoverTarget = cutSegmentHover ? document.elements.find((element) => element.id === cutSegmentHover.hit.elementId) : undefined;
      const cutSegmentHoverOverlay = tool === "cut" && cutSegmentHover && !(cutHoverTarget?.type === "arc" && cutSegmentHover.fragments.length === 0) ? <svg className="cut-segment-hover-overlay" viewBox={`0 0 ${document.page.width} ${document.page.height}`} style={{ left: pageStyle.left + 1, top: pageStyle.top + 1, width: document.page.width * zoom, height: document.page.height * zoom, right: "auto", bottom: "auto" }} aria-label={cutSegmentHover.diagnostics?.length ? `Trim: ${cutSegmentHover.diagnostics.map((diagnostic) => diagnostic.message).join("; ")}` : "Segmento de Trim bajo el puntero"}>{cutSegmentHover.diagnostics?.length ? <text x={cutSegmentHover.hit.start.x} y={cutSegmentHover.hit.start.y} className="cut-preview-diagnostic">{cutSegmentHover.diagnostics.map((diagnostic) => diagnostic.message).join("; ")}</text> : cutSegmentHover.fragments.length ? cutSegmentHover.fragments.map((fragment, index) => previewFragmentShape(fragment, `cut-preview-${index}`)) : cutSegmentHover.hit.points ? <polyline points={cutSegmentHover.hit.points.map((point) => `${point.x},${point.y}`).join(" ")} /> : <line x1={cutSegmentHover.hit.start.x} y1={cutSegmentHover.hit.start.y} x2={cutSegmentHover.hit.end.x} y2={cutSegmentHover.hit.end.y} />}</svg> : undefined;
      const formaSegmentHoverOverlay = (tool === "forma" || tool === "dimension") && formaSegmentHover ? (() => { const element = document.elements.find((candidate) => candidate.id === formaSegmentHover.elementId); const segment = element?.type === "line" ? { start: element.start, end: element.end } : element?.type === "sketch" ? (() => { const edge = element.edges[formaSegmentHover.segmentIndex]; const nodes = new Map(element.nodes.map((node) => [node.id, node.point])); const start = edge ? nodes.get(edge.startNodeId) : undefined; const end = edge ? nodes.get(edge.endNodeId) : undefined; return start && end ? { start, end } : undefined; })() : undefined; return segment ? <svg className="forma-segment-hover-overlay" viewBox={`0 0 ${document.page.width} ${document.page.height}`} style={{ left: pageStyle.left + 1, top: pageStyle.top + 1, width: document.page.width * zoom, height: document.page.height * zoom, right: "auto", bottom: "auto" }} aria-label="Segmento bajo el puntero"><line x1={segment.start.x} y1={segment.start.y} x2={segment.end.x} y2={segment.end.y} /></svg> : undefined; })() : undefined;
-     const cursorNodeGuideOverlay = tool === "line" && documentCursorPoint ? (() => { const guides = cursorNodeGuides(document, documentCursorPoint, zoom, 5); return guides.length ? <svg className="node-guide-overlay" viewBox={`0 0 ${document.page.width} ${document.page.height}`} style={{ left: pageStyle.left + 1, top: pageStyle.top + 1, width: document.page.width * zoom, height: document.page.height * zoom, right: "auto", bottom: "auto" }} aria-label="Guía de nodo">{guides.map((guide, index) => <line key={`cursor-node-guide-${index}`} className="creation-guide creation-guide-node-alignment" x1={guide.source.x} y1={guide.source.y} x2={guide.target.x} y2={guide.target.y} />)}</svg> : undefined; })() : undefined;
+     const cursorNodeGuideOverlay = tool === "line" && documentCursorPoint ? (() => { const guides = lineInference?.guides ?? []; return guides.length ? <svg className="node-guide-overlay" viewBox={`0 0 ${document.page.width} ${document.page.height}`} style={{ left: pageStyle.left + 1, top: pageStyle.top + 1, width: document.page.width * zoom, height: document.page.height * zoom, right: "auto", bottom: "auto" }} aria-label="Guía de nodo">{guides.map((guide, index) => <line key={`cursor-node-guide-${index}`} className="creation-guide creation-guide-node-alignment" x1={guide.source.x} y1={guide.source.y} x2={guide.target.x} y2={guide.target.y} />)}</svg> : undefined; })() : undefined;
          const pendingCreationOverlay = creationDraft && creationPoint ? (() => {
       const start = creationDraft.tool === "line" ? creationDraft.points.at(-1)! : creationDraft.points[0]!;
        const pointer = creationPoint;
@@ -2134,9 +2193,8 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
       const arcSweep = arc ? (((arc.endAngle - arc.startAngle) * (arc.direction === "clockwise" ? 1 : -1)) % (Math.PI * 2) + Math.PI * 2) % (Math.PI * 2) : 0;
       const radiusGuideStart = arc?.center ?? start;
       const shape = rectangle ? <rect x={rectangle.position.x} y={rectangle.position.y} width={rectangle.size.width} height={rectangle.size.height} /> : circle ? <circle cx={creationDraft.points[0]!.x} cy={creationDraft.points[0]!.y} r={circle.radius} /> : arc && arcStart && arcEnd ? <path d={`M ${arcStart.x} ${arcStart.y} A ${arc.radius} ${arc.radius} 0 ${arcSweep > Math.PI ? 1 : 0} ${arc.direction === "clockwise" ? 1 : 0} ${arcEnd.x} ${arcEnd.y}`} style={{ fill: "none" }} /> : undefined;
-       const guides: readonly CreationGuide[] = creationGuides(document, pointer, zoom);
-           const nodeGuides = creationDraft.tool === "line" ? nodeAlignmentGuides(document, start, pointer, zoom, 5) : [];
-       return <svg className="creation-pending-overlay" viewBox={`0 0 ${document.page.width} ${document.page.height}`} style={{ left: pageStyle.left + 1, top: pageStyle.top + 1, width: document.page.width * zoom, height: document.page.height * zoom, right: "auto", bottom: "auto" }} aria-label="Vista previa de creación"><g className="creation-preview-shape">{shape}</g><line className="creation-preview-radius" x1={radiusGuideStart.x} y1={radiusGuideStart.y} x2={pointer.x} y2={pointer.y} />{nodeGuides.map((guide, index) => <line key={`node-guide-${index}`} className="creation-guide creation-guide-node-alignment" x1={guide.source.x} y1={guide.source.y} x2={guide.target.x} y2={guide.target.y} />)}{guides.map((guide, index) => <line key={index} className={`creation-guide creation-guide-${guide.kind}`} x1={guide.source.x} y1={guide.source.y} x2={guide.target.x} y2={guide.target.y} />)}</svg>;
+       const guides: readonly CreationGuide[] = creationDraft.tool === "line" ? lineInference?.guides ?? [] : creationGuides(document, pointer, zoom);
+       return <svg className="creation-pending-overlay" viewBox={`0 0 ${document.page.width} ${document.page.height}`} style={{ left: pageStyle.left + 1, top: pageStyle.top + 1, width: document.page.width * zoom, height: document.page.height * zoom, right: "auto", bottom: "auto" }} aria-label="Vista previa de creación"><g className="creation-preview-shape">{shape}</g><line className="creation-preview-radius" x1={radiusGuideStart.x} y1={radiusGuideStart.y} x2={pointer.x} y2={pointer.y} />{guides.map((guide, index) => <line key={index} className={`creation-guide creation-guide-${guide.kind}`} x1={guide.source.x} y1={guide.source.y} x2={guide.target.x} y2={guide.target.y} />)}</svg>;
     })() : undefined;
    const dimensionHoverStyle = dimensionNodeHover && (tool === "dimension" || tool === "radius") ? (() => { const point = pagePointToCanvas(dimensionNodeHover.node.point, zoom, panMm); return { left: point.x, top: point.y }; })() : undefined;
   const rulerMajorStep = [1, 5, 10, 25, 50, 100, 250, 500].find((step) => step * zoom >= 50) ?? 1000;
