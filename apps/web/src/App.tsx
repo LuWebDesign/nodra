@@ -1409,7 +1409,17 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
           else if (candidate?.kind === "perpendicular" && candidate.sourceIds[1]) relation = { kind: "perpendicular", sourceEdgeId: candidate.sourceIds[1] };
           const automatic = candidate?.kind === "midpoint" && candidate.sourceIds[1] ? { kind: "midpoint" as const, references: [{ elementId: draft.elementId, edgeId: candidate.sourceIds[1] }] as const } : undefined;
           const next = dispatch(editorRef.current, appendSketchEdge(draft.elementId, draft.currentNodeId, creationPoint, targetNodeId, automatic, automatic ? undefined : relation));
-          if (next === editorRef.current) return;
+          if (next === editorRef.current) {
+            const currentSketch = editorRef.current.document.elements.find((element): element is Extract<Element, { type: "sketch" }> => element.id === draft.elementId && element.type === "sketch");
+            const target = targetNodeId && currentSketch?.nodes.find((node) => node.id === targetNodeId);
+            const alreadyConnected = targetNodeId !== undefined && targetNodeId !== draft.currentNodeId && currentSketch?.edges.some((edge) => (edge.startNodeId === draft.currentNodeId && edge.endNodeId === targetNodeId) || (edge.startNodeId === targetNodeId && edge.endNodeId === draft.currentNodeId));
+            if (target && alreadyConnected) {
+              const nextDraft = { ...draft, points: [...draft.points, target.point], pointer: target.point, currentNodeId: targetNodeId };
+              creationDraftRef.current = nextDraft;
+              setCreationDraft(nextDraft);
+            }
+            return;
+          }
           const sketch = next.document.elements.find((element): element is Extract<Element, { type: "sketch" }> => element.id === draft.elementId && element.type === "sketch");
           const appendedEdge = sketch?.edges.at(-1);
           const currentNodeId = targetNodeId ?? appendedEdge?.endNodeId ?? draft.currentNodeId;
