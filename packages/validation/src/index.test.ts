@@ -165,16 +165,61 @@ describe("native document validation", () => {
     const legacyLine = { id: "legacy", kind: "midpoint", references: [{ elementId: dependent.id, nodeId: "mid" }], source: { kind: "line", elementId: "native-line" } };
     const line = { type: "line" as const, id: "native-line", layerId: "layer-1", start: { x: 0, y: 0 }, end: { x: 10, y: 0 }, rotation: 0, style: path.style };
     const migrated = migrateDocument({ ...base, schemaVersion: 10, elements: [dependent, line], constraints: [legacyLine] });
-    expect(migrated).toMatchObject({ schemaVersion: 11, constraints: [legacyLine] });
+    expect(migrated).toMatchObject({ schemaVersion: 12, constraints: [legacyLine] });
     expect(validateDocument({ ...base, schemaVersion: 99 }).success).toBe(false);
   });
 
-  it("migrates schema 8 documents and projects explicitly to schema 11", () => {
+  it("validates stable ordered open Spline span midpoint sources and migrates v11", () => {
+    const base = createDocument("spline-midpoint", [{ id: layerId("layer-1"), name: "Design", visible: true, order: 0 }]);
+    const spline = { type: "spline" as const, id: "spline", layerId: "layer-1", nodes: [
+      { id: "a", anchor: { x: 0, y: 0 }, continuity: "smooth" as const, outHandle: { dx: 2, dy: 4 } },
+      { id: "b", anchor: { x: 8, y: 2 }, continuity: "smooth" as const, inHandle: { dx: -1, dy: 3 } },
+      { id: "c", anchor: { x: 12, y: 0 }, continuity: "corner" as const },
+    ], closed: false, style: { stroke: "#000", strokeWidth: 1 } };
+    const dependent = { type: "sketch" as const, id: "dependent", layerId: "layer-1", nodes: [{ id: "mid", point: { x: 5, y: 3 } }, { id: "other", point: { x: 8, y: 2 } }], edges: [{ id: "dependent-edge", startNodeId: "mid", endNodeId: "other" }], style: spline.style };
+    const relation = { id: "spline-mid", kind: "midpoint" as const, references: [{ elementId: dependent.id, nodeId: "mid" }] as const, source: { kind: "spline-span" as const, elementId: spline.id, startNodeId: "a", endNodeId: "b" } };
+    const valid = (nodes: readonly import("@nodra/domain").SplineNode[] = spline.nodes, closed = false, source: typeof relation.source = relation.source) => validateDocument({ ...base, elements: [dependent, { ...spline, nodes, closed }], constraints: [{ ...relation, source }] });
+    expect(valid().success).toBe(true);
+    const zeroHandleNodes: import("@nodra/domain").SplineNode[] = spline.nodes.map((node) => ({ id: node.id, anchor: node.anchor, continuity: node.continuity }));
+    expect(valid(zeroHandleNodes).success).toBe(true);
+    expect(valid(spline.nodes, false, { ...relation.source, startNodeId: "b", endNodeId: "a" }).success).toBe(false);
+    expect(valid(spline.nodes, false, { ...relation.source, endNodeId: "c" }).success).toBe(false);
+    expect(valid(spline.nodes, false, { ...relation.source, startNodeId: "missing" }).success).toBe(false);
+    expect(valid(spline.nodes, true).success).toBe(false);
+    expect(valid([spline.nodes[0]!, { id: "inserted", anchor: { x: 4, y: 3 }, continuity: "corner" as const }, ...spline.nodes.slice(1)]).success).toBe(false);
+    expect(valid([spline.nodes[0]!, spline.nodes[1]!, { id: "outside", anchor: { x: 20, y: 0 }, continuity: "corner" as const }, spline.nodes[2]!]).success).toBe(true);
+    expect(valid([{ id: "ahead", anchor: { x: -5, y: 0 }, continuity: "corner" as const }, ...spline.nodes]).success).toBe(true);
+    const flat = [{ id: "a", anchor: { x: 0, y: 0 }, continuity: "corner" as const }, { id: "b", anchor: { x: 0, y: 0 }, continuity: "corner" as const }, spline.nodes[2]!];
+    expect(valid(flat).success).toBe(false);
+    const overflow: import("@nodra/domain").SplineNode[] = [{ id: "a", anchor: { x: 1e308, y: 0 }, continuity: "smooth", outHandle: { dx: -1e308, dy: 0 } }, { id: "b", anchor: { x: -1e308, y: 0 }, continuity: "smooth", inHandle: { dx: 1e308, dy: 0 } }, spline.nodes[2]!];
+    expect(valid(overflow).success).toBe(false);
+    expect(valid(spline.nodes, false, { ...relation.source, spanIndex: 0 } as typeof relation.source).success).toBe(false);
+    expect(validateDocument({ ...base, elements: [dependent, spline], constraints: [relation, { ...relation, id: "duplicate" }] }).success).toBe(false);
+    const line = { type: "line" as const, id: "old-line", layerId: "layer-1", start: { x: 0, y: 0 }, end: { x: 10, y: 0 }, rotation: 0, style: spline.style };
+    const path = { type: "path" as const, id: "old-path", layerId: "layer-1", nodes: [{ id: "p0", anchor: { x: 0, y: 0 }, join: "corner" as const }, { id: "p1", anchor: { x: 10, y: 0 }, join: "corner" as const }], segments: [{ id: "seg", type: "line" as const, startNodeId: "p0", endNodeId: "p1" }], closed: false, style: spline.style };
+    const dependentPath = { ...dependent, id: "dependent-path", nodes: [{ id: "mid-path", point: { x: 5, y: 1 } }, { id: "other-path", point: { x: 8, y: 2 } }], edges: [{ id: "dependent-edge-path", startNodeId: "mid-path", endNodeId: "other-path" }] };
+    const oldSources = [{ ...relation, id: "old-line-ref", source: { kind: "line", elementId: line.id } }, { ...relation, id: "old-path-ref", references: [{ elementId: dependentPath.id, nodeId: "mid-path" }], source: { kind: "path-segment", elementId: path.id, segmentId: "seg" } }];
+    const oldDocument = { ...base, schemaVersion: 11, elements: [dependent, dependentPath, line, path], constraints: oldSources };
+    expect(migrateDocument(oldDocument)).toMatchObject({ schemaVersion: 12, constraints: oldSources });
+    expect(validateDocument(oldDocument).success).toBe(true);
+    const created = createProject({ ...base, elements: [dependent, dependentPath, line, path], constraints: oldSources } as unknown as import("@nodra/domain").DocumentSnapshot);
+    const oldProject = { ...created, pieces: created.pieces.map((piece) => ({ ...piece, sketches: [{ pageId: created.pages[0]!.id, sketchId: dependent.id }, { pageId: created.pages[0]!.id, sketchId: dependentPath.id }] })), schemaVersion: 11 };
+    expect(migrateProject(oldProject)).toMatchObject({ schemaVersion: 12, pages: [{ constraints: oldSources }] });
+    expect(validateProject(oldProject).success).toBe(true);
+    expect(migrateDocument({ ...base, schemaVersion: 99 })).toEqual({ ...base, schemaVersion: 99 });
+    expect(validateDocument({ ...base, schemaVersion: 99 }).success).toBe(false);
+    const currentProject = createProject({ ...base, elements: [dependent, spline], constraints: [relation] } as unknown as import("@nodra/domain").DocumentSnapshot);
+    const invalidSourceProject = { ...currentProject, pieces: currentProject.pieces.map((piece) => ({ ...piece, sketches: [{ pageId: currentProject.pages[0]!.id, sketchId: dependent.id }] })), pages: [{ ...currentProject.pages[0]!, elements: [dependent], constraints: [relation] }] };
+    expect(validateProject(invalidSourceProject).success).toBe(false);
+    expect(validateProject({ ...createProject(base), schemaVersion: 99 }).success).toBe(false);
+  });
+
+  it("migrates schema 8 documents and projects explicitly to schema 12", () => {
     const base = createDocument("schema-8", []);
     const migratedDocument = migrateDocument({ ...base, schemaVersion: 8 });
     const migratedProject = migrateProject({ schemaVersion: 8, id: "p", revision: 0, origin: "top-left", units: "mm", preferences: { lineGuidesEnabled: true, lineGuideAngle: 45 }, pages: [{ id: "page-1", page: base.page, layers: [], elements: [] }], activePageId: "page-1" });
-    expect(migratedDocument).toMatchObject({ schemaVersion: 11 });
-    expect(migratedProject).toMatchObject({ schemaVersion: 11 });
+    expect(migratedDocument).toMatchObject({ schemaVersion: 12 });
+    expect(migratedProject).toMatchObject({ schemaVersion: 12 });
     expect(migratedDocument).not.toHaveProperty("featureTree");
     expect((migratedProject as { pages?: readonly unknown[] }).pages?.[0]).not.toHaveProperty("featureTree");
   });
@@ -186,7 +231,7 @@ describe("native document validation", () => {
     const project = createProject({ ...base, elements: [sketch], constraints: [pageMidpoint] } as unknown as import("@nodra/domain").DocumentSnapshot);
     const legacyProject = { ...project, pieces: project.pieces.map((piece) => ({ ...piece, sketches: [{ pageId: project.pages[0]!.id, sketchId: elementId("sketch") }] })), schemaVersion: 9 };
     const migrated = migrateProject(legacyProject);
-    expect(migrated).toMatchObject({ schemaVersion: 11, pages: [{ constraints: [pageMidpoint], elements: [{ constraints: [sketch.constraints[0]] }] }] });
+    expect(migrated).toMatchObject({ schemaVersion: 12, pages: [{ constraints: [pageMidpoint], elements: [{ constraints: [sketch.constraints[0]] }] }] });
     expect(validateProject(legacyProject).success).toBe(true);
     expect(JSON.stringify(migrated)).not.toContain('"source"');
 
@@ -505,7 +550,7 @@ describe("native document validation", () => {
     const tinyLine = { ...line, start: { x: 0, y: 0 }, end: { x: 0, y: Number.MIN_VALUE } };
     expect(validateDocument({ ...base, elements: [sketch, tinyLine], constraints: [native] }).success).toBe(true);
     const v9 = { ...base, schemaVersion: 9, constraints: undefined };
-    expect(migrateDocument(v9)).toMatchObject({ schemaVersion: 11, elements: v9.elements });
+    expect(migrateDocument(v9)).toMatchObject({ schemaVersion: 12, elements: v9.elements });
     expect(validateDocument(v9).success).toBe(true);
   });
   it("accepts closed contour paths and rejects open rings", () => {

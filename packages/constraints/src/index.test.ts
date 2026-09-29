@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { elementId, type DocumentConstraint, type SketchConstraint, type SketchElement } from "@nodra/domain";
-import { halfArcLengthMidpoint, pathSegmentToCurve, solveSketchConstraints } from "@nodra/geometry";
+import { halfArcLengthMidpoint, pathSegmentToCurve, solveSketchConstraints, splineSpanToCurve } from "@nodra/geometry";
 import { constraintComponentStatesForDocument, constraintComponentsForDocument, constraintDofMetadataForDocument, constraintInputsForDocument, constraintResidualsForDocument, constraintStateForElement, normalizedConstraintsForDocument, parametricCapabilitiesForElement, solveConstraintComponents } from "./index.js";
 import { documentWith, fixtureLayer, fixtureStyle, sketch } from "./test-fixtures.js";
 
@@ -485,6 +485,34 @@ describe("parametric constraint boundary", () => {
     expect(solved.document.elements[1]).toEqual(path);
     expect(solved.residuals).toEqual([expect.objectContaining({ supported: true, satisfied: true })]);
     expect(normalizedConstraintsForDocument(document)[0]).toMatchObject({ sourceKind: "path-segment", sourceSegmentId: "first" });
+  });
+
+  it("resolves spline-span midpoint sources by ordered stable node IDs", () => {
+    const dependent = sketch();
+    const spline = { type: "spline" as const, id: elementId("native-spline"), layerId: fixtureLayer().id, nodes: [{ id: "a", anchor: { x: 0, y: 0 }, continuity: "smooth" as const, outHandle: { dx: 2, dy: 1 } }, { id: "b", anchor: { x: 10, y: 0 }, continuity: "smooth" as const, inHandle: { dx: -2, dy: 1 } }, { id: "c", anchor: { x: 20, y: 0 }, continuity: "smooth" as const }], closed: false, style: fixtureStyle() };
+    const relation = { id: "spline-mid", kind: "midpoint" as const, references: [{ elementId: dependent.id, nodeId: "a" }] as const, source: { kind: "spline-span" as const, elementId: spline.id, startNodeId: "a", endNodeId: "b" } };
+    const document = { ...documentWith([dependent, spline]), constraints: [relation] };
+    const solved = solveConstraintComponents(document);
+    const prepended = { ...spline, nodes: [{ id: "new", anchor: { x: -10, y: 0 }, continuity: "smooth" as const }, ...spline.nodes] };
+    const shifted = solveConstraintComponents({ ...document, elements: [dependent, prepended] });
+    const moved = { ...spline, nodes: spline.nodes.map((node) => ({ ...node, anchor: { x: node.anchor.x + 7, y: node.anchor.y + 3 }, ...(node.inHandle ? { inHandle: { dx: node.inHandle.dx + 1, dy: node.inHandle.dy + 2 } } : {}), ...(node.outHandle ? { outHandle: { dx: node.outHandle.dx + 1, dy: node.outHandle.dy + 2 } } : {}) })) };
+    const movedResult = solveConstraintComponents({ ...document, elements: [dependent, moved] });
+    const movedMidpoint = halfArcLengthMidpoint(splineSpanToCurve(moved, 0).curve);
+    const broken = { ...spline, nodes: [spline.nodes[0]!, { id: "inserted", anchor: { x: 5, y: 0 }, continuity: "smooth" as const }, ...spline.nodes.slice(1)] };
+    const unsupported = constraintResidualsForDocument({ ...document, elements: [dependent, broken] });
+    const midpoint = halfArcLengthMidpoint(splineSpanToCurve(spline, 0).curve);
+
+    expect(normalizedConstraintsForDocument(document)[0]).toMatchObject({ sourceKind: "spline-span", sourceStartNodeId: "a", sourceEndNodeId: "b" });
+    expect((solved.document.elements[0] as SketchElement).nodes[0]?.point).toEqual(midpoint);
+    expect(midpoint).not.toEqual({ x: 5, y: 0 });
+    expect((shifted.document.elements[0] as SketchElement).nodes[0]?.point).toEqual(midpoint);
+    expect((movedResult.document.elements[0] as SketchElement).nodes[0]?.point).toEqual(movedMidpoint);
+    expect(movedMidpoint).not.toEqual(midpoint);
+    expect(unsupported).toEqual([expect.objectContaining({ residual: Number.POSITIVE_INFINITY, supported: false })]);
+    expect(solveConstraintComponents({ ...document, elements: [dependent, broken] }).document.elements[0]).toEqual(dependent);
+    expect(constraintResidualsForDocument({ ...document, elements: [dependent, { ...spline, closed: true }] })).toEqual([expect.objectContaining({ supported: false })]);
+    expect(constraintResidualsForDocument({ ...document, elements: [dependent, { ...spline, nodes: [spline.nodes[1]!, spline.nodes[0]!] }] })).toEqual([expect.objectContaining({ supported: false })]);
+    expect(constraintResidualsForDocument({ ...document, elements: [dependent, { ...spline, nodes: [spline.nodes[0]!, { ...spline.nodes[1]!, id: "a" }] }] })).toEqual([expect.objectContaining({ supported: false })]);
   });
 
   it.each(["closed", "missing", "degenerate"] as const)("fails closed for %s path sources", (failure) => {

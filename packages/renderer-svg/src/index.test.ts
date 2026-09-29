@@ -75,6 +75,24 @@ describe("SVG renderer boundary", () => {
     }
     expect(source).toEqual(before);
   });
+  it("renders a validated v12 Spline span source without synthesizing source nodes", () => {
+    const spline = { type: "spline" as const, id: elementId("native-spline"), layerId: layer.id, nodes: [{ id: "start", anchor: { x: 0, y: 0 }, continuity: "smooth" as const, outHandle: { dx: 0, dy: 4 } }, { id: "end", anchor: { x: 10, y: 0 }, continuity: "smooth" as const, inHandle: { dx: 0, dy: 4 } }], closed: false, style };
+    const dependentId = elementId("spline-span-dependent");
+    const dependent = { type: "sketch" as const, id: dependentId, layerId: layer.id, nodes: [{ id: "mid", point: { x: 5, y: 5 } }, { id: "other", point: { x: 8, y: 2 } }], edges: [{ id: "dependent-edge", startNodeId: "mid", endNodeId: "other" }], style };
+    const relation = { id: "spline-span-midpoint", kind: "midpoint" as const, references: [{ elementId: dependentId, nodeId: "mid" }] as const, source: { kind: "spline-span" as const, elementId: spline.id, startNodeId: "start", endNodeId: "end" } };
+    const source = { ...withElements(createDocument("spline-span-render", [layer]), [spline, dependent]), schemaVersion: 12, constraints: [relation] };
+    const before = structuredClone(source);
+    expect(validateDocument(source).success).toBe(true);
+    const rendered = renderSvg(source, { zoom: 1, panMm: { x: 0, y: 0 } });
+    expect(rendered.success).toBe(true);
+    if (rendered.success) {
+      expect(rendered.renderedElementIds).toEqual([spline.id, dependentId]);
+      expect(rendered.svg).toContain('data-element-id="native-spline"');
+      expect(rendered.svg).not.toContain('data-element-id="native-spline:start"');
+      expect(rendered.svg).not.toContain('data-constraint-id="spline-span-midpoint"');
+    }
+    expect(source).toEqual(before);
+  });
   it("does not interpret a one-reference native midpoint as a sketch-edge glyph", () => {
     const dependentId = elementId("native-dependent");
     const dependent = { type: "sketch" as const, id: dependentId, layerId: layer.id, nodes: [{ id: "mid", point: { x: 5, y: 0 } }, { id: "other", point: { x: 8, y: 2 } }], edges: [{ id: "dependent-edge", startNodeId: "mid", endNodeId: "other" }], style };
