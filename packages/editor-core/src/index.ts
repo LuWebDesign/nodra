@@ -36,7 +36,7 @@ import {
   isCircleElement,
 } from "@nodra/domain";
 import { validateDocument } from "@nodra/validation";
-import { boundsOf, boundsOfElements, connectableNodeAddress, contourWithPoints, directionVector, elementCenter, elementToContour, dimensionGeometry, elementToCurves, glyphGeometryNodes, groupCenter, intersectCurves, lineElementToCurve, circleElementToCurve, arcElementToCurve, pathSegmentToCurve, halfArcLengthMidpoint, pointAt, mirrorHandleOffset, partitionCurveByInterval, selectRemovableCurveInterval, selectSourcedCurveInterval, realGeometryNodes, resizeGroup, rotateElements, shapeResultContours, tangentAt, transformPoint, connectableNode, splitCuttableSegments, classifyCutGraph, cuttableSegments, lineSegmentIntersection, rotatedLineEndpoints, sketchEdgeAtAddress, sketchEdgeIndexAtAddress, solveSketchConstraints, cubicBezierLineIntersections, splitCubicBezierAtParameters, flattenCubicBezier, GEOMETRY_EPSILON, type CubicBezier, type Direction, type LineCurve2D, type SourcedCurve2D } from "@nodra/geometry";
+import { boundsOf, boundsOfElements, connectableNodeAddress, contourWithPoints, directionVector, elementCenter, elementToContour, dimensionGeometry, elementToCurves, glyphGeometryNodes, groupCenter, intersectCurves, lineElementToCurve, circleElementToCurve, arcElementToCurve, pathSegmentToCurve, halfArcLengthMidpoint, splineSpanToCurve, pointAt, mirrorHandleOffset, partitionCurveByInterval, selectRemovableCurveInterval, selectSourcedCurveInterval, realGeometryNodes, resizeGroup, rotateElements, shapeResultContours, tangentAt, transformPoint, connectableNode, splitCuttableSegments, classifyCutGraph, cuttableSegments, lineSegmentIntersection, rotatedLineEndpoints, sketchEdgeAtAddress, sketchEdgeIndexAtAddress, solveSketchConstraints, cubicBezierLineIntersections, splitCubicBezierAtParameters, flattenCubicBezier, GEOMETRY_EPSILON, type CubicBezier, type Direction, type LineCurve2D, type SourcedCurve2D } from "@nodra/geometry";
 import { insertSplineNode, moveSplineHandle as moveSplineHandleData, moveSplineNode as moveSplineNodeData } from "./spline.js";
 import { topologyReferenceKey, type ReferenceResolution, type TopologyEditResult, type TopologyReference } from "./topology.js";
 import { recomputeSketchKernel } from "./sketchKernel.js";
@@ -101,8 +101,13 @@ const withoutDanglingDocumentConstraints = (document: DocumentSnapshot, elements
     const sourceReference = constraint.source;
     const source = elementsById.get(sourceReference.elementId);
     if (sourceReference.kind === "line") return source?.type === "line";
-    if (source?.type !== "path" || source.closed || !source.segments.some((segment) => segment.id === sourceReference.segmentId)) return false;
-    try { return halfArcLengthMidpoint(pathSegmentToCurve(source, sourceReference.segmentId).curve) !== undefined; } catch { return false; }
+    if (sourceReference.kind === "path-segment") {
+      if (source?.type !== "path" || source.closed || !source.segments.some((segment) => segment.id === sourceReference.segmentId)) return false;
+      try { return halfArcLengthMidpoint(pathSegmentToCurve(source, sourceReference.segmentId).curve) !== undefined; } catch { return false; }
+    }
+    if (source?.type !== "spline" || source.closed || new Set(source.nodes.map((node) => node.id)).size !== source.nodes.length) return false;
+    const index = source.nodes.findIndex((node, candidate) => node.id === sourceReference.startNodeId && source.nodes[candidate + 1]?.id === sourceReference.endNodeId);
+    try { return index >= 0 && halfArcLengthMidpoint(splineSpanToCurve(source, index).curve) !== undefined; } catch { return false; }
   };
   const constraints = document.constraints.filter((constraint) => constraint.references.every((reference) => { const sketch = sketches.get(reference.elementId); return sketch !== undefined && ("nodeId" in reference ? sketch.nodes.some((node) => node.id === reference.nodeId) : sketch.edges.some((edge) => edge.id === reference.edgeId)); }) && validSource(constraint));
   return constraints.length === document.constraints.length ? document : { ...document, constraints };
@@ -520,7 +525,14 @@ export const createSketchLine = (sketchId: ElementId, layer: LayerId, style: Vis
   return { type: "sketch", id: sketchId, layerId: layer, nodes: [{ id: startNodeId, point: start }, { id: endNodeId, point: end }], edges: [{ id: edgeId, startNodeId, endNodeId }], ...(relation ? { constraints: [relation] } : {}), style };
 };
 const constraintReferenceKey = (reference: SketchConstraint["references"][number]): string => JSON.stringify([reference.elementId, "nodeId" in reference ? "node" : "edge", "nodeId" in reference ? reference.nodeId : reference.edgeId]);
-const documentConstraintsEqual = (first: DocumentConstraint, second: DocumentConstraint): boolean => first.id === second.id && first.kind === second.kind && first.value === second.value && first.references.length === second.references.length && first.references.every((reference, index) => constraintReferenceKey(reference) === (second.references[index] ? constraintReferenceKey(second.references[index]!) : undefined)) && ("source" in first) === ("source" in second) && (!("source" in first) || "source" in second && first.source.kind === second.source.kind && first.source.elementId === second.source.elementId && (first.source.kind !== "path-segment" || second.source.kind === "path-segment" && first.source.segmentId === second.source.segmentId));
+const sameDocumentConstraintSource = (first: DocumentConstraint, second: DocumentConstraint): boolean => {
+  if (!("source" in first) || !("source" in second)) return !("source" in first) && !("source" in second);
+  if (first.source.kind !== second.source.kind || first.source.elementId !== second.source.elementId) return false;
+  if (first.source.kind === "line") return true;
+  if (first.source.kind === "path-segment") return second.source.kind === "path-segment" && first.source.segmentId === second.source.segmentId;
+  return second.source.kind === "spline-span" && first.source.startNodeId === second.source.startNodeId && first.source.endNodeId === second.source.endNodeId;
+};
+const documentConstraintsEqual = (first: DocumentConstraint, second: DocumentConstraint): boolean => first.id === second.id && first.kind === second.kind && first.value === second.value && first.references.length === second.references.length && first.references.every((reference, index) => constraintReferenceKey(reference) === (second.references[index] ? constraintReferenceKey(second.references[index]!) : undefined)) && sameDocumentConstraintSource(first, second);
 const replaceDocumentConstraints = (document: DocumentSnapshot, constraints: readonly DocumentConstraint[]): CommandResult => {
   const candidate = { ...document, revision: nextRevision(document.revision), ...(constraints.length || document.constraints ? { constraints: [...constraints] } : {}) };
   if (!constraints.some((constraint) => constraint.kind === "midpoint")) return result(candidate);

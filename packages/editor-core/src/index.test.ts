@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createDocument, elementId, featureId, layerId, type ArcElement, type DimensionElement, type Element, type EllipseElement, type CircleElement, type LineElement, type GlyphElement, type PathElement, type PointMm, type RectangleElement, type SketchElement, type SplineElement, type TextElement } from "@nodra/domain";
-import { addCircleConstraint, addDocumentConstraint, deleteDocumentConstraint, addSketchConstraint, addSketchSegmentRelation, addToSelection, appendSketchEdge, appendSplineNode, beginGesture, cancelGesture, clearSelection, closePath, closeSplineElement, commitGesture, createEditor, createElement, createIntersectFeature, dimensionDrivingCapability, rebuildParametricFeatures, addPositionalConnection, addPositionalCoincidence, deletePositionalCoincidence, createPathCubicNode, createSketchLine, cutContourSegment, cutLineAtPoint, cutPathSegment, cutSegment, cutSketchEdge, splitPathLineAt, deleteContourNodes, deleteElement, deleteElementNodes, deletePathNodes, deleteSketchConstraint, dispatch, duplicateElements, flipElements, insertContourNode, invalidDimensionIdsForShapeOperation, moveElement, moveElements, movePathNode, movePathHandle, openPath, previewGesture, previewGestureFromBase, redo, reversePath, removeFromSelection, reorderLayer, resizeElement, resizeElementToDimensions, resizeElements, resizeElementsToDimensions, rotateElement, rotateElementsAroundCenter, select, selectForPointerDown, setDimensionDriving, updateCircleConstraint, deleteCircleConstraint, solveCircle, setLayerVisibility, setPathJoin, shapeOperation, splitPathSegment, toggleSelection, topologyEditForPathSegmentReplacement, topologyReferenceKey, undo, updateContourNode, updateDimensionValue, updateElement, updateElementNode, updateElementStyles, updateSketchConstraint, updateDocumentConstraint, updateSplineHandle, updateSplineNode, setGeometryRole, type AutomaticSketchRelationCandidate } from "./index.js";
-import { boundsOfElements, halfArcLengthMidpoint, pathSegmentToCurve, realGeometryNodes } from "@nodra/geometry";
+import { addCircleConstraint, addDocumentConstraint, deleteDocumentConstraint, addSketchConstraint, addSketchSegmentRelation, addToSelection, appendSketchEdge, appendSplineNode, beginGesture, cancelGesture, clearSelection, closePath, closeSplineElement, commitGesture, createEditor, createElement, createIntersectFeature, dimensionDrivingCapability, rebuildParametricFeatures, addPositionalConnection, addPositionalCoincidence, deletePositionalCoincidence, createPathCubicNode, replaceSplineElement, createSketchLine, cutContourSegment, cutLineAtPoint, cutPathSegment, cutSegment, cutSketchEdge, splitPathLineAt, deleteContourNodes, deleteElement, deleteElementNodes, deletePathNodes, deleteSketchConstraint, dispatch, duplicateElements, flipElements, insertContourNode, invalidDimensionIdsForShapeOperation, moveElement, moveElements, movePathNode, movePathHandle, openPath, previewGesture, previewGestureFromBase, redo, reversePath, removeFromSelection, reorderLayer, resizeElement, resizeElementToDimensions, resizeElements, resizeElementsToDimensions, rotateElement, rotateElementsAroundCenter, select, selectForPointerDown, setDimensionDriving, updateCircleConstraint, deleteCircleConstraint, solveCircle, setLayerVisibility, setPathJoin, shapeOperation, splitPathSegment, toggleSelection, topologyEditForPathSegmentReplacement, topologyReferenceKey, undo, updateContourNode, updateDimensionValue, updateElement, updateElementNode, updateElementStyles, updateSketchConstraint, updateDocumentConstraint, updateSplineHandle, updateSplineNode, setGeometryRole, type AutomaticSketchRelationCandidate } from "./index.js";
+import { boundsOfElements, halfArcLengthMidpoint, pathSegmentToCurve, splineSpanToCurve, realGeometryNodes } from "@nodra/geometry";
 import type { Direction } from "@nodra/geometry";
 import { appendLinePoint } from "./index.js";
 
@@ -393,6 +393,45 @@ describe("editor core", () => {
     const deleted = dispatch(initial, deleteElement(source.id));
     expect(deleted.document.constraints).toEqual([]);
     expect(undo(deleted).document).toEqual(initial.document);
+  });
+
+  it("projects spline-span midpoint dependencies by ordered node IDs and fails closed on topology changes", () => {
+    const source: SplineElement = { ...spline, id: elementId("spline-span-source"), nodes: [{ id: "s0", anchor: { x: 0, y: 0 }, continuity: "smooth", outHandle: { dx: 0, dy: 5 } }, { id: "s1", anchor: { x: 10, y: 0 }, continuity: "smooth", inHandle: { dx: 0, dy: 5 } }, { id: "s2", anchor: { x: 20, y: 0 }, continuity: "smooth" }] };
+    const dependent = createSketchLine(elementId("spline-span-dependent"), rectangle.layerId, rectangle.style, { x: 5, y: 5 }, { x: 5, y: 15 });
+    const constraint = { id: "spline-span-midpoint", kind: "midpoint" as const, references: [{ elementId: dependent.id, nodeId: dependent.nodes[0]!.id }] as const, source: { kind: "spline-span" as const, elementId: source.id, startNodeId: "s0", endNodeId: "s1" } };
+    const initial = dispatch(createEditor({ ...document, schemaVersion: 12, elements: [source, dependent] }), addDocumentConstraint(constraint));
+    const target = (state: typeof initial) => (state.document.elements.find((element): element is SketchElement => element.id === dependent.id && element.type === "sketch"))!.nodes[0]!.point;
+    expect(target(initial)).toEqual(halfArcLengthMidpoint(splineSpanToCurve(source, 0).curve));
+    const moved = dispatch(initial, updateSplineNode(source.id, "s1", { x: 12, y: 2 }));
+    expect(moved.document.constraints).toEqual([constraint]);
+    expect(target(moved)).toEqual(halfArcLengthMidpoint(splineSpanToCurve(moved.document.elements.find((element): element is SplineElement => element.id === source.id && element.type === "spline")!, 0).curve));
+    expect(undo(moved).document).toEqual(initial.document);
+    expect(redo(undo(moved)).document).toEqual(moved.document);
+    const prepended = dispatch(initial, replaceSplineElement({ ...source, nodes: [{ id: "unrelated", anchor: { x: -10, y: 0 }, continuity: "smooth" }, ...source.nodes] }));
+    expect(prepended.document.constraints).toEqual([constraint]);
+    const insertedBetween = dispatch(initial, replaceSplineElement({ ...source, nodes: [source.nodes[0]!, { id: "between", anchor: { x: 5, y: 2 }, continuity: "smooth" }, ...source.nodes.slice(1)] }));
+    expect(insertedBetween.document.constraints).toEqual([]);
+    for (const invalid of [
+      { ...source, nodes: [...source.nodes].reverse() },
+      { ...source, nodes: source.nodes.filter((node) => node.id !== "s1") },
+      { ...source, closed: true },
+    ]) expect(dispatch(initial, replaceSplineElement(invalid)).document.constraints).toEqual([]);
+    const changedSpanOnly = dispatch(initial, updateDocumentConstraint({ ...constraint, source: { ...constraint.source, startNodeId: "s1", endNodeId: "s2" } }));
+    expect(changedSpanOnly).not.toBe(initial);
+    expect(changedSpanOnly.document.constraints?.[0]).toEqual({ ...constraint, source: { ...constraint.source, startNodeId: "s1", endNodeId: "s2" } });
+    expect(dispatch(initial, updateDocumentConstraint(constraint))).toBe(initial);
+    const sourceCopy = structuredClone(source);
+    const dependentOnly = dispatch(initial, duplicateElements([dependent.id], "east", 5, 1));
+    expect(dependentOnly.document.constraints).toEqual([constraint]);
+    const both = dispatch(initial, duplicateElements([source.id, dependent.id], "east", 5, 1));
+    expect(both.document.constraints).toHaveLength(2);
+    expect(both.document.constraints?.[1]).toMatchObject({ source: { kind: "spline-span", startNodeId: "s0", endNodeId: "s1" } });
+    expect("source" in both.document.constraints![1]!).toBe(true);
+    if ("source" in both.document.constraints![1]!) expect(both.document.constraints![1]!.source.elementId).not.toBe(source.id);
+    expect(source).toEqual(sourceCopy);
+    expect(undo(both).document).toEqual(initial.document);
+    expect(redo(undo(both)).document).toEqual(both.document);
+    expect(dispatch(initial, replaceSplineElement({ ...source, nodes: [{ ...source.nodes[0]!, anchor: { x: 0, y: 0 }, outHandle: { dx: 0, dy: 0 } }, { ...source.nodes[1]!, anchor: { x: 0, y: 0 }, inHandle: { dx: 0, dy: 0 } }, ...source.nodes.slice(2)] })).document.constraints).toEqual([]);
   });
 
   it("keeps a native-line midpoint dependent fixed through source rotation and undo/redo", () => {

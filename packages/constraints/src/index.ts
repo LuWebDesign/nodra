@@ -1,5 +1,5 @@
 import { isCircleElement, type CircleConstraintKind, type DocumentSnapshot, type Element, type ElementId, type PointMm, type SketchConstraintKind, type SketchConstraint } from "@nodra/domain";
-import { halfArcLengthMidpoint, lineElementToCurve, pathSegmentToCurve, solveCircleConstraints, solveSketchConstraints } from "@nodra/geometry";
+import { halfArcLengthMidpoint, lineElementToCurve, pathSegmentToCurve, solveCircleConstraints, solveSketchConstraints, splineSpanToCurve } from "@nodra/geometry";
 
 export type ConstraintState = "underdefined" | "fully-defined" | "overdefined" | "conflict" | "invalid";
 export type ParametricConstraintKind = SketchConstraintKind | CircleConstraintKind;
@@ -35,8 +35,10 @@ export interface NormalizedConstraint {
   readonly kind: SketchConstraintKind;
   readonly value?: number;
   readonly sourceElementId?: ElementId;
-  readonly sourceKind?: "line" | "path-segment";
+  readonly sourceKind?: "line" | "path-segment" | "spline-span";
   readonly sourceSegmentId?: string;
+  readonly sourceStartNodeId?: string;
+  readonly sourceEndNodeId?: string;
 }
 
 export interface ConstraintDofMetadata {
@@ -159,6 +161,11 @@ const nativeSourceMidpoint = (document: DocumentSnapshot, constraint: Normalized
       return Number.isFinite(midpoint.x) && Number.isFinite(midpoint.y) ? midpoint : undefined;
     }
     if (constraint.sourceKind === "path-segment" && source.type === "path" && !source.closed && constraint.sourceSegmentId !== undefined) return halfArcLengthMidpoint(pathSegmentToCurve(source, constraint.sourceSegmentId).curve);
+    if (constraint.sourceKind === "spline-span" && source.type === "spline" && !source.closed && constraint.sourceStartNodeId !== undefined && constraint.sourceEndNodeId !== undefined) {
+      if (new Set(source.nodes.map((node) => node.id)).size !== source.nodes.length) return undefined;
+      const index = source.nodes.findIndex((node, candidate) => node.id === constraint.sourceStartNodeId && source.nodes[candidate + 1]?.id === constraint.sourceEndNodeId);
+      return index < 0 ? undefined : halfArcLengthMidpoint(splineSpanToCurve(source, index).curve);
+    }
     return undefined;
   } catch { return undefined; }
 };
@@ -291,7 +298,7 @@ export function normalizedConstraintsForDocument(document: DocumentSnapshot): re
   const sketches = document.elements.filter((element): element is Extract<Element, { type: "sketch" }> => element.type === "sketch");
   return [
     ...sketches.flatMap((sketch) => (sketch.constraints ?? []).map((constraint) => ({ id: constraintIdentity("local", sketch.id, constraint.id), scope: "local" as const, ownerId: sketch.id, references: pointReferencesForConstraint(sketches, constraint), kind: constraint.kind, ...(constraint.value !== undefined ? { value: constraint.value } : {}) }))),
-    ...(document.constraints ?? []).map((constraint) => ({ id: constraintIdentity("document", undefined, constraint.id), scope: "document" as const, references: pointReferencesForConstraint(sketches, constraint), kind: constraint.kind, ...("source" in constraint ? { sourceElementId: constraint.source.elementId, sourceKind: constraint.source.kind, ...(constraint.source.kind === "path-segment" ? { sourceSegmentId: constraint.source.segmentId } : {}) } : {}), ...(constraint.value !== undefined ? { value: constraint.value } : {}) })),
+    ...(document.constraints ?? []).map((constraint) => ({ id: constraintIdentity("document", undefined, constraint.id), scope: "document" as const, references: pointReferencesForConstraint(sketches, constraint), kind: constraint.kind, ...("source" in constraint ? { sourceElementId: constraint.source.elementId, sourceKind: constraint.source.kind, ...(constraint.source.kind === "path-segment" ? { sourceSegmentId: constraint.source.segmentId } : constraint.source.kind === "spline-span" ? { sourceStartNodeId: constraint.source.startNodeId, sourceEndNodeId: constraint.source.endNodeId } : {}) } : {}), ...(constraint.value !== undefined ? { value: constraint.value } : {}) })),
   ].sort((first, second) => first.id < second.id ? -1 : first.id > second.id ? 1 : 0);
 
 }
