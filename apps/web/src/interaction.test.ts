@@ -1,9 +1,56 @@
 import { describe, expect, it } from "vitest";
 import { createDocument, elementId, layerId, type DocumentSnapshot } from "@nodra/domain";
 import { validateDocument } from "@nodra/validation";
-import { canActivateRotation, circleGeometry, centerPageInCanvas, clientPointToCanvas, clientPointToPage, creationGuides, directionalGuide, resolveLineInference, hasNonCollinearPoints, hoveredSelectionCenter, INITIAL_ZOOM, isDrawingTool, marqueeSelection, MAX_ZOOM, MIN_ZOOM, movementExceedsThreshold, nodeAlignmentGuides, normalizeBounds, normalizeDrag, pagePointToScreen, screenDeltaToMm, screenPointToMm, viewportPointToCanvas, containsBounds, elementsContainedBy, pickDimensionTarget, pickElement, pickFormaElement, pickFormaNode, pickFormaSegment, pickHoverNode, pickCutIntervalPreview, pickCuttableSegment, pickNode, pointerDownIntent, selectedNodeAnchor, selectionCenter, selectionFrame, snapCreationPoint, snapMoveDelta, visibleEditablePathNodeIndexes, visibleNativeCircularCenters, zoomAtPoint } from "./interaction.js";
+import { canActivateRotation, circleGeometry, centerPageInCanvas, clientPointToCanvas, clientPointToPage, creationGuides, directionalGuide, resolveLineInference, hasNonCollinearPoints, hoveredSelectionCenter, INITIAL_ZOOM, isDrawingTool, marqueeSelection, MAX_ZOOM, MIN_ZOOM, movementExceedsThreshold, nodeAlignmentGuides, normalizeBounds, normalizeDrag, pagePointToScreen, screenDeltaToMm, screenPointToMm, viewportPointToCanvas, containsBounds, elementsContainedBy, pickDimensionTarget, pickElement, pickFormaElement, pickFormaNode, pickFormaSegment, pickHoverNode, pickCutIntervalPreview, pickCuttableSegment, pickNode, pickOpenEdgeMidpointHover, pointerDownIntent, selectedNodeAnchor, selectionCenter, selectionFrame, snapCreationPoint, snapMoveDelta, visibleEditablePathNodeIndexes, visibleNativeCircularCenters, zoomAtPoint } from "./interaction.js";
 import { geometryPatch, geometryValue } from "./propertyBar.js";
 import { dimensionKindForNodes, dimensionOffsetForPlacement, pointMidpoint, sketchProfileResult } from "@nodra/geometry";
+
+describe("open-edge midpoint hover picking", () => {
+  const layer = { id: layerId("mid-hover"), name: "Visible", visible: true, order: 0 };
+  const style = { stroke: "#000", strokeWidth: 1 };
+  const sketch = { type: "sketch" as const, id: elementId("mid-hover-sketch"), layerId: layer.id, nodes: [{ id: "a", point: { x: 0, y: 0 } }, { id: "b", point: { x: 20, y: 0 } }], edges: [{ id: "edge-id", startNodeId: "a", endNodeId: "b" }], style };
+  const line = { type: "line" as const, id: elementId("mid-hover-line"), layerId: layer.id, start: { x: 0, y: 20 }, end: { x: 20, y: 20 }, rotation: 0, style };
+  const path = { type: "path" as const, id: elementId("mid-hover-path"), layerId: layer.id, nodes: [{ id: "a", anchor: { x: 0, y: 40 }, join: "corner" as const }, { id: "b", anchor: { x: 20, y: 40 }, join: "corner" as const }], segments: [{ id: "segment-id", type: "line" as const, startNodeId: "a", endNodeId: "b" }], closed: false, style };
+  const spline = { type: "spline" as const, id: elementId("mid-hover-spline"), layerId: layer.id, nodes: [{ id: "left", anchor: { x: 0, y: 60 }, continuity: "smooth" as const }, { id: "right", anchor: { x: 20, y: 60 }, continuity: "smooth" as const }], closed: false, style };
+  const arc = { type: "arc" as const, id: elementId("mid-hover-arc"), layerId: layer.id, center: { x: 10, y: 90 }, radius: 10, startAngle: 0, endAngle: Math.PI / 2, direction: "clockwise" as const, style };
+  const document = (elements: readonly DocumentSnapshot["elements"][number][], layers = [layer]) => ({ ...createDocument("mid-hover-doc", layers), elements });
+
+  it("returns stable source identities for every supported open edge", () => {
+    const targets = [
+      [sketch, { x: 10, y: 0 }, { kind: "sketch-edge", elementId: sketch.id, edgeId: "edge-id" }],
+      [line, { x: 10, y: 20 }, { kind: "line-element", elementId: line.id }],
+      [path, { x: 10, y: 40 }, { kind: "path-segment", elementId: path.id, segmentId: "segment-id" }],
+      [spline, { x: 10, y: 60 }, { kind: "spline-span", elementId: spline.id, startNodeId: "left", endNodeId: "right" }],
+      [arc, { x: 10, y: 100 }, { kind: "arc-element", elementId: arc.id }],
+    ] as const;
+    for (const [element, pointer, source] of targets) expect(pickOpenEdgeMidpointHover(document([element]), pointer, 1)?.source).toMatchObject(source);
+  });
+
+  it("picks by nearest edge body, displays a cubic's calculated half-length point, and does not mutate", () => {
+    const cubic = { ...path, segments: [{ id: "curve-id", type: "cubicBezier" as const, startNodeId: "a", endNodeId: "b", control1: { x: 0, y: 70 }, control2: { x: 20, y: 70 } }] };
+    const before = structuredClone(cubic);
+    const hit = pickOpenEdgeMidpointHover(document([cubic]), { x: 10, y: 65 }, 1);
+    expect(hit?.source).toMatchObject({ kind: "path-segment", segmentId: "curve-id" });
+    expect(hit?.point.y).toBeGreaterThan(55);
+    expect(cubic).toEqual(before);
+    expect(pickOpenEdgeMidpointHover(document([line]), { x: 1, y: 20 }, 1)).toMatchObject({ point: { x: 10, y: 20 }, source: { elementId: line.id } });
+  });
+
+  it("excludes hidden, closed and unsupported shapes, uses inclusive zoom tolerance and stable ties", () => {
+    const hidden = { ...layer, id: layerId("mid-hover-hidden"), visible: false };
+    const closedPath = { ...path, id: elementId("closed-path"), closed: true };
+    const circle = { type: "circle" as const, id: elementId("mid-hover-circle"), layerId: layer.id, center: { x: 10, y: 0 }, radius: 10, style };
+    expect(pickOpenEdgeMidpointHover(document([{ ...line, layerId: hidden.id }], [hidden]), { x: 10, y: 20 }, 1)).toBeUndefined();
+    expect(pickOpenEdgeMidpointHover(document([closedPath]), { x: 10, y: 40 }, 1)).toBeUndefined();
+    expect(pickOpenEdgeMidpointHover(document([circle]), { x: 10, y: 0 }, 1)).toBeUndefined();
+    expect(pickOpenEdgeMidpointHover(document([line]), { x: 10, y: 28 }, 1, 8)?.source).toMatchObject({ elementId: line.id });
+    expect(pickOpenEdgeMidpointHover(document([line]), { x: 10, y: 28.01 }, 1, 8)).toBeUndefined();
+    const first = { ...line, id: elementId("a-tie") }; const second = { ...line, id: elementId("b-tie") };
+    expect(pickOpenEdgeMidpointHover(document([second, first]), { x: 10, y: 20 }, 1)?.source).toMatchObject({ elementId: first.id });
+    expect(() => pickOpenEdgeMidpointHover(document([line]), { x: 0, y: 0 }, 0)).toThrow();
+    expect(() => pickOpenEdgeMidpointHover(document([line]), { x: 0, y: 0 }, 1, -1)).toThrow();
+  });
+});
 
 describe("Line inference resolver", () => {
   const layer = { id: layerId("infer-line"), name: "Sketch", visible: true, order: 0 };
