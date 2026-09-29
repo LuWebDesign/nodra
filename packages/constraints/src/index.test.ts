@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { elementId, type DocumentConstraint, type SketchConstraint, type SketchElement } from "@nodra/domain";
-import { solveSketchConstraints } from "@nodra/geometry";
+import { halfArcLengthMidpoint, pathSegmentToCurve, solveSketchConstraints } from "@nodra/geometry";
 import { constraintComponentStatesForDocument, constraintComponentsForDocument, constraintDofMetadataForDocument, constraintInputsForDocument, constraintResidualsForDocument, constraintStateForElement, normalizedConstraintsForDocument, parametricCapabilitiesForElement, solveConstraintComponents } from "./index.js";
 import { documentWith, fixtureLayer, fixtureStyle, sketch } from "./test-fixtures.js";
 
@@ -464,6 +464,37 @@ describe("parametric constraint boundary", () => {
     expect(solved.residuals).toEqual([expect.objectContaining({ supported: true, satisfied: true, residual: 0 })]);
     expect(JSON.stringify(document)).toBe(before);
     expect(solved.document.elements[1]).toEqual(line);
+  });
+
+  it("drives an open native path segment by stable identity and geometric half length", () => {
+    const dependent = sketch();
+    const path = { type: "path" as const, id: elementId("native-path"), layerId: fixtureLayer().id, nodes: [{ id: "p0", anchor: { x: 0, y: 0 }, join: "corner" as const }, { id: "p1", anchor: { x: 10, y: 0 }, join: "corner" as const }, { id: "p2", anchor: { x: 20, y: 0 }, join: "corner" as const }], segments: [{ id: "first", type: "cubicBezier" as const, startNodeId: "p0", endNodeId: "p1", control1: { x: 0, y: 10 }, control2: { x: 10, y: 10 } }, { id: "second", type: "line" as const, startNodeId: "p1", endNodeId: "p2" }], closed: false, style: fixtureStyle() };
+    const relation = { id: "path-mid", kind: "midpoint" as const, references: [{ elementId: dependent.id, nodeId: "a" }] as const, source: { kind: "path-segment" as const, elementId: path.id, segmentId: "first" } };
+    const document = { ...documentWith([dependent, path]), constraints: [relation] };
+    const midpoint = halfArcLengthMidpoint(pathSegmentToCurve(path, "first").curve)!;
+    const solved = solveConstraintComponents(document);
+    const shifted = { ...path, nodes: [{ id: "extra", anchor: { x: -10, y: 0 }, join: "corner" as const }, ...path.nodes], segments: [{ id: "extra-segment", type: "line" as const, startNodeId: "extra", endNodeId: "p0" }, ...path.segments] };
+    const shiftedSolved = solveConstraintComponents({ ...document, elements: [dependent, shifted] });
+    const moved = { ...path, nodes: path.nodes.map((node) => ({ ...node, anchor: { x: node.anchor.x + 5, y: node.anchor.y + 7 } })), segments: path.segments.map((segment) => segment.type === "cubicBezier" ? { ...segment, control1: { x: segment.control1.x + 5, y: segment.control1.y + 7 }, control2: { x: segment.control2.x + 5, y: segment.control2.y + 7 } } : segment) };
+    const movedSolved = solveConstraintComponents({ ...document, elements: [dependent, moved] });
+
+    expect(midpoint).not.toEqual({ x: 5, y: 0 });
+    expect((solved.document.elements[0] as SketchElement).nodes[0]?.point).toEqual(midpoint);
+    expect((shiftedSolved.document.elements[0] as SketchElement).nodes[0]?.point).toEqual(midpoint);
+    expect((movedSolved.document.elements[0] as SketchElement).nodes[0]?.point).toEqual({ x: midpoint.x + 5, y: midpoint.y + 7 });
+    expect(solved.document.elements[1]).toEqual(path);
+    expect(solved.residuals).toEqual([expect.objectContaining({ supported: true, satisfied: true })]);
+    expect(normalizedConstraintsForDocument(document)[0]).toMatchObject({ sourceKind: "path-segment", sourceSegmentId: "first" });
+  });
+
+  it.each(["closed", "missing", "degenerate"] as const)("fails closed for %s path sources", (failure) => {
+    const dependent = sketch();
+    const base = { type: "path" as const, id: elementId("native-path"), layerId: fixtureLayer().id, nodes: [{ id: "p0", anchor: { x: 0, y: 0 }, join: "corner" as const }, { id: "p1", anchor: { x: 10, y: 0 }, join: "corner" as const }], segments: [{ id: "segment", type: "line" as const, startNodeId: "p0", endNodeId: "p1" }], closed: false, style: fixtureStyle() };
+    const path = failure === "closed" ? { ...base, closed: true } : failure === "degenerate" ? { ...base, nodes: base.nodes.map((node) => ({ ...node, anchor: { x: 0, y: 0 } })) } : base;
+    const relation = { id: "path-mid", kind: "midpoint" as const, references: [{ elementId: dependent.id, nodeId: "a" }] as const, source: { kind: "path-segment" as const, elementId: path.id, segmentId: failure === "missing" ? "absent" : "segment" } };
+    const document = { ...documentWith([dependent, path]), constraints: [relation] };
+    expect(constraintResidualsForDocument(document)).toEqual([expect.objectContaining({ residual: Number.POSITIVE_INFINITY, satisfied: false, supported: false })]);
+    expect(solveConstraintComponents(document).document.elements[1]).toEqual(path);
   });
 
   it("keeps unsupported and missing entities distinguishable", () => {

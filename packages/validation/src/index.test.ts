@@ -142,12 +142,39 @@ describe("native document validation", () => {
     expect(validateProject({ ...project, pieces: "broken" }).success).toBe(false);
   });
 
-  it("migrates schema 8 documents and projects explicitly to schema 10", () => {
+  it("validates stable open Path segment midpoint sources and migrates v10 unchanged", () => {
+    const base = createDocument("path-midpoint", [{ id: layerId("layer-1"), name: "Design", visible: true, order: 0 }]);
+    const path = { type: "path" as const, id: "path", layerId: "layer-1", nodes: [{ id: "a", anchor: { x: 0, y: 0 }, join: "corner" as const }, { id: "b", anchor: { x: 10, y: 0 }, join: "corner" as const }], segments: [{ id: "stable-edge", type: "line" as const, startNodeId: "a", endNodeId: "b" }], closed: false, style: { stroke: "#000", strokeWidth: 1 } };
+    const dependent = { type: "sketch" as const, id: "dependent", layerId: "layer-1", nodes: [{ id: "mid", point: { x: 5, y: 2 } }, { id: "other", point: { x: 8, y: 2 } }], edges: [{ id: "dependent-edge", startNodeId: "mid", endNodeId: "other" }], style: path.style };
+    const relation = { id: "path-mid", kind: "midpoint" as const, references: [{ elementId: dependent.id, nodeId: "mid" }] as const, source: { kind: "path-segment" as const, elementId: path.id, segmentId: "stable-edge" } };
+    expect(validateDocument({ ...base, elements: [dependent, path], constraints: [relation] }).success).toBe(true);
+    const unexecutableLine = { ...path, nodes: [{ ...path.nodes[0]!, anchor: { x: 1e308, y: 0 } }, { ...path.nodes[1]!, anchor: { x: -1e308, y: 0 } }] };
+    expect(validateDocument({ ...base, elements: [dependent, unexecutableLine], constraints: [relation] }).success).toBe(false);
+    const unexecutableCubic = { ...path, segments: [{ id: "curve", type: "cubicBezier" as const, startNodeId: "a", endNodeId: "b", control1: { x: 1e308, y: 0 }, control2: { x: -1e308, y: 0 } }] };
+    expect(validateDocument({ ...base, elements: [dependent, unexecutableCubic], constraints: [{ ...relation, source: { ...relation.source, segmentId: "curve" } }] }).success).toBe(false);
+    const subnormalPath = { ...path, nodes: [{ ...path.nodes[0]!, anchor: { x: 0, y: 0 } }, { ...path.nodes[1]!, anchor: { x: Number.MIN_VALUE, y: 0 } }] };
+    expect(validateDocument({ ...base, elements: [dependent, subnormalPath], constraints: [relation] }).success).toBe(true);
+    expect(validateDocument({ ...base, elements: [dependent, { ...path, segments: [...path.segments, { id: "another", type: "line" as const, startNodeId: "a", endNodeId: "b" }] }], constraints: [relation] }).success).toBe(false);
+    expect(validateDocument({ ...base, elements: [dependent, { ...path, closed: true }], constraints: [relation] }).success).toBe(false);
+    expect(validateDocument({ ...base, elements: [dependent, { ...path, segments: [{ ...path.segments[0]!, startNodeId: "a", endNodeId: "a" }] }], constraints: [relation] }).success).toBe(false);
+    expect(validateDocument({ ...base, elements: [dependent, path], constraints: [{ ...relation, source: { ...relation.source, segmentId: "missing" } }] }).success).toBe(false);
+    const cubic = { ...path, segments: [{ id: "curve", type: "cubicBezier" as const, startNodeId: "a", endNodeId: "b", control1: { x: 2, y: 7 }, control2: { x: 9, y: -3 } }] };
+    expect(validateDocument({ ...base, elements: [dependent, cubic], constraints: [{ ...relation, source: { ...relation.source, segmentId: "curve" } }] }).success).toBe(true);
+    const degenerateCubic = { ...cubic, segments: [{ ...cubic.segments[0]!, endNodeId: "a", control1: { x: 0, y: 0 }, control2: { x: 0, y: 0 } }] };
+    expect(validateDocument({ ...base, elements: [dependent, degenerateCubic], constraints: [{ ...relation, source: { ...relation.source, segmentId: "curve" } }] }).success).toBe(false);
+    const legacyLine = { id: "legacy", kind: "midpoint", references: [{ elementId: dependent.id, nodeId: "mid" }], source: { kind: "line", elementId: "native-line" } };
+    const line = { type: "line" as const, id: "native-line", layerId: "layer-1", start: { x: 0, y: 0 }, end: { x: 10, y: 0 }, rotation: 0, style: path.style };
+    const migrated = migrateDocument({ ...base, schemaVersion: 10, elements: [dependent, line], constraints: [legacyLine] });
+    expect(migrated).toMatchObject({ schemaVersion: 11, constraints: [legacyLine] });
+    expect(validateDocument({ ...base, schemaVersion: 99 }).success).toBe(false);
+  });
+
+  it("migrates schema 8 documents and projects explicitly to schema 11", () => {
     const base = createDocument("schema-8", []);
     const migratedDocument = migrateDocument({ ...base, schemaVersion: 8 });
     const migratedProject = migrateProject({ schemaVersion: 8, id: "p", revision: 0, origin: "top-left", units: "mm", preferences: { lineGuidesEnabled: true, lineGuideAngle: 45 }, pages: [{ id: "page-1", page: base.page, layers: [], elements: [] }], activePageId: "page-1" });
-    expect(migratedDocument).toMatchObject({ schemaVersion: 10 });
-    expect(migratedProject).toMatchObject({ schemaVersion: 10 });
+    expect(migratedDocument).toMatchObject({ schemaVersion: 11 });
+    expect(migratedProject).toMatchObject({ schemaVersion: 11 });
     expect(migratedDocument).not.toHaveProperty("featureTree");
     expect((migratedProject as { pages?: readonly unknown[] }).pages?.[0]).not.toHaveProperty("featureTree");
   });
@@ -159,14 +186,14 @@ describe("native document validation", () => {
     const project = createProject({ ...base, elements: [sketch], constraints: [pageMidpoint] } as unknown as import("@nodra/domain").DocumentSnapshot);
     const legacyProject = { ...project, pieces: project.pieces.map((piece) => ({ ...piece, sketches: [{ pageId: project.pages[0]!.id, sketchId: elementId("sketch") }] })), schemaVersion: 9 };
     const migrated = migrateProject(legacyProject);
-    expect(migrated).toMatchObject({ schemaVersion: 10, pages: [{ constraints: [pageMidpoint], elements: [{ constraints: [sketch.constraints[0]] }] }] });
+    expect(migrated).toMatchObject({ schemaVersion: 11, pages: [{ constraints: [pageMidpoint], elements: [{ constraints: [sketch.constraints[0]] }] }] });
     expect(validateProject(legacyProject).success).toBe(true);
     expect(JSON.stringify(migrated)).not.toContain('"source"');
 
     const legacyDocument = { ...base, elements: [sketch], constraints: [pageMidpoint], schemaVersion: 9 };
     const parsed = parseDocument(JSON.stringify(legacyDocument));
     expect(parsed.success).toBe(true);
-    expect(validateDocument({ ...base, schemaVersion: 11 }).success).toBe(false);
+    expect(validateDocument({ ...base, schemaVersion: 99 }).success).toBe(false);
     expect(validateDocument({ ...base, schemaVersion: 9 }).success).toBe(true);
   });
   it("validates page-scoped feature trees and their element references strictly", () => {
@@ -478,7 +505,7 @@ describe("native document validation", () => {
     const tinyLine = { ...line, start: { x: 0, y: 0 }, end: { x: 0, y: Number.MIN_VALUE } };
     expect(validateDocument({ ...base, elements: [sketch, tinyLine], constraints: [native] }).success).toBe(true);
     const v9 = { ...base, schemaVersion: 9, constraints: undefined };
-    expect(migrateDocument(v9)).toMatchObject({ schemaVersion: 10, elements: v9.elements });
+    expect(migrateDocument(v9)).toMatchObject({ schemaVersion: 11, elements: v9.elements });
     expect(validateDocument(v9).success).toBe(true);
   });
   it("accepts closed contour paths and rejects open rings", () => {

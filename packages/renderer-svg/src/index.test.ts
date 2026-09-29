@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createDocument, elementId, layerId, withElements, type ArcElement, type DocumentSnapshot } from "@nodra/domain";
 import { buildSketchProfile } from "@nodra/geometry";
+import { validateDocument } from "@nodra/validation";
 import { FabricableDocumentProjectionError, projectFabricableDocument, renderSketchProfileSvg, renderSvg } from "./index.js";
 
 const layer = { id: layerId("design"), name: "Design", visible: true, order: 0 } as const;
@@ -53,6 +54,26 @@ describe("SVG renderer boundary", () => {
       const hiddenResult = renderSvg(hidden, { zoom: 1, panMm: { x: 0, y: 0 } });
       expect(hiddenResult.success && hiddenResult.svg).not.toContain("data-constraint-id");
     }
+  });
+  it("renders a validated Path midpoint source without synthesizing source geometry", () => {
+    const path = { type: "path" as const, id: elementId("native-path"), layerId: layer.id, nodes: [{ id: "start", anchor: { x: 0, y: 0 }, join: "corner" as const }, { id: "end", anchor: { x: 10, y: 0 }, join: "corner" as const }], segments: [{ id: "open-segment", type: "line" as const, startNodeId: "start", endNodeId: "end" }], closed: false, style };
+    const dependentId = elementId("path-midpoint-dependent");
+    const dependent = { type: "sketch" as const, id: dependentId, layerId: layer.id, nodes: [{ id: "mid", point: { x: 5, y: 0 } }, { id: "other", point: { x: 8, y: 2 } }], edges: [{ id: "dependent-edge", startNodeId: "mid", endNodeId: "other" }], style };
+    const relation = { id: "path-midpoint", kind: "midpoint" as const, references: [{ elementId: dependentId, nodeId: "mid" }] as const, source: { kind: "path-segment" as const, elementId: path.id, segmentId: "open-segment" } };
+    const source = { ...withElements(createDocument("path-midpoint-render", [layer]), [path, dependent]), schemaVersion: 11, constraints: [relation] };
+    const before = structuredClone(source);
+
+    expect(validateDocument(source).success).toBe(true);
+    expect(() => renderSvg(source, { zoom: 1, panMm: { x: 0, y: 0 } })).not.toThrow();
+    const rendered = renderSvg(source, { zoom: 1, panMm: { x: 0, y: 0 } });
+    expect(rendered.success).toBe(true);
+    if (rendered.success) {
+      expect(rendered.renderedElementIds).toEqual([path.id, dependentId]);
+      expect(rendered.svg).toContain('data-element-id="native-path"');
+      expect(rendered.svg).not.toContain('data-element-id="native-path:open-segment"');
+      expect(rendered.svg).not.toContain('data-constraint-id="path-midpoint"');
+    }
+    expect(source).toEqual(before);
   });
   it("does not interpret a one-reference native midpoint as a sketch-edge glyph", () => {
     const dependentId = elementId("native-dependent");

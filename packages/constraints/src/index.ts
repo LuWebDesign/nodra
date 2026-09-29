@@ -1,5 +1,5 @@
 import { isCircleElement, type CircleConstraintKind, type DocumentSnapshot, type Element, type ElementId, type PointMm, type SketchConstraintKind, type SketchConstraint } from "@nodra/domain";
-import { lineElementToCurve, solveCircleConstraints, solveSketchConstraints } from "@nodra/geometry";
+import { halfArcLengthMidpoint, lineElementToCurve, pathSegmentToCurve, solveCircleConstraints, solveSketchConstraints } from "@nodra/geometry";
 
 export type ConstraintState = "underdefined" | "fully-defined" | "overdefined" | "conflict" | "invalid";
 export type ParametricConstraintKind = SketchConstraintKind | CircleConstraintKind;
@@ -35,6 +35,8 @@ export interface NormalizedConstraint {
   readonly kind: SketchConstraintKind;
   readonly value?: number;
   readonly sourceElementId?: ElementId;
+  readonly sourceKind?: "line" | "path-segment";
+  readonly sourceSegmentId?: string;
 }
 
 export interface ConstraintDofMetadata {
@@ -144,23 +146,27 @@ const solveGlobalSegmentRelation = (kind: SketchConstraintKind, first: MutablePo
   return true;
 };
 
-const nativeLineMidpoint = (document: DocumentSnapshot, constraint: NormalizedConstraint): PointMm | undefined => {
+const nativeSourceMidpoint = (document: DocumentSnapshot, constraint: NormalizedConstraint): PointMm | undefined => {
   if (constraint.sourceElementId === undefined || constraint.references.length !== 1) return undefined;
-  const line = document.elements.find((element) => element.id === constraint.sourceElementId);
-  if (!line || line.type !== "line") return undefined;
+  const source = document.elements.find((element) => element.id === constraint.sourceElementId);
+  if (!source) return undefined;
   try {
-    const curve = lineElementToCurve(line).curve;
-    const { start, end } = curve;
-    if (![start.x, start.y, end.x, end.y].every(Number.isFinite) || start.x === end.x && start.y === end.y) return undefined;
-    const midpoint = { x: start.x / 2 + end.x / 2, y: start.y / 2 + end.y / 2 };
-    return Number.isFinite(midpoint.x) && Number.isFinite(midpoint.y) ? midpoint : undefined;
+    if (constraint.sourceKind === "line" && source.type === "line" && constraint.sourceSegmentId === undefined) {
+      const curve = lineElementToCurve(source).curve;
+      const { start, end } = curve;
+      if (![start.x, start.y, end.x, end.y].every(Number.isFinite) || start.x === end.x && start.y === end.y) return undefined;
+      const midpoint = { x: start.x / 2 + end.x / 2, y: start.y / 2 + end.y / 2 };
+      return Number.isFinite(midpoint.x) && Number.isFinite(midpoint.y) ? midpoint : undefined;
+    }
+    if (constraint.sourceKind === "path-segment" && source.type === "path" && !source.closed && constraint.sourceSegmentId !== undefined) return halfArcLengthMidpoint(pathSegmentToCurve(source, constraint.sourceSegmentId).curve);
+    return undefined;
   } catch { return undefined; }
 };
 
 const projectGlobalConstraint = (document: DocumentSnapshot, points: Map<string, MutablePoint>, constraint: NormalizedConstraint): number => {
   if (constraint.sourceElementId !== undefined) {
     const dependent = constraint.references.length === 1 ? points.get(constraintNodeKey(constraint.references[0]!)) : undefined;
-    const midpoint = nativeLineMidpoint(document, constraint);
+    const midpoint = nativeSourceMidpoint(document, constraint);
     if (constraint.kind !== "midpoint" || !dependent || !midpoint) return 0;
     const delta = Math.hypot(dependent.x - midpoint.x, dependent.y - midpoint.y);
     dependent.x = midpoint.x; dependent.y = midpoint.y;
@@ -285,7 +291,7 @@ export function normalizedConstraintsForDocument(document: DocumentSnapshot): re
   const sketches = document.elements.filter((element): element is Extract<Element, { type: "sketch" }> => element.type === "sketch");
   return [
     ...sketches.flatMap((sketch) => (sketch.constraints ?? []).map((constraint) => ({ id: constraintIdentity("local", sketch.id, constraint.id), scope: "local" as const, ownerId: sketch.id, references: pointReferencesForConstraint(sketches, constraint), kind: constraint.kind, ...(constraint.value !== undefined ? { value: constraint.value } : {}) }))),
-    ...(document.constraints ?? []).map((constraint) => ({ id: constraintIdentity("document", undefined, constraint.id), scope: "document" as const, references: pointReferencesForConstraint(sketches, constraint), kind: constraint.kind, ...("source" in constraint ? { sourceElementId: constraint.source.elementId } : {}), ...(constraint.value !== undefined ? { value: constraint.value } : {}) })),
+    ...(document.constraints ?? []).map((constraint) => ({ id: constraintIdentity("document", undefined, constraint.id), scope: "document" as const, references: pointReferencesForConstraint(sketches, constraint), kind: constraint.kind, ...("source" in constraint ? { sourceElementId: constraint.source.elementId, sourceKind: constraint.source.kind, ...(constraint.source.kind === "path-segment" ? { sourceSegmentId: constraint.source.segmentId } : {}) } : {}), ...(constraint.value !== undefined ? { value: constraint.value } : {}) })),
   ].sort((first, second) => first.id < second.id ? -1 : first.id > second.id ? 1 : 0);
 
 }
@@ -541,7 +547,7 @@ export function constraintResidualsForDocument(document: DocumentSnapshot, toler
   return normalizedConstraintsForDocument(document).map((constraint) => {
     if (constraint.sourceElementId !== undefined) {
       const dependent = constraint.references.length === 1 ? points.get(constraintNodeKey(constraint.references[0]!)) : undefined;
-      const midpoint = nativeLineMidpoint(document, constraint);
+      const midpoint = nativeSourceMidpoint(document, constraint);
       if (constraint.kind !== "midpoint" || !dependent || !midpoint || constraint.value !== undefined) return { constraintId: constraint.id, residual: Number.POSITIVE_INFINITY, satisfied: false, supported: false };
       const residual = Math.hypot(dependent.x - midpoint.x, dependent.y - midpoint.y);
       return { constraintId: constraint.id, residual, satisfied: residual <= tolerance, supported: true };
