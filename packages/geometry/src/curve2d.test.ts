@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { closestParameter, curveBounds, GEOMETRY_EPSILON, PARAMETER_EPSILON, pointAt, splitCurveAtParameters, tangentAt, type ArcCurve2D, type CircleCurve2D, type CubicBezierCurve2D, type Curve2D, type LineCurve2D } from "./index.js";
+import { closestParameter, curveBounds, GEOMETRY_EPSILON, halfArcLengthMidpoint, PARAMETER_EPSILON, pointAt, splitCurveAtParameters, tangentAt, type ArcCurve2D, type CircleCurve2D, type CubicBezierCurve2D, type Curve2D, type LineCurve2D } from "./index.js";
 
 const expectPointClose = (actual: { readonly x: number; readonly y: number }, expected: { readonly x: number; readonly y: number }, digits = 8) => {
   expect(actual.x).toBeCloseTo(expected.x, digits);
@@ -25,6 +25,27 @@ function expectSplitMatchesOriginal(curve: Curve2D, parameters: readonly number[
   for (let index = 1; index < fragments.length; index += 1) expectPointClose(pointAt(fragments[index - 1]!.curve, 1), pointAt(fragments[index]!.curve, 0), 10);
   return fragments;
 }
+
+describe("halfArcLengthMidpoint", () => {
+  it("returns exact line and partial-arc midpoints and fails closed for degenerate/closed curves", () => {
+    expect(halfArcLengthMidpoint(line)).toEqual(pointAt(line, 0.5));
+    expectPointClose(halfArcLengthMidpoint(wrappedArc)!, pointAt(wrappedArc, 0.5));
+    expect(halfArcLengthMidpoint({ ...line, end: line.start })).toBeUndefined();
+    expect(halfArcLengthMidpoint({ type: "circle", center: { x: 0, y: 0 }, radius: 3 })).toBeUndefined();
+    expect(halfArcLengthMidpoint({ type: "arc", center: { x: 0, y: 0 }, radius: 3, startAngle: 0, endAngle: 0, direction: "clockwise", fullTurn: true })).toBeUndefined();
+    expect(() => halfArcLengthMidpoint({ ...line, end: { x: Number.NaN, y: 0 } })).toThrow("finite");
+  });
+
+  it("integrates an asymmetric cubic by distance and preserves reversal", () => {
+    const asymmetric: CubicBezierCurve2D = { type: "cubicBezier", p0: { x: 0, y: 0 }, p1: { x: 1, y: 12 }, p2: { x: 9, y: -2 }, p3: { x: 10, y: 0 } };
+    const midpoint = halfArcLengthMidpoint(asymmetric)!;
+    expect(Math.abs(midpoint.x - pointAt(asymmetric, 0.5).x) + Math.abs(midpoint.y - pointAt(asymmetric, 0.5).y)).toBeGreaterThan(0.1);
+    const reversed: CubicBezierCurve2D = { type: "cubicBezier", p0: asymmetric.p3, p1: asymmetric.p2, p2: asymmetric.p1, p3: asymmetric.p0 };
+    expectPointClose(midpoint, halfArcLengthMidpoint(reversed)!, 7);
+    const pointCurve: CubicBezierCurve2D = { type: "cubicBezier", p0: { x: 2, y: 3 }, p1: { x: 2, y: 3 }, p2: { x: 2, y: 3 }, p3: { x: 2, y: 3 } };
+    expect(halfArcLengthMidpoint(pointCurve)).toBeUndefined();
+  });
+});
 
 describe("Curve2D line operations", () => {
   it("evaluates horizontal, vertical, and diagonal lines with raw tangents and exact bounds", () => {

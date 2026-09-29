@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { elementId, layerId, type ArcElement, type CircleElement, type EllipseElement, type PathElement, type RectangleElement, type SketchElement, type SplineElement } from "@nodra/domain";
-import { arcElementToCurve, circleElementToCurve, deriveCurvePieces, elementToContour, elementToCurves, ellipseElementToCurve, lineElementToCurve, pathSegmentToCurve, rectangleElementToCurves, rotatedLineEndpoints, sketchEdgeToCurve, splineSpanToCurve } from "./index.js";
+import { arcElementToCurve, circleElementToCurve, deriveCurvePieces, elementToContour, elementToCurves, ellipseElementToCurve, halfArcLengthMidpoint, lineElementToCurve, pathSegmentToCurve, rectangleElementToCurves, rotatedLineEndpoints, sketchEdgeToCurve, splineSpanToCurve } from "./index.js";
 
 const style = { stroke: "#000", strokeWidth: 1 };
 const layer = layerId("layer");
@@ -32,6 +32,7 @@ describe("Curve2D source adapters", () => {
     expect(sourced.curve.start.x).toBeCloseTo(5); expect(sourced.curve.start.y).toBeCloseTo(-5);
     expect(sourced.curve.end.x).toBeCloseTo(5); expect(sourced.curve.end.y).toBeCloseTo(5);
     expect(rotatedLineEndpoints(element)).toEqual([sourced.curve.start, sourced.curve.end]);
+    expect(halfArcLengthMidpoint(sourced.curve)).toEqual({ x: 5, y: 0 });
     const flipped = { ...line(), flipX: true };
     expect(lineElementToCurve(flipped).curve).toEqual({ type: "line", start: { x: 10, y: 0 }, end: { x: 0, y: 0 } });
     expect(elementToContour(flipped).contours[0]!.points).toEqual([{ x: 10, y: 0 }, { x: 0, y: 0 }, { x: 10, y: 0 }]);
@@ -69,6 +70,7 @@ describe("Curve2D source adapters", () => {
       source: { kind: "path-segment", elementId: path.id, segmentId: "bc", startNodeId: "b", endNodeId: "c" }, sourceIndex: 1,
     });
     expect(elementToCurves(path).map(({ sourceIndex }) => sourceIndex)).toEqual([0, 1]);
+    expect(halfArcLengthMidpoint(pathSegmentToCurve(path, "bc").curve)).toBeDefined();
     const closed: PathElement = { ...path, closed: true, segments: [...path.segments, { id: "ca", type: "line", startNodeId: "c", endNodeId: "a" }] };
     expect(elementToCurves(closed)).toHaveLength(3);
     const bcSource = pathSegmentToCurve(closed, "bc").source;
@@ -94,6 +96,7 @@ describe("Curve2D source adapters", () => {
     });
     expect(splineSpanToCurve(spline, 1).curve).toEqual({ type: "cubicBezier", p0: { x: 10, y: 0 }, p1: { x: 10, y: 0 }, p2: { x: 20, y: 5 }, p3: { x: 20, y: 5 } });
     expect(elementToCurves(spline)).toHaveLength(2);
+    expect(halfArcLengthMidpoint(splineSpanToCurve(spline, 0).curve)).toBeDefined();
     const closed = { ...spline, closed: true };
     expect(splineSpanToCurve(closed, 2)).toMatchObject({ curve: { p0: { x: 20, y: 5 }, p3: { x: 0, y: 0 } }, source: { startNodeId: "c", endNodeId: "a" }, sourceIndex: 2 });
     expect(elementToCurves(closed)).toHaveLength(3);
