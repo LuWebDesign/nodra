@@ -1,7 +1,43 @@
 import type { DocumentSnapshot, Element, ElementId, LineElement, PathElement, PathSegment, PointMm } from "@nodra/domain";
-import { boundsOf, boundsOfElements, closestParameter, connectableNodeAddress, contourSegmentAt, contourVertexNodes, dimensionGeometry, elementCenter, elementSegmentAt, hitTest, pathGeometryNodes, pointAt, cuttableSegments, splitCuttableSegments, pathSegmentAt, realGeometryNodes, elementToCurves, intersectCurves, partitionCurveByInterval, selectRemovableCurveInterval, selectSourcedCurveInterval, GEOMETRY_EPSILON, type Bounds, type ContourSegmentHit, type ContourVertexNode, type CurveFragment, type PathGeometryNode, type RealGeometryNode, type PathSegmentHit, type SketchProfileResult } from "@nodra/geometry";
+import { boundsOf, boundsOfElements, closestParameter, connectableNodeAddress, contourSegmentAt, contourVertexNodes, dimensionGeometry, elementCenter, elementSegmentAt, hitTest, pathGeometryNodes, pointAt, cuttableSegments, splitCuttableSegments, pathSegmentAt, realGeometryNodes, elementToCurves, halfArcLengthMidpoint, intersectCurves, partitionCurveByInterval, selectRemovableCurveInterval, selectSourcedCurveInterval, GEOMETRY_EPSILON, type Bounds, type ContourSegmentHit, type ContourVertexNode, type CurveFragment, type Curve2DSource, type PathGeometryNode, type RealGeometryNode, type PathSegmentHit, type SketchProfileResult } from "@nodra/geometry";
 
 export interface DragGeometry { readonly position: PointMm; readonly size: { readonly width: number; readonly height: number } }
+
+export interface OpenEdgeMidpointHover {
+  readonly point: PointMm;
+  readonly source: Curve2DSource;
+}
+
+/** Picks the nearest visible open-edge body and returns its calculated half-arc-length point. */
+export function pickOpenEdgeMidpointHover(document: DocumentSnapshot, pointer: PointMm, zoom: number, tolerancePx = 8): OpenEdgeMidpointHover | undefined {
+  if (![pointer.x, pointer.y, zoom, tolerancePx].every(Number.isFinite) || zoom <= 0 || tolerancePx < 0) throw new Error("open edge midpoint coordinates, zoom, and tolerance must be valid");
+  const visibleLayers = new Set(document.layers.filter((layer) => layer.visible).map((layer) => layer.id));
+  let best: { readonly result: OpenEdgeMidpointHover; readonly distance: number; readonly key: string } | undefined;
+  for (const element of document.elements) {
+    if (!visibleLayers.has(element.layerId) || !(element.type === "sketch" || element.type === "line" || element.type === "path" || element.type === "spline" || element.type === "arc")) continue;
+    if ((element.type === "path" || element.type === "spline") && element.closed) continue;
+    let curves;
+    try { curves = elementToCurves(element); } catch { continue; }
+    for (const sourced of curves) {
+      const source = sourced.source;
+      if (!(source.kind === "sketch-edge" || source.kind === "line-element" || source.kind === "path-segment" || source.kind === "spline-span" || source.kind === "arc-element")) continue;
+      try {
+        const parameter = closestParameter(sourced.curve, pointer);
+        const closest = pointAt(sourced.curve, parameter);
+        const distance = Math.hypot(pointer.x - closest.x, pointer.y - closest.y);
+        if (!Number.isFinite(distance) || distance * zoom > tolerancePx) continue;
+        const midpoint = halfArcLengthMidpoint(sourced.curve);
+        if (!midpoint) continue;
+        const key = source.kind === "sketch-edge" ? `${source.kind}:${source.elementId}:${source.edgeId}`
+          : source.kind === "path-segment" ? `${source.kind}:${source.elementId}:${source.segmentId}`
+            : source.kind === "spline-span" ? `${source.kind}:${source.elementId}:${source.startNodeId}:${source.endNodeId}`
+              : `${source.kind}:${source.elementId}`;
+        if (!best || distance < best.distance || distance === best.distance && key < best.key) best = { result: { point: midpoint, source }, distance, key };
+      } catch { /* Malformed or non-executable candidates fail closed. */ }
+    }
+  }
+  return best?.result;
+}
 
 /** Native circular centers shown as transient, non-document UI datums. */
 export function visibleNativeCircularCenters(document: DocumentSnapshot): readonly { readonly elementId: ElementId; readonly point: PointMm }[] {
