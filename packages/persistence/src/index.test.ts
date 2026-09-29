@@ -76,6 +76,18 @@ describe("DexieProjectRepository", () => {
     expect(recovered.ok && recovered.revision.document).toMatchObject({ elements: [{ nodes: sketch.nodes, constraints: sketch.constraints }] });
   });
 
+  it("round-trips a cross-sketch driving midpoint through the repository", async () => {
+    db = await repository();
+    const base = document();
+    const dependent = { type: "sketch" as const, id: elementId("dependent-sketch"), layerId: layerId("layer-1"), nodes: [{ id: "dependent", point: { x: 15, y: 5 } }, { id: "other", point: { x: 20, y: 5 } }], edges: [{ id: "dependent-edge", startNodeId: "dependent", endNodeId: "other" }], style: { stroke: "#000", strokeWidth: 1 } };
+    const source = { type: "sketch" as const, id: elementId("source-sketch"), layerId: layerId("layer-1"), nodes: [{ id: "start", point: { x: 10, y: 0 } }, { id: "end", point: { x: 20, y: 10 } }], edges: [{ id: "source-edge", startNodeId: "start", endNodeId: "end" }], style: { stroke: "#000", strokeWidth: 1 } };
+    const constraint = { id: "cross-midpoint", kind: "midpoint" as const, references: [{ elementId: dependent.id, nodeId: "dependent" }, { elementId: source.id, edgeId: "source-edge" }] as const };
+    const saved = { ...base, elements: [dependent, source], constraints: [constraint] };
+    expect((await db.saveProject(metadata, saved)).ok).toBe(true);
+    const recovered = await db.getProject(metadata.id);
+    expect(recovered.ok && recovered.revision.document).toMatchObject({ elements: [dependent, source], constraints: [constraint] });
+  });
+
   it("round-trips explicit connections through the repository", async () => {
     db = await repository();
     const base = document();

@@ -268,12 +268,17 @@ export const validateDocumentConstraints = (elements: readonly z.infer<typeof el
     const segmentRelation = constraint.kind === "parallel" || constraint.kind === "perpendicular" || constraint.kind === "equal";
     const midpointRelation = constraint.kind === "midpoint" && constraint.references.length === 2 && "nodeId" in constraint.references[0]! && "edgeId" in constraint.references[1]!;
     if (constraint.kind === "midpoint") {
-      const dependent = midpointRelation ? constraint.references[0] : undefined;
-      const edgeReference = midpointRelation ? constraint.references[1] : undefined;
-      const ownerId = dependent && "nodeId" in dependent ? dependent.elementId : undefined;
-      const edge = edgeReference && "edgeId" in edgeReference ? sketches.get(ownerId!)?.edges.find((candidate) => candidate.id === edgeReference.edgeId) : undefined;
-      if (!midpointRelation || !dependent || !edgeReference || !ownerId || edgeReference.elementId !== ownerId || !edge) ctx.addIssue({ code: "custom", message: "Midpoint constraints require a dependent node followed by an edge in the same sketch", path: [...path, index, "references"] });
-      else if ("nodeId" in dependent && (dependent.nodeId === edge.startNodeId || dependent.nodeId === edge.endNodeId)) ctx.addIssue({ code: "custom", message: "Midpoint dependent node must differ from both edge endpoints", path: [...path, index, "references", 0] });
+      const firstReference = constraint.references[0];
+      const secondReference = constraint.references[1];
+      const dependent = firstReference && "nodeId" in firstReference ? firstReference : undefined;
+      const edgeReference = secondReference && "edgeId" in secondReference ? secondReference : undefined;
+      const ownerId = dependent?.elementId;
+      const sourceId = edgeReference?.elementId;
+      const edge = edgeReference && sourceId ? sketches.get(sourceId)?.edges.find((candidate) => candidate.id === edgeReference.edgeId) : undefined;
+      const dependentSketch = ownerId ? sketches.get(ownerId) : undefined;
+      const dependentExists = dependent && dependentSketch?.nodes.some((node) => node.id === dependent.nodeId);
+      if (!dependent || !edgeReference || !ownerId || !sourceId || !dependentExists || !edge) ctx.addIssue({ code: "custom", message: "Midpoint constraints require an existing dependent node followed by an existing sketch edge", path: [...path, index, "references"] });
+      else if (sourceId === ownerId && (dependent.nodeId === edge.startNodeId || dependent.nodeId === edge.endNodeId)) ctx.addIssue({ code: "custom", message: "Midpoint dependent node must differ from both edge endpoints", path: [...path, index, "references", 0] });
     }
     const canonicalSegments = segmentRelation && constraint.references.length === 2 && constraint.references.every((reference) => "edgeId" in reference);
     const legacySegments = segmentRelation && constraint.references.length === 4 && constraint.references.every((reference) => "nodeId" in reference);
@@ -300,13 +305,13 @@ export const validateDocumentConstraints = (elements: readonly z.infer<typeof el
   for (const { constraint, ownerId } of midpointConstraints) {
     if (constraint.references.length !== 2 || !("nodeId" in constraint.references[0]!) || !("edgeId" in constraint.references[1]!)) continue;
     const dependent = constraint.references[0]; const edgeReference = constraint.references[1]; const sketchId = ownerId ?? dependent.elementId;
-    if (dependent.elementId !== sketchId || edgeReference.elementId !== sketchId) continue;
-    const edge = sketches.get(sketchId)?.edges.find((candidate) => candidate.id === edgeReference.edgeId);
+    if (dependent.elementId !== sketchId) continue;
+    const edge = sketches.get(edgeReference.elementId)?.edges.find((candidate) => candidate.id === edgeReference.edgeId);
     if (!edge) continue;
     const dependentKey = JSON.stringify([sketchId, dependent.nodeId]);
     if (dependentNodeKeys.has(dependentKey)) hasDuplicateDependent = true;
     dependentNodeKeys.add(dependentKey);
-    dependencies.set(dependentKey, [...(dependencies.get(dependentKey) ?? []), JSON.stringify([sketchId, edge.startNodeId]), JSON.stringify([sketchId, edge.endNodeId])]);
+    dependencies.set(dependentKey, [...(dependencies.get(dependentKey) ?? []), JSON.stringify([edgeReference.elementId, edge.startNodeId]), JSON.stringify([edgeReference.elementId, edge.endNodeId])]);
   }
   const visiting = new Set<string>(); const visited = new Set<string>();
   const hasCycle = (node: string): boolean => {

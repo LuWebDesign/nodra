@@ -423,7 +423,14 @@ describe("native document validation", () => {
     expect(validateDocument({ ...base, elements: [{ ...sketch, constraints: [{ ...midpoint, references: [midpoint.references[0], { elementId: "other", edgeId: "ab" }] }] }] }).success).toBe(false);
     const other = { ...sketch, id: "other", nodes: nodes.map((node) => ({ ...node, id: `other-${node.id}` })), edges: [{ id: "other-ab", startNodeId: "other-a", endNodeId: "other-b" }] };
     const crossSketch = { id: "global-mid", kind: "midpoint" as const, references: [{ elementId: "sketch", nodeId: "c" }, { elementId: "other", edgeId: "other-ab" }] as const };
-    expect(validateDocument({ ...base, elements: [sketch, other], constraints: [crossSketch] }).success).toBe(false);
+    expect(validateDocument({ ...base, elements: [sketch, other], constraints: [crossSketch] }).success).toBe(true);
+    expect(validateDocument({ ...base, elements: [sketch, other], constraints: [crossSketch, { ...crossSketch, id: "duplicate-dependent" }] }).success).toBe(false);
+    const crossCycle = [
+      { id: "cross-a", kind: "midpoint" as const, references: [{ elementId: "sketch", nodeId: "c" }, { elementId: "other", edgeId: "other-cd" }] },
+      { id: "cross-b", kind: "midpoint" as const, references: [{ elementId: "other", nodeId: "other-c" }, { elementId: "sketch", edgeId: "ab" }] },
+    ];
+    const cycleSource = { ...other, nodes: [...other.nodes, { id: "other-d", point: { x: 12, y: 0 } }], edges: [{ id: "other-cd", startNodeId: "other-c", endNodeId: "other-d" }] };
+    expect(validateDocument({ ...base, elements: [sketch, cycleSource], constraints: crossCycle }).success).toBe(false);
     expect(validateDocument({ ...base, elements: [{ ...sketch, constraints: [{ ...midpoint, references: [{ elementId: "sketch", nodeId: "a" }, midpoint.references[1]] }] }] }).success).toBe(false);
     expect(validateDocument({ ...base, elements: [{ ...sketch, constraints: [{ ...midpoint, references: [midpoint.references[0], { elementId: "sketch", edgeId: "missing" }] }] }] }).success).toBe(false);
     const cyclic = { ...sketch, nodes: [...nodes, { id: "e", point: { x: 3, y: 3 } }], edges: [edge, { id: "cd", startNodeId: "c", endNodeId: "d" }, { id: "de", startNodeId: "d", endNodeId: "e" }, { id: "ec", startNodeId: "e", endNodeId: "c" }], constraints: [

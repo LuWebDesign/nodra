@@ -539,6 +539,29 @@ describe("editor core", () => {
     expect(redo(undo(changed)).document).toEqual(changed.document);
   });
 
+  it("drives a node in another sketch from a document midpoint and cleans it on source topology edits", () => {
+    const dependent = createSketchLine(elementId("cross-mid-dependent"), layerId("default"), rectangle.style, { x: 5, y: 8 }, { x: 15, y: 8 });
+    const source = createSketchLine(elementId("cross-mid-source"), layerId("default"), rectangle.style, { x: 20, y: 0 }, { x: 40, y: 0 });
+    const relation = { id: "cross-mid", kind: "midpoint" as const, references: [{ elementId: dependent.id, nodeId: dependent.nodes[0]!.id }, { elementId: source.id, edgeId: source.edges[0]!.id }] as const };
+    const initial = dispatch(createEditor({ ...document, elements: [dependent, source] }), addDocumentConstraint(relation));
+    const driven = initial.document.elements[0] as SketchElement;
+    expect(driven.nodes[0]?.point).toEqual({ x: 30, y: 0 });
+    const sourceBefore = initial.document.elements[1];
+    const moved = dispatch(initial, updateElementNode(source.id, 1, { x: 50, y: 10 }));
+    expect((moved.document.elements[0] as SketchElement).nodes[0]?.point).toEqual({ x: 35, y: 0 });
+    expect(moved.document.elements[1]).not.toEqual(sourceBefore);
+    expect(undo(moved).document).toEqual(initial.document);
+    expect(redo(undo(moved)).document).toEqual(moved.document);
+
+    const split = dispatch(initial, cutSketchEdge(source.id, 0, { x: 30, y: 0 }));
+    expect(split.document.constraints).toEqual([]);
+    expect(undo(split).document).toEqual(initial.document);
+    const deleted = dispatch(initial, cutSketchEdge(source.id, 0));
+    expect(deleted.document.constraints).toEqual([]);
+    expect((deleted.document.elements[0] as SketchElement).nodes[0]?.point).toEqual({ x: 30, y: 0 });
+    expect(undo(deleted).document).toEqual(initial.document);
+  });
+
   it("keeps a midpoint dependent on a moved source endpoint and restores the relation on undo", () => {
     const base = createSketchLine(elementId("midpoint-move"), layerId("default"), rectangle.style, { x: 0, y: 0 }, { x: 10, y: 0 });
     const sketch: SketchElement = { ...base, nodes: [...base.nodes, { id: "source-end", point: { x: 10, y: 10 } }], edges: [...base.edges, { id: "source", startNodeId: base.nodes[1]!.id, endNodeId: "source-end" }] };

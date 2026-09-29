@@ -240,8 +240,10 @@ const pointReferencesForConstraint = (sketches: readonly Extract<Element, { type
     const dependent = constraint.references[0];
     const edgeReference = constraint.references[1];
     const sketch = dependent && sketches.find((candidate) => candidate.id === dependent.elementId);
-    const edge = sketch && edgeReference && edgeReference.elementId === sketch.id ? sketch.edges.find((candidate) => candidate.id === edgeReference.edgeId) : undefined;
-    return dependent && sketch && edge ? [dependent, { elementId: sketch.id, nodeId: edge.startNodeId }, { elementId: sketch.id, nodeId: edge.endNodeId }] : [];
+    const sourceSketch = edgeReference && sketches.find((candidate) => candidate.id === edgeReference.elementId);
+    const edge = sourceSketch && edgeReference ? sourceSketch.edges.find((candidate) => candidate.id === edgeReference.edgeId) : undefined;
+    if (!dependent || !sketch || !edge || constraint.references[0]?.elementId !== dependent.elementId) return [];
+    return [dependent, { elementId: sourceSketch!.id, nodeId: edge.startNodeId }, { elementId: sourceSketch!.id, nodeId: edge.endNodeId }];
   }
   if (constraint.references.every((reference) => "nodeId" in reference)) return constraint.references;
   const segmentRelation = constraint.kind === "parallel" || constraint.kind === "perpendicular" || constraint.kind === "equal";
