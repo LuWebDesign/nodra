@@ -1,4 +1,4 @@
-export const CURRENT_SCHEMA_VERSION = 12 as const;
+export const CURRENT_SCHEMA_VERSION = 13 as const;
 
 export type SchemaVersion = typeof CURRENT_SCHEMA_VERSION;
 export type DocumentId = string & { readonly __brand: "DocumentId" };
@@ -114,7 +114,7 @@ export interface SketchConstraint { readonly id: string; readonly kind: SketchCo
 export interface SketchElement extends ElementBase { readonly type: "sketch"; readonly id: ElementId; readonly layerId: LayerId; readonly nodes: readonly SketchNode[]; readonly edges: readonly SketchEdge[]; readonly constraints?: readonly SketchConstraint[]; readonly style: VisualStyle; readonly operation?: OperationMetadata }
 /** Page-level parametric constraint; references may span multiple sketch elements. */
 export type DocumentConstraint = SketchConstraint | NativeLineMidpointConstraint;
-export interface NativeLineMidpointConstraint { readonly id: string; readonly kind: "midpoint"; readonly references: readonly [SketchPointReference]; readonly source: { readonly kind: "line"; readonly elementId: ElementId } | { readonly kind: "path-segment"; readonly elementId: ElementId; readonly segmentId: string } | { readonly kind: "spline-span"; readonly elementId: ElementId; readonly startNodeId: string; readonly endNodeId: string }; readonly value?: never }
+export interface NativeLineMidpointConstraint { readonly id: string; readonly kind: "midpoint"; readonly references: readonly [SketchPointReference]; readonly source: { readonly kind: "line"; readonly elementId: ElementId } | { readonly kind: "path-segment"; readonly elementId: ElementId; readonly segmentId: string } | { readonly kind: "spline-span"; readonly elementId: ElementId; readonly startNodeId: string; readonly endNodeId: string } | { readonly kind: "arc"; readonly elementId: ElementId }; readonly value?: never }
 export type DimensionKind = "aligned" | "horizontal" | "vertical" | "angular" | "radius" | "diameter";
 export type DimensionReference =
   | { readonly kind: "node"; readonly elementId: ElementId; readonly nodeIndex: number; readonly nodeId?: string }

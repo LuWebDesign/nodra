@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createDocument, elementId, featureId, layerId, type ArcElement, type DimensionElement, type Element, type EllipseElement, type CircleElement, type LineElement, type GlyphElement, type PathElement, type PointMm, type RectangleElement, type SketchElement, type SplineElement, type TextElement } from "@nodra/domain";
 import { addCircleConstraint, addDocumentConstraint, deleteDocumentConstraint, addSketchConstraint, addSketchSegmentRelation, addToSelection, appendSketchEdge, appendSplineNode, beginGesture, cancelGesture, clearSelection, closePath, closeSplineElement, commitGesture, createEditor, createElement, createIntersectFeature, dimensionDrivingCapability, rebuildParametricFeatures, addPositionalConnection, addPositionalCoincidence, deletePositionalCoincidence, createPathCubicNode, replaceSplineElement, createSketchLine, cutContourSegment, cutLineAtPoint, cutPathSegment, cutSegment, cutSketchEdge, splitPathLineAt, deleteContourNodes, deleteElement, deleteElementNodes, deletePathNodes, deleteSketchConstraint, dispatch, duplicateElements, flipElements, insertContourNode, invalidDimensionIdsForShapeOperation, moveElement, moveElements, movePathNode, movePathHandle, openPath, previewGesture, previewGestureFromBase, redo, reversePath, removeFromSelection, reorderLayer, resizeElement, resizeElementToDimensions, resizeElements, resizeElementsToDimensions, rotateElement, rotateElementsAroundCenter, select, selectForPointerDown, setDimensionDriving, updateCircleConstraint, deleteCircleConstraint, solveCircle, setLayerVisibility, setPathJoin, shapeOperation, splitPathSegment, toggleSelection, topologyEditForPathSegmentReplacement, topologyReferenceKey, undo, updateContourNode, updateDimensionValue, updateElement, updateElementNode, updateElementStyles, updateSketchConstraint, updateDocumentConstraint, updateSplineHandle, updateSplineNode, setGeometryRole, type AutomaticSketchRelationCandidate } from "./index.js";
-import { boundsOfElements, halfArcLengthMidpoint, pathSegmentToCurve, splineSpanToCurve, realGeometryNodes } from "@nodra/geometry";
+import { arcElementToCurve, boundsOfElements, halfArcLengthMidpoint, pathSegmentToCurve, splineSpanToCurve, realGeometryNodes } from "@nodra/geometry";
 import type { Direction } from "@nodra/geometry";
 import { appendLinePoint } from "./index.js";
 
@@ -399,7 +399,7 @@ describe("editor core", () => {
     const source: SplineElement = { ...spline, id: elementId("spline-span-source"), nodes: [{ id: "s0", anchor: { x: 0, y: 0 }, continuity: "smooth", outHandle: { dx: 0, dy: 5 } }, { id: "s1", anchor: { x: 10, y: 0 }, continuity: "smooth", inHandle: { dx: 0, dy: 5 } }, { id: "s2", anchor: { x: 20, y: 0 }, continuity: "smooth" }] };
     const dependent = createSketchLine(elementId("spline-span-dependent"), rectangle.layerId, rectangle.style, { x: 5, y: 5 }, { x: 5, y: 15 });
     const constraint = { id: "spline-span-midpoint", kind: "midpoint" as const, references: [{ elementId: dependent.id, nodeId: dependent.nodes[0]!.id }] as const, source: { kind: "spline-span" as const, elementId: source.id, startNodeId: "s0", endNodeId: "s1" } };
-    const initial = dispatch(createEditor({ ...document, schemaVersion: 12, elements: [source, dependent] }), addDocumentConstraint(constraint));
+    const initial = dispatch(createEditor({ ...document, schemaVersion: 13, elements: [source, dependent] }), addDocumentConstraint(constraint));
     const target = (state: typeof initial) => (state.document.elements.find((element): element is SketchElement => element.id === dependent.id && element.type === "sketch"))!.nodes[0]!.point;
     expect(target(initial)).toEqual(halfArcLengthMidpoint(splineSpanToCurve(source, 0).curve));
     const moved = dispatch(initial, updateSplineNode(source.id, "s1", { x: 12, y: 2 }));
@@ -3200,6 +3200,53 @@ it("moves a dimension by changing only its placement offset and supports undo", 
     expect(moved.undo).toHaveLength(1);
     expect(undo(moved).document).toEqual(initial.document);
     expect(redo(undo(moved)).document).toEqual(moved.document);
+  });
+
+  it("projects native Arc midpoint dependents and preserves valid stable-ID sources", () => {
+    const source: ArcElement = { ...arc, id: elementId("native-arc-midpoint"), center: { x: 0, y: 0 }, radius: 10, startAngle: 0, endAngle: Math.PI, direction: "clockwise" };
+    const dependent = createSketchLine(elementId("native-arc-dependent"), rectangle.layerId, rectangle.style, { x: 5, y: 5 }, { x: 5, y: 15 });
+    const constraint = { id: "native-arc-relation", kind: "midpoint" as const, references: [{ elementId: dependent.id, nodeId: dependent.nodes[0]!.id }] as const, source: { kind: "arc" as const, elementId: source.id } };
+    const initial = dispatch(createEditor({ ...document, schemaVersion: 13, elements: [source, dependent] }), addDocumentConstraint(constraint));
+    const dependentPoint = (state: typeof initial) => (state.document.elements.find((element): element is SketchElement => element.id === dependent.id && element.type === "sketch"))!.nodes[0]!.point;
+    const midpoint = (candidate: ArcElement) => halfArcLengthMidpoint(arcElementToCurve(candidate).curve);
+    expect(dependentPoint(initial).x).toBeCloseTo(0);
+    expect(dependentPoint(initial).y).toBeCloseTo(10);
+    const moved = dispatch(initial, moveElement(source.id, { x: 4, y: 3 }));
+    expect(dependentPoint(moved).x).toBeCloseTo(4);
+    expect(dependentPoint(moved).y).toBeCloseTo(13);
+    const resized = dispatch(moved, updateElement(source.id, { radius: 20 }));
+    expect(dependentPoint(resized).x).toBeCloseTo(4);
+    expect(dependentPoint(resized).y).toBeCloseTo(23);
+    const angled = dispatch(resized, updateElementNode(source.id, 1, { x: 4, y: 43 }));
+    expect(angled.document.constraints).toEqual([constraint]);
+    expect(dependentPoint(angled)).toEqual(midpoint(angled.document.elements.find((element): element is ArcElement => element.id === source.id && element.type === "arc")!));
+    expect(angled.document.elements.find((element) => element.id === source.id)).toMatchObject({ type: "arc", id: source.id });
+    expect(undo(moved).document).toEqual(initial.document);
+    expect(redo(undo(moved)).document).toEqual(moved.document);
+
+    const dependentOnly = dispatch(initial, duplicateElements([dependent.id], "east", 5, 1));
+    expect(dependentOnly.document.constraints).toEqual([constraint]);
+    const both = dispatch(initial, duplicateElements([source.id, dependent.id], "east", 5, 1));
+    expect(both.document.constraints).toHaveLength(2);
+    expect(both.document.constraints?.[1]).toMatchObject({ source: { kind: "arc" } });
+    if (both.document.constraints?.[1] && "source" in both.document.constraints[1]) expect(both.document.constraints[1].source.elementId).not.toBe(source.id);
+    expect(undo(both).document).toEqual(initial.document);
+    expect(redo(undo(both)).document).toEqual(both.document);
+
+    const invalid = dispatch(initial, updateElement(source.id, { radius: 0 }));
+    expect(invalid).toBe(initial);
+    const deleted = dispatch(initial, deleteElement(source.id));
+    expect(deleted.document.constraints).toEqual([]);
+    expect(undo(deleted).document).toEqual(initial.document);
+    const trims: LineElement[] = [
+      { type: "line", id: elementId("arc-trim-left"), layerId: source.layerId, start: { x: -5, y: -20 }, end: { x: -5, y: 5 }, rotation: 0, style: rectangle.style },
+      { type: "line", id: elementId("arc-trim-right"), layerId: source.layerId, start: { x: 5, y: -20 }, end: { x: 5, y: 5 }, rotation: 0, style: rectangle.style },
+    ];
+    const trimmed = dispatch(createEditor({ ...document, elements: [source, dependent, ...trims], constraints: [constraint] }), cutSegment(source.id, 0, { x: 0, y: -10 }));
+    expect(trimmed.document.elements.find((element) => element.id === source.id)?.type).toBe("arc");
+    expect(trimmed.document.constraints).toEqual([constraint]);
+    expect(undo(trimmed).document.constraints).toEqual([constraint]);
+    expect(redo(undo(trimmed)).document).toEqual(trimmed.document);
   });
 
   it("edits circle center and radius handles without changing topology node identity", () => {

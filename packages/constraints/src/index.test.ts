@@ -525,6 +525,45 @@ describe("parametric constraint boundary", () => {
     expect(solveConstraintComponents(document).document.elements[1]).toEqual(path);
   });
 
+  it.each([
+    ["clockwise wrap", 5.5, 0.5, "clockwise"],
+    ["counterclockwise wrap", 0.5, 5.5, "counterclockwise"],
+  ] as const)("projects a partial native arc by half traveled angle for %s", (_label, startAngle, endAngle, direction) => {
+    const dependent = sketch();
+    const arc = { type: "arc" as const, id: elementId("native-arc"), layerId: fixtureLayer().id, center: { x: 10, y: 20 }, radius: 8, startAngle, endAngle, direction, style: fixtureStyle() };
+    const relation = { id: "arc-mid", kind: "midpoint" as const, references: [{ elementId: dependent.id, nodeId: "a" }] as const, source: { kind: "arc" as const, elementId: arc.id } };
+    const document = { ...documentWith([dependent, arc]), constraints: [relation] };
+    const before = structuredClone(document);
+    const solved = solveConstraintComponents(document);
+    const expectedAngle = direction === "clockwise" ? startAngle + (endAngle + Math.PI * 2 - startAngle) / 2 : startAngle - (startAngle + Math.PI * 2 - endAngle) / 2;
+    const expected = { x: arc.center.x + arc.radius * Math.cos(expectedAngle), y: arc.center.y + arc.radius * Math.sin(expectedAngle) };
+
+    expect(normalizedConstraintsForDocument(document)[0]).toMatchObject({ sourceKind: "arc", sourceElementId: arc.id });
+    expect((solved.document.elements[0] as SketchElement).nodes[0]?.point.x).toBeCloseTo(expected.x, 8);
+    expect((solved.document.elements[0] as SketchElement).nodes[0]?.point.y).toBeCloseTo(expected.y, 8);
+    expect(solved.residuals).toEqual([expect.objectContaining({ supported: true, satisfied: true })]);
+    expect(document).toEqual(before);
+    expect(solved.document.elements[1]).toEqual(arc);
+
+    const movedArc = { ...arc, center: { x: 40, y: 50 }, radius: 12, startAngle: 5.2, endAngle: 0.8 };
+    const moved = solveConstraintComponents({ ...document, elements: [dependent, movedArc] });
+    expect((moved.document.elements[0] as SketchElement).nodes[0]?.point).not.toEqual((solved.document.elements[0] as SketchElement).nodes[0]?.point);
+    expect(moved.document.elements[1]).toEqual(movedArc);
+  });
+
+  it.each(["missing", "circle", "ellipse", "invalid-sweep", "full-turn"] as const)("fails closed for %s native arc source", (failure) => {
+    const dependent = sketch();
+    const arc = { type: "arc" as const, id: elementId("native-arc"), layerId: fixtureLayer().id, center: { x: 0, y: 0 }, radius: 5, startAngle: 0, endAngle: Math.PI, direction: "clockwise" as const, style: fixtureStyle() };
+    const circle = { type: "circle" as const, id: arc.id, layerId: fixtureLayer().id, center: { x: 0, y: 0 }, radius: 5, style: fixtureStyle() };
+    const ellipse = { type: "ellipse" as const, id: arc.id, layerId: fixtureLayer().id, position: { x: 0, y: 0 }, size: { width: 10, height: 6 }, rotation: 0, style: fixtureStyle() };
+    const source = failure === "missing" ? [] : [failure === "circle" ? circle : failure === "ellipse" ? ellipse : failure === "invalid-sweep" ? { ...arc, radius: Number.POSITIVE_INFINITY } : { ...arc, endAngle: 0 }];
+    const relation = { id: "arc-mid", kind: "midpoint" as const, references: [{ elementId: dependent.id, nodeId: "a" }] as const, source: { kind: "arc" as const, elementId: arc.id } };
+    const document = { ...documentWith([dependent, ...source]), constraints: [relation] };
+
+    expect(constraintResidualsForDocument(document)).toEqual([expect.objectContaining({ residual: Number.POSITIVE_INFINITY, satisfied: false, supported: false })]);
+    expect(solveConstraintComponents(document).document.elements[0]).toEqual(dependent);
+  });
+
   it("keeps unsupported and missing entities distinguishable", () => {
     const line = { type: "line" as const, id: elementId("line"), layerId: fixtureLayer().id, start: { x: 0, y: 0 }, end: { x: 10, y: 0 }, rotation: 0, style: fixtureStyle() };
     const document = documentWith([line]);
