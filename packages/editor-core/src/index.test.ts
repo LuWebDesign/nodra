@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createDocument, elementId, featureId, layerId, type ArcElement, type DimensionElement, type Element, type EllipseElement, type CircleElement, type LineElement, type GlyphElement, type PathElement, type PointMm, type RectangleElement, type SketchElement, type SplineElement, type TextElement } from "@nodra/domain";
 import { addCircleConstraint, addDocumentConstraint, deleteDocumentConstraint, addSketchConstraint, addSketchSegmentRelation, addToSelection, appendSketchEdge, appendSplineNode, beginGesture, cancelGesture, clearSelection, closePath, closeSplineElement, commitGesture, createEditor, createElement, createIntersectFeature, dimensionDrivingCapability, rebuildParametricFeatures, addPositionalConnection, addPositionalCoincidence, deletePositionalCoincidence, createPathCubicNode, createSketchLine, cutContourSegment, cutLineAtPoint, cutPathSegment, cutSegment, cutSketchEdge, splitPathLineAt, deleteContourNodes, deleteElement, deleteElementNodes, deletePathNodes, deleteSketchConstraint, dispatch, duplicateElements, flipElements, insertContourNode, invalidDimensionIdsForShapeOperation, moveElement, moveElements, movePathNode, movePathHandle, openPath, previewGesture, previewGestureFromBase, redo, reversePath, removeFromSelection, reorderLayer, resizeElement, resizeElementToDimensions, resizeElements, resizeElementsToDimensions, rotateElement, rotateElementsAroundCenter, select, selectForPointerDown, setDimensionDriving, updateCircleConstraint, deleteCircleConstraint, solveCircle, setLayerVisibility, setPathJoin, shapeOperation, splitPathSegment, toggleSelection, topologyEditForPathSegmentReplacement, topologyReferenceKey, undo, updateContourNode, updateDimensionValue, updateElement, updateElementNode, updateElementStyles, updateSketchConstraint, updateDocumentConstraint, updateSplineHandle, updateSplineNode, setGeometryRole, type AutomaticSketchRelationCandidate } from "./index.js";
-import { boundsOfElements, realGeometryNodes } from "@nodra/geometry";
+import { boundsOfElements, halfArcLengthMidpoint, pathSegmentToCurve, realGeometryNodes } from "@nodra/geometry";
 import type { Direction } from "@nodra/geometry";
 import { appendLinePoint } from "./index.js";
 
@@ -355,6 +355,44 @@ describe("editor core", () => {
     expect(state.undo).toHaveLength(4);
     expect(undo(state).document).toEqual(commands.slice(0, 2).reduce((current, command) => dispatch(current, command), initial).document);
     expect(redo(undo(state)).document).toEqual(state.document);
+  });
+
+  it("projects Path midpoint dependents by stable segment ID and cleans invalid sources atomically", () => {
+    const source: PathElement = { ...path, nodes: [{ id: "pa", anchor: { x: 0, y: 0 }, join: "corner" }, { id: "pb", anchor: { x: 10, y: 0 }, join: "corner" }], segments: [{ id: "path-mid-segment", type: "cubicBezier", startNodeId: "pa", endNodeId: "pb", control1: { x: 0, y: 10 }, control2: { x: 10, y: 10 } }] };
+    const dependent = createSketchLine(elementId("path-midpoint-dependent"), rectangle.layerId, rectangle.style, { x: 5, y: 5 }, { x: 5, y: 15 });
+    const constraint = { id: "path-midpoint", kind: "midpoint" as const, references: [{ elementId: dependent.id, nodeId: dependent.nodes[0]!.id }] as const, source: { kind: "path-segment" as const, elementId: source.id, segmentId: "path-mid-segment" } };
+    const initial = dispatch(createEditor({ ...document, elements: [source, dependent] }), addDocumentConstraint(constraint));
+    const midpoint = (candidate: PathElement) => halfArcLengthMidpoint(pathSegmentToCurve(candidate, "path-mid-segment").curve)!;
+    const originalNode = (state: typeof initial) => (state.document.elements.find((element): element is SketchElement => element.id === dependent.id && element.type === "sketch"))!.nodes[0]!.point;
+    expect(originalNode(initial)).toEqual(midpoint(source));
+    const moved = dispatch(initial, moveElement(source.id, { x: 12, y: 3 }));
+    const movedPath = moved.document.elements.find((element): element is PathElement => element.id === source.id && element.type === "path")!;
+    expect(originalNode(moved)).toEqual(midpoint(movedPath));
+    expect(movedPath?.nodes.map((node) => node.anchor)).toEqual(source.nodes.map((node) => ({ x: node.anchor.x + 12, y: node.anchor.y + 3 })));
+    expect(movedPath?.segments[0]).toMatchObject({ control1: { x: 12, y: 13 }, control2: { x: 22, y: 13 } });
+    expect(source.segments[0]).toMatchObject({ control1: { x: 0, y: 10 }, control2: { x: 10, y: 10 } });
+    expect(moved.document.constraints).toEqual([constraint]);
+    expect(undo(moved).document).toEqual(initial.document);
+    expect(redo(undo(moved)).document).toEqual(moved.document);
+
+    const indexedPath: PathElement = { ...source, id: elementId("path-mid-indexed"), nodes: [...source.nodes, { id: "pc", anchor: { x: 20, y: 0 }, join: "corner" }], segments: [...source.segments, { id: "path-mid-second", type: "line", startNodeId: "pb", endNodeId: "pc" }] };
+    const indexedConstraint = { ...constraint, id: "path-mid-indexed-relation", source: { ...constraint.source, elementId: indexedPath.id, segmentId: "path-mid-second" } };
+    const indexedState = dispatch(createEditor({ ...document, elements: [indexedPath, dependent] }), addDocumentConstraint(indexedConstraint));
+    const reversed = dispatch(indexedState, reversePath(indexedPath.id));
+    const reversedPath = reversed.document.elements.find((element): element is PathElement => element.id === indexedPath.id && element.type === "path")!;
+    expect(originalNode(reversed)).toEqual(halfArcLengthMidpoint(pathSegmentToCurve(reversedPath, "path-mid-second").curve));
+    const changedReference = dispatch(indexedState, updateDocumentConstraint({ ...indexedConstraint, source: { ...indexedConstraint.source, segmentId: "path-mid-segment" } }));
+    expect(changedReference.document.constraints?.[0]).toEqual({ ...indexedConstraint, source: { ...indexedConstraint.source, segmentId: "path-mid-segment" } });
+    expect(changedReference).not.toBe(indexedState);
+
+    const split = dispatch(initial, splitPathSegment(source.id, 0, "path-mid-split"));
+    expect(split.document.constraints).toEqual([]);
+    expect(undo(split).document).toEqual(initial.document);
+    const closed = dispatch(initial, closePath(source.id));
+    expect(closed.document.constraints).toEqual([]);
+    const deleted = dispatch(initial, deleteElement(source.id));
+    expect(deleted.document.constraints).toEqual([]);
+    expect(undo(deleted).document).toEqual(initial.document);
   });
 
   it("keeps a native-line midpoint dependent fixed through source rotation and undo/redo", () => {
@@ -2860,6 +2898,37 @@ it("moves a dimension by changing only its placement offset and supports undo", 
     expect(copy.constraints?.[0]?.references.every((reference) => reference.elementId === copy.id && ("nodeId" in reference ? copy.nodes.some((node) => node.id === reference.nodeId) : copy.edges.some((edge) => edge.id === reference.edgeId)))).toBe(true);
     expect(undo(duplicated).document).toEqual(constrained.document);
     expect(redo(undo(duplicated)).document).toEqual(duplicated.document);
+  });
+
+  it("duplicates native midpoint relations only with their copied Line or Path source", () => {
+    const dependent = createSketchLine(elementId("duplicate-native-dependent"), rectangle.layerId, rectangle.style, { x: 0, y: 0 }, { x: 0, y: 10 });
+    const sources: Element[] = [
+      { type: "line", id: elementId("duplicate-native-line"), layerId: rectangle.layerId, start: { x: 20, y: 0 }, end: { x: 30, y: 0 }, rotation: 0, style: rectangle.style },
+      { ...path, id: elementId("duplicate-native-path"), nodes: [{ id: "dpa", anchor: { x: 20, y: 0 }, join: "corner" }, { id: "dpb", anchor: { x: 30, y: 0 }, join: "corner" }], segments: [{ id: "duplicate-stable-segment", type: "line", startNodeId: "dpa", endNodeId: "dpb" }] },
+    ];
+    for (const source of sources) {
+      const relation = { id: `duplicate-relation:${source.id}`, kind: "midpoint" as const, references: [{ elementId: dependent.id, nodeId: dependent.nodes[0]!.id }] as const, source: source.type === "path" ? { kind: "path-segment" as const, elementId: source.id, segmentId: "duplicate-stable-segment" } : { kind: "line" as const, elementId: source.id } };
+      const initial = createEditor({ ...document, elements: [source, dependent], constraints: [relation] });
+      const sourceAndDependent = dispatch(initial, duplicateElements([source.id, dependent.id], "east", 1, 1));
+      const copiedRelation = sourceAndDependent.document.constraints?.find((candidate) => candidate.id !== relation.id);
+      const copiedSourceId = copiedRelation && "source" in copiedRelation ? copiedRelation.source.elementId : undefined;
+      const copiedSource = sourceAndDependent.document.elements.find((element) => element.id === copiedSourceId);
+      const copiedDependent = sourceAndDependent.document.elements.find((element): element is SketchElement => element.type === "sketch" && element.id !== dependent.id);
+      expect(copiedRelation?.id).not.toBe(relation.id);
+      expect(copiedRelation && "source" in copiedRelation ? copiedRelation.source.elementId : undefined).toBe(copiedSource?.id);
+      if (source.type === "path") expect(copiedRelation && "source" in copiedRelation ? copiedRelation.source : undefined).toEqual({ kind: "path-segment", elementId: copiedSource?.id, segmentId: "duplicate-stable-segment" });
+      expect(copiedDependent?.nodes[0]?.point).not.toEqual(dependent.nodes[0]?.point);
+      expect(sourceAndDependent.document.constraints?.map((candidate) => candidate.id)).toHaveLength(2);
+      const sourceMoved = dispatch(sourceAndDependent, moveElement(source.id, { x: 50, y: 0 }));
+      expect(sourceMoved.document.elements.find((element) => element.id === copiedSource?.id)).toEqual(copiedSource);
+      expect(undo(sourceAndDependent).document).toEqual(initial.document);
+      expect(redo(undo(sourceAndDependent)).document).toEqual(sourceAndDependent.document);
+
+      const dependentOnly = dispatch(initial, duplicateElements([dependent.id], "east", 1, 1));
+      expect(dependentOnly.document.constraints).toEqual([relation]);
+      expect(dependentOnly.document.constraints).toHaveLength(1);
+      expect(undo(dependentOnly).document).toEqual(initial.document);
+    }
   });
 
   it("remaps local and internal document constraint IDs across copied dimensions and preserves undo/redo", () => {

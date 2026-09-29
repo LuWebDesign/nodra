@@ -13,6 +13,23 @@ const visualLineEndpoints = (line: { readonly start: PointMm; readonly end: Poin
   const rotate = (point: PointMm): PointMm => ({ x: center.x + (point.x - center.x) * Math.cos(line.rotation) - (point.y - center.y) * Math.sin(line.rotation), y: center.y + (point.x - center.x) * Math.sin(line.rotation) + (point.y - center.y) * Math.cos(line.rotation) });
   return [rotate(line.start), rotate(line.end)];
 };
+const pathSegmentHasFiniteExecutableLength = (segment: z.infer<typeof pathSegment>, start: PointMm, end: PointMm): boolean => {
+  if (segment.type === "line") {
+    const length = Math.hypot(end.x - start.x, end.y - start.y);
+    return Number.isFinite(length) && length > 0;
+  }
+  const finiteDifference = (a: number, b: number): number | undefined => {
+    const difference = a - b;
+    return Number.isFinite(difference) ? Math.abs(difference) : undefined;
+  };
+  const dx0 = finiteDifference(segment.control1.x, start.x); const dx1 = finiteDifference(segment.control2.x, segment.control1.x); const dx2 = finiteDifference(end.x, segment.control2.x);
+  const dy0 = finiteDifference(segment.control1.y, start.y); const dy1 = finiteDifference(segment.control2.y, segment.control1.y); const dy2 = finiteDifference(end.y, segment.control2.y);
+  if ([dx0, dx1, dx2, dy0, dy1, dy2].some((value) => value === undefined)) return false;
+  const derivativeBound = (first: number, middle: number, last: number): number => 3 * (first + 2 * middle + last);
+  const maxSpeed = Math.hypot(derivativeBound(dx0!, dx1!, dx2!), derivativeBound(dy0!, dy1!, dy2!));
+  // Keep cubic derivative samples and Simpson's weighted speed sums finite without imposing a coordinate cap.
+  return Number.isFinite(maxSpeed) && maxSpeed <= Number.MAX_VALUE / 8;
+};
 const nativeLineHasFiniteDistinctVisualEndpoints = (line: { readonly start: PointMm; readonly end: PointMm; readonly rotation: number; readonly flipX?: boolean; readonly flipY?: boolean }): boolean => {
   const center = { x: line.start.x / 2 + line.end.x / 2, y: line.start.y / 2 + line.end.y / 2 };
   const rotate = (point: PointMm): PointMm => {
@@ -89,7 +106,7 @@ const sketchPointReference = z.object({ elementId: nonEmptyId, nodeId: nonEmptyI
 const sketchEdgeReference = z.object({ elementId: nonEmptyId, edgeId: nonEmptyId }).strict();
 const sketchConstraintReference = z.union([sketchPointReference, sketchEdgeReference]);
 const sketchConstraint = z.object({ id: nonEmptyId, kind: z.enum(["horizontal", "vertical", "coincident", "parallel", "perpendicular", "equal", "distance-horizontal", "distance-vertical", "distance", "angle", "fixed", "midpoint"]), references: z.array(sketchConstraintReference).min(1).max(4), value: finite.positive().optional() }).strict();
-const nativeLineMidpointConstraint = z.object({ id: nonEmptyId, kind: z.literal("midpoint"), references: z.tuple([sketchPointReference]), source: z.object({ kind: z.literal("line"), elementId: nonEmptyId }).strict() }).strict();
+const nativeLineMidpointConstraint = z.object({ id: nonEmptyId, kind: z.literal("midpoint"), references: z.tuple([sketchPointReference]), source: z.discriminatedUnion("kind", [z.object({ kind: z.literal("line"), elementId: nonEmptyId }).strict(), z.object({ kind: z.literal("path-segment"), elementId: nonEmptyId, segmentId: nonEmptyId }).strict()]) }).strict();
 const documentConstraint = z.union([nativeLineMidpointConstraint, sketchConstraint]);
 const sketch = z.object({ id: nonEmptyId, layerId: nonEmptyId, ...pieceOwnership, role: geometryRole, type: z.literal("sketch"), nodes: z.array(sketchNode).min(2), edges: z.array(sketchEdge).min(1), constraints: z.array(sketchConstraint).optional(), style, operation: operation.optional() }).strict().superRefine((value, ctx) => {
   const nodeIds = value.nodes.map((node) => node.id); const edgeIds = value.edges.map((edge) => edge.id);
@@ -282,8 +299,23 @@ export const validateDocumentConstraints = (elements: readonly z.infer<typeof el
       const dependentSketch = sketches.get(dependent.elementId);
       const node = dependentSketch?.nodes.find((candidate) => candidate.id === dependent.nodeId);
       if (!dependentSketch || !node) ctx.addIssue({ code: "custom", message: "Native midpoint requires an existing dependent sketch node", path: [...path, index, "references", 0] });
-      if (!source || source.type !== "line") ctx.addIssue({ code: "custom", message: "Native midpoint source must identify an existing line", path: [...path, index, "source"] });
-      else if (!nativeLineHasFiniteDistinctVisualEndpoints(source)) ctx.addIssue({ code: "custom", message: "Native midpoint source line must have finite, distinct visual endpoints", path: [...path, index, "source"] });
+      if (constraint.source.kind === "line") {
+        if (!source || source.type !== "line") ctx.addIssue({ code: "custom", message: "Native midpoint source must identify an existing line", path: [...path, index, "source"] });
+        else if (!nativeLineHasFiniteDistinctVisualEndpoints(source)) ctx.addIssue({ code: "custom", message: "Native midpoint source line must have finite, distinct visual endpoints", path: [...path, index, "source"] });
+      } else if (!source || source.type !== "path") ctx.addIssue({ code: "custom", message: "Native midpoint path source must identify an existing Path", path: [...path, index, "source"] });
+      else if (source.closed) ctx.addIssue({ code: "custom", message: "Native midpoint path source must be open", path: [...path, index, "source"] });
+      else {
+        const segmentId = constraint.source.kind === "path-segment" ? constraint.source.segmentId : "";
+        const segment = source.segments.find((candidate) => candidate.id === segmentId);
+        if (!segment) ctx.addIssue({ code: "custom", message: "Native midpoint path source segment does not exist", path: [...path, index, "source", "segmentId"] });
+        else {
+          const nodes = new Map(source.nodes.map((candidate) => [candidate.id, candidate.anchor]));
+          const start = nodes.get(segment.startNodeId); const end = nodes.get(segment.endNodeId);
+          const degenerate = start && end && (segment.type === "line" ? start.x === end.x && start.y === end.y : start.x === end.x && start.y === end.y && segment.control1.x === start.x && segment.control1.y === start.y && segment.control2.x === start.x && segment.control2.y === start.y);
+          if (start && end && !pathSegmentHasFiniteExecutableLength(segment, start, end)) ctx.addIssue({ code: "custom", message: "Native midpoint path segment exceeds the finite geometry range", path: [...path, index, "source", "segmentId"] });
+          else if (degenerate) ctx.addIssue({ code: "custom", message: "Native midpoint path segment must not be degenerate", path: [...path, index, "source", "segmentId"] });
+        }
+      }
       const duplicateLocal = dependentSketch?.constraints?.some((other) => other.kind === "midpoint" && "nodeId" in other.references[0]! && other.references[0]!.nodeId === dependent.nodeId);
       const duplicateDocument = constraints.some((other, otherIndex) => otherIndex !== index && other.kind === "midpoint" && "nodeId" in other.references[0]! && other.references[0]!.elementId === dependent.elementId && other.references[0]!.nodeId === dependent.nodeId);
       if (duplicateLocal || duplicateDocument) ctx.addIssue({ code: "custom", message: "A node may have only one midpoint constraint", path: [...path, index, "references"] });
@@ -425,7 +457,7 @@ const documentSchema = z.object({ schemaVersion: z.literal(CURRENT_SCHEMA_VERSIO
   validateConnections(value.elements, value.connections, ctx, ["connections"]);
   validateConnections(value.elements, value.positionalCoincidences ?? [], ctx, ["positionalCoincidences"], true);
 });
-const pageSchema = z.object({ id: nonEmptyId, name: z.string().trim().min(1), page: size, layers: z.array(layerSchema), elements: z.array(elementSchema), featureTree: parametricFeatureTree.optional(), constraints: z.array(sketchConstraint).optional(), connections: z.array(explicitConnection).default([]), positionalCoincidences: z.array(positionalCoincidence).optional() }).strict();
+const pageSchema = z.object({ id: nonEmptyId, name: z.string().trim().min(1), page: size, layers: z.array(layerSchema), elements: z.array(elementSchema), featureTree: parametricFeatureTree.optional(), constraints: z.array(documentConstraint).optional(), connections: z.array(explicitConnection).default([]), positionalCoincidences: z.array(positionalCoincidence).optional() }).strict();
 const projectPreferencesSchema = z.object({ lineGuidesEnabled: z.boolean().default(true), lineGuideAngle: z.union([z.literal(15), z.literal(45)]).default(45).transform(() => 45) }).strict().default({ lineGuidesEnabled: true, lineGuideAngle: 45 });
 const pieceSketchReferenceSchema = z.object({ pageId: nonEmptyId, sketchId: nonEmptyId }).strict();
 const pieceSchema = z.object({ id: nonEmptyId, name: z.string().trim().min(1), material: z.string().trim().min(1).optional(), thicknessMm: finite.gt(0).optional(), process: z.literal("cut"), state: z.enum(["design", "underdefined", "defined", "validated", "ready"]), pageId: nonEmptyId.optional(), sketches: z.array(pieceSketchReferenceSchema) }).strict();
@@ -645,7 +677,7 @@ export function migrateDocument(input: JsonValue): JsonValue {
   if (typeof input !== "object" || input === null || Array.isArray(input)) return input;
   const candidate = input as Record<string, unknown>;
   if (candidate.schemaVersion === 7) return { ...migrateSchema7CircleElements(candidate) as Record<string, unknown>, schemaVersion: CURRENT_SCHEMA_VERSION };
-  if (candidate.schemaVersion === 8 || candidate.schemaVersion === 9) return { ...candidate, schemaVersion: CURRENT_SCHEMA_VERSION };
+  if (candidate.schemaVersion === 8 || candidate.schemaVersion === 9 || candidate.schemaVersion === 10) return { ...candidate, schemaVersion: CURRENT_SCHEMA_VERSION };
   if (candidate.schemaVersion === 1) return { ...migrateSchema7CircleElements({ ...candidate, page: { width: 1200, height: 900 }, elements: migrateLegacyElements(candidate.elements), connections: [] }) as Record<string, unknown>, schemaVersion: CURRENT_SCHEMA_VERSION };
   if (candidate.schemaVersion === 2 || candidate.schemaVersion === 3 || candidate.schemaVersion === 4 || candidate.schemaVersion === 5 || candidate.schemaVersion === 6) {
     return { ...migrateSchema7CircleElements({ ...candidate, page: candidate.page ?? { width: 1200, height: 900 }, elements: migrateLegacyElements(candidate.elements), connections: candidate.connections ?? [] }) as Record<string, unknown>, schemaVersion: CURRENT_SCHEMA_VERSION };
@@ -678,10 +710,10 @@ export function validateProject(input: unknown): { readonly success: true; reado
 export function migrateProject(input: unknown): unknown {
   if (typeof input !== "object" || input === null || Array.isArray(input)) return input;
   const candidate = input as Record<string, unknown>;
-  if (![1, 2, 3, 4, 5, 6, 7, 8, 9, CURRENT_SCHEMA_VERSION].includes(candidate.schemaVersion as number)) return input;
+  if (![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, CURRENT_SCHEMA_VERSION].includes(candidate.schemaVersion as number)) return input;
   let migrated: Record<string, unknown>;
   if (candidate.schemaVersion === 7) migrated = { ...migrateSchema7CircleElements(candidate) as Record<string, unknown>, schemaVersion: CURRENT_SCHEMA_VERSION };
-  else if (candidate.schemaVersion === 8 || candidate.schemaVersion === 9 || candidate.schemaVersion === CURRENT_SCHEMA_VERSION) migrated = { ...candidate, schemaVersion: CURRENT_SCHEMA_VERSION };
+  else if (candidate.schemaVersion === 8 || candidate.schemaVersion === 9 || candidate.schemaVersion === 10 || candidate.schemaVersion === CURRENT_SCHEMA_VERSION) migrated = { ...candidate, schemaVersion: CURRENT_SCHEMA_VERSION };
   else {
     const pages = migrateLegacyPages(candidate.pages);
     migrated = { ...migrateSchema7CircleElements({ ...candidate, pages }) as Record<string, unknown>, schemaVersion: CURRENT_SCHEMA_VERSION };
