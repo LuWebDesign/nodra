@@ -225,7 +225,21 @@ describe("global constraint commands", () => {
         expect(redo(undo(committed)).document).toEqual(committed.document);
       });
 
-      it("exposes supported kinds and normalized diagnostic identities", () => {
+      it("accepts and solves a global midpoint driven by a native line", () => {
+    const dependent = sketch("dependent", 4, 3);
+    const line = { type: "line" as const, id: elementId("native-source"), layerId: layer.id, start: { x: 0, y: 0 }, end: { x: 10, y: 0 }, rotation: 0, style };
+    const constraint: DocumentConstraint = { id: "native-midpoint", kind: "midpoint", references: [{ elementId: dependent.id, nodeId: dependent.nodes[0]!.id }], source: { kind: "line", elementId: line.id } };
+    const initial = createEditor({ ...createDocument("native-midpoint", [layer]), elements: [dependent, line] });
+
+    expect(supportsGlobalConstraintKind("midpoint")).toBe(true);
+    const committed = dispatch(initial, addSolvedDocumentConstraint(constraint));
+
+    expect(committed.document.constraints).toEqual([constraint]);
+    expect((committed.document.elements[0] as SketchElement).nodes[0]!.point).toEqual({ x: 5, y: 0 });
+    expect(committed.undo).toHaveLength(1);
+    expect(undo(committed).document).toEqual(initial.document);
+  });
+  it("exposes supported kinds and normalized diagnostic identities", () => {
     expect(supportsGlobalConstraintKind("distance")).toBe(true);
     expect(supportsGlobalConstraintKind("parallel")).toBe(true);
     expect(supportsGlobalConstraintKind("perpendicular")).toBe(true);

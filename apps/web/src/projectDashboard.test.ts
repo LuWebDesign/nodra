@@ -81,6 +81,39 @@ describe("project dashboard", () => {
     expect(next.pages.some((page) => page.id === "delete:page-2")).toBe(true);
     expect(() => deletePiece(next, next.pieces[0]!)).toThrow("Project must keep at least one piece");
   });
+  it("removes an owned native line and midpoint relation while preserving a shared page", () => {
+    const base = addPiece(createProject(createDocument("delete-shared-native")), { name: "Second" });
+    const [sourcePiece, dependentPiece] = base.pieces;
+    if (!sourcePiece || !dependentPiece) throw new Error("Expected two pieces");
+    const dependent = { type: "sketch" as const, id: elementId("shared-dependent"), layerId: layerId("layer-1"), pieceId: dependentPiece.id, nodes: [{ id: "mid", point: { x: 5, y: 0 } }], edges: [], style: { stroke: "#000", strokeWidth: 1 } };
+    const source = { type: "line" as const, id: elementId("shared-source"), layerId: layerId("layer-1"), pieceId: sourcePiece.id, start: { x: 0, y: 0 }, end: { x: 10, y: 0 }, rotation: 0, style: { stroke: "#000", strokeWidth: 1 } };
+    const unrelated = { ...source, id: elementId("shared-unrelated"), pieceId: dependentPiece.id };
+    const relation = { id: "shared-native-midpoint", kind: "midpoint" as const, references: [{ elementId: dependent.id, nodeId: "mid" }] as const, source: { kind: "line" as const, elementId: source.id } };
+    const sharedPage = { ...base.pages[0]!, elements: [dependent, source, unrelated], constraints: [relation] };
+    const project = { ...base, pages: [sharedPage], pieces: base.pieces.map((piece) => piece.id === dependentPiece.id ? { ...piece, sketches: [{ pageId: sharedPage.id, sketchId: dependent.id }] } : piece) };
+    const snapshot = structuredClone(project);
+
+    const next = deletePiece(project, sourcePiece);
+
+    expect(next.pages).toHaveLength(1);
+    expect(next.pages[0]!.id).toBe(sharedPage.id);
+    expect(next.pages[0]!.elements.map((element) => element.id)).toEqual([dependent.id, unrelated.id]);
+    expect(next.pages[0]!.constraints).toEqual([]);
+    expect(project).toEqual(snapshot);
+  });
+  it("removes native-line midpoint relations when deleting their owning piece", () => {
+    const base = addPiece(createProject(createDocument("delete-native")), { name: "Second" });
+    const dependent = { type: "sketch" as const, id: elementId("dependent"), layerId: layerId("layer-1"), nodes: [{ id: "mid", point: { x: 5, y: 0 } }], edges: [], style: { stroke: "#000", strokeWidth: 1 } };
+    const source = { type: "line" as const, id: elementId("source-line"), layerId: layerId("layer-1"), start: { x: 0, y: 0 }, end: { x: 10, y: 0 }, rotation: 0, style: { stroke: "#000", strokeWidth: 1 } };
+    const relation = { id: "native-midpoint", kind: "midpoint" as const, references: [{ elementId: dependent.id, nodeId: "mid" }] as const, source: { kind: "line" as const, elementId: source.id } };
+    const dedicatedPageId = pageId(`${base.pieces[0]!.id}:page`);
+    const dedicatedPage = { ...base.pages[0]!, id: dedicatedPageId, elements: [dependent, source], constraints: [relation] };
+    const project = { ...base, pages: [base.pages[0]!, dedicatedPage], pieces: base.pieces.map((piece, index) => index === 0 ? { ...piece, pageId: dedicatedPageId, sketches: [{ pageId: dedicatedPageId, sketchId: dependent.id }] } : piece) };
+
+    const next = deletePiece(project, project.pieces[0]!);
+
+    expect(next.pages.some((page) => page.id === dedicatedPageId)).toBe(false);
+  });
   it("derives a navigation tree without copying page geometry", () => {
     const project = addPiece(createProject(createDocument("tree")), { name: "Segunda" });
     const tree = projectTree({ metadata: { id: "tree", name: "Árbol", updatedAt: 1 }, project });

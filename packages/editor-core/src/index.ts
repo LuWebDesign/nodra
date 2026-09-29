@@ -95,7 +95,8 @@ const kernelDiagnostics = (recomputed: ReturnType<typeof recomputeSketchKernel>)
 const withoutDanglingDocumentConstraints = (document: DocumentSnapshot, elements: readonly Element[]): DocumentSnapshot => {
   if (!document.constraints?.length) return document;
   const sketches = new Map(elements.filter((element): element is SketchElement => element.type === "sketch").map((sketch) => [sketch.id, sketch]));
-  const constraints = document.constraints.filter((constraint) => constraint.references.every((reference) => { const sketch = sketches.get(reference.elementId); return sketch !== undefined && ("nodeId" in reference ? sketch.nodes.some((node) => node.id === reference.nodeId) : sketch.edges.some((edge) => edge.id === reference.edgeId)); }));
+  const elementsById = new Map(elements.map((element) => [element.id, element]));
+  const constraints = document.constraints.filter((constraint) => constraint.references.every((reference) => { const sketch = sketches.get(reference.elementId); return sketch !== undefined && ("nodeId" in reference ? sketch.nodes.some((node) => node.id === reference.nodeId) : sketch.edges.some((edge) => edge.id === reference.edgeId)); }) && (!("source" in constraint) || elementsById.get(constraint.source.elementId)?.type === "line"));
   return constraints.length === document.constraints.length ? document : { ...document, constraints };
 };
 const relationPoint = (elements: readonly Element[], reference: PositionalCoincidence["first"]): PointMm | undefined => {
@@ -234,7 +235,13 @@ const replaceElements = (document: DocumentSnapshot, elements: readonly Element[
   if (enforcedOutputEdit) return { success: false, error: `Intersect output is derived and cannot be edited directly: ${enforcedOutputEdit}` };
   const cleaned = withoutDanglingDocumentConstraints(document, enforced);
   const rebuilt = rebuildAffectedIntersectFeatures(document, enforced, cleaned);
-  return rebuilt.success ? result(withElements(rebuilt.document, rebuilt.document.elements)) : rebuilt;
+  if (!rebuilt.success) return rebuilt;
+  if ((rebuilt.document.constraints ?? []).some((constraint) => "source" in constraint)) {
+    const recomputed = recomputeSketchKernel(rebuilt.document);
+    if (!recomputed.committed) return { success: false, error: "Document constraints are in conflict", diagnostics: kernelDiagnostics(recomputed) };
+    return result(withElements(recomputed.document, recomputed.document.elements));
+  }
+  return result(withElements(rebuilt.document, rebuilt.document.elements));
 };
 
 const fixedSketchTransformDiagnostics = (document: DocumentSnapshot, proposed: readonly Element[]): readonly CommandDiagnostic[] => {
@@ -505,7 +512,7 @@ export const createSketchLine = (sketchId: ElementId, layer: LayerId, style: Vis
   return { type: "sketch", id: sketchId, layerId: layer, nodes: [{ id: startNodeId, point: start }, { id: endNodeId, point: end }], edges: [{ id: edgeId, startNodeId, endNodeId }], ...(relation ? { constraints: [relation] } : {}), style };
 };
 const constraintReferenceKey = (reference: SketchConstraint["references"][number]): string => JSON.stringify([reference.elementId, "nodeId" in reference ? "node" : "edge", "nodeId" in reference ? reference.nodeId : reference.edgeId]);
-const documentConstraintsEqual = (first: DocumentConstraint, second: DocumentConstraint): boolean => first.id === second.id && first.kind === second.kind && first.value === second.value && first.references.length === second.references.length && first.references.every((reference, index) => constraintReferenceKey(reference) === (second.references[index] ? constraintReferenceKey(second.references[index]) : undefined));
+const documentConstraintsEqual = (first: DocumentConstraint, second: DocumentConstraint): boolean => first.id === second.id && first.kind === second.kind && first.value === second.value && first.references.length === second.references.length && first.references.every((reference, index) => constraintReferenceKey(reference) === (second.references[index] ? constraintReferenceKey(second.references[index]!) : undefined)) && ("source" in first) === ("source" in second) && (!("source" in first) || "source" in second && first.source.kind === second.source.kind && first.source.elementId === second.source.elementId);
 const replaceDocumentConstraints = (document: DocumentSnapshot, constraints: readonly DocumentConstraint[]): CommandResult => {
   const candidate = { ...document, revision: nextRevision(document.revision), ...(constraints.length || document.constraints ? { constraints: [...constraints] } : {}) };
   if (!constraints.some((constraint) => constraint.kind === "midpoint")) return result(candidate);

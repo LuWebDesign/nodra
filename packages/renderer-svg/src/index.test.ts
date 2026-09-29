@@ -54,6 +54,18 @@ describe("SVG renderer boundary", () => {
       expect(hiddenResult.success && hiddenResult.svg).not.toContain("data-constraint-id");
     }
   });
+  it("does not interpret a one-reference native midpoint as a sketch-edge glyph", () => {
+    const dependentId = elementId("native-dependent");
+    const dependent = { type: "sketch" as const, id: dependentId, layerId: layer.id, nodes: [{ id: "mid", point: { x: 5, y: 0 } }, { id: "other", point: { x: 8, y: 2 } }], edges: [{ id: "dependent-edge", startNodeId: "mid", endNodeId: "other" }], style };
+    const line = { type: "line" as const, id: elementId("native-line"), layerId: layer.id, start: { x: 0, y: 0 }, end: { x: 10, y: 0 }, rotation: 0, style };
+    const relation = { id: "native-midpoint", kind: "midpoint" as const, references: [{ elementId: dependentId, nodeId: "mid" }] as const, source: { kind: "line" as const, elementId: line.id } };
+    const source = { ...withElements(createDocument("native-midpoint-render", [layer]), [dependent, line]), constraints: [relation] };
+
+    const rendered = renderSvg(source, { zoom: 1, panMm: { x: 0, y: 0 } });
+
+    expect(rendered.success).toBe(true);
+    if (rendered.success) expect(rendered.svg).not.toContain('data-constraint-id="native-midpoint"');
+  });
   it("renders a cross-sketch document constraint only on its first referenced sketch", () => {
     const firstId = elementId("first-sketch");
     const secondId = elementId("second-sketch");

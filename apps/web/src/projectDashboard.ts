@@ -182,12 +182,12 @@ export const deletePiece = (project: ProjectSnapshot, piece: PieceSnapshot): Pro
   const dedicatedPageId = pageId(`${piece.id}:page`);
   const dedicatedPageIsShared = remainingPieces.some((candidate) => candidate.sketches.some((reference) => reference.pageId === dedicatedPageId));
   const pages = project.pages.filter((page) => page.id !== dedicatedPageId || dedicatedPageIsShared).map((page) => {
-    const removedIds = new Set(page.elements.filter((element) => exclusivelyOwned.has(`${page.id}:${element.id}`)).map((element) => element.id));
+    const removedIds = new Set(page.elements.filter((element) => element.pieceId === piece.id || exclusivelyOwned.has(`${page.id}:${element.id}`)).map((element) => element.id));
     for (const element of page.elements) if (element.type === "dimension" && element.references.some((reference) => removedIds.has(reference.elementId))) removedIds.add(element.id);
     return {
       ...page,
       elements: page.elements.filter((element) => !removedIds.has(element.id)),
-      ...(page.constraints ? { constraints: page.constraints.filter((constraint) => constraint.references.every((reference) => !removedIds.has(reference.elementId))) } : {}),
+      ...(page.constraints ? { constraints: page.constraints.filter((constraint) => constraint.references.every((reference) => !removedIds.has(reference.elementId)) && !("source" in constraint && removedIds.has(constraint.source.elementId))) } : {}),
       ...(page.connections ? { connections: page.connections.filter((connection) => !removedIds.has(connection.first.elementId) && !removedIds.has(connection.second.elementId)) } : {}),
       ...(page.positionalCoincidences ? { positionalCoincidences: page.positionalCoincidences.filter((coincidence) => !removedIds.has(coincidence.first.elementId) && !removedIds.has(coincidence.second.elementId)) } : {}),
     };
