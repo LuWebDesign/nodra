@@ -93,6 +93,24 @@ describe("SVG renderer boundary", () => {
     }
     expect(source).toEqual(before);
   });
+  it("renders a validated v13 Arc midpoint source without synthesizing nodes or mutating the snapshot", () => {
+    const arc: ArcElement = { type: "arc", id: elementId("native-arc"), layerId: layer.id, center: { x: 0, y: 0 }, radius: 10, startAngle: 0, endAngle: Math.PI, direction: "clockwise", style };
+    const dependentId = elementId("arc-midpoint-dependent");
+    const dependent = { type: "sketch" as const, id: dependentId, layerId: layer.id, nodes: [{ id: "mid", point: { x: 0, y: 10 } }, { id: "other", point: { x: 8, y: 12 } }], edges: [{ id: "dependent-edge", startNodeId: "mid", endNodeId: "other" }], style };
+    const relation = { id: "arc-midpoint", kind: "midpoint" as const, references: [{ elementId: dependentId, nodeId: "mid" }] as const, source: { kind: "arc" as const, elementId: arc.id } };
+    const source = { ...withElements(createDocument("arc-midpoint-render", [layer]), [arc, dependent]), schemaVersion: 13, constraints: [relation] };
+    const before = structuredClone(source);
+    expect(validateDocument(source).success).toBe(true);
+    const rendered = renderSvg(source, { zoom: 1, panMm: { x: 0, y: 0 } });
+    expect(rendered.success).toBe(true);
+    if (rendered.success) {
+      expect(rendered.renderedElementIds).toEqual([arc.id, dependentId]);
+      expect(rendered.svg).toContain('data-element-id="native-arc"');
+      expect(rendered.svg).not.toContain('data-element-id="native-arc:start"');
+      expect(rendered.svg).not.toContain('data-constraint-id="arc-midpoint"');
+    }
+    expect(source).toEqual(before);
+  });
   it("does not interpret a one-reference native midpoint as a sketch-edge glyph", () => {
     const dependentId = elementId("native-dependent");
     const dependent = { type: "sketch" as const, id: dependentId, layerId: layer.id, nodes: [{ id: "mid", point: { x: 5, y: 0 } }, { id: "other", point: { x: 8, y: 2 } }], edges: [{ id: "dependent-edge", startNodeId: "mid", endNodeId: "other" }], style };

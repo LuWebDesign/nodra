@@ -118,7 +118,7 @@ describe("DexieProjectRepository", () => {
     await rawDb.projects.put(metadata);
     await rawDb.revisions.put({ key: `${metadata.id}:3`, recordVersion: 1, projectId: metadata.id, revision: 3, savedAt: 3, document: { ...legacy, revision: 3 } });
     const migrated = await db.getProject(metadata.id);
-    expect(migrated.ok && migrated.revision.document).toMatchObject({ schemaVersion: 12, constraints: [{ source: { kind: "line", elementId: line.id } }] });
+    expect(migrated.ok && migrated.revision.document).toMatchObject({ schemaVersion: 13, constraints: [{ source: { kind: "line", elementId: line.id } }] });
   });
 
   it("round-trips Spline span references and migrates v11 projects preserving Line and Path sources", async () => {
@@ -134,7 +134,7 @@ describe("DexieProjectRepository", () => {
     const pathRelation = { id: "old-path-mid", kind: "midpoint" as const, references: [{ elementId: dependentPath.id, nodeId: "mid-path" }] as const, source: { kind: "path-segment" as const, elementId: path.id, segmentId: "path-seg" } };
     expect((await db.saveProject(metadata, { ...base, elements: [dependent, spline], constraints: [splineRelation] })).ok).toBe(true);
     const roundTrip = await db.getProject(metadata.id);
-    expect(roundTrip.ok && roundTrip.revision.document).toMatchObject({ schemaVersion: 12, constraints: [splineRelation] });
+    expect(roundTrip.ok && roundTrip.revision.document).toMatchObject({ schemaVersion: 13, constraints: [splineRelation] });
 
     const legacyBase = createProject(base);
     const legacy = { ...legacyBase, pieces: legacyBase.pieces.map((piece) => ({ ...piece, sketches: [{ pageId: legacyBase.pages[0]!.id, sketchId: dependent.id }, { pageId: legacyBase.pages[0]!.id, sketchId: dependentPath.id }] })), schemaVersion: 11, pages: [{ ...legacyBase.pages[0]!, elements: [dependent, dependentPath, nativeLine, path], constraints: [lineRelation, pathRelation] }] };
@@ -142,7 +142,7 @@ describe("DexieProjectRepository", () => {
     await rawDb.projects.put(metadata);
     await rawDb.revisions.put({ key: `${metadata.id}:4`, recordVersion: 1, projectId: metadata.id, revision: 4, savedAt: 4, document: { ...legacy, revision: 4 } });
     const migrated = await db.getProject(metadata.id);
-    expect(migrated.ok && migrated.revision.document).toMatchObject({ schemaVersion: 12, pages: [{ constraints: [lineRelation, pathRelation] }] });
+    expect(migrated.ok && migrated.revision.document).toMatchObject({ schemaVersion: 13, pages: [{ constraints: [lineRelation, pathRelation] }] });
   });
 
   it("migrates schema-9 documents and rejects invalid native midpoint references", async () => {
@@ -161,6 +161,26 @@ describe("DexieProjectRepository", () => {
     expect(await db.saveProject(metadata, invalid)).toMatchObject({ ok: false, status: "failed" });
     const afterRejection = await db.getProject(metadata.id);
     expect(afterRejection.ok).toBe(true);
+  });
+
+  it("round-trips Arc midpoint references and migrates v12 projects", async () => {
+    db = await repository();
+    const base = document();
+    const style = { stroke: "#000", strokeWidth: 1 };
+    const dependent = { type: "sketch" as const, id: elementId("arc-dependent"), layerId: layerId("layer-1"), nodes: [{ id: "mid", point: { x: 1, y: 1 } }, { id: "other", point: { x: 2, y: 2 } }], edges: [{ id: "edge", startNodeId: "mid", endNodeId: "other" }], style };
+    const arc = { type: "arc" as const, id: elementId("arc-source"), layerId: layerId("layer-1"), center: { x: 0, y: 0 }, radius: 10, startAngle: 5.5, endAngle: 0.5, direction: "clockwise" as const, style };
+    const relation = { id: "arc-mid", kind: "midpoint" as const, references: [{ elementId: dependent.id, nodeId: "mid" }] as const, source: { kind: "arc" as const, elementId: arc.id } };
+    expect((await db.saveProject(metadata, { ...base, elements: [dependent, arc], constraints: [relation] })).ok).toBe(true);
+    const roundTrip = await db.getProject(metadata.id);
+    expect(roundTrip.ok && roundTrip.revision.document).toMatchObject({ schemaVersion: 13, constraints: [relation] });
+
+    const oldProject = createProject(base);
+    const legacy = { ...oldProject, pieces: oldProject.pieces.map((piece) => ({ ...piece, sketches: [{ pageId: oldProject.pages[0]!.id, sketchId: dependent.id }] })), schemaVersion: 12, pages: [{ ...oldProject.pages[0]!, elements: [dependent, arc], constraints: [relation] }] };
+    const rawDb = (db as unknown as { db: { projects: { put: (value: unknown) => Promise<void> }; revisions: { put: (value: unknown) => Promise<void> } } }).db;
+    await rawDb.projects.put(metadata);
+    await rawDb.revisions.put({ key: `${metadata.id}:5`, recordVersion: 1, projectId: metadata.id, revision: 5, savedAt: 5, document: { ...legacy, revision: 5 } });
+    const migrated = await db.getProject(metadata.id);
+    expect(migrated.ok && migrated.revision.document).toMatchObject({ schemaVersion: 13, pages: [{ constraints: [relation] }] });
   });
 
   it("round-trips explicit connections through the repository", async () => {

@@ -101,6 +101,10 @@ const withoutDanglingDocumentConstraints = (document: DocumentSnapshot, elements
     const sourceReference = constraint.source;
     const source = elementsById.get(sourceReference.elementId);
     if (sourceReference.kind === "line") return source?.type === "line";
+    if (sourceReference.kind === "arc") {
+      if (source?.type !== "arc") return false;
+      try { return halfArcLengthMidpoint(arcElementToCurve(source).curve) !== undefined; } catch { return false; }
+    }
     if (sourceReference.kind === "path-segment") {
       if (source?.type !== "path" || source.closed || !source.segments.some((segment) => segment.id === sourceReference.segmentId)) return false;
       try { return halfArcLengthMidpoint(pathSegmentToCurve(source, sourceReference.segmentId).curve) !== undefined; } catch { return false; }
@@ -528,7 +532,7 @@ const constraintReferenceKey = (reference: SketchConstraint["references"][number
 const sameDocumentConstraintSource = (first: DocumentConstraint, second: DocumentConstraint): boolean => {
   if (!("source" in first) || !("source" in second)) return !("source" in first) && !("source" in second);
   if (first.source.kind !== second.source.kind || first.source.elementId !== second.source.elementId) return false;
-  if (first.source.kind === "line") return true;
+  if (first.source.kind === "line" || first.source.kind === "arc") return true;
   if (first.source.kind === "path-segment") return second.source.kind === "path-segment" && first.source.segmentId === second.source.segmentId;
   return second.source.kind === "spline-span" && first.source.startNodeId === second.source.startNodeId && first.source.endNodeId === second.source.endNodeId;
 };
