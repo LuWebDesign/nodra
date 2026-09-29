@@ -88,6 +88,38 @@ describe("DexieProjectRepository", () => {
     expect(recovered.ok && recovered.revision.document).toMatchObject({ elements: [dependent, source], constraints: [constraint] });
   });
 
+  it("round-trips native-line midpoint references in schema 10", async () => {
+    db = await repository();
+    const base = document();
+    const dependent = { type: "sketch" as const, id: elementId("native-dependent"), layerId: layerId("layer-1"), nodes: [{ id: "mid", point: { x: 5, y: 0 } }, { id: "other", point: { x: 8, y: 2 } }], edges: [{ id: "dependent-edge", startNodeId: "mid", endNodeId: "other" }], style: { stroke: "#000", strokeWidth: 1 } };
+    const line = { type: "line" as const, id: elementId("native-line"), layerId: layerId("layer-1"), start: { x: 0, y: 0 }, end: { x: 10, y: 0 }, rotation: 0, style: { stroke: "#000", strokeWidth: 1 } };
+    const relation = { id: "native-midpoint", kind: "midpoint" as const, references: [{ elementId: dependent.id, nodeId: "mid" }] as const, source: { kind: "line" as const, elementId: line.id } };
+    const saved = { ...base, elements: [dependent, line], constraints: [relation] };
+
+    expect((await db.saveProject(metadata, saved)).ok).toBe(true);
+    const recovered = await db.getProject(metadata.id);
+    expect(recovered.ok && recovered.revision.document.schemaVersion).toBe(CURRENT_SCHEMA_VERSION);
+    expect(recovered.ok && recovered.revision.document).toMatchObject({ constraints: [relation] });
+  });
+
+  it("migrates schema-9 documents and rejects invalid native midpoint references", async () => {
+    db = await repository();
+    const base = document();
+    const legacy = { ...base, schemaVersion: 9 as const };
+    const rawDb = (db as unknown as { db: { projects: { put: (value: unknown) => Promise<void> }; revisions: { put: (value: unknown) => Promise<void> } } }).db;
+    await rawDb.projects.put(metadata);
+    await rawDb.revisions.put({ key: `${metadata.id}:0`, recordVersion: 1, projectId: metadata.id, revision: 0, savedAt: 1, document: legacy });
+    const migrated = await db.getProject(metadata.id);
+    expect(migrated.ok && migrated.revision.document.schemaVersion).toBe(CURRENT_SCHEMA_VERSION);
+
+    const dependent = { type: "sketch" as const, id: elementId("invalid-dependent"), layerId: layerId("layer-1"), nodes: [{ id: "mid", point: { x: 5, y: 0 } }, { id: "other", point: { x: 8, y: 2 } }], edges: [{ id: "dependent-edge", startNodeId: "mid", endNodeId: "other" }], style: { stroke: "#000", strokeWidth: 1 } };
+    const line = { type: "line" as const, id: elementId("valid-native"), layerId: layerId("layer-1"), start: { x: 0, y: 0 }, end: { x: 10, y: 0 }, rotation: 0, style: { stroke: "#000", strokeWidth: 1 } };
+    const invalid = { ...base, elements: [dependent, line], constraints: [{ id: "invalid-native-midpoint", kind: "midpoint", references: [{ elementId: dependent.id, nodeId: "missing" }], source: { kind: "line", elementId: line.id } }] } as unknown as typeof base;
+    expect(await db.saveProject(metadata, invalid)).toMatchObject({ ok: false, status: "failed" });
+    const afterRejection = await db.getProject(metadata.id);
+    expect(afterRejection.ok).toBe(true);
+  });
+
   it("round-trips explicit connections through the repository", async () => {
     db = await repository();
     const base = document();

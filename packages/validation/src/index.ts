@@ -13,6 +13,16 @@ const visualLineEndpoints = (line: { readonly start: PointMm; readonly end: Poin
   const rotate = (point: PointMm): PointMm => ({ x: center.x + (point.x - center.x) * Math.cos(line.rotation) - (point.y - center.y) * Math.sin(line.rotation), y: center.y + (point.x - center.x) * Math.sin(line.rotation) + (point.y - center.y) * Math.cos(line.rotation) });
   return [rotate(line.start), rotate(line.end)];
 };
+const nativeLineHasFiniteDistinctVisualEndpoints = (line: { readonly start: PointMm; readonly end: PointMm; readonly rotation: number; readonly flipX?: boolean; readonly flipY?: boolean }): boolean => {
+  const center = { x: line.start.x / 2 + line.end.x / 2, y: line.start.y / 2 + line.end.y / 2 };
+  const rotate = (point: PointMm): PointMm => {
+    const x = (point.x - center.x) * (line.flipX === true ? -1 : 1);
+    const y = (point.y - center.y) * (line.flipY === true ? -1 : 1);
+    return { x: center.x + x * Math.cos(line.rotation) - y * Math.sin(line.rotation), y: center.y + x * Math.sin(line.rotation) + y * Math.cos(line.rotation) };
+  };
+  const start = rotate(line.start); const end = rotate(line.end);
+  return Number.isFinite(start.x) && Number.isFinite(start.y) && Number.isFinite(end.x) && Number.isFinite(end.y) && (start.x !== end.x || start.y !== end.y);
+};
 const pieceOwnership = { pieceId: nonEmptyId.optional() };
     const common = { id: nonEmptyId, layerId: nonEmptyId, ...pieceOwnership, role: geometryRole, rotation: finite, flipX: z.boolean().default(false), flipY: z.boolean().default(false), style, operation: operation.optional() };
 const cornerRadii = z.object({ topLeft: finite.min(0), topRight: finite.min(0), bottomRight: finite.min(0), bottomLeft: finite.min(0) }).strict();
@@ -79,6 +89,8 @@ const sketchPointReference = z.object({ elementId: nonEmptyId, nodeId: nonEmptyI
 const sketchEdgeReference = z.object({ elementId: nonEmptyId, edgeId: nonEmptyId }).strict();
 const sketchConstraintReference = z.union([sketchPointReference, sketchEdgeReference]);
 const sketchConstraint = z.object({ id: nonEmptyId, kind: z.enum(["horizontal", "vertical", "coincident", "parallel", "perpendicular", "equal", "distance-horizontal", "distance-vertical", "distance", "angle", "fixed", "midpoint"]), references: z.array(sketchConstraintReference).min(1).max(4), value: finite.positive().optional() }).strict();
+const nativeLineMidpointConstraint = z.object({ id: nonEmptyId, kind: z.literal("midpoint"), references: z.tuple([sketchPointReference]), source: z.object({ kind: z.literal("line"), elementId: nonEmptyId }).strict() }).strict();
+const documentConstraint = z.union([nativeLineMidpointConstraint, sketchConstraint]);
 const sketch = z.object({ id: nonEmptyId, layerId: nonEmptyId, ...pieceOwnership, role: geometryRole, type: z.literal("sketch"), nodes: z.array(sketchNode).min(2), edges: z.array(sketchEdge).min(1), constraints: z.array(sketchConstraint).optional(), style, operation: operation.optional() }).strict().superRefine((value, ctx) => {
   const nodeIds = value.nodes.map((node) => node.id); const edgeIds = value.edges.map((edge) => edge.id);
   if (new Set(nodeIds).size !== nodeIds.length) ctx.addIssue({ code: "custom", message: "Sketch node IDs must be unique", path: ["nodes"] });
@@ -156,7 +168,7 @@ const glyph = z.object({ ...common, type: z.literal("glyph"), position: point, s
 });
 export const elementSchema = z.discriminatedUnion("type", [rectangle, circle, arc, ellipse, line, sketch, dimension, contour, path, splineElementSchema, textElement, glyph]);
 export const layerSchema = z.object({ id: nonEmptyId, name: z.string().min(1), visible: z.boolean(), order: finite.int().nonnegative() }).strict();
-const documentFields = { id: nonEmptyId, revision: finite.int().nonnegative(), origin: z.literal("top-left"), units: z.literal("mm"), page: size, layers: z.array(layerSchema), elements: z.array(elementSchema), featureTree: parametricFeatureTree.optional(), constraints: z.array(sketchConstraint).optional(), connections: z.array(explicitConnection).default([]), positionalCoincidences: z.array(positionalCoincidence).optional() };
+const documentFields = { id: nonEmptyId, revision: finite.int().nonnegative(), origin: z.literal("top-left"), units: z.literal("mm"), page: size, layers: z.array(layerSchema), elements: z.array(elementSchema), featureTree: parametricFeatureTree.optional(), constraints: z.array(documentConstraint).optional(), connections: z.array(explicitConnection).default([]), positionalCoincidences: z.array(positionalCoincidence).optional() };
 const transformAnchor = (point: PointMm, center: PointMm, rotation: number, flipX = false, flipY = false): PointMm => {
   const x = (point.x - center.x) * (flipX ? -1 : 1); const y = (point.y - center.y) * (flipY ? -1 : 1);
   return { x: center.x + x * Math.cos(rotation) - y * Math.sin(rotation), y: center.y + x * Math.sin(rotation) + y * Math.cos(rotation) };
@@ -258,13 +270,26 @@ const validateFeatureTree = (elements: readonly z.infer<typeof elementSchema>[],
   });
 };
 
-export const validateDocumentConstraints = (elements: readonly z.infer<typeof elementSchema>[], constraints: readonly z.infer<typeof sketchConstraint>[], ctx: z.RefinementCtx, path: readonly (string | number)[]) => {
+export const validateDocumentConstraints = (elements: readonly z.infer<typeof elementSchema>[], constraints: readonly z.infer<typeof documentConstraint>[], ctx: z.RefinementCtx, path: readonly (string | number)[]) => {
   const sketches = new Map(elements.filter((element): element is Extract<typeof element, { type: "sketch" }> => element.type === "sketch").map((element) => [element.id, element]));
   const ids = new Set<string>();
   constraints.forEach((constraint, index) => {
-    if (constraint.kind === "fixed") ctx.addIssue({ code: "custom", message: "Fixed constraints are local-only", path: [...path, index, "kind"] });
     if (ids.has(constraint.id)) ctx.addIssue({ code: "custom", message: "Document constraint IDs must be unique", path: [...path, index, "id"] });
     ids.add(constraint.id);
+    if ("source" in constraint) {
+      const dependent = constraint.references[0];
+      const source = elements.find((element) => element.id === constraint.source.elementId);
+      const dependentSketch = sketches.get(dependent.elementId);
+      const node = dependentSketch?.nodes.find((candidate) => candidate.id === dependent.nodeId);
+      if (!dependentSketch || !node) ctx.addIssue({ code: "custom", message: "Native midpoint requires an existing dependent sketch node", path: [...path, index, "references", 0] });
+      if (!source || source.type !== "line") ctx.addIssue({ code: "custom", message: "Native midpoint source must identify an existing line", path: [...path, index, "source"] });
+      else if (!nativeLineHasFiniteDistinctVisualEndpoints(source)) ctx.addIssue({ code: "custom", message: "Native midpoint source line must have finite, distinct visual endpoints", path: [...path, index, "source"] });
+      const duplicateLocal = dependentSketch?.constraints?.some((other) => other.kind === "midpoint" && "nodeId" in other.references[0]! && other.references[0]!.nodeId === dependent.nodeId);
+      const duplicateDocument = constraints.some((other, otherIndex) => otherIndex !== index && other.kind === "midpoint" && "nodeId" in other.references[0]! && other.references[0]!.elementId === dependent.elementId && other.references[0]!.nodeId === dependent.nodeId);
+      if (duplicateLocal || duplicateDocument) ctx.addIssue({ code: "custom", message: "A node may have only one midpoint constraint", path: [...path, index, "references"] });
+      return;
+    }
+    if (constraint.kind === "fixed") ctx.addIssue({ code: "custom", message: "Fixed constraints are local-only", path: [...path, index, "kind"] });
     const segmentRelation = constraint.kind === "parallel" || constraint.kind === "perpendicular" || constraint.kind === "equal";
     const midpointRelation = constraint.kind === "midpoint" && constraint.references.length === 2 && "nodeId" in constraint.references[0]! && "edgeId" in constraint.references[1]!;
     if (constraint.kind === "midpoint") {
@@ -620,7 +645,7 @@ export function migrateDocument(input: JsonValue): JsonValue {
   if (typeof input !== "object" || input === null || Array.isArray(input)) return input;
   const candidate = input as Record<string, unknown>;
   if (candidate.schemaVersion === 7) return { ...migrateSchema7CircleElements(candidate) as Record<string, unknown>, schemaVersion: CURRENT_SCHEMA_VERSION };
-  if (candidate.schemaVersion === 8) return { ...candidate, schemaVersion: CURRENT_SCHEMA_VERSION };
+  if (candidate.schemaVersion === 8 || candidate.schemaVersion === 9) return { ...candidate, schemaVersion: CURRENT_SCHEMA_VERSION };
   if (candidate.schemaVersion === 1) return { ...migrateSchema7CircleElements({ ...candidate, page: { width: 1200, height: 900 }, elements: migrateLegacyElements(candidate.elements), connections: [] }) as Record<string, unknown>, schemaVersion: CURRENT_SCHEMA_VERSION };
   if (candidate.schemaVersion === 2 || candidate.schemaVersion === 3 || candidate.schemaVersion === 4 || candidate.schemaVersion === 5 || candidate.schemaVersion === 6) {
     return { ...migrateSchema7CircleElements({ ...candidate, page: candidate.page ?? { width: 1200, height: 900 }, elements: migrateLegacyElements(candidate.elements), connections: candidate.connections ?? [] }) as Record<string, unknown>, schemaVersion: CURRENT_SCHEMA_VERSION };
@@ -653,10 +678,10 @@ export function validateProject(input: unknown): { readonly success: true; reado
 export function migrateProject(input: unknown): unknown {
   if (typeof input !== "object" || input === null || Array.isArray(input)) return input;
   const candidate = input as Record<string, unknown>;
-  if (![1, 2, 3, 4, 5, 6, 7, 8, CURRENT_SCHEMA_VERSION].includes(candidate.schemaVersion as number)) return input;
+  if (![1, 2, 3, 4, 5, 6, 7, 8, 9, CURRENT_SCHEMA_VERSION].includes(candidate.schemaVersion as number)) return input;
   let migrated: Record<string, unknown>;
   if (candidate.schemaVersion === 7) migrated = { ...migrateSchema7CircleElements(candidate) as Record<string, unknown>, schemaVersion: CURRENT_SCHEMA_VERSION };
-  else if (candidate.schemaVersion === 8 || candidate.schemaVersion === CURRENT_SCHEMA_VERSION) migrated = { ...candidate, schemaVersion: CURRENT_SCHEMA_VERSION };
+  else if (candidate.schemaVersion === 8 || candidate.schemaVersion === 9 || candidate.schemaVersion === CURRENT_SCHEMA_VERSION) migrated = { ...candidate, schemaVersion: CURRENT_SCHEMA_VERSION };
   else {
     const pages = migrateLegacyPages(candidate.pages);
     migrated = { ...migrateSchema7CircleElements({ ...candidate, pages }) as Record<string, unknown>, schemaVersion: CURRENT_SCHEMA_VERSION };

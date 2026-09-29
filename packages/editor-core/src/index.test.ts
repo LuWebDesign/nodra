@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createDocument, elementId, featureId, layerId, type ArcElement, type DimensionElement, type Element, type EllipseElement, type CircleElement, type LineElement, type GlyphElement, type PathElement, type PointMm, type RectangleElement, type SketchElement, type SplineElement, type TextElement } from "@nodra/domain";
-import { addCircleConstraint, addDocumentConstraint, deleteDocumentConstraint, addSketchConstraint, addSketchSegmentRelation, addToSelection, appendSketchEdge, appendSplineNode, beginGesture, cancelGesture, clearSelection, closePath, closeSplineElement, commitGesture, createEditor, createElement, createIntersectFeature, dimensionDrivingCapability, rebuildParametricFeatures, addPositionalConnection, addPositionalCoincidence, deletePositionalCoincidence, createPathCubicNode, createSketchLine, cutContourSegment, cutLineAtPoint, cutPathSegment, cutSegment, cutSketchEdge, splitPathLineAt, deleteContourNodes, deleteElement, deleteElementNodes, deletePathNodes, deleteSketchConstraint, dispatch, duplicateElements, flipElements, insertContourNode, invalidDimensionIdsForShapeOperation, moveElement, moveElements, movePathNode, movePathHandle, openPath, previewGesture, previewGestureFromBase, redo, reversePath, removeFromSelection, reorderLayer, resizeElement, resizeElementToDimensions, resizeElements, resizeElementsToDimensions, rotateElementsAroundCenter, select, selectForPointerDown, setDimensionDriving, updateCircleConstraint, deleteCircleConstraint, solveCircle, setLayerVisibility, setPathJoin, shapeOperation, splitPathSegment, toggleSelection, topologyEditForPathSegmentReplacement, topologyReferenceKey, undo, updateContourNode, updateDimensionValue, updateElement, updateElementNode, updateElementStyles, updateSketchConstraint, updateDocumentConstraint, updateSplineHandle, updateSplineNode, setGeometryRole, type AutomaticSketchRelationCandidate } from "./index.js";
+import { addCircleConstraint, addDocumentConstraint, deleteDocumentConstraint, addSketchConstraint, addSketchSegmentRelation, addToSelection, appendSketchEdge, appendSplineNode, beginGesture, cancelGesture, clearSelection, closePath, closeSplineElement, commitGesture, createEditor, createElement, createIntersectFeature, dimensionDrivingCapability, rebuildParametricFeatures, addPositionalConnection, addPositionalCoincidence, deletePositionalCoincidence, createPathCubicNode, createSketchLine, cutContourSegment, cutLineAtPoint, cutPathSegment, cutSegment, cutSketchEdge, splitPathLineAt, deleteContourNodes, deleteElement, deleteElementNodes, deletePathNodes, deleteSketchConstraint, dispatch, duplicateElements, flipElements, insertContourNode, invalidDimensionIdsForShapeOperation, moveElement, moveElements, movePathNode, movePathHandle, openPath, previewGesture, previewGestureFromBase, redo, reversePath, removeFromSelection, reorderLayer, resizeElement, resizeElementToDimensions, resizeElements, resizeElementsToDimensions, rotateElement, rotateElementsAroundCenter, select, selectForPointerDown, setDimensionDriving, updateCircleConstraint, deleteCircleConstraint, solveCircle, setLayerVisibility, setPathJoin, shapeOperation, splitPathSegment, toggleSelection, topologyEditForPathSegmentReplacement, topologyReferenceKey, undo, updateContourNode, updateDimensionValue, updateElement, updateElementNode, updateElementStyles, updateSketchConstraint, updateDocumentConstraint, updateSplineHandle, updateSplineNode, setGeometryRole, type AutomaticSketchRelationCandidate } from "./index.js";
 import { boundsOfElements, realGeometryNodes } from "@nodra/geometry";
 import type { Direction } from "@nodra/geometry";
 import { appendLinePoint } from "./index.js";
@@ -332,6 +332,81 @@ describe("editor core", () => {
     const restored = undo(state);
     expect(restored.document.constraints?.[0]?.kind).toBe("horizontal");
     expect(redo(restored).document.constraints).toEqual([]);
+  });
+
+  it("projects native-line midpoint dependents after native line edit commands", () => {
+    const source: LineElement = { type: "line", id: elementId("native-midpoint-source"), layerId: rectangle.layerId, start: { x: 0, y: 0 }, end: { x: 10, y: 0 }, rotation: 0, style: rectangle.style };
+    const dependent = createSketchLine(elementId("native-midpoint-dependent"), rectangle.layerId, rectangle.style, { x: 20, y: 20 }, { x: 20, y: 30 });
+    const targetNode = dependent.nodes[0]!;
+    const constraint = { id: "native-line-midpoint", kind: "midpoint" as const, references: [{ elementId: dependent.id, nodeId: targetNode.id }] as const, source: { kind: "line" as const, elementId: source.id } };
+    const initial = dispatch(createEditor({ ...document, elements: [source, dependent] }), addDocumentConstraint(constraint));
+    const commands = [
+      updateElement(source.id, { start: { x: 2, y: 0 }, end: { x: 12, y: 0 } }),
+      moveElement(source.id, { x: 3, y: 0 }),
+      moveElements([source.id], { x: 4, y: 0 }),
+    ];
+    let state = initial;
+    const expected = [{ x: 7, y: 0 }, { x: 10, y: 0 }, { x: 14, y: 0 }];
+    commands.forEach((command, index) => {
+      state = dispatch(state, command);
+      const sketch = state.document.elements.find((element): element is SketchElement => element.id === dependent.id && element.type === "sketch");
+      expect(sketch?.nodes.find((node) => node.id === targetNode.id)?.point).toEqual(expected[index]);
+    });
+    expect(state.undo).toHaveLength(4);
+    expect(undo(state).document).toEqual(commands.slice(0, 2).reduce((current, command) => dispatch(current, command), initial).document);
+    expect(redo(undo(state)).document).toEqual(state.document);
+  });
+
+  it("keeps a native-line midpoint dependent fixed through source rotation and undo/redo", () => {
+    const source: LineElement = { type: "line", id: elementId("rotated-midpoint-source"), layerId: rectangle.layerId, start: { x: 0, y: 0 }, end: { x: 10, y: 0 }, rotation: 0, style: rectangle.style };
+    const dependent = createSketchLine(elementId("rotated-midpoint-dependent"), rectangle.layerId, rectangle.style, { x: 5, y: 0 }, { x: 5, y: 10 });
+    const constraint = { id: "rotated-native-midpoint", kind: "midpoint" as const, references: [{ elementId: dependent.id, nodeId: dependent.nodes[0]!.id }] as const, source: { kind: "line" as const, elementId: source.id } };
+    const initial = dispatch(createEditor({ ...document, elements: [source, dependent] }), addDocumentConstraint(constraint));
+
+    const rotated = dispatch(initial, rotateElement(source.id, Math.PI / 2));
+    const rotatedSource = rotated.document.elements.find((element) => element.id === source.id);
+    const rotatedDependent = rotated.document.elements.find((element): element is SketchElement => element.id === dependent.id && element.type === "sketch");
+    expect(rotatedSource).toMatchObject({ type: "line", start: source.start, end: source.end, rotation: Math.PI / 2 });
+    expect(rotatedSource).not.toEqual(source);
+    expect(rotatedDependent?.nodes.find((node) => node.id === dependent.nodes[0]!.id)?.point).toEqual({ x: 5, y: 0 });
+    expect(rotated.document.elements).toHaveLength(2);
+    expect(rotated.document.constraints).toEqual([constraint]);
+    expect(undo(rotated).document).toEqual(initial.document);
+    expect(redo(undo(rotated)).document).toEqual(rotated.document);
+  });
+
+  it("updates and deletes a native midpoint relation through the constraint kernel", () => {
+    const first: LineElement = { type: "line", id: elementId("update-midpoint-first"), layerId: rectangle.layerId, start: { x: 0, y: 0 }, end: { x: 10, y: 0 }, rotation: 0, style: rectangle.style };
+    const second: LineElement = { ...first, id: elementId("update-midpoint-second"), start: { x: 20, y: 0 }, end: { x: 40, y: 0 } };
+    const dependent = createSketchLine(elementId("update-midpoint-dependent"), rectangle.layerId, rectangle.style, { x: 5, y: 0 }, { x: 5, y: 10 });
+    const constraint = { id: "update-native-midpoint", kind: "midpoint" as const, references: [{ elementId: dependent.id, nodeId: dependent.nodes[0]!.id }] as const, source: { kind: "line" as const, elementId: first.id } };
+    const initial = createEditor({ ...document, elements: [first, second, dependent] });
+    const added = dispatch(initial, addDocumentConstraint(constraint));
+    const updated = dispatch(added, updateDocumentConstraint({ ...constraint, source: { kind: "line", elementId: second.id } }));
+    const updatedSketch = updated.document.elements.find((element): element is SketchElement => element.id === dependent.id && element.type === "sketch");
+    expect(updatedSketch?.nodes[0]?.point).toEqual({ x: 30, y: 0 });
+    const deleted = dispatch(updated, deleteDocumentConstraint(constraint.id));
+    expect(deleted.document.constraints).toEqual([]);
+    expect(undo(deleted).document).toEqual(updated.document);
+    expect(redo(undo(deleted)).document).toEqual(deleted.document);
+  });
+
+  it("cleans native midpoint relations on source or dependent deletion without retargeting", () => {
+    const source: LineElement = { type: "line", id: elementId("deleted-midpoint-source"), layerId: rectangle.layerId, start: { x: 0, y: 0 }, end: { x: 10, y: 0 }, rotation: 0, style: rectangle.style };
+    const dependent = createSketchLine(elementId("deleted-midpoint-dependent"), rectangle.layerId, rectangle.style, { x: 5, y: 0 }, { x: 5, y: 10 });
+    const other: LineElement = { ...source, id: elementId("other-midpoint-line"), start: { x: 100, y: 0 }, end: { x: 110, y: 0 } };
+    const constraint = { id: "delete-native-midpoint", kind: "midpoint" as const, references: [{ elementId: dependent.id, nodeId: dependent.nodes[0]!.id }] as const, source: { kind: "line" as const, elementId: source.id } };
+    const initial = dispatch(createEditor({ ...document, elements: [source, other, dependent] }), addDocumentConstraint(constraint));
+    const sourceDeleted = dispatch(initial, deleteElement(source.id));
+    expect(sourceDeleted.document.constraints).toEqual([]);
+    expect(sourceDeleted.document.elements.find((element) => element.id === other.id)).toBeDefined();
+    expect(undo(sourceDeleted).document).toEqual(initial.document);
+    expect(redo(undo(sourceDeleted)).document).toEqual(sourceDeleted.document);
+
+    const dependentDeleted = dispatch(initial, deleteElement(dependent.id));
+    expect(dependentDeleted.document.constraints).toEqual([]);
+    expect(dependentDeleted.document.elements.map((element) => element.id)).toEqual([source.id, other.id]);
+    expect(undo(dependentDeleted).document).toEqual(initial.document);
   });
 
   it("removes page constraints that reference a deleted element and restores them with undo", () => {

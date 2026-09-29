@@ -142,16 +142,33 @@ describe("native document validation", () => {
     expect(validateProject({ ...project, pieces: "broken" }).success).toBe(false);
   });
 
-  it("migrates schema 8 documents and projects explicitly to schema 9", () => {
+  it("migrates schema 8 documents and projects explicitly to schema 10", () => {
     const base = createDocument("schema-8", []);
     const migratedDocument = migrateDocument({ ...base, schemaVersion: 8 });
     const migratedProject = migrateProject({ schemaVersion: 8, id: "p", revision: 0, origin: "top-left", units: "mm", preferences: { lineGuidesEnabled: true, lineGuideAngle: 45 }, pages: [{ id: "page-1", page: base.page, layers: [], elements: [] }], activePageId: "page-1" });
-    expect(migratedDocument).toMatchObject({ schemaVersion: 9 });
-    expect(migratedProject).toMatchObject({ schemaVersion: 9 });
+    expect(migratedDocument).toMatchObject({ schemaVersion: 10 });
+    expect(migratedProject).toMatchObject({ schemaVersion: 10 });
     expect(migratedDocument).not.toHaveProperty("featureTree");
     expect((migratedProject as { pages?: readonly unknown[] }).pages?.[0]).not.toHaveProperty("featureTree");
   });
 
+  it("migrates schema 9 projects with sketch midpoint constraints without inventing native relations", () => {
+    const base = createDocument("schema-9-project", [{ id: layerId("layer-1"), name: "Design", visible: true, order: 0 }]);
+    const sketch = { type: "sketch" as const, id: "sketch", layerId: "layer-1", nodes: [{ id: "a", point: { x: 0, y: 0 } }, { id: "b", point: { x: 10, y: 0 } }, { id: "c", point: { x: 5, y: 3 } }, { id: "d", point: { x: 5, y: 6 } }], edges: [{ id: "ab", startNodeId: "a", endNodeId: "b" }], constraints: [{ id: "local-mid", kind: "midpoint" as const, references: [{ elementId: "sketch", nodeId: "c" }, { elementId: "sketch", edgeId: "ab" }] as const }], style: { stroke: "#000", strokeWidth: 1 } };
+    const pageMidpoint = { id: "page-mid", kind: "midpoint" as const, references: [{ elementId: "sketch", nodeId: "d" }, { elementId: "sketch", edgeId: "ab" }] as const };
+    const project = createProject({ ...base, elements: [sketch], constraints: [pageMidpoint] } as unknown as import("@nodra/domain").DocumentSnapshot);
+    const legacyProject = { ...project, pieces: project.pieces.map((piece) => ({ ...piece, sketches: [{ pageId: project.pages[0]!.id, sketchId: elementId("sketch") }] })), schemaVersion: 9 };
+    const migrated = migrateProject(legacyProject);
+    expect(migrated).toMatchObject({ schemaVersion: 10, pages: [{ constraints: [pageMidpoint], elements: [{ constraints: [sketch.constraints[0]] }] }] });
+    expect(validateProject(legacyProject).success).toBe(true);
+    expect(JSON.stringify(migrated)).not.toContain('"source"');
+
+    const legacyDocument = { ...base, elements: [sketch], constraints: [pageMidpoint], schemaVersion: 9 };
+    const parsed = parseDocument(JSON.stringify(legacyDocument));
+    expect(parsed.success).toBe(true);
+    expect(validateDocument({ ...base, schemaVersion: 11 }).success).toBe(false);
+    expect(validateDocument({ ...base, schemaVersion: 9 }).success).toBe(true);
+  });
   it("validates page-scoped feature trees and their element references strictly", () => {
     const base = createDocument("feature-tree", [{ id: layerId("layer-1"), name: "Design", visible: true, order: 0 }]);
     const source = { type: "rectangle", id: "source", layerId: "layer-1", position: { x: 0, y: 0 }, size: { width: 10, height: 10 }, cornerRadius: 0, rotation: 0, style: { stroke: "#000", strokeWidth: 1 } };
@@ -441,6 +458,29 @@ describe("native document validation", () => {
     expect(validateDocument({ ...base, elements: [cyclic] }).success).toBe(false);
   });
 
+  it("validates native Line midpoint references and preserves schema 9 documents on migration", () => {
+    const base = createDocument("native-line-midpoint", [{ id: layerId("layer-1"), name: "Design", visible: true, order: 0 }]);
+    const sketch = { type: "sketch" as const, id: "sketch", layerId: "layer-1", nodes: [{ id: "dependent", point: { x: 5, y: 4 } }, { id: "other", point: { x: 0, y: 0 } }], edges: [{ id: "edge", startNodeId: "dependent", endNodeId: "other" }], style: { stroke: "#000", strokeWidth: 1 } };
+    const line = { type: "line" as const, id: "source", layerId: "layer-1", start: { x: 0, y: 0 }, end: { x: 10, y: 0 }, rotation: 0, style: { stroke: "#000", strokeWidth: 1 } };
+    const native = { id: "native-mid", kind: "midpoint" as const, references: [{ elementId: "sketch", nodeId: "dependent" }], source: { kind: "line" as const, elementId: "source" } };
+    expect(validateDocument({ ...base, elements: [sketch, line], constraints: [native] }).success).toBe(true);
+    expect(validateDocument({ ...base, elements: [sketch, line], constraints: [{ ...native, references: [] }] }).success).toBe(false);
+    expect(validateDocument({ ...base, elements: [sketch, line], constraints: [{ ...native, source: { kind: "edge", elementId: "source" } }] }).success).toBe(false);
+    expect(validateDocument({ ...base, elements: [sketch, line], constraints: [{ ...native, id: "duplicate" }, { ...native, id: "duplicate", references: [{ elementId: "sketch", nodeId: "other" }] }] }).success).toBe(false);
+    const sketchConstraint = { id: "duplicate", kind: "horizontal" as const, references: [{ elementId: "sketch", nodeId: "dependent" }, { elementId: "sketch", nodeId: "other" }] as const };
+    expect(validateDocument({ ...base, elements: [sketch, line], constraints: [sketchConstraint, { ...native, id: "duplicate", source: { kind: "line" as const, elementId: "source" } }] }).success).toBe(false);
+    expect(validateDocument({ ...base, elements: [{ ...sketch, constraints: [{ ...native }] }] }).success).toBe(false);
+    expect(validateDocument({ ...base, elements: [sketch, { ...line, end: line.start }], constraints: [native] }).success).toBe(false);
+    const largeCenterLine = { ...line, start: { x: 1.6e308, y: 1.5e308 }, end: { x: 1.6e308, y: 1.6e308 } };
+    expect(validateDocument({ ...base, elements: [sketch, largeCenterLine], constraints: [native] }).success).toBe(true);
+    const overflowingRotationLine = { ...line, start: { x: 1.7e308, y: -1e308 }, end: { x: 1.7e308, y: 1e308 }, rotation: Math.PI / 2 };
+    expect(validateDocument({ ...base, elements: [sketch, overflowingRotationLine], constraints: [native] }).success).toBe(false);
+    const tinyLine = { ...line, start: { x: 0, y: 0 }, end: { x: 0, y: Number.MIN_VALUE } };
+    expect(validateDocument({ ...base, elements: [sketch, tinyLine], constraints: [native] }).success).toBe(true);
+    const v9 = { ...base, schemaVersion: 9, constraints: undefined };
+    expect(migrateDocument(v9)).toMatchObject({ schemaVersion: 10, elements: v9.elements });
+    expect(validateDocument(v9).success).toBe(true);
+  });
   it("accepts closed contour paths and rejects open rings", () => {
     const base = createDocument("doc-1", [{ id: layerId("layer-1"), name: "Design", visible: true, order: 0 }]);
     const contour = { type: "contour", id: "path", layerId: "layer-1", position: { x: 0, y: 0 }, size: { width: 10, height: 10 }, contours: [{ points: [{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }, { x: 0, y: 0 }] }], fillRule: "evenodd", rotation: 0, style: { stroke: "#000", strokeWidth: 1 } };

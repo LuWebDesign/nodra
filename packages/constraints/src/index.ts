@@ -1,5 +1,5 @@
 import { isCircleElement, type CircleConstraintKind, type DocumentSnapshot, type Element, type ElementId, type PointMm, type SketchConstraintKind, type SketchConstraint } from "@nodra/domain";
-import { solveCircleConstraints, solveSketchConstraints } from "@nodra/geometry";
+import { lineElementToCurve, solveCircleConstraints, solveSketchConstraints } from "@nodra/geometry";
 
 export type ConstraintState = "underdefined" | "fully-defined" | "overdefined" | "conflict" | "invalid";
 export type ParametricConstraintKind = SketchConstraintKind | CircleConstraintKind;
@@ -34,6 +34,7 @@ export interface NormalizedConstraint {
   readonly references: readonly ConstraintNodeReference[];
   readonly kind: SketchConstraintKind;
   readonly value?: number;
+  readonly sourceElementId?: ElementId;
 }
 
 export interface ConstraintDofMetadata {
@@ -143,7 +144,28 @@ const solveGlobalSegmentRelation = (kind: SketchConstraintKind, first: MutablePo
   return true;
 };
 
-const projectGlobalConstraint = (points: Map<string, MutablePoint>, constraint: NormalizedConstraint): number => {
+const nativeLineMidpoint = (document: DocumentSnapshot, constraint: NormalizedConstraint): PointMm | undefined => {
+  if (constraint.sourceElementId === undefined || constraint.references.length !== 1) return undefined;
+  const line = document.elements.find((element) => element.id === constraint.sourceElementId);
+  if (!line || line.type !== "line") return undefined;
+  try {
+    const curve = lineElementToCurve(line).curve;
+    const { start, end } = curve;
+    if (![start.x, start.y, end.x, end.y].every(Number.isFinite) || start.x === end.x && start.y === end.y) return undefined;
+    const midpoint = { x: start.x / 2 + end.x / 2, y: start.y / 2 + end.y / 2 };
+    return Number.isFinite(midpoint.x) && Number.isFinite(midpoint.y) ? midpoint : undefined;
+  } catch { return undefined; }
+};
+
+const projectGlobalConstraint = (document: DocumentSnapshot, points: Map<string, MutablePoint>, constraint: NormalizedConstraint): number => {
+  if (constraint.sourceElementId !== undefined) {
+    const dependent = constraint.references.length === 1 ? points.get(constraintNodeKey(constraint.references[0]!)) : undefined;
+    const midpoint = nativeLineMidpoint(document, constraint);
+    if (constraint.kind !== "midpoint" || !dependent || !midpoint) return 0;
+    const delta = Math.hypot(dependent.x - midpoint.x, dependent.y - midpoint.y);
+    dependent.x = midpoint.x; dependent.y = midpoint.y;
+    return delta;
+  }
   const segmentRelation = constraint.kind === "parallel" || constraint.kind === "perpendicular" || constraint.kind === "equal";
   const supported = supportsDocumentConstraintKind(constraint.kind);
   const requiresValue = constraint.kind === "distance-horizontal" || constraint.kind === "distance-vertical" || constraint.kind === "distance" || constraint.kind === "angle";
@@ -236,6 +258,7 @@ const adapters: readonly ParametricAdapter[] = [sketchAdapter, circleAdapter];
 const adapterFor = (element: Element): ParametricAdapter | undefined => adapters.find((adapter) => adapter.supports(element));
 
 const pointReferencesForConstraint = (sketches: readonly Extract<Element, { type: "sketch" }>[], constraint: SketchConstraint): readonly ConstraintNodeReference[] => {
+  if (constraint.kind === "midpoint" && "source" in constraint && constraint.references.length === 1 && "nodeId" in constraint.references[0]!) return [{ elementId: constraint.references[0].elementId, nodeId: constraint.references[0].nodeId }];
   if (constraint.kind === "midpoint" && constraint.references.length === 2 && "nodeId" in constraint.references[0]! && "edgeId" in constraint.references[1]!) {
     const dependent = constraint.references[0];
     const edgeReference = constraint.references[1];
@@ -262,7 +285,7 @@ export function normalizedConstraintsForDocument(document: DocumentSnapshot): re
   const sketches = document.elements.filter((element): element is Extract<Element, { type: "sketch" }> => element.type === "sketch");
   return [
     ...sketches.flatMap((sketch) => (sketch.constraints ?? []).map((constraint) => ({ id: constraintIdentity("local", sketch.id, constraint.id), scope: "local" as const, ownerId: sketch.id, references: pointReferencesForConstraint(sketches, constraint), kind: constraint.kind, ...(constraint.value !== undefined ? { value: constraint.value } : {}) }))),
-    ...(document.constraints ?? []).map((constraint) => ({ id: constraintIdentity("document", undefined, constraint.id), scope: "document" as const, references: pointReferencesForConstraint(sketches, constraint), kind: constraint.kind, ...(constraint.value !== undefined ? { value: constraint.value } : {}) })),
+    ...(document.constraints ?? []).map((constraint) => ({ id: constraintIdentity("document", undefined, constraint.id), scope: "document" as const, references: pointReferencesForConstraint(sketches, constraint), kind: constraint.kind, ...("source" in constraint ? { sourceElementId: constraint.source.elementId } : {}), ...(constraint.value !== undefined ? { value: constraint.value } : {}) })),
   ].sort((first, second) => first.id < second.id ? -1 : first.id > second.id ? 1 : 0);
 
 }
@@ -344,12 +367,13 @@ const constraintRankForInput = (input: ConstraintComponentInput): { readonly ran
   };
   for (const constraint of input.constraints) {
     const [first, second, third, fourth] = constraint.references;
-    const expected = constraint.kind === "fixed" ? 1 : constraint.kind === "midpoint" ? 3 : constraint.kind === "parallel" || constraint.kind === "perpendicular" || constraint.kind === "equal" ? 4 : 2;
+    const expected = constraint.kind === "fixed" || constraint.sourceElementId !== undefined ? 1 : constraint.kind === "midpoint" ? 3 : constraint.kind === "parallel" || constraint.kind === "perpendicular" || constraint.kind === "equal" ? 4 : 2;
     const usesValue = constraint.kind === "distance-horizontal" || constraint.kind === "distance-vertical" || constraint.kind === "distance" || constraint.kind === "angle";
     if (!first || constraint.references.length !== expected || constraint.scope === "document" && !supportsDocumentConstraintKind(constraint.kind) || usesValue && (constraint.value === undefined || !Number.isFinite(constraint.value) || constraint.value <= 0) || !usesValue && constraint.value !== undefined) continue;
     const finiteReferences = constraint.references.every((reference) => { const point = points.get(constraintNodeKey(reference)); return point !== undefined && Number.isFinite(point.x) && Number.isFinite(point.y); });
     if (!finiteReferences) continue;
     if (constraint.kind === "fixed") { addRow([{ reference: first, x: 1, y: 0 }]); addRow([{ reference: first, x: 0, y: 1 }]); continue; }
+    if (constraint.sourceElementId !== undefined) { addRow([{ reference: first, x: 1, y: 0 }]); addRow([{ reference: first, x: 0, y: 1 }]); continue; }
     if (constraint.kind === "midpoint") {
       if (!second || !third) continue;
       addRow([{ reference: first, x: -1, y: 0 }, { reference: second, x: 0.5, y: 0 }, { reference: third, x: 0.5, y: 0 }]);
@@ -470,7 +494,7 @@ export function solveConstraintComponents(document: DocumentSnapshot): Constrain
       componentIterations = iteration + 1;
       const localResults = componentSketches.map((sketch) => projectLocalSketchConstraints(globalPoints, sketch, constraintIds, nodeKeys));
       if (localResults.some((result) => !result.valid)) { invalidLocalProjection = true; invalidLocalComponents.push(component); break; }
-      const maxProjectionDelta = Math.max(0, ...localResults.map((result) => result.delta), ...componentGlobals.map((constraint) => projectGlobalConstraint(globalPoints, constraint)));
+      const maxProjectionDelta = Math.max(0, ...localResults.map((result) => result.delta), ...componentGlobals.map((constraint) => projectGlobalConstraint(document, globalPoints, constraint)));
       if (maxProjectionDelta <= CONSTRAINT_TOLERANCE) { componentReachedFixedPoint = true; break; }
       const signature = pointMapSignature(globalPoints, nodeKeys);
       if (seen.has(signature)) break;
@@ -515,6 +539,13 @@ export function constraintResidualsForDocument(document: DocumentSnapshot, toler
   if (!Number.isFinite(tolerance) || tolerance < 0) throw new Error("Constraint residual tolerance must be finite and non-negative");
   const points = new Map(document.elements.filter((element): element is Extract<Element, { type: "sketch" }> => element.type === "sketch").flatMap((sketch) => sketch.nodes.map((node) => [constraintNodeKey({ elementId: sketch.id, nodeId: node.id }), node.point] as const)));
   return normalizedConstraintsForDocument(document).map((constraint) => {
+    if (constraint.sourceElementId !== undefined) {
+      const dependent = constraint.references.length === 1 ? points.get(constraintNodeKey(constraint.references[0]!)) : undefined;
+      const midpoint = nativeLineMidpoint(document, constraint);
+      if (constraint.kind !== "midpoint" || !dependent || !midpoint || constraint.value !== undefined) return { constraintId: constraint.id, residual: Number.POSITIVE_INFINITY, satisfied: false, supported: false };
+      const residual = Math.hypot(dependent.x - midpoint.x, dependent.y - midpoint.y);
+      return { constraintId: constraint.id, residual, satisfied: residual <= tolerance, supported: true };
+    }
     const values = constraint.references.map((reference) => points.get(constraintNodeKey(reference)));
     const isPoint = (point: PointMm | undefined): point is PointMm => point !== undefined && typeof point === "object" && Number.isFinite(point.x) && Number.isFinite(point.y);
     const valid = values.every(isPoint) && (constraint.ownerId === undefined || constraint.references.every((reference) => reference.elementId === constraint.ownerId));

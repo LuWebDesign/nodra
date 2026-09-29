@@ -437,6 +437,35 @@ describe("parametric constraint boundary", () => {
     expect(afterMove.residuals).toEqual([expect.objectContaining({ supported: true, satisfied: true })]);
   });
 
+  it("projects a document midpoint from a native line snapshot without moving the source", () => {
+    const dependent = sketch();
+    const line = { type: "line" as const, id: elementId("native-line"), layerId: fixtureLayer().id, start: { x: 0, y: 0 }, end: { x: 10, y: 0 }, rotation: 0, style: fixtureStyle() };
+    const relation = { id: "native-mid", kind: "midpoint" as const, references: [{ elementId: dependent.id, nodeId: "a" }] as const, source: { kind: "line" as const, elementId: line.id } };
+    const document = { ...documentWith([dependent, line]), constraints: [relation] };
+    const first = solveConstraintComponents(document);
+    const movedLine = { ...line, start: { x: 20, y: 10 }, end: { x: 40, y: 30 }, rotation: Math.PI / 2 };
+    const second = solveConstraintComponents({ ...document, elements: [dependent, movedLine] });
+
+    expect((first.document.elements[0] as SketchElement).nodes[0]?.point).toEqual({ x: 5, y: 0 });
+    expect((second.document.elements[0] as SketchElement).nodes[0]?.point).not.toEqual((first.document.elements[0] as SketchElement).nodes[0]?.point);
+    expect(second.residuals).toEqual([expect.objectContaining({ supported: true, satisfied: true })]);
+    expect(second.document.elements[1]).toEqual(movedLine);
+  });
+
+  it("projects a valid tiny native-line midpoint and reports it as supported", () => {
+    const dependent = sketch();
+    const line = { type: "line" as const, id: elementId("tiny-native-line"), layerId: fixtureLayer().id, start: { x: 0, y: 0 }, end: { x: 1e-9, y: 0 }, rotation: 0, style: fixtureStyle() };
+    const relation = { id: "tiny-native-mid", kind: "midpoint" as const, references: [{ elementId: dependent.id, nodeId: "a" }] as const, source: { kind: "line" as const, elementId: line.id } };
+    const document = { ...documentWith([dependent, line]), constraints: [relation] };
+    const before = JSON.stringify(document);
+    const solved = solveConstraintComponents(document);
+
+    expect((solved.document.elements[0] as SketchElement).nodes[0]?.point).toEqual({ x: 5e-10, y: 0 });
+    expect(solved.residuals).toEqual([expect.objectContaining({ supported: true, satisfied: true, residual: 0 })]);
+    expect(JSON.stringify(document)).toBe(before);
+    expect(solved.document.elements[1]).toEqual(line);
+  });
+
   it("keeps unsupported and missing entities distinguishable", () => {
     const line = { type: "line" as const, id: elementId("line"), layerId: fixtureLayer().id, start: { x: 0, y: 0 }, end: { x: 10, y: 0 }, rotation: 0, style: fixtureStyle() };
     const document = documentWith([line]);
