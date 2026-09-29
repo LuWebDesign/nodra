@@ -51,7 +51,7 @@ export interface CreationGuide { readonly source: PointMm; readonly target: Poin
 export interface DirectionalGuide { readonly source: PointMm; readonly target: PointMm; readonly angle: number; readonly snappedPoint: PointMm }
 export interface CreationSnap { readonly point: PointMm; readonly kind: "node" | "center"; readonly node?: NodeHit; readonly address?: import("@nodra/domain").ConnectableNodeAddress }
 export type LineInferenceKind = "node" | "center" | "midpoint" | "axis" | "angular" | "perpendicular";
-export interface LineInferenceCandidate { readonly point: PointMm; readonly kind: LineInferenceKind; readonly sourceIds: readonly string[]; readonly guides: readonly CreationGuide[]; readonly axis?: "vertical" | "horizontal"; readonly nodeId?: string }
+export interface LineInferenceCandidate { readonly point: PointMm; readonly kind: LineInferenceKind; readonly sourceIds: readonly string[]; readonly guides: readonly CreationGuide[]; readonly axis?: "vertical" | "horizontal"; readonly nodeId?: string; readonly midpointSource?: Curve2DSource }
 export interface LineInferenceInput {
   readonly document: DocumentSnapshot;
   readonly pointer: PointMm;
@@ -446,13 +446,14 @@ export function resolveLineInference(input: LineInferenceInput): LineInferenceCa
   const visible = new Set(document.layers.filter((layer) => layer.visible).map((layer) => layer.id));
   const candidates: { candidate: LineInferenceCandidate; distance: number; priority: number; order: string }[] = [];
   const prior = input.priorCandidate;
-  const sameCandidate = (candidate: LineInferenceCandidate): boolean => !!prior && candidate.kind === prior.kind && candidate.sourceIds.join("/") === prior.sourceIds.join("/") && candidate.axis === prior.axis && candidate.nodeId === prior.nodeId;
+  const sameCandidate = (candidate: LineInferenceCandidate): boolean => !!prior && candidate.kind === prior.kind && candidate.sourceIds.join("/") === prior.sourceIds.join("/") && candidate.axis === prior.axis && candidate.nodeId === prior.nodeId && JSON.stringify(candidate.midpointSource) === JSON.stringify(prior.midpointSource);
   const add = (candidate: LineInferenceCandidate, distance: number, priority: number, order: string, limit = tolerance): void => {
     const cap = sameCandidate(candidate) ? (candidate.kind === "axis" ? axisTolerance : tolerance) * 1.5 : limit;
     if (distance * zoom <= cap) candidates.push({ candidate, distance, priority, order });
   };
   for (const element of document.elements) if (visible.has(element.layerId)) {
     for (const [index, node] of realGeometryNodes(element).entries()) {
+      if (element.type === "line" && node.kind === "center") continue;
       if (element.id === activeSketchId && node.nodeId === input.originNodeId) continue;
       const kind = node.kind === "center" ? "center" : "node";
       const distance = Math.hypot(pointer.x - node.point.x, pointer.y - node.point.y);
@@ -463,14 +464,33 @@ export function resolveLineInference(input: LineInferenceInput): LineInferenceCa
     const distance = Math.hypot(pointer.x - center.point.x, pointer.y - center.point.y);
     add({ point: center.point, kind: "center", sourceIds: [center.elementId, "center"], guides: [{ source: pointer, target: center.point, kind: "center" }] }, distance, 1, `${center.elementId}:center`);
   }
-  const sketch = activeSketchId ? document.elements.find((element) => element.type === "sketch" && element.id === activeSketchId && visible.has(element.layerId)) : undefined;
-  if (sketch?.type === "sketch") for (const edge of sketch.edges) {
-    const start = sketch.nodes.find((node) => node.id === edge.startNodeId)?.point;
-    const end = sketch.nodes.find((node) => node.id === edge.endNodeId)?.point;
-    if (!start || !end) continue;
-    const point = { x: (start.x + end.x) / 2, y: (start.y + end.y) / 2 };
-    add({ point, kind: "midpoint", sourceIds: [sketch.id, edge.id], guides: [{ source: pointer, target: point, kind: "node" }] }, Math.hypot(pointer.x - point.x, pointer.y - point.y), 2, `${sketch.id}:${edge.id}`);
+  for (const element of document.elements) {
+    if (!visible.has(element.layerId) || !(element.type === "sketch" || element.type === "line" || element.type === "path" || element.type === "spline" || element.type === "arc")) continue;
+    if ((element.type === "path" || element.type === "spline") && element.closed) continue;
+    let sourcedCurves: ReturnType<typeof elementToCurves>;
+    try { sourcedCurves = elementToCurves(element); } catch { continue; }
+    for (const sourced of sourcedCurves) {
+      const source = sourced.source;
+      if (!(source.kind === "sketch-edge" || source.kind === "line-element" || source.kind === "path-segment" || source.kind === "spline-span" || source.kind === "arc-element")) continue;
+      try {
+        if (source.kind === "sketch-edge" && element.type === "sketch" && element.id === activeSketchId) {
+          const edge = element.edges.find((candidate) => candidate.id === source.edgeId);
+          const start = edge && element.nodes.find((node) => node.id === edge.startNodeId)?.point;
+          const end = edge && element.nodes.find((node) => node.id === edge.endNodeId)?.point;
+          if (!start || !end || Math.hypot(end.x - start.x, end.y - start.y) <= 1e-9) continue;
+        }
+        const point = halfArcLengthMidpoint(sourced.curve);
+        if (!point) continue;
+        const sourceIds = source.kind === "sketch-edge" ? [source.kind, source.elementId, source.edgeId]
+          : source.kind === "path-segment" ? [source.kind, source.elementId, source.segmentId]
+            : source.kind === "spline-span" ? [source.kind, source.elementId, source.startNodeId, source.endNodeId]
+              : [source.kind, source.elementId];
+        const order = sourceIds.join(":");
+        add({ point, kind: "midpoint", sourceIds, midpointSource: source, guides: [{ source: pointer, target: point, kind: "node" }] }, Math.hypot(pointer.x - point.x, pointer.y - point.y), 2, order);
+      } catch { /* Malformed or non-executable edges fail closed individually. */ }
+    }
   }
+  const sketch = activeSketchId ? document.elements.find((element) => element.type === "sketch" && element.id === activeSketchId && visible.has(element.layerId)) : undefined;
   if (origin) for (const [axis, value] of [["vertical", origin.x], ["horizontal", origin.y]] as const) {
     const point = axis === "vertical" ? { x: value, y: pointer.y } : { x: pointer.x, y: value };
     const distance = axis === "vertical" ? Math.abs(pointer.x - value) : Math.abs(pointer.y - value);

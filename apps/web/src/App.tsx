@@ -1,13 +1,13 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent, type PointerEvent, type ReactNode, type WheelEvent } from "react";
-import { createDocument, createEmptyProject, createProject, documentFromProject, elementId, layerId, pageId, projectFromDocument, projectPage, type DocumentSnapshot, hasRotation, type ArcElement, type DimensionElement, type Element, type SketchConstraint, type ElementId, type PieceId, type PointMm, type ProjectSnapshot, type SplineElement, type TextElement, type ExplicitConnection } from "@nodra/domain";
+import { createDocument, createEmptyProject, createProject, documentFromProject, elementId, layerId, pageId, projectFromDocument, projectPage, type DocumentSnapshot, type DocumentConstraint, hasRotation, type ArcElement, type DimensionElement, type Element, type SketchConstraint, type ElementId, type PieceId, type PointMm, type ProjectSnapshot, type SplineElement, type TextElement, type ExplicitConnection } from "@nodra/domain";
 import { deleteDocumentConstraint, addPositionalCoincidence, deletePositionalCoincidence, addSketchConstraint, addToSelection, appendSketchEdge, appendSplineNode, beginGesture, cancelGesture, clearSelection, closePath, trimSegment, trimPreview, closeSplineElement, commitGesture, convertTextToGlyphs, createElement, createPathCubicNode, createPathNode, createSketchLine, deleteContourNodes, deleteElement, deleteElementNodes, deletePathNodes, deleteSketchConstraint, dispatch, duplicateElements, flipElements, insertFormaNode, invalidDimensionIdsForShapeOperation, moveElements, movePathHandle, movePathNode, openPath, updateSplineNode, previewGesture, previewGestureFromBase, redo, resizeElement, resizeElementToDimensions, resizeElements, resizeElementsToDimensions, rotateElement, updateDimensionValue, setDimensionDriving, setGeometryRole, rotateElementsAroundCenter, select, selectForPointerDown, setPathJoin, shapeOperation, splitPathSegment, undo, updateContourNode, updateElement, updateElementNode, updateElementStyles, updatePage, updateSketchConstraint, updateSplineHandle, type EditorCommand, type FlipAxis, type LineSketchRelationIntent, type ShapeOperation, profileScopeForSelection, profileScopeForPiece, type TrimTarget, dimensionDrivingCapability } from "@nodra/editor-core";
 import { constraintComponentStatesForDocument, constraintResidualsForDocument, type ConstraintState } from "@nodra/constraints";
-import { arcThroughThreePoints, boundsOfElements, connectableNodeAddress, contourVertexNodes, dimensionKindForPlacement, dimensionOffsetForAlignedPlacement, dimensionOffsetForPlacement, elementCenter, editableGeometryNodes, glyphGeometryNodes, groupCenter, groupHandlePoints, pathGeometryNodes, pointMidpoint, dimensionGeometry, realGeometryNodes, sketchProfileResult, solveSketchConstraints, resizeHandle, rotatedResizeHandles, rotationFromDrag, rotationHandlePoints, visibleBezierHandleGuides, type CurveFragment, type Direction, type GroupHandle, type ResizeHandle } from "@nodra/geometry";
+import { arcThroughThreePoints, boundsOfElements, connectableNodeAddress, contourVertexNodes, dimensionKindForPlacement, dimensionOffsetForAlignedPlacement, dimensionOffsetForPlacement, elementCenter, editableGeometryNodes, glyphGeometryNodes, groupCenter, groupHandlePoints, pathGeometryNodes, pointMidpoint, dimensionGeometry, realGeometryNodes, sketchProfileResult, solveSketchConstraints, resizeHandle, rotatedResizeHandles, rotationFromDrag, rotationHandlePoints, visibleBezierHandleGuides, type Curve2DSource, type CurveFragment, type Direction, type GroupHandle, type ResizeHandle } from "@nodra/geometry";
 import { DexieProjectRepository, requestStoragePersistence, type FontRecord } from "@nodra/persistence";
 import { validateDesign } from "@nodra/validation";
 import { createPersistenceQueue, loadCollapsedPages, loadLastOpenedProject, loadProjectMirror, removeLastOpenedProject, removeProjectMirror, saveCollapsedPages, saveLastAppLocation, saveLastOpenedProject, saveProjectMirror } from "./appPersistence.js";
 import { selectRecoveredProject } from "./appRecovery.js";
-import { addSolvedDocumentConstraint, documentConstraintDiagnosticId, supportsGlobalConstraintKind, updateSolvedDocumentConstraint } from "./globalConstraintCommands.js";
+import { addSolvedDocumentConstraint, createGeometryWithDocumentConstraints, documentConstraintDiagnosticId, supportsGlobalConstraintKind, updateSolvedDocumentConstraint } from "./globalConstraintCommands.js";
 import { renderSketchProfileSvg, renderSvg } from "@nodra/renderer-svg";
 import { canActivateRotation, centerPageInCanvas, clientPointToCanvas, clientPointToPage, cubicPlacementControls, formaNodeKey, hoveredSelectionCenter, isDrawingTool, marqueeSelection, movementExceedsThreshold, normalizeBounds, normalizeDrag, pagePointToCanvas, pathGuides, pickDimensionTarget, pickElement, pickFormaElement, pickFormaNode, pickFormaSegment, pickHoverNode, pickCutIntervalPreview, pickCuttableSegment, pickNode, pickPathNode, pickPathSegment, pickOpenEdgeMidpointHover, pointerDownIntent, visibleEditablePathNodeIndexes, screenDeltaToMm, screenPointToMm, selectedNodeAnchor, selectedPathAnchorIds, alignmentGuides, snapCreationPoint, snapFormaNodePoint, snapMoveDelta, viewportPointToCanvas, zoomAtPoint, type AlignmentGuide, type ContourNodeHit, type CutIntervalPreview, type DimensionTarget, type FormaNodeHit, type HoverNode, type NodeHit, type OpenEdgeMidpointHover, type PathNodeHit, type SnapGuide, type TransformMode, type CreationSnap } from "./interaction.js";
 import { aspectSize, formatMm, geometryValue, rotationDegreesValue, rotationPatch, type GeometryField, type PropertyElement, type RotatableElement } from "./propertyBar.js";
@@ -67,6 +67,16 @@ const creationConnections = (element: Element, snaps: readonly (CreationSnap | u
   if (!sourceAddress || !snap.address || snap.node.elementId === element.id) return [];
   return [{ id: `connection-${crypto.randomUUID()}`, first: { elementId: element.id, node: sourceAddress }, second: { elementId: snap.node.elementId, node: snap.address } }];
 });
+const midpointDocumentConstraint = (source: Curve2DSource, elementId: ElementId, nodeId: string): DocumentConstraint => {
+  const dependent = { elementId, nodeId };
+  const id = `midpoint-${crypto.randomUUID()}`;
+  if (source.kind === "sketch-edge") return { id, kind: "midpoint", references: [dependent, { elementId: source.elementId, edgeId: source.edgeId }] };
+  if (source.kind === "line-element") return { id, kind: "midpoint", references: [dependent], source: { kind: "line", elementId: source.elementId } };
+  if (source.kind === "path-segment") return { id, kind: "midpoint", references: [dependent], source: { kind: "path-segment", elementId: source.elementId, segmentId: source.segmentId } };
+  if (source.kind === "spline-span") return { id, kind: "midpoint", references: [dependent], source: { kind: "spline-span", elementId: source.elementId, startNodeId: source.startNodeId, endNodeId: source.endNodeId } };
+  if (source.kind === "arc-element") return { id, kind: "midpoint", references: [dependent], source: { kind: "arc", elementId: source.elementId } };
+  throw new Error("Unsupported midpoint source");
+};
 const splinePathData = (spline: SplineElement): string => {
   const first = spline.nodes[0];
   if (!first) return "";
@@ -126,7 +136,7 @@ type ActiveInteraction = {
   splineHandle?: "in" | "out";
   pressedAt?: number;
 };
-type CreationDraft = { readonly tool: "rectangle" | "circle" | "line" | "arc"; readonly points: readonly PointMm[]; readonly pointer: PointMm; readonly snaps?: readonly (CreationSnap | undefined)[]; readonly elementId?: ElementId; readonly currentNodeId?: string };
+type CreationDraft = { readonly tool: "rectangle" | "circle" | "line" | "arc"; readonly points: readonly PointMm[]; readonly pointer: PointMm; readonly snaps?: readonly (CreationSnap | undefined)[]; readonly elementId?: ElementId; readonly currentNodeId?: string; readonly startMidpointSource?: Curve2DSource };
 
 type FormaNodeOverlay =
   | { readonly kind: "contour"; readonly key: string; readonly elementId: ElementId; readonly point: PointMm; readonly contour: ContourNodeHit }
@@ -1380,13 +1390,25 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
         const snappedSketchNode = candidateSource?.type === "sketch" && candidate?.nodeId ? { elementId: candidateSource.id, nodeId: candidate.nodeId } : undefined;
         const matchingCandidateSnap = candidate && candidateSnap && candidateSnap.node && candidateSnap.node.elementId === candidate.sourceIds[0] && candidateNode?.nodeId === candidate.nodeId && candidateSnap.address && (candidateSnap.address.kind === "sketch" || candidateSnap.address.kind === "path" || candidateSnap.address.kind === "spline") && candidateSnap.address.nodeId === candidate.nodeId ? candidateSnap : undefined;
         if (!draft) {
-          const nextDraft = { tool, points: [creationPoint], pointer: creationPoint, snaps: [matchingCandidateSnap], ...(snappedSketchNode ? { elementId: snappedSketchNode.elementId, currentNodeId: snappedSketchNode.nodeId } : {}) } as const;
+          const nextDraft = { tool, points: [creationPoint], pointer: creationPoint, snaps: [matchingCandidateSnap], ...(candidate?.kind === "midpoint" && candidate.midpointSource ? { startMidpointSource: candidate.midpointSource } : {}), ...(snappedSketchNode ? { elementId: snappedSketchNode.elementId, currentNodeId: snappedSketchNode.nodeId } : {}) } as const;
          creationDraftRef.current = nextDraft;
          setCreationDraft(nextDraft);
          lineInferenceRef.current = undefined;
        } else if (draft.points.length === 1 && !draft.elementId) {
           const sketch = createSketchLine(id(), layerId(editorRef.current.document.layers[0]?.id ?? "layer-1"), { ...defaultStyle, strokeWidth: 1.5 }, draft.points[0]!, creationPoint, { kind: candidate?.kind === "axis" ? candidate.axis ?? "none" : "none" });
-          const next = dispatch(editorRef.current, createElement(sketch, creationConnections(sketch, [...(draft.snaps ?? []), matchingCandidateSnap])));
+          const geometryCommand = createElement(sketch, creationConnections(sketch, [...(draft.snaps ?? []), matchingCandidateSnap]));
+          const midpointSources = [draft.startMidpointSource, candidate?.kind === "midpoint" ? candidate.midpointSource : undefined] as const;
+          const command = midpointSources.some(Boolean) ? createGeometryWithDocumentConstraints(geometryCommand, (_before, after) => {
+            const created = after.elements.find((element): element is Extract<Element, { type: "sketch" }> => element.id === sketch.id && element.type === "sketch");
+            if (!created) throw new Error("Created sketch is unavailable for midpoint constraints");
+            return midpointSources.flatMap((source, index) => {
+              const node = created.nodes[index === 0 ? 0 : 1];
+              if (!source) return [];
+              if (!node) throw new Error("Created sketch midpoint node is unavailable");
+              return [midpointDocumentConstraint(source, created.id, node.id)];
+            });
+          }) : geometryCommand;
+          const next = dispatch(editorRef.current, command);
           if (next === editorRef.current) return;
           const persistedSketch = next.document.elements.find((element): element is Extract<Element, { type: "sketch" }> => element.id === sketch.id && element.type === "sketch");
           if (!persistedSketch) return;
@@ -1409,8 +1431,18 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
           let relation: LineSketchRelationIntent = { kind: "none" };
           if (candidate?.kind === "axis") relation = { kind: candidate.axis ?? "horizontal" };
           else if (candidate?.kind === "perpendicular" && candidate.sourceIds[1]) relation = { kind: "perpendicular", sourceEdgeId: candidate.sourceIds[1] };
-          const automatic = candidate?.kind === "midpoint" && candidate.sourceIds[1] ? { kind: "midpoint" as const, references: [{ elementId: draft.elementId, edgeId: candidate.sourceIds[1] }] as const } : undefined;
-          const next = dispatch(editorRef.current, appendSketchEdge(draft.elementId, draft.currentNodeId, creationPoint, targetNodeId, automatic, automatic ? undefined : relation));
+          const midpointSource = candidate?.kind === "midpoint" ? candidate.midpointSource : undefined;
+          const localMidpoint = midpointSource?.kind === "sketch-edge" && midpointSource.elementId === draft.elementId ? { kind: "midpoint" as const, references: [{ elementId: draft.elementId, edgeId: midpointSource.edgeId }] as const } : undefined;
+          const geometryCommand = appendSketchEdge(draft.elementId, draft.currentNodeId, creationPoint, targetNodeId, localMidpoint, localMidpoint ? undefined : relation);
+          const command = midpointSource && !localMidpoint ? createGeometryWithDocumentConstraints(geometryCommand, (before, after) => {
+            const prior = before.elements.find((element): element is Extract<Element, { type: "sketch" }> => element.id === draft.elementId && element.type === "sketch");
+            const appended = after.elements.find((element): element is Extract<Element, { type: "sketch" }> => element.id === draft.elementId && element.type === "sketch");
+            const edge = appended?.edges.find((item) => !prior?.edges.some((existing) => existing.id === item.id));
+            const node = edge && appended?.nodes.find((item) => item.id === edge.endNodeId);
+            if (!node) throw new Error("Appended sketch midpoint node is unavailable");
+            return [midpointDocumentConstraint(midpointSource, draft.elementId!, node.id)];
+          }) : geometryCommand;
+          const next = dispatch(editorRef.current, command);
           if (next === editorRef.current) {
             const currentSketch = editorRef.current.document.elements.find((element): element is Extract<Element, { type: "sketch" }> => element.id === draft.elementId && element.type === "sketch");
             const target = targetNodeId && currentSketch?.nodes.find((node) => node.id === targetNodeId);
