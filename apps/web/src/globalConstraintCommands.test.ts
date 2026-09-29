@@ -1,9 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { createDocument, elementId, layerId, type DocumentConstraint, type SketchElement } from "@nodra/domain";
-import { createEditor, dispatch, redo, undo } from "@nodra/editor-core";
+import { createEditor, createElement, createSketchLine, dispatch, redo, undo, type EditorCommand } from "@nodra/editor-core";
 import { constraintResidualsForDocument } from "@nodra/constraints";
 import {
   addSolvedDocumentConstraint,
+  createGeometryWithDocumentConstraints,
   documentConstraintDiagnosticId,
   supportsGlobalConstraintKind,
   updateSolvedDocumentConstraint,
@@ -239,6 +240,99 @@ describe("global constraint commands", () => {
     expect(committed.undo).toHaveLength(1);
     expect(undo(committed).document).toEqual(initial.document);
   });
+  it("atomically creates geometry and a native-line midpoint relation in one history transaction", () => {
+    const dependent = sketch("dependent", 4);
+    const line = { type: "line" as const, id: elementId("source-line"), layerId: layer.id, start: { x: 0, y: 0 }, end: { x: 10, y: 0 }, rotation: 0, style };
+    const initial = createEditor({ ...createDocument("atomic-midpoint", [layer]), elements: [dependent, line] });
+    const constraint: DocumentConstraint = { id: "created-midpoint", kind: "midpoint", references: [{ elementId: dependent.id, nodeId: dependent.nodes[0]!.id }], source: { kind: "line", elementId: line.id } };
+    const command = createGeometryWithDocumentConstraints(createElement(createSketchLine(elementId("new-sketch"), layer.id, style, { x: 2, y: 3 }, { x: 5, y: 3 }, { kind: "none" })), () => [constraint]);
+
+    const committed = dispatch(initial, command);
+
+    expect(committed.document.constraints).toEqual([constraint]);
+    expect(committed.document.revision).toBe(1);
+    expect(committed.undo).toHaveLength(1);
+    expect(undo(committed).document).toEqual(initial.document);
+    expect(redo(undo(committed)).document).toEqual(committed.document);
+    const committedLine = committed.document.elements.find((element) => element.id === line.id);
+    expect(committedLine).toMatchObject({ start: line.start, end: line.end });
+  });
+
+  it.each(["hidden", "missing", "invalid"] as const)("leaves geometry and revision unchanged for a %s source", (caseName) => {
+    const dependent = sketch("dependent", 4);
+    const hiddenLayer = { ...layer, visible: false };
+    const line = { type: "line" as const, id: elementId("source-line"), layerId: layer.id, start: { x: 0, y: 0 }, end: { x: 10, y: 0 }, rotation: 0, style };
+    const initial = createEditor({ ...createDocument("atomic-midpoint", [caseName === "hidden" ? hiddenLayer : layer]), elements: [dependent, line] });
+    const sourceId = caseName === "missing" ? elementId("missing-line") : line.id;
+    const constraint: DocumentConstraint = { id: "created-midpoint", kind: "midpoint", references: [{ elementId: dependent.id, nodeId: caseName === "invalid" ? "missing-node" : dependent.nodes[0]!.id }], source: { kind: "line", elementId: sourceId } };
+    const command = createGeometryWithDocumentConstraints(createElement(createSketchLine(elementId("new-sketch"), layer.id, style, { x: 2, y: 3 }, { x: 5, y: 3 }, { kind: "none" })), () => [constraint]);
+
+    const rejected = dispatch(initial, command);
+
+    expect(rejected).toBe(initial);
+    expect(rejected.document.revision).toBe(initial.document.revision);
+    expect(rejected.document.elements).toEqual(initial.document.elements);
+  });
+
+  it.each(["missing", "hidden"] as const)("rejects a %s cross-sketch edge reference atomically", (caseName) => {
+    const dependent = sketch("dependent", 4);
+    const sourceSketch = sketch("source-sketch", 0);
+    const hiddenLayer = { ...layer, id: layerId("hidden"), visible: false };
+    const source = { ...sourceSketch, layerId: caseName === "hidden" ? hiddenLayer.id : layer.id };
+    const initial = createEditor({ ...createDocument("cross-sketch-midpoint", caseName === "hidden" ? [layer, hiddenLayer] : [layer]), elements: [dependent, source] });
+    const edgeId = caseName === "missing" ? "missing-edge" : source.edges[0]!.id;
+    const relation: DocumentConstraint = { id: "cross-midpoint", kind: "midpoint", references: [{ elementId: dependent.id, nodeId: dependent.nodes[0]!.id }, { elementId: source.id, edgeId }] };
+    const geometry = createElement(createSketchLine(elementId("new-sketch"), layer.id, style, { x: 2, y: 3 }, { x: 5, y: 3 }, { kind: "none" }));
+
+    const rejected = dispatch(initial, createGeometryWithDocumentConstraints(geometry, () => [relation]));
+
+    expect(rejected).toBe(initial);
+    expect(rejected.document.revision).toBe(initial.document.revision);
+    expect(rejected.document.elements).toEqual(initial.document.elements);
+  });
+
+  it("preserves no-op geometry dispatch state and rejects derived constraints on a no-op", () => {
+    const initial = createEditor({ ...createDocument("atomic-midpoint", [layer]), elements: [] });
+    const noop: EditorCommand = { name: "geometry-noop", apply: (document) => ({ success: true, document }) };
+    const noConstraint = dispatch(initial, createGeometryWithDocumentConstraints(noop, () => []));
+    expect(noConstraint).toBe(initial);
+    expect(noConstraint.document.revision).toBe(initial.document.revision);
+    expect(noConstraint.undo).toHaveLength(0);
+
+    const dependent = sketch("dependent", 4);
+    const source = sketch("source", 0);
+    const withGeometry = createEditor({ ...createDocument("atomic-midpoint", [layer]), elements: [dependent, source] });
+    const relation: DocumentConstraint = { id: "noop-midpoint", kind: "midpoint", references: [{ elementId: dependent.id, nodeId: dependent.nodes[0]!.id }, { elementId: source.id, edgeId: source.edges[0]!.id }] };
+    const rejected = dispatch(withGeometry, createGeometryWithDocumentConstraints(noop, () => [relation]));
+    expect(rejected).toBe(withGeometry);
+  });
+
+  it("rejects a conflicting second relation without retaining geometry or the first relation", () => {
+    const dependent = sketch("dependent", 4);
+    const line = { type: "line" as const, id: elementId("source-line"), layerId: layer.id, start: { x: 0, y: 0 }, end: { x: 10, y: 0 }, rotation: 0, style };
+    const initial = createEditor({ ...createDocument("atomic-midpoint", [layer]), elements: [dependent, line] });
+    const first: DocumentConstraint = { id: "first-midpoint", kind: "midpoint", references: [{ elementId: dependent.id, nodeId: dependent.nodes[0]!.id }], source: { kind: "line", elementId: line.id } };
+    const second: DocumentConstraint = { ...first, id: "second-midpoint", source: { kind: "line", elementId: elementId("missing-line") } };
+    const command = createGeometryWithDocumentConstraints(createElement(createSketchLine(elementId("new-sketch"), layer.id, style, { x: 2, y: 3 }, { x: 5, y: 3 }, { kind: "none" })), () => [first, second]);
+
+    const rejected = dispatch(initial, command);
+
+    expect(rejected).toBe(initial);
+    expect(rejected.document.constraints).toBeUndefined();
+    expect(rejected.document.elements).toEqual(initial.document.elements);
+  });
+
+  it("fails closed when constraint derivation throws and allows caller-owned cancellation", () => {
+    const initial = createEditor({ ...createDocument("atomic-midpoint", [layer]), elements: [] });
+    const geometry = createElement(createSketchLine(elementId("new-sketch"), layer.id, style, { x: 2, y: 3 }, { x: 5, y: 3 }, { kind: "none" }));
+    const failed = dispatch(initial, createGeometryWithDocumentConstraints(geometry, () => { throw new Error("midpoint became stale"); }));
+    expect(failed).toBe(initial);
+    expect(failed.document.elements).toEqual([]);
+    const callerCanceled = dispatch(initial, geometry);
+    expect(initial.document.elements).toEqual([]);
+    expect(callerCanceled.document.elements).toHaveLength(1);
+  });
+
   it("exposes supported kinds and normalized diagnostic identities", () => {
     expect(supportsGlobalConstraintKind("distance")).toBe(true);
     expect(supportsGlobalConstraintKind("parallel")).toBe(true);

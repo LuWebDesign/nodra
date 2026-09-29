@@ -4,7 +4,7 @@ import {
   constraintResidualsForDocument,
   supportsDocumentConstraintKind,
 } from "@nodra/constraints";
-import type { DocumentConstraint, DocumentSnapshot, SketchConstraintKind } from "@nodra/domain";
+import { nextRevision, type DocumentConstraint, type DocumentSnapshot, type SketchConstraintKind } from "@nodra/domain";
 import {
   addDocumentConstraint,
   recomputeSketchKernel,
@@ -73,3 +73,52 @@ export const addSolvedDocumentConstraint = (constraint: DocumentConstraint): Edi
 
 export const updateSolvedDocumentConstraint = (constraint: DocumentConstraint): EditorCommand =>
   solvedDocumentConstraintCommand(constraint, updateDocumentConstraint(constraint), "update");
+
+const sourceIsVisible = (before: DocumentSnapshot, after: DocumentSnapshot, constraint: DocumentConstraint): boolean => {
+  if (!("source" in constraint)) {
+    if (constraint.kind !== "midpoint" || constraint.references.length !== 2) return true;
+    const [dependent, reference] = constraint.references;
+    if (!dependent || !("nodeId" in dependent) || !reference || !("edgeId" in reference)) return false;
+    const dependentSketch = after.elements.find((element) => element.type === "sketch" && element.id === dependent.elementId);
+    if (dependentSketch?.type !== "sketch" || !dependentSketch.nodes.some((node) => node.id === dependent.nodeId)) return false;
+    const source = before.elements.find((element) => element.type === "sketch" && element.id === reference.elementId);
+    const layer = source && before.layers.find((candidate) => candidate.id === source.layerId);
+    return source?.type === "sketch" && layer?.visible === true && source.edges.some((edge) => edge.id === reference.edgeId);
+  }
+  const reference = constraint.source;
+  const source = before.elements.find((element) => element.id === reference.elementId);
+  const layer = source && before.layers.find((candidate) => candidate.id === source.layerId);
+  if (!source || !layer?.visible) return false;
+  if (reference.kind === "line") return source.type === "line";
+  if (reference.kind === "arc") return source.type === "arc";
+  if (reference.kind === "path-segment") return source.type === "path" && source.segments.some((segment) => segment.id === reference.segmentId);
+  return source.type === "spline" && source.nodes.some((node, index) => node.id === reference.startNodeId && source.nodes[index + 1]?.id === reference.endNodeId);
+};
+
+/** Applies geometry and its dependent midpoint relations as one atomic editor command. */
+export const createGeometryWithDocumentConstraints = (
+  geometryCommand: EditorCommand,
+  deriveConstraints: (before: DocumentSnapshot, after: DocumentSnapshot) => readonly DocumentConstraint[],
+): EditorCommand => ({
+  name: geometryCommand.name,
+  apply: (before) => {
+    const geometry = geometryCommand.apply(before);
+    if (!geometry.success) return geometry;
+    let constraints: readonly DocumentConstraint[];
+    try {
+      constraints = deriveConstraints(before, geometry.document);
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : "Unable to derive document constraints" };
+    }
+    if (constraints.length > 2) return { success: false, error: "At most two document constraints may be added atomically" };
+    if (geometry.document === before) return constraints.length === 0 ? geometry : { success: false, error: "Cannot add document constraints without a geometry change" };
+    let current = geometry.document;
+    for (const constraint of constraints) {
+      if (!sourceIsVisible(before, geometry.document, constraint)) return { success: false, error: "Document constraint source is missing or hidden" };
+      const applied = addSolvedDocumentConstraint(constraint).apply(current);
+      if (!applied.success) return applied;
+      current = applied.document;
+    }
+    return { ...geometry, document: { ...current, revision: nextRevision(before.revision) } };
+  },
+});

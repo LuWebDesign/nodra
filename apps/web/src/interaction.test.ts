@@ -58,9 +58,52 @@ describe("Line inference resolver", () => {
   const document = { ...createDocument("infer-doc", [layer]), elements: [sketch] };
   const input = { document, pointer: { x: 10, y: 1 }, zoom: 1, activeSketchId: sketch.id, origin: { x: 0, y: 10 } };
 
-  it("prefers a real node then resolves the active sketch edge midpoint with stable sources", () => {
+  it("prefers a real node then resolves the active sketch edge midpoint with stable source identity", () => {
     expect(resolveLineInference({ ...input, pointer: { x: 0, y: 0 } })).toMatchObject({ kind: "node", sourceIds: [sketch.id, "a"], nodeId: "a" });
-    expect(resolveLineInference(input)).toMatchObject({ kind: "midpoint", point: { x: 10, y: 0 }, sourceIds: [sketch.id, "ab"] });
+    expect(resolveLineInference(input)).toMatchObject({ kind: "midpoint", point: { x: 10, y: 0 }, sourceIds: ["sketch-edge", sketch.id, "ab"], midpointSource: { kind: "sketch-edge", elementId: sketch.id, edgeId: "ab" } });
+  });
+  it("resolves calculated midpoints on visible open edges of every supported source kind", () => {
+    const style = sketch.style;
+    const line = { type: "line" as const, id: elementId("infer-native-line"), layerId: layer.id, start: { x: 30, y: 0 }, end: { x: 50, y: 0 }, rotation: 0, style };
+    const path = { type: "path" as const, id: elementId("infer-path"), layerId: layer.id, nodes: [{ id: "p0", anchor: { x: 60, y: 0 }, join: "corner" as const }, { id: "p1", anchor: { x: 80, y: 0 }, join: "corner" as const }], segments: [{ id: "seg", type: "line" as const, startNodeId: "p0", endNodeId: "p1" }], closed: false, style };
+    const spline = { type: "spline" as const, id: elementId("infer-spline"), layerId: layer.id, nodes: [{ id: "s0", anchor: { x: 90, y: 0 }, continuity: "smooth" as const }, { id: "s1", anchor: { x: 110, y: 0 }, continuity: "smooth" as const }], closed: false, style };
+    const arc = { type: "arc" as const, id: elementId("infer-arc"), layerId: layer.id, center: { x: 130, y: 0 }, radius: 10, startAngle: 0, endAngle: Math.PI / 2, direction: "clockwise" as const, style };
+    const cubic = { ...path, id: elementId("infer-cubic"), nodes: [{ id: "c0", anchor: { x: 160, y: 0 }, join: "corner" as const }, { id: "c1", anchor: { x: 180, y: 0 }, join: "corner" as const }], segments: [{ id: "cubic", type: "cubicBezier" as const, startNodeId: "c0", endNodeId: "c1", control1: { x: 160, y: 20 }, control2: { x: 180, y: 20 } }] };
+    const doc = { ...createDocument("all-midpoint-sources", [layer]), elements: [line, path, spline, arc, cubic] };
+    const cases = [
+      [{ x: 40, y: 0 }, { kind: "line-element", elementId: line.id }],
+      [{ x: 70, y: 0 }, { kind: "path-segment", elementId: path.id, segmentId: "seg" }],
+      [{ x: 100, y: 0 }, { kind: "spline-span", elementId: spline.id, startNodeId: "s0", endNodeId: "s1" }],
+      [{ x: 130 + Math.SQRT1_2 * 10, y: Math.SQRT1_2 * 10 }, { kind: "arc-element", elementId: arc.id }],
+      [{ x: 170, y: 15 }, { kind: "path-segment", elementId: cubic.id, segmentId: "cubic" }],
+    ] as const;
+    for (const [midpoint, identity] of cases) {
+      const result = resolveLineInference({ document: doc, pointer: midpoint, zoom: 1, tolerancePx: 0.01 });
+      expect(result).toMatchObject({ kind: "midpoint", midpointSource: identity });
+      expect(result?.point.x).toBeCloseTo(midpoint.x, 8);
+      expect(result?.point.y).toBeCloseTo(midpoint.y, 8);
+    }
+    const foreignSketch = { ...sketch, id: elementId("foreign-open-sketch"), nodes: [{ id: "a", point: { x: 200, y: 0 } }, { id: "b", point: { x: 220, y: 0 } }] };
+    const crossDoc = { ...createDocument("cross-sketch-midpoint", [layer]), elements: [foreignSketch] };
+    expect(resolveLineInference({ document: crossDoc, pointer: { x: 210, y: 0 }, zoom: 1, activeSketchId: sketch.id })).toMatchObject({ kind: "midpoint", midpointSource: { kind: "sketch-edge", elementId: foreignSketch.id, edgeId: "ab" } });
+  });
+  it("requires proximity to the calculated midpoint and excludes hidden, closed, and tiny local edges", () => {
+    const hiddenLayer = { ...layer, id: layerId("infer-hidden"), visible: false };
+    const hidden = { ...sketch, layerId: hiddenLayer.id };
+    const closedPath = { type: "path" as const, id: elementId("infer-closed-path"), layerId: layer.id, nodes: [{ id: "a", anchor: { x: 0, y: 30 }, join: "corner" as const }, { id: "b", anchor: { x: 20, y: 30 }, join: "corner" as const }], segments: [{ id: "closed-seg", type: "line" as const, startNodeId: "a", endNodeId: "b" }], closed: true, style: sketch.style };
+    const tiny = { ...sketch, nodes: [{ id: "a", point: { x: 0, y: 50 } }, { id: "b", point: { x: 1e-10, y: 50 } }] };
+    const doc = { ...createDocument("midpoint-exclusions", [layer, hiddenLayer]), elements: [hidden, closedPath, tiny] };
+    expect(resolveLineInference({ document: doc, pointer: { x: 10, y: 0 }, zoom: 1 })?.kind).not.toBe("midpoint");
+    expect(resolveLineInference({ document, pointer: { x: 1, y: 0 }, zoom: 1, activeSketchId: sketch.id, tolerancePx: 0.1 })).toBeUndefined();
+    const tinyOnly = { ...createDocument("tiny-only", [layer]), elements: [tiny] };
+    expect(resolveLineInference({ document: tinyOnly, pointer: { x: 5e-11, y: 50 }, zoom: 1, activeSketchId: tiny.id, tolerancePx: 0.1 })?.kind).not.toBe("midpoint");
+  });
+  it("does not treat body hover near an endpoint as a midpoint snap and keeps midpoint hysteresis source-specific", () => {
+    const prior = resolveLineInference(input)!;
+    expect(resolveLineInference({ ...input, pointer: { x: 1, y: 0 }, tolerancePx: 2 })?.kind).not.toBe("midpoint");
+    const other = { ...sketch, id: elementId("another-midpoint-source") };
+    const doc = { ...document, elements: [sketch, other] };
+    expect(resolveLineInference({ document: doc, pointer: { x: 10, y: 0 }, zoom: 1, activeSketchId: sketch.id, priorCandidate: { ...prior, sourceIds: ["sketch-edge", other.id, "ab"], midpointSource: { kind: "sketch-edge", elementId: other.id, edgeId: "ab", startNodeId: "a", endNodeId: "b" } } })).toMatchObject({ midpointSource: { elementId: other.id } });
   });
   it("resolves first-click nodes and centers without sketch or origin context", () => {
     const visible = { id: layerId("first-click"), name: "Visible", visible: true, order: 0 };
@@ -89,7 +132,7 @@ describe("Line inference resolver", () => {
     expect(axis.kind).toBe("axis");
     expect(resolveLineInference({ ...noGeometry, pointer: { x: 1.6, y: 5 }, axisTolerancePx: 1, priorCandidate: axis })).toBeUndefined();
     const foreign = { ...sketch, id: elementId("foreign-sketch") };
-    expect(resolveLineInference({ ...input, document: { ...document, elements: [foreign] }, pointer: { x: 10, y: 1 } })?.kind).not.toBe("midpoint");
+    expect(resolveLineInference({ ...input, document: { ...document, elements: [foreign] }, pointer: { x: 10, y: 1 } })?.kind).toBe("midpoint");
     const midpoint = resolveLineInference(input)!;
     expect(resolveLineInference({ ...input, pointer: { x: 10, y: 5 }, priorCandidate: midpoint })?.kind).toBe("midpoint");
     expect(resolveLineInference({ ...input, pointer: { x: 10, y: 9 }, priorCandidate: midpoint })?.kind).toBe("midpoint");
