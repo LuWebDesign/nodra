@@ -180,8 +180,8 @@ describe("SVG renderer boundary", () => {
     const result = renderSvg(source, { zoom: 1, panMm: { x: 0, y: 0 } });
     expect(result.success).toBe(true);
     if (result.success) {
-      expect(result.svg).toContain('<line x1="0" y1="0" x2="10" y2="0" />');
-      expect(result.svg).toContain('<line x1="10" y1="0" x2="10" y2="10" stroke-dasharray="6 4" />');
+      expect(result.svg).toContain('<line data-sketch-edge="normal-edge" x1="0" y1="0" x2="10" y2="0" />');
+      expect(result.svg).toContain('<line data-sketch-edge="construction-edge" x1="10" y1="0" x2="10" y2="10" stroke-dasharray="6 4" />');
     }
   });
 
@@ -244,15 +244,37 @@ describe("SVG renderer boundary", () => {
     expect(constrained).toEqual(constrainedBefore);
   });
 
+  it("marks sketch edges for transient hover styling without changing native line rendering", () => {
+    const sketch = { type: "sketch" as const, id: elementId("hover-sketch"), layerId: layer.id, nodes: [{ id: "a", point: { x: 0, y: 0 } }, { id: "b", point: { x: 20, y: 0 } }], edges: [{ id: "ab", startNodeId: "a", endNodeId: "b" }], constraints: [], style };
+    const nativeLine = { type: "line" as const, id: elementId("native-hover-line"), layerId: layer.id, start: { x: 0, y: 10 }, end: { x: 20, y: 10 }, rotation: 0, style: { stroke: "#123456", strokeWidth: 0.5 } };
+    const source = withElements(createDocument("sketch-edge-hover", [layer]), [sketch, nativeLine]);
+    const result = renderSvg(source, { zoom: 1, panMm: { x: 0, y: 0 } });
+    const hovered = renderSvg(source, { zoom: 1, panMm: { x: 0, y: 0 } }, { hoveredSketchEdge: { elementId: "hover-sketch", edgeId: "ab" } });
+
+    expect(result.success).toBe(true);
+    expect(hovered.success && hovered.svg).toContain('data-sketch-edge="ab" data-sketch-hovered="true"');
+    if (result.success) {
+      expect(result.svg).toContain('data-element-id="hover-sketch"');
+      expect(result.svg).toContain('data-sketch-element="true" data-sketch-state="underdefined"');
+      expect(result.svg).toContain('<line data-sketch-edge="ab" x1="0" y1="0" x2="20" y2="0" />');
+      expect(result.svg).toContain('data-element-id="native-hover-line" x1="0" y1="10" x2="20" y2="10" transform=');
+      expect(result.svg).toContain('data-element-id="native-hover-line" x1="0" y1="10" x2="20" y2="10" transform="translate(10 10) rotate(0) scale(1 1) translate(-10 -10)" stroke="#123456" stroke-width="0.5"');
+    }
+  });
+
   it("renders sketch definition state through the shared constraint boundary", () => {
     const underdefined = { type: "sketch" as const, id: elementId("underdefined"), layerId: layer.id, nodes: [{ id: "a", point: { x: 0, y: 0 } }, { id: "b", point: { x: 20, y: 0 } }], edges: [{ id: "ab", startNodeId: "a", endNodeId: "b" }], constraints: [], style };
     const defined = { ...underdefined, id: elementId("defined"), nodes: [{ id: "a", point: { x: 0, y: 0 } }, { id: "b", point: { x: 20, y: 0 } }], constraints: [{ id: "fixed-a", kind: "fixed" as const, references: [{ elementId: elementId("defined"), nodeId: "a" }] as const }, { id: "horizontal", kind: "horizontal" as const, references: [{ elementId: elementId("defined"), nodeId: "a" }, { elementId: elementId("defined"), nodeId: "b" }] as const }, { id: "length", kind: "distance-horizontal" as const, references: [{ elementId: elementId("defined"), nodeId: "a" }, { elementId: elementId("defined"), nodeId: "b" }] as const, value: 20 }] };
-    const result = renderSvg(withElements(createDocument("constraint-colors", [layer]), [underdefined, defined]), { zoom: 1, panMm: { x: 0, y: 0 } });
+    const source = withElements(createDocument("constraint-colors", [layer]), [underdefined, defined]);
+    const result = renderSvg(source, { zoom: 1, panMm: { x: 0, y: 0 } });
+    const hoveredDefined = renderSvg(source, { zoom: 1, panMm: { x: 0, y: 0 } }, { hoveredSketchEdge: { elementId: "defined", edgeId: "ab" } });
 
     expect(result.success).toBe(true);
     if (result.success) {
       expect(result.svg).toContain('data-element-id="underdefined" stroke="#2563eb"');
       expect(result.svg).toContain('data-element-id="defined" stroke="#111827"');
+      expect(result.svg).toContain('data-sketch-element="true" data-sketch-state="fully-defined"');
+      expect(hoveredDefined.success && hoveredDefined.svg).not.toContain('data-sketch-edge="ab" data-sketch-hovered="true"');
     }
   });
   it("colors a sketch by the highest-precedence state across disconnected components", () => {
@@ -291,8 +313,11 @@ describe("SVG renderer boundary", () => {
         elements: [{ ...source, constraints: source.constraints?.filter((constraint) => localIds.includes(constraint.id)) }],
         constraints: document.constraints.filter((constraint) => globalIds.includes(constraint.id)),
       };
-      const rendered = renderSvg(variant, { zoom: 1, panMm: { x: 0, y: 0 } });
+      const rendered = renderSvg(variant, { zoom: 1, panMm: { x: 0, y: 0 } }, { hoveredSketchEdge: { elementId: "aggregate-state", edgeId: "visible" } });
       expect(rendered.success && rendered.svg).toContain(`data-element-id="aggregate-state" stroke="${expectedStroke}"`);
+      expect(rendered.success && rendered.svg).toContain(`data-sketch-state="${expectedStroke === "#ef4444" ? "conflict" : expectedStroke === "#f59e0b" ? "overdefined" : "underdefined"}"`);
+      if (expectedStroke === "#2563eb") expect(rendered.success && rendered.svg).toContain('data-sketch-edge="visible" data-sketch-hovered="true"');
+      else expect(rendered.success && rendered.svg).not.toContain('data-sketch-edge="visible" data-sketch-hovered="true"');
     };
     renderWith(["fixed-defined", "join-defined"], ["conflict-10", "conflict-20", "over-1", "over-2"], "#ef4444");
     renderWith(["fixed-defined", "join-defined"], ["over-1", "over-2"], "#f59e0b");
@@ -309,6 +334,26 @@ describe("SVG renderer boundary", () => {
     expect(editor.success && editor.svg).toContain('data-element-id="export-sketch" stroke="#2563eb"');
     expect(exported.success && exported.svg).toContain('data-element-id="export-sketch" stroke="#111"');
     expect(exported.success && exported.svg).not.toContain('stroke="#2563eb"');
+  });
+  it("keeps invalid and conflict diagnostics red when their sketch edges are hovered", () => {
+    const sketch = { type: "sketch" as const, id: elementId("hover-diagnostic-sketch"), layerId: layer.id, nodes: [{ id: "a", point: { x: 0, y: 0 } }, { id: "b", point: { x: 20, y: 0 } }], edges: [{ id: "ab", startNodeId: "a", endNodeId: "b" }], style };
+    const invalid = { ...sketch, constraints: [{ id: "unsupported-horizontal", kind: "horizontal" as const, references: [{ elementId: sketch.id, nodeId: "a" }, { elementId: sketch.id, nodeId: "b" }] as const, value: 10 }] };
+    const conflictBase = withElements(createDocument("hover-diagnostic-conflict", [layer]), [sketch]);
+    const conflict = { ...conflictBase, constraints: [
+      { id: "distance-10", kind: "distance-horizontal" as const, value: 10, references: [{ elementId: sketch.id, nodeId: "a" }, { elementId: sketch.id, nodeId: "b" }] as const },
+      { id: "distance-20", kind: "distance-horizontal" as const, value: 20, references: [{ elementId: sketch.id, nodeId: "a" }, { elementId: sketch.id, nodeId: "b" }] as const },
+    ] };
+    const hover = { hoveredSketchEdge: { elementId: sketch.id, edgeId: "ab" } };
+
+    for (const [source, state] of [[withElements(createDocument("hover-diagnostic-invalid", [layer]), [invalid]), "invalid"], [conflict, "conflict"]] as const) {
+      const result = renderSvg(source, { zoom: 1, panMm: { x: 0, y: 0 } }, hover);
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.svg).toContain(`data-sketch-state="${state}"`);
+        expect(result.svg).toContain('stroke="#ef4444"');
+        expect(result.svg).not.toContain('data-sketch-edge="ab" data-sketch-hovered="true"');
+      }
+    }
   });
   it("renders global constraint conflicts for every involved sketch", () => {
     const first = { type: "sketch" as const, id: elementId("global-state-first"), layerId: layer.id, nodes: [{ id: "a", point: { x: 0, y: 0 } }, { id: "b", point: { x: 20, y: 0 } }], edges: [{ id: "ab", startNodeId: "a", endNodeId: "b" }], style };
