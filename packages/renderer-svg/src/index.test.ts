@@ -14,6 +14,27 @@ const document = (): DocumentSnapshot => withElements(createDocument("doc-1", [l
 ]);
 
 describe("SVG renderer boundary", () => {
+  it("offsets H/V glyphs perpendicular to their referenced edges while preserving longitudinal centers", () => {
+    const sketchId = elementId("hv-offset-sketch");
+    const render = (kind: "horizontal" | "vertical", end: { x: number; y: number }, reversed = false) => {
+      const nodes = [{ id: "a", point: { x: 10, y: 10 } }, { id: "b", point: end }];
+      const ordered = reversed ? [...nodes].reverse() : nodes;
+      const sketch = { type: "sketch" as const, id: sketchId, layerId: layer.id, nodes: ordered, edges: [{ id: "edge", startNodeId: "a", endNodeId: "b" }], constraints: [{ id: kind, kind, references: [{ elementId: sketchId, nodeId: reversed ? "b" : "a" }, { elementId: sketchId, nodeId: reversed ? "a" : "b" }] as const }], style };
+      const result = renderSvg(withElements(createDocument("hv-offset", [layer]), [sketch]), { zoom: 1, panMm: { x: 0, y: 0 } });
+      expect(result.success).toBe(true);
+      if (!result.success) return undefined;
+      expect(result.svg).toContain('<line data-sketch-edge="edge"');
+      return result.svg.match(new RegExp(`data-constraint-id="${kind}"[^>]*transform="([^"]+)"`))?.[1];
+    };
+    expect(render("horizontal", { x: 30, y: 10 })).toBe("translate(20 -4)");
+    expect(render("horizontal", { x: 30, y: 10 }, true)).toBe("translate(20 -4)");
+    expect(render("vertical", { x: 10, y: 30 })).toBe("translate(24 20)");
+    expect(render("vertical", { x: 10, y: 30 }, true)).toBe("translate(24 20)");
+    // Even a two-pixel edge keeps its glyph centered along its length and offset
+    // by a fixed screen-space clearance, so the edge itself stays visible.
+    expect(render("horizontal", { x: 11, y: 10 })).toBe("translate(10.5 -4)");
+    expect(render("horizontal", { x: 30, y: 20 })).toBe("translate(26.26099 2.478019)");
+  });
   it("renders derived editor-only constraint glyphs from stable sketch references", () => {
     const id = elementId("constraint-sketch");
     const sketch = (nodes: readonly { id: string; point: { x: number; y: number } }[], edges: readonly { id: string; startNodeId: string; endNodeId: string }[]) => ({

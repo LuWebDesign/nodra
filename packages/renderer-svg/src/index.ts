@@ -94,6 +94,23 @@ function renderConstraintGlyph(constraint: SketchConstraint & { readonly owner: 
     else if (references.length === 3 && dependent && references[0]!.elementId === sketchId) anchor = dependent;
   }
   if (!anchor) return "";
+  if ((constraint.kind === "horizontal" || constraint.kind === "vertical") && references.length === 2) {
+    const first = point(references[0]!); const second = point(references[1]!);
+    if (first && second) {
+      const start = mmToScreen(first, viewport); const end = mmToScreen(second, viewport);
+      let dx = end.x - start.x; let dy = end.y - start.y;
+      if (dx < 0 || (dx === 0 && dy < 0)) { dx = -dx; dy = -dy; }
+      const length = Math.hypot(dx, dy);
+      if (length > 0) {
+        let nx = -dy / length; let ny = dx / length;
+        // Pick a canonical side: above horizontal edges, right of vertical edges,
+        // and the equivalent deterministic side for supported sloped references.
+        if (ny > 0 || (Math.abs(ny) < 1e-9 && nx < 0)) { nx = -nx; ny = -ny; }
+        const offset = 14;
+        anchor = { x: anchor.x + nx * offset / viewport.zoom, y: anchor.y + ny * offset / viewport.zoom };
+      }
+    }
+  }
   const screen = mmToScreen(anchor, viewport); const label = constraint.kind === "perpendicular" ? "⊥" : constraint.kind === "midpoint" ? "M" : constraint.kind === "horizontal" ? "H" : "V";
   return `<g data-constraint-id="${escapeAttribute(constraint.id)}" data-constraint-kind="${escapeAttribute(constraint.kind)}" data-constraint-owner="${escapeAttribute(constraint.owner)}" transform="translate(${number(screen.x)} ${number(screen.y)})" font-size="12" text-anchor="middle" dominant-baseline="central" pointer-events="none"><circle r="8" fill="#fff" stroke="#2563eb" stroke-width="1" /><text fill="#2563eb" stroke="none">${label}</text></g>`;
 }
