@@ -71,8 +71,9 @@ test("Line keeps jitter clicks, ignores intermediate gestures, and accepts delib
   await expect(page.locator('.page-svg svg > g > line[data-element-id]')).toHaveCount(1);
 });
 
-test("native dragged Line deletion in the default workspace survives reload", async ({ page }) => {
+test("independent native Line deletion survives an immediate reload with autosave active", async ({ page }) => {
   await page.goto("/modelo");
+  await expect(page.getByRole("button", { name: /Autosave:/ })).toHaveAttribute("aria-pressed", "true");
   const pageElement = page.locator(".page");
   const bounds = await pageElement.boundingBox();
   expect(bounds).not.toBeNull();
