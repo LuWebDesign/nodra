@@ -36,7 +36,7 @@ import {
   isCircleElement,
 } from "@nodra/domain";
 import { validateDocument } from "@nodra/validation";
-import { boundsOf, boundsOfElements, connectableNodeAddress, contourWithPoints, directionVector, elementCenter, elementToContour, dimensionGeometry, elementToCurves, glyphGeometryNodes, groupCenter, intersectCurves, lineElementToCurve, circleElementToCurve, arcElementToCurve, pathSegmentToCurve, halfArcLengthMidpoint, splineSpanToCurve, pointAt, mirrorHandleOffset, partitionCurveByInterval, selectRemovableCurveInterval, selectSourcedCurveInterval, realGeometryNodes, resizeGroup, rotateElements, shapeResultContours, tangentAt, transformPoint, connectableNode, splitCuttableSegments, classifyCutGraph, cuttableSegments, lineSegmentIntersection, rotatedLineEndpoints, sketchEdgeAtAddress, sketchEdgeIndexAtAddress, solveSketchConstraints, cubicBezierLineIntersections, splitCubicBezierAtParameters, flattenCubicBezier, GEOMETRY_EPSILON, type CubicBezier, type Direction, type LineCurve2D, type SourcedCurve2D } from "@nodra/geometry";
+import { boundsOf, boundsOfElements, connectableNodeAddress, contourWithPoints, directionVector, elementCenter, elementToContour, dimensionGeometry, elementToCurves, glyphGeometryNodes, groupCenter, intersectCurves, lineElementToCurve, circleElementToCurve, arcElementToCurve, pathSegmentToCurve, halfArcLengthMidpoint, splineSpanToCurve, pointAt, mirrorHandleOffset, partitionCurveByInterval, selectRemovableCurveInterval, selectSourcedCurveInterval, realGeometryNodes, setLineVisualEndpoint, resizeGroup, rotateElements, shapeResultContours, tangentAt, transformPoint, connectableNode, splitCuttableSegments, classifyCutGraph, cuttableSegments, lineSegmentIntersection, rotatedLineEndpoints, sketchEdgeAtAddress, sketchEdgeIndexAtAddress, solveSketchConstraints, cubicBezierLineIntersections, splitCubicBezierAtParameters, flattenCubicBezier, GEOMETRY_EPSILON, type CubicBezier, type Direction, type LineCurve2D, type SourcedCurve2D } from "@nodra/geometry";
 import { insertSplineNode, moveSplineHandle as moveSplineHandleData, moveSplineNode as moveSplineNodeData } from "./spline.js";
 import { topologyReferenceKey, type ReferenceResolution, type TopologyEditResult, type TopologyReference } from "./topology.js";
 import { recomputeSketchKernel } from "./sketchKernel.js";
@@ -97,6 +97,12 @@ const withoutDanglingDocumentConstraints = (document: DocumentSnapshot, elements
   const sketches = new Map(elements.filter((element): element is SketchElement => element.type === "sketch").map((sketch) => [sketch.id, sketch]));
   const elementsById = new Map(elements.map((element) => [element.id, element]));
   const validSource = (constraint: DocumentConstraint): boolean => {
+    if (constraint.kind === "line-endpoint-midpoint") {
+      const dependent = constraint.references[0]!;
+      const target = elementsById.get(dependent.elementId);
+      const source = elementsById.get(constraint.source.elementId);
+      return target?.type === "line" && source?.type === "line";
+    }
     if (!("source" in constraint)) return true;
     const sourceReference = constraint.source;
     const source = elementsById.get(sourceReference.elementId);
@@ -113,7 +119,9 @@ const withoutDanglingDocumentConstraints = (document: DocumentSnapshot, elements
     const index = source.nodes.findIndex((node, candidate) => node.id === sourceReference.startNodeId && source.nodes[candidate + 1]?.id === sourceReference.endNodeId);
     try { return index >= 0 && halfArcLengthMidpoint(splineSpanToCurve(source, index).curve) !== undefined; } catch { return false; }
   };
-  const constraints = document.constraints.filter((constraint) => constraint.references.every((reference) => { const sketch = sketches.get(reference.elementId); return sketch !== undefined && ("nodeId" in reference ? sketch.nodes.some((node) => node.id === reference.nodeId) : sketch.edges.some((edge) => edge.id === reference.edgeId)); }) && validSource(constraint));
+  const constraints = document.constraints.filter((constraint) => constraint.kind === "line-endpoint-midpoint"
+    ? validSource(constraint)
+    : constraint.references.every((reference) => { const sketch = sketches.get(reference.elementId); return sketch !== undefined && ("nodeId" in reference ? sketch.nodes.some((node) => node.id === reference.nodeId) : sketch.edges.some((edge) => edge.id === reference.edgeId)); }) && validSource(constraint));
   return constraints.length === document.constraints.length ? document : { ...document, constraints };
 };
 const relationPoint = (elements: readonly Element[], reference: PositionalCoincidence["first"]): PointMm | undefined => {
@@ -243,6 +251,27 @@ const changedIntersectOutput = (document: DocumentSnapshot, elements: readonly E
   const after = new Map(elements.map((element) => [element.id, element]));
   return document.featureTree?.features.find((feature) => feature.operation === "intersect" && feature.outputs.some((output) => stableJson(document.elements.find((element) => element.id === output.elementId)) !== stableJson(after.get(output.elementId))))?.id;
 };
+const projectLineEndpointMidpoints = (document: DocumentSnapshot, elements: readonly Element[]): readonly Element[] | string => {
+  const relations = (document.constraints ?? []).filter((constraint) => constraint.kind === "line-endpoint-midpoint");
+  if (!relations.length) return elements;
+  const projected = [...elements];
+  for (const relation of relations) {
+    const dependentReference = relation.references[0]!;
+    const targetIndex = projected.findIndex((element) => element.id === dependentReference.elementId);
+    const source = projected.find((element) => element.id === relation.source.elementId);
+    const dependent = projected[targetIndex];
+    if (!source || source.type !== "line" || !dependent || dependent.type !== "line") return "Line endpoint midpoint references unsupported geometry";
+    if (!document.layers.find((layer) => layer.id === source.layerId)?.visible) return "Line endpoint midpoint source must be visible";
+    let start: PointMm; let end: PointMm;
+    try { ({ start, end } = lineElementToCurve(source).curve); } catch { return "Line endpoint midpoint source is invalid"; }
+    if (![start.x, start.y, end.x, end.y].every(Number.isFinite) || start.x === end.x && start.y === end.y) return "Line endpoint midpoint source must be non-degenerate";
+    const midpoint = { x: start.x / 2 + end.x / 2, y: start.y / 2 + end.y / 2 };
+    const updated = setLineVisualEndpoint(dependent, dependentReference.endpoint, midpoint);
+    if (!updated) return "Line endpoint midpoint dependent endpoint cannot be represented";
+    projected[targetIndex] = updated;
+  }
+  return projected;
+};
 const replaceElements = (document: DocumentSnapshot, elements: readonly Element[]): CommandResult => {
   const proposedOutputEdit = changedIntersectOutput(document, elements);
   if (proposedOutputEdit) return { success: false, error: `Intersect output is derived and cannot be edited directly: ${proposedOutputEdit}` };
@@ -251,12 +280,16 @@ const replaceElements = (document: DocumentSnapshot, elements: readonly Element[
   const enforcedOutputEdit = changedIntersectOutput(document, enforced);
   if (enforcedOutputEdit) return { success: false, error: `Intersect output is derived and cannot be edited directly: ${enforcedOutputEdit}` };
   const cleaned = withoutDanglingDocumentConstraints(document, enforced);
-  const rebuilt = rebuildAffectedIntersectFeatures(document, enforced, cleaned);
+  const projected = projectLineEndpointMidpoints(cleaned, enforced);
+  if (typeof projected === "string") return { success: false, error: projected };
+  const rebuilt = rebuildAffectedIntersectFeatures(document, projected, cleaned);
   if (!rebuilt.success) return rebuilt;
-  if ((rebuilt.document.constraints ?? []).some((constraint) => "source" in constraint)) {
+  if ((rebuilt.document.constraints ?? []).some((constraint) => constraint.kind === "midpoint" && "source" in constraint)) {
     const recomputed = recomputeSketchKernel(rebuilt.document);
     if (!recomputed.committed) return { success: false, error: "Document constraints are in conflict", diagnostics: kernelDiagnostics(recomputed) };
-    return result(withElements(recomputed.document, recomputed.document.elements));
+    const projectedAfterSolve = projectLineEndpointMidpoints(recomputed.document, recomputed.document.elements);
+    if (typeof projectedAfterSolve === "string") return { success: false, error: projectedAfterSolve };
+    return result(withElements({ ...recomputed.document, elements: projectedAfterSolve }, projectedAfterSolve));
   }
   return result(withElements(rebuilt.document, rebuilt.document.elements));
 };
@@ -283,13 +316,18 @@ const replaceSketchElements = (document: DocumentSnapshot, elements: readonly El
   const cleaned = withoutDanglingDocumentConstraints(document, enforced);
   const recomputed = recomputeSketchKernel({ ...cleaned, elements: enforced });
   if (!recomputed.committed) return { success: false, error: "Sketch constraints are in conflict", diagnostics: kernelDiagnostics(recomputed) };
-  const checked = result(withElements(recomputed.document, recomputed.document.elements));
+  const projected = projectLineEndpointMidpoints(recomputed.document, recomputed.document.elements);
+  if (typeof projected === "string") return { success: false, error: projected };
+  const checked = result(withElements({ ...recomputed.document, elements: projected }, projected));
   return checked.success ? { ...checked, diagnostics: kernelDiagnostics(recomputed) } : checked;
 };
 const replaceTopology = (document: DocumentSnapshot, edit: TopologyEditResult): CommandResult => {
   const enforced = enforcePositionalCoincidences(document, edit.elements);
   if (typeof enforced === "string") return { success: false, error: enforced };
-  const checked = result(withElements(withoutDanglingDocumentConstraints(document, enforced), enforced));
+  const cleaned = withoutDanglingDocumentConstraints(document, enforced);
+  const projected = projectLineEndpointMidpoints(cleaned, enforced);
+  if (typeof projected === "string") return { success: false, error: projected };
+  const checked = result(withElements({ ...cleaned, elements: projected }, projected));
   return checked.success ? { ...checked, topology: { ...edit, elements: checked.document.elements } } : checked;
 };
 /** Applies sketch topology edits through the kernel without changing the generic topology path. */
@@ -299,7 +337,9 @@ const replaceSketchTopology = (document: DocumentSnapshot, edit: TopologyEditRes
   const cleaned = withoutDanglingDocumentConstraints(document, enforced);
   const recomputed = recomputeSketchKernel({ ...cleaned, elements: enforced });
   if (!recomputed.committed) return { success: false, error: "Sketch constraints are in conflict", diagnostics: kernelDiagnostics(recomputed) };
-  const checked = result(withElements(recomputed.document, recomputed.document.elements));
+  const projected = projectLineEndpointMidpoints(recomputed.document, recomputed.document.elements);
+  if (typeof projected === "string") return { success: false, error: projected };
+  const checked = result(withElements({ ...recomputed.document, elements: projected }, projected));
   return checked.success ? { ...checked, topology: { ...edit, elements: checked.document.elements } } : checked;
 };
 const removeConnectionsFor = (document: DocumentSnapshot, ids: ReadonlySet<ElementId>): DocumentSnapshot => ({ ...document, connections: (document.connections ?? []).filter((connection) => !ids.has(connection.first.elementId) && !ids.has(connection.second.elementId)), positionalCoincidences: (document.positionalCoincidences ?? []).filter((relation) => !ids.has(relation.first.elementId) && !ids.has(relation.second.elementId)) });
@@ -528,7 +568,8 @@ export const createSketchLine = (sketchId: ElementId, layer: LayerId, style: Vis
   const relation: SketchConstraint | undefined = relationKind ? { id: `auto:${edgeId}:${relationKind}`, kind: relationKind, references: [{ elementId: sketchId, nodeId: startNodeId }, { elementId: sketchId, nodeId: endNodeId }] } : undefined;
   return { type: "sketch", id: sketchId, layerId: layer, nodes: [{ id: startNodeId, point: start }, { id: endNodeId, point: end }], edges: [{ id: edgeId, startNodeId, endNodeId }], ...(relation ? { constraints: [relation] } : {}), style };
 };
-const constraintReferenceKey = (reference: SketchConstraint["references"][number]): string => JSON.stringify([reference.elementId, "nodeId" in reference ? "node" : "edge", "nodeId" in reference ? reference.nodeId : reference.edgeId]);
+type DocumentConstraintReference = DocumentConstraint["references"][number];
+const constraintReferenceKey = (reference: DocumentConstraintReference): string => JSON.stringify([reference.elementId, "endpoint" in reference ? "endpoint" : "nodeId" in reference ? "node" : "edge", "endpoint" in reference ? reference.endpoint : "nodeId" in reference ? reference.nodeId : reference.edgeId]);
 const sameDocumentConstraintSource = (first: DocumentConstraint, second: DocumentConstraint): boolean => {
   if (!("source" in first) || !("source" in second)) return !("source" in first) && !("source" in second);
   if (first.source.kind !== second.source.kind || first.source.elementId !== second.source.elementId) return false;
@@ -536,11 +577,14 @@ const sameDocumentConstraintSource = (first: DocumentConstraint, second: Documen
   if (first.source.kind === "path-segment") return second.source.kind === "path-segment" && first.source.segmentId === second.source.segmentId;
   return second.source.kind === "spline-span" && first.source.startNodeId === second.source.startNodeId && first.source.endNodeId === second.source.endNodeId;
 };
-const documentConstraintsEqual = (first: DocumentConstraint, second: DocumentConstraint): boolean => first.id === second.id && first.kind === second.kind && first.value === second.value && first.references.length === second.references.length && first.references.every((reference, index) => constraintReferenceKey(reference) === (second.references[index] ? constraintReferenceKey(second.references[index]!) : undefined)) && sameDocumentConstraintSource(first, second);
+const documentConstraintsEqual = (first: DocumentConstraint, second: DocumentConstraint): boolean => first.id === second.id && first.kind === second.kind && ("value" in first ? first.value : undefined) === ("value" in second ? second.value : undefined) && first.references.length === second.references.length && first.references.every((reference, index) => constraintReferenceKey(reference) === (second.references[index] ? constraintReferenceKey(second.references[index]!) : undefined)) && sameDocumentConstraintSource(first, second);
 const replaceDocumentConstraints = (document: DocumentSnapshot, constraints: readonly DocumentConstraint[]): CommandResult => {
   const candidate = { ...document, revision: nextRevision(document.revision), ...(constraints.length || document.constraints ? { constraints: [...constraints] } : {}) };
-  if (!constraints.some((constraint) => constraint.kind === "midpoint")) return result(candidate);
-  const recomputed = recomputeSketchKernel(candidate);
+  const projected = projectLineEndpointMidpoints(candidate, candidate.elements);
+  if (typeof projected === "string") return { success: false, error: projected };
+  const projectedDocument = { ...candidate, elements: projected };
+  if (!constraints.some((constraint) => constraint.kind === "midpoint")) return result(projectedDocument);
+  const recomputed = recomputeSketchKernel(projectedDocument);
   if (!recomputed.committed) return { success: false, error: "Document constraints are in conflict", diagnostics: kernelDiagnostics(recomputed) };
   return result(recomputed.document);
 };
@@ -671,7 +715,8 @@ const remapSketchEdgeDimensionReferences = (edit: TopologyEditResult, sketchId: 
   return first && second ? [{ ...element, references: [first, second] }] : [];
 });
 
-const constraintReferencesSketchEdge = (constraint: SketchConstraint, sketchId: ElementId, edge: SketchElement["edges"][number]): boolean => {
+const constraintReferencesSketchEdge = (constraint: DocumentConstraint, sketchId: ElementId, edge: SketchElement["edges"][number]): boolean => {
+  if (constraint.kind === "line-endpoint-midpoint") return false;
   if (constraint.references.some((reference) => "edgeId" in reference && reference.elementId === sketchId && reference.edgeId === edge.id)) return true;
   if (!(constraint.kind === "parallel" || constraint.kind === "perpendicular" || constraint.kind === "equal") || constraint.references.length !== 4 || !constraint.references.every((reference) => "nodeId" in reference)) return false;
   return [[constraint.references[0], constraint.references[1]], [constraint.references[2], constraint.references[3]]].some(([first, second]) => first !== undefined && second !== undefined && "nodeId" in first && "nodeId" in second && first.elementId === sketchId && second.elementId === sketchId && (first.nodeId === edge.startNodeId && second.nodeId === edge.endNodeId || first.nodeId === edge.endNodeId && second.nodeId === edge.startNodeId));
@@ -2865,7 +2910,9 @@ export const solveSketch = (sketchId: ElementId): EditorCommand => ({
 const replaceCircleElements = (document: DocumentSnapshot, elements: readonly Element[]): CommandResult => {
   const recomputed = recomputeSketchKernel({ ...document, elements });
   if (!recomputed.committed) return { success: false, error: recomputed.circleConstraintDiagnostics.length ? "Circle constraints are in conflict" : "Sketch constraints are in conflict", diagnostics: kernelDiagnostics(recomputed) };
-  const rebuilt = rebuildAffectedIntersectFeatures(document, recomputed.document.elements, recomputed.document);
+  const projected = projectLineEndpointMidpoints(recomputed.document, recomputed.document.elements);
+  if (typeof projected === "string") return { success: false, error: projected };
+  const rebuilt = rebuildAffectedIntersectFeatures(document, projected, { ...recomputed.document, elements: projected });
   if (!rebuilt.success) return rebuilt;
   const checked = result(withElements(rebuilt.document, rebuilt.document.elements));
   return checked.success ? { ...checked, diagnostics: kernelDiagnostics(recomputed) } : checked;
@@ -3138,8 +3185,9 @@ const translateElement = (element: Element, delta: PointMm, id: ElementId): Elem
 
 type DuplicateMaps = { readonly elements: ReadonlyMap<ElementId, ElementId>; readonly sketches: ReadonlyMap<ElementId, { readonly nodes: ReadonlyMap<string, string>; readonly edges: ReadonlyMap<string, string> }> };
 const duplicateIdAllocator = (used: Set<string>) => (base: string): string => { let value = base; let suffix = 1; while (used.has(value)) value = `${base}:${suffix++}`; used.add(value); return value; };
-const duplicateConstraintReference = (reference: SketchConstraint["references"][number], maps: DuplicateMaps): SketchConstraint["references"][number] | undefined => {
+const duplicateConstraintReference = (reference: DocumentConstraintReference, maps: DuplicateMaps): DocumentConstraintReference | undefined => {
   const elementId = maps.elements.get(reference.elementId); if (!elementId) return undefined; const sketch = maps.sketches.get(reference.elementId);
+  if ("endpoint" in reference) return { elementId, nodeId: reference.nodeId, endpoint: reference.endpoint };
   if ("nodeId" in reference) { const nodeId = sketch?.nodes.get(reference.nodeId); return nodeId ? { elementId, nodeId } : sketch ? undefined : { elementId, nodeId: reference.nodeId }; }
   const edgeId = sketch?.edges.get(reference.edgeId); return edgeId ? { elementId, edgeId } : sketch ? undefined : { elementId, edgeId: reference.edgeId };
 };
@@ -3171,7 +3219,7 @@ const duplicateSketchAware = (document: DocumentSnapshot, selected: readonly Ele
       const sketchMap = sketchMaps.get(source.id)!; const local = (source.constraints ?? []).map((constraint) => { const refs = constraint.references.map((reference) => duplicateConstraintReference(reference, maps)); return refs.some((reference) => !reference) ? undefined : { ...constraint, id: constraintMaps.get(constraint.id)!, references: refs as unknown as SketchConstraint["references"] }; }); if (local.some((constraint) => !constraint)) return { success: false, error: "Cannot duplicate a sketch with external constraint references" };
       copies.push({ ...translateElement(source, delta, id), nodes: source.nodes.map((node) => ({ ...node, id: sketchMap.nodes.get(node.id)!, point: { x: node.point.x + delta.x, y: node.point.y + delta.y } })), edges: source.edges.map((edge) => ({ ...edge, id: sketchMap.edges.get(edge.id)!, startNodeId: sketchMap.nodes.get(edge.startNodeId)!, endNodeId: sketchMap.nodes.get(edge.endNodeId)! })), ...(local.length ? { constraints: local } : {}) } as SketchElement);
     }
-    for (const source of document.constraints ?? []) if (source.references.every((reference) => selectedIds.has(reference.elementId)) && (!("source" in source) || selectedIds.has(source.source.elementId))) { const refs = source.references.map((reference) => duplicateConstraintReference(reference, maps)); const id = constraintMaps.get(source.id); if (id && refs.every((reference) => reference)) copiedConstraints.push({ ...source, id, references: refs as unknown as DocumentConstraint["references"], ...( "source" in source ? { source: { ...source.source, elementId: map.get(source.source.elementId)! } } : {}) }); }
+    for (const source of document.constraints ?? []) if (source.references.every((reference) => selectedIds.has(reference.elementId)) && (!("source" in source) || selectedIds.has(source.source.elementId))) { const refs = source.references.map((reference) => duplicateConstraintReference(reference, maps)); const id = constraintMaps.get(source.id); if (id && refs.every((reference) => reference)) copiedConstraints.push({ ...source, id, references: refs as unknown as DocumentConstraint["references"], ...( "source" in source ? { source: { ...source.source, elementId: map.get(source.source.elementId)! } } : {}) } as DocumentConstraint); }
     const relationship = (source: ExplicitConnection | PositionalCoincidence): ExplicitConnection | PositionalCoincidence | undefined => { if (!selectedIds.has(source.first.elementId) || !selectedIds.has(source.second.elementId)) return undefined; const first = duplicateConnectionReference(source.first, maps), second = duplicateConnectionReference(source.second, maps); return first && second ? { ...source, id: relations(`relationship:copy:${source.id}:${copyIndex + 1}`), first, second } : undefined; };
     for (const source of document.connections ?? []) { const copy = relationship(source); if (copy) copiedConnections.push(copy as ExplicitConnection); } for (const source of document.positionalCoincidences ?? []) { const copy = relationship(source); if (copy) copiedCoincidences.push(copy as PositionalCoincidence); }
   }

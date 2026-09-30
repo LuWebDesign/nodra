@@ -276,6 +276,23 @@ describe("native document validation", () => {
     expect(validateProject({ ...project, pages: [{ ...project.pages[0], elements: [source, output], featureTree: { version: 1, features: [{ ...feature, outputs: [{ elementId: "missing" }] }] } }] }).success).toBe(false);
   });
 
+  it("validates native Line endpoint midpoint relations without admitting chains or duplicates", () => {
+    const base = createDocument("line-endpoint-midpoint", [{ id: layerId("layer-1"), name: "Design", visible: true, order: 0 }]);
+    const style = { stroke: "#000", strokeWidth: 1 };
+    const source = { type: "line" as const, id: elementId("source"), layerId: layerId("layer-1"), start: { x: 0, y: 0 }, end: { x: 10, y: 0 }, rotation: 0, style };
+    const dependent = { ...source, id: elementId("dependent"), start: { x: 20, y: 20 }, end: { x: 30, y: 20 } };
+    const relation = { id: "endpoint-mid", kind: "line-endpoint-midpoint" as const, references: [{ elementId: dependent.id, nodeId: "start" as const, endpoint: "start" as const }], source: { kind: "line" as const, elementId: source.id } };
+    expect(validateDocument({ ...base, elements: [source, dependent], constraints: [relation] }).success).toBe(true);
+    expect(validateDocument({ ...base, elements: [source, dependent], constraints: [relation, { ...relation, id: "duplicate" }] }).success).toBe(false);
+    expect(validateDocument({ ...base, elements: [dependent], constraints: [{ ...relation, source: { kind: "line", elementId: dependent.id } }] }).success).toBe(false);
+    const secondDependent = { ...dependent, id: elementId("second-dependent") };
+    const chain = { ...relation, id: "chain", source: { kind: "line" as const, elementId: dependent.id }, references: [{ elementId: secondDependent.id, nodeId: "end" as const, endpoint: "end" as const }] as const };
+    expect(validateDocument({ ...base, elements: [source, dependent, secondDependent], constraints: [relation, chain] }).success).toBe(false);
+    expect(validateDocument({ ...base, layers: [{ ...base.layers[0]!, visible: false }], elements: [source, dependent], constraints: [relation] }).success).toBe(false);
+    expect(validateDocument({ ...base, elements: [source, { ...dependent, type: "rectangle" }], constraints: [relation] }).success).toBe(false);
+    expect(validateDocument({ ...base, elements: [{ ...source, end: source.start }, dependent], constraints: [relation] }).success).toBe(false);
+  });
+
   it("round-trips valid records", () => {
     const document = createDocument("doc-1", [{ id: layerId("layer-1"), name: "Design", visible: true, order: 0 }]);
     const result = parseDocument(serializeDocument(document));

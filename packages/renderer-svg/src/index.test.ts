@@ -76,6 +76,15 @@ describe("SVG renderer boundary", () => {
       expect(hiddenResult.success && hiddenResult.svg).not.toContain("data-constraint-id");
     }
   });
+  it("filters native Line endpoint midpoint relations from sketch solver glyphs", () => {
+    const source = { type: "line" as const, id: elementId("endpoint-render-source"), layerId: layer.id, start: { x: 0, y: 0 }, end: { x: 10, y: 0 }, rotation: 0, style };
+    const dependent = { ...source, id: elementId("endpoint-render-dependent"), start: { x: 10, y: 0 }, end: { x: 20, y: 0 } };
+    const relation = { id: "endpoint-render", kind: "line-endpoint-midpoint" as const, references: [{ elementId: dependent.id, nodeId: "start" as const, endpoint: "start" as const }] as const, source: { kind: "line" as const, elementId: source.id } };
+    const rendered = renderSvg({ ...withElements(createDocument("endpoint-render", [layer]), [source, dependent]), constraints: [relation] }, { zoom: 1, panMm: { x: 0, y: 0 } });
+    expect(rendered.success).toBe(true);
+    if (rendered.success) expect(rendered.svg).not.toContain('data-constraint-id="endpoint-render"');
+  });
+
   it("renders a validated Path midpoint source without synthesizing source geometry", () => {
     const path = { type: "path" as const, id: elementId("native-path"), layerId: layer.id, nodes: [{ id: "start", anchor: { x: 0, y: 0 }, join: "corner" as const }, { id: "end", anchor: { x: 10, y: 0 }, join: "corner" as const }], segments: [{ id: "open-segment", type: "line" as const, startNodeId: "start", endNodeId: "end" }], closed: false, style };
     const dependentId = elementId("path-midpoint-dependent");

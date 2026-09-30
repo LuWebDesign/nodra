@@ -102,6 +102,17 @@ describe("DexieProjectRepository", () => {
     expect(recovered.ok && recovered.revision.document).toMatchObject({ constraints: [relation] });
   });
 
+  it("round-trips native Line endpoint midpoint constraints through project persistence", async () => {
+    db = await repository();
+    const base = document();
+    const source = { type: "line" as const, id: elementId("endpoint-source"), layerId: layerId("layer-1"), start: { x: 0, y: 0 }, end: { x: 10, y: 0 }, rotation: 0, style: { stroke: "#000", strokeWidth: 1 } };
+    const dependent = { ...source, id: elementId("endpoint-dependent"), start: { x: 5, y: 0 }, end: { x: 15, y: 0 } };
+    const relation = { id: "endpoint-mid", kind: "line-endpoint-midpoint" as const, references: [{ elementId: dependent.id, nodeId: "start" as const, endpoint: "start" as const }] as const, source: { kind: "line" as const, elementId: source.id } };
+    expect((await db.saveProject(metadata, { ...base, elements: [source, dependent], constraints: [relation] })).ok).toBe(true);
+    const recovered = await db.getProject(metadata.id);
+    expect(recovered.ok && recovered.revision.document).toMatchObject({ constraints: [relation], elements: [{ id: source.id }, { id: dependent.id }] });
+  });
+
   it("round-trips Path segment midpoint references and migrates schema-10 native Line", async () => {
     db = await repository();
     const base = document();
