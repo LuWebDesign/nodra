@@ -30,24 +30,26 @@ test("open-edge midpoint hover is informational across editing tools", async ({ 
   const assertMarker = async (): Promise<void> => {
     await expect(marker).toBeVisible();
     await expect(marker).toHaveCSS("pointer-events", "none");
+    await expect(marker).toHaveCSS("background-color", "rgb(245, 158, 11)");
+    await expect(marker).toHaveCSS("border-top-color", "rgb(17, 24, 39)");
+    await expect(marker).toHaveCSS("border-top-width", "1px");
     const bounds = await marker.boundingBox();
     expect(bounds).not.toBeNull();
-    expect(bounds!.width).toBeCloseTo(8, 0);
-    expect(bounds!.height).toBeCloseTo(8, 0);
+    expect(bounds!.width).toBeCloseTo(11.34, 0);
+    expect(bounds!.height).toBeCloseTo(11.34, 0);
     expect(Math.abs(bounds!.x + bounds!.width / 2 - midpoint.x)).toBeLessThanOrEqual(1.5);
     expect(Math.abs(bounds!.y + bounds!.height / 2 - midpoint.y)).toBeLessThanOrEqual(1.5);
-    const color = await marker.evaluate((element) => {
-      return getComputedStyle(element).backgroundColor;
-    });
-    expect(color).toMatch(/orange|#f97316|#ffa500|rgb\(255,\s*165,\s*0\)|rgb\(249,\s*115,\s*22\)/i);
   };
   const assertDocumentUnchanged = async (): Promise<void> => {
     await expect(pageElement).toHaveAttribute("data-document-revision", revision!);
     await expect(pageElement).toHaveAttribute("data-document-element-ids", elementIds!);
   };
 
-  // Hover near the endpoint, deliberately far from the edge's calculated midpoint.
+  // Body and endpoint hover do not display a marker far from the midpoint.
   await page.mouse.move(nearEndpoint.x, nearEndpoint.y);
+  await expect(marker).toHaveCount(0);
+  // The calculated midpoint is the only marker candidate.
+  await page.mouse.move(midpoint.x, midpoint.y);
   await assertMarker();
   await assertDocumentUnchanged();
 
@@ -55,6 +57,8 @@ test("open-edge midpoint hover is informational across editing tools", async ({ 
   for (const toolName of ["Seleccion", "Forma"]) {
     await page.getByRole("button", { name: toolName, exact: true }).click();
     await page.mouse.move(nearEndpoint.x, nearEndpoint.y);
+    await expect(marker).toHaveCount(0);
+    await page.mouse.move(midpoint.x, midpoint.y);
     await assertMarker();
     await page.mouse.click(nearEndpoint.x, nearEndpoint.y);
     await assertDocumentUnchanged();
@@ -68,6 +72,8 @@ test("open-edge midpoint hover is informational across editing tools", async ({ 
   // Pan is another editing tool; hover remains available without changing the document.
   await page.getByRole("button", { name: "Desplazar", exact: true }).click();
   await page.mouse.move(nearEndpoint.x, nearEndpoint.y);
+  await expect(marker).toHaveCount(0);
+  await page.mouse.move(midpoint.x, midpoint.y);
   await assertMarker();
   await assertDocumentUnchanged();
 
@@ -81,11 +87,13 @@ test("open-edge midpoint hover is informational across editing tools", async ({ 
   midpoint = { x: zoomedLineBounds!.x + zoomedLineBounds!.width / 2, y: zoomedLineBounds!.y + zoomedLineBounds!.height / 2 };
   nearEndpoint = { x: zoomedLineBounds!.x + 12, y: zoomedLineBounds!.y + zoomedLineBounds!.height / 2 };
   await page.mouse.move(nearEndpoint.x, nearEndpoint.y);
+  await expect(marker).toHaveCount(0);
+  await page.mouse.move(midpoint.x, midpoint.y);
   await assertMarker();
   const markerAfterZoom = await marker.boundingBox();
   expect(markerAfterZoom).not.toBeNull();
-  expect(markerAfterZoom!.width).toBeCloseTo(8, 0);
-  expect(markerAfterZoom!.height).toBeCloseTo(8, 0);
+  expect(markerAfterZoom!.width).toBeCloseTo(11.34, 0);
+  expect(markerAfterZoom!.height).toBeCloseTo(11.34, 0);
   await assertDocumentUnchanged();
 
   // Move away only after checking zoom: no stale marker may outlive its source hover.

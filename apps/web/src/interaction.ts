@@ -8,7 +8,7 @@ export interface OpenEdgeMidpointHover {
   readonly source: Curve2DSource;
 }
 
-/** Picks the nearest visible open-edge body and returns its calculated half-arc-length point. */
+/** Picks the nearest calculated midpoint within a screen-pixel radius. */
 export function pickOpenEdgeMidpointHover(document: DocumentSnapshot, pointer: PointMm, zoom: number, tolerancePx = 8): OpenEdgeMidpointHover | undefined {
   if (![pointer.x, pointer.y, zoom, tolerancePx].every(Number.isFinite) || zoom <= 0 || tolerancePx < 0) throw new Error("open edge midpoint coordinates, zoom, and tolerance must be valid");
   const visibleLayers = new Set(document.layers.filter((layer) => layer.visible).map((layer) => layer.id));
@@ -22,12 +22,10 @@ export function pickOpenEdgeMidpointHover(document: DocumentSnapshot, pointer: P
       const source = sourced.source;
       if (!(source.kind === "sketch-edge" || source.kind === "line-element" || source.kind === "path-segment" || source.kind === "spline-span" || source.kind === "arc-element")) continue;
       try {
-        const parameter = closestParameter(sourced.curve, pointer);
-        const closest = pointAt(sourced.curve, parameter);
-        const distance = Math.hypot(pointer.x - closest.x, pointer.y - closest.y);
-        if (!Number.isFinite(distance) || distance * zoom > tolerancePx) continue;
         const midpoint = halfArcLengthMidpoint(sourced.curve);
         if (!midpoint) continue;
+        const distance = Math.hypot(pointer.x - midpoint.x, pointer.y - midpoint.y);
+        if (!Number.isFinite(distance) || distance * zoom > tolerancePx) continue;
         const key = source.kind === "sketch-edge" ? `${source.kind}:${source.elementId}:${source.edgeId}`
           : source.kind === "path-segment" ? `${source.kind}:${source.elementId}:${source.segmentId}`
             : source.kind === "spline-span" ? `${source.kind}:${source.elementId}:${source.startNodeId}:${source.endNodeId}`

@@ -26,14 +26,16 @@ describe("open-edge midpoint hover picking", () => {
     for (const [element, pointer, source] of targets) expect(pickOpenEdgeMidpointHover(document([element]), pointer, 1)?.source).toMatchObject(source);
   });
 
-  it("picks by nearest edge body, displays a cubic's calculated half-length point, and does not mutate", () => {
+  it("requires proximity to the calculated midpoint, displays a cubic's half-length point, and does not mutate", () => {
     const cubic = { ...path, segments: [{ id: "curve-id", type: "cubicBezier" as const, startNodeId: "a", endNodeId: "b", control1: { x: 0, y: 70 }, control2: { x: 20, y: 70 } }] };
     const before = structuredClone(cubic);
-    const hit = pickOpenEdgeMidpointHover(document([cubic]), { x: 10, y: 65 }, 1);
+    const hit = pickOpenEdgeMidpointHover(document([cubic]), { x: 10, y: 62.5 }, 1);
     expect(hit?.source).toMatchObject({ kind: "path-segment", segmentId: "curve-id" });
     expect(hit?.point.y).toBeGreaterThan(55);
     expect(cubic).toEqual(before);
-    expect(pickOpenEdgeMidpointHover(document([line]), { x: 1, y: 20 }, 1)).toMatchObject({ point: { x: 10, y: 20 }, source: { elementId: line.id } });
+    expect(pickOpenEdgeMidpointHover(document([line]), { x: 10, y: 20 }, 1)).toMatchObject({ point: { x: 10, y: 20 }, source: { elementId: line.id } });
+    expect(pickOpenEdgeMidpointHover(document([line]), { x: 1, y: 20 }, 1)).toBeUndefined();
+    expect(pickOpenEdgeMidpointHover(document([line]), { x: 10, y: 7 }, 1)).toBeUndefined();
   });
 
   it("excludes hidden, closed and unsupported shapes, uses inclusive zoom tolerance and stable ties", () => {
