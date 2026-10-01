@@ -242,6 +242,18 @@ describe("global constraint commands", () => {
     expect(undo(committed).document).toEqual(initial.document);
   });
 
+  it("atomically projects a Line endpoint onto a stable Path segment midpoint", () => {
+    const dependent = { type: "line" as const, id: elementId("path-dependent-line"), layerId: layer.id, start: { x: 1, y: 0 }, end: { x: 1, y: 10 }, rotation: 0, style };
+    const path = { type: "path" as const, id: elementId("midpoint-path"), layerId: layer.id, nodes: [{ id: "a", anchor: { x: 0, y: 0 }, join: "corner" as const }, { id: "b", anchor: { x: 10, y: 0 }, join: "corner" as const }], segments: [{ id: "stable-segment", type: "line" as const, startNodeId: "a", endNodeId: "b" }], closed: false, style };
+    const initial = createEditor({ ...createDocument("path-endpoint-midpoint", [layer]), elements: [dependent, path] });
+    const relation: DocumentConstraint = { id: "path-endpoint-midpoint", kind: "line-endpoint-midpoint", references: [{ elementId: dependent.id, nodeId: "start", endpoint: "start" }], source: { kind: "path-segment", elementId: path.id, segmentId: "stable-segment" } };
+    const committed = dispatch(initial, createGeometryWithDocumentConstraints(moveElement(dependent.id, { x: 4, y: 0 }), () => [relation]));
+    expect(committed.document.constraints).toEqual([relation]);
+    expect(committed.document.elements.find((element) => element.id === dependent.id)).toMatchObject({ start: { x: 5, y: 0 }, end: { x: 5, y: 10 } });
+    expect(committed.undo).toHaveLength(1);
+    expect(undo(committed).document).toEqual(initial.document);
+  });
+
   it("accepts and solves a global midpoint driven by a native line", () => {
     const dependent = sketch("dependent", 4, 3);
     const line = { type: "line" as const, id: elementId("native-source"), layerId: layer.id, start: { x: 0, y: 0 }, end: { x: 10, y: 0 }, rotation: 0, style };

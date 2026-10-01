@@ -113,6 +113,54 @@ describe("DexieProjectRepository", () => {
     expect(recovered.ok && recovered.revision.document).toMatchObject({ constraints: [relation], elements: [{ id: source.id }, { id: dependent.id }] });
   });
 
+  it("round-trips a Line endpoint relation to a stable Arc midpoint", async () => {
+    db = await repository();
+    const base = document();
+    const style = { stroke: "#000", strokeWidth: 1 };
+    const arc = { type: "arc" as const, id: elementId("endpoint-arc"), layerId: layerId("layer-1"), center: { x: 0, y: 0 }, radius: 10, startAngle: 0, endAngle: Math.PI, direction: "counterclockwise" as const, style };
+    const dependent = { type: "line" as const, id: elementId("endpoint-arc-dependent"), layerId: layerId("layer-1"), start: { x: 0, y: 10 }, end: { x: 10, y: 10 }, rotation: 0, style };
+    const relation = { id: "endpoint-arc-mid", kind: "line-endpoint-midpoint" as const, references: [{ elementId: dependent.id, nodeId: "start" as const, endpoint: "start" as const }] as const, source: { kind: "arc" as const, elementId: arc.id } };
+    expect((await db.saveProject(metadata, { ...base, elements: [arc, dependent], constraints: [relation] })).ok).toBe(true);
+    const recovered = await db.getProject(metadata.id);
+    expect(recovered).toMatchObject({ ok: true, revision: { document: { constraints: [relation], elements: [{ id: arc.id, type: "arc" }, { id: dependent.id, type: "line" }] } } });
+  });
+
+  it("round-trips a Line endpoint relation to a stable Sketch edge, including closed Sketch topology", async () => {
+    db = await repository();
+    const base = document();
+    const style = { stroke: "#000", strokeWidth: 1 };
+    const source = { type: "sketch" as const, id: elementId("endpoint-sketch-source"), layerId: layerId("layer-1"), nodes: [{ id: "a", point: { x: 0, y: 0 } }, { id: "b", point: { x: 10, y: 0 } }, { id: "c", point: { x: 10, y: 10 } }], edges: [{ id: "stable-edge", startNodeId: "a", endNodeId: "b" }, { id: "bc", startNodeId: "b", endNodeId: "c" }, { id: "ca", startNodeId: "c", endNodeId: "a" }], style };
+    const dependent = { type: "line" as const, id: elementId("endpoint-sketch-dependent"), layerId: layerId("layer-1"), start: { x: 5, y: 0 }, end: { x: 15, y: 0 }, rotation: 0, style };
+    const relation = { id: "endpoint-sketch-mid", kind: "line-endpoint-midpoint" as const, references: [{ elementId: dependent.id, nodeId: "start" as const, endpoint: "start" as const }] as const, source: { kind: "sketch-edge" as const, elementId: source.id, edgeId: "stable-edge" } };
+    expect((await db.saveProject(metadata, { ...base, elements: [source, dependent], constraints: [relation] })).ok).toBe(true);
+    const recovered = await db.getProject(metadata.id);
+    const recoveredDocument = recovered.ok && "elements" in recovered.revision.document ? recovered.revision.document : undefined;
+    expect(recoveredDocument?.constraints).toEqual([relation]);
+    expect(recoveredDocument?.elements.map((element) => element.id)).toEqual([source.id, dependent.id]);
+  });
+
+  it("round-trips a Line endpoint relation to a stable Path segment midpoint", async () => {
+    db = await repository();
+    const base = document();
+    const path = { type: "path" as const, id: elementId("endpoint-path"), layerId: layerId("layer-1"), nodes: [{ id: "a", anchor: { x: 0, y: 0 }, join: "corner" as const }, { id: "b", anchor: { x: 10, y: 0 }, join: "corner" as const }], segments: [{ id: "stable-segment", type: "line" as const, startNodeId: "a", endNodeId: "b" }], closed: false, style: { stroke: "#000", strokeWidth: 1 } };
+    const dependent = { type: "line" as const, id: elementId("endpoint-dependent-path"), layerId: layerId("layer-1"), start: { x: 5, y: 0 }, end: { x: 15, y: 0 }, rotation: 0, style: path.style };
+    const relation = { id: "endpoint-path-mid", kind: "line-endpoint-midpoint" as const, references: [{ elementId: dependent.id, nodeId: "start" as const, endpoint: "start" as const }] as const, source: { kind: "path-segment" as const, elementId: path.id, segmentId: "stable-segment" } };
+    expect((await db.saveProject(metadata, { ...base, elements: [path, dependent], constraints: [relation] })).ok).toBe(true);
+    const recovered = await db.getProject(metadata.id);
+    expect(recovered.ok && recovered.revision.document).toMatchObject({ constraints: [relation], elements: [{ id: path.id, segments: [{ id: "stable-segment" }] }, { id: dependent.id }] });
+  });
+
+  it("round-trips a Line endpoint relation to an ordered Spline span", async () => {
+    db = await repository();
+    const base = document();
+    const spline = { type: "spline" as const, id: elementId("endpoint-spline"), layerId: layerId("layer-1"), nodes: [{ id: "s0", anchor: { x: 0, y: 0 }, continuity: "smooth" as const }, { id: "s1", anchor: { x: 10, y: 0 }, continuity: "smooth" as const }], closed: false, style: { stroke: "#000", strokeWidth: 1 } };
+    const dependent = { type: "line" as const, id: elementId("endpoint-dependent-spline"), layerId: layerId("layer-1"), start: { x: 5, y: 0 }, end: { x: 15, y: 0 }, rotation: 0, style: spline.style };
+    const relation = { id: "endpoint-spline-mid", kind: "line-endpoint-midpoint" as const, references: [{ elementId: dependent.id, nodeId: "start" as const, endpoint: "start" as const }] as const, source: { kind: "spline-span" as const, elementId: spline.id, startNodeId: "s0", endNodeId: "s1" } };
+    expect((await db.saveProject(metadata, { ...base, elements: [spline, dependent], constraints: [relation] })).ok).toBe(true);
+    const recovered = await db.getProject(metadata.id);
+    expect(recovered.ok && recovered.revision.document).toMatchObject({ constraints: [relation], elements: [{ id: spline.id, nodes: [{ id: "s0" }, { id: "s1" }] }, { id: dependent.id }] });
+  });
+
   it("round-trips Path segment midpoint references and migrates schema-10 native Line", async () => {
     db = await repository();
     const base = document();

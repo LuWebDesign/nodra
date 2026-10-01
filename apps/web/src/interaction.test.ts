@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { createDocument, elementId, layerId, type DocumentSnapshot } from "@nodra/domain";
+import { createDocument, elementId, layerId, type DocumentSnapshot, type Element } from "@nodra/domain";
 import { validateDocument } from "@nodra/validation";
-import { canActivateRotation, circleGeometry, centerPageInCanvas, clientPointToCanvas, clientPointToPage, creationGuides, directionalGuide, resolveLineInference, hasNonCollinearPoints, hoveredSelectionCenter, INITIAL_ZOOM, isDrawingTool, marqueeSelection, MAX_ZOOM, MIN_ZOOM, movementExceedsThreshold, nodeAlignmentGuides, normalizeBounds, normalizeDrag, pagePointToScreen, screenDeltaToMm, screenPointToMm, viewportPointToCanvas, containsBounds, elementsContainedBy, pickDimensionTarget, pickElement, pickFormaElement, pickFormaNode, pickFormaSegment, pickHoverNode, pickCutIntervalPreview, pickCuttableSegment, pickNode, pickOpenEdgeMidpointHover, pickLineEndpointMidpointLanding, pointerDownIntent, selectedNodeAnchor, selectionCenter, selectionFrame, snapCreationPoint, snapMoveDelta, visibleEditablePathNodeIndexes, visibleNativeCircularCenters, zoomAtPoint } from "./interaction.js";
+import { canActivateRotation, circleGeometry, centerPageInCanvas, clientPointToCanvas, clientPointToPage, creationGuides, directionalGuide, resolveLineInference, hasNonCollinearPoints, hoveredSelectionCenter, INITIAL_ZOOM, isDrawingTool, marqueeSelection, MAX_ZOOM, MIN_ZOOM, movementExceedsThreshold, nodeAlignmentGuides, normalizeBounds, normalizeDrag, pagePointToScreen, screenDeltaToMm, screenPointToMm, viewportPointToCanvas, containsBounds, elementsContainedBy, pickDimensionTarget, pickElement, pickFormaElement, pickFormaNode, pickFormaSegment, pickHoverNode, pickCutIntervalPreview, pickCuttableSegment, pickNode, pickOpenEdgeMidpointHover, pickLineEndpointMidpointLanding, lineEndpointMidpointConstraintId, pointerDownIntent, selectedNodeAnchor, selectionCenter, selectionFrame, snapCreationPoint, snapMoveDelta, visibleEditablePathNodeIndexes, visibleNativeCircularCenters, zoomAtPoint } from "./interaction.js";
 import { geometryPatch, geometryValue } from "./propertyBar.js";
-import { dimensionKindForNodes, dimensionOffsetForPlacement, pointMidpoint, sketchProfileResult } from "@nodra/geometry";
+import { dimensionKindForNodes, dimensionOffsetForPlacement, halfArcLengthMidpoint, pointMidpoint, sketchProfileResult, splineSpanToCurve } from "@nodra/geometry";
 
 describe("open-edge midpoint hover picking", () => {
   const layer = { id: layerId("mid-hover"), name: "Visible", visible: true, order: 0 };
@@ -59,7 +59,7 @@ describe("native Line endpoint midpoint landing", () => {
   const style = { stroke: "#000", strokeWidth: 1 };
   const dependent = { type: "line" as const, id: elementId("dependent-line"), layerId: layer.id, start: { x: 10, y: 1 }, end: { x: 30, y: 1 }, rotation: 0, style };
   const source = { ...dependent, id: elementId("source-line"), start: { x: 0, y: 0 }, end: { x: 20, y: 0 } };
-  const doc = (elements = [dependent, source], layers = [layer]) => ({ ...createDocument("line-landing", layers), elements });
+  const doc = (elements: readonly Element[] = [dependent, source], layers = [layer]) => ({ ...createDocument("line-landing", layers), elements });
 
   it("selects the unique nearest endpoint/source pair within eight screen pixels", () => {
     expect(pickLineEndpointMidpointLanding(doc(), dependent.id, 1)).toMatchObject({ dependentLineId: dependent.id, endpoint: "start", sourceLineId: source.id, midpoint: { x: 10, y: 0 }, distancePx: 1 });
@@ -70,6 +70,47 @@ describe("native Line endpoint midpoint landing", () => {
     const candidate = doc([{ ...dependent, start: { x: 10, y: 1 } }, source, otherNode]);
     expect(pickLineEndpointMidpointLanding(candidate, dependent.id, 1, "start", { x: 10, y: 2 })).toBeUndefined();
     expect(pickLineEndpointMidpointLanding(candidate, dependent.id, 1, "start", undefined)).toMatchObject({ sourceLineId: source.id });
+  });
+
+  it("lands on a visible open Path segment midpoint with stable segment identity", () => {
+    const path = { type: "path" as const, id: elementId("source-path"), layerId: layer.id, nodes: [{ id: "a", anchor: { x: 0, y: 0 }, join: "corner" as const }, { id: "b", anchor: { x: 20, y: 0 }, join: "corner" as const }], segments: [{ id: "stable-segment", type: "line" as const, startNodeId: "a", endNodeId: "b" }], closed: false, style };
+    expect(pickLineEndpointMidpointLanding(doc([dependent, path]), dependent.id, 1)).toMatchObject({ sourceLineId: path.id, source: { kind: "path-segment", elementId: path.id, segmentId: "stable-segment" }, endpoint: "start", midpoint: { x: 10, y: 0 } });
+    expect(pickLineEndpointMidpointLanding(doc([dependent, { ...path, closed: true }]), dependent.id, 1)).toBeUndefined();
+    const hidden = { ...layer, id: layerId("hidden-path-layer"), visible: false };
+    expect(pickLineEndpointMidpointLanding(doc([dependent, { ...path, layerId: hidden.id }], [layer, hidden]), dependent.id, 1)).toBeUndefined();
+  });
+
+  it("lands on a stable Sketch edge, including an edge in a closed sketch", () => {
+    const sketch = { type: "sketch" as const, id: elementId("source-sketch"), layerId: layer.id, nodes: [{ id: "n0", point: { x: 0, y: 0 } }, { id: "n1", point: { x: 20, y: 0 } }, { id: "n2", point: { x: 20, y: 20 } }], edges: [{ id: "stable-edge", startNodeId: "n0", endNodeId: "n1" }, { id: "other-edge", startNodeId: "n1", endNodeId: "n2" }, { id: "closing-edge", startNodeId: "n2", endNodeId: "n0" }], style };
+    expect(pickLineEndpointMidpointLanding(doc([dependent, sketch]), dependent.id, 1)).toMatchObject({ sourceLineId: sketch.id, source: { kind: "sketch-edge", elementId: sketch.id, edgeId: "stable-edge" }, endpoint: "start", midpoint: { x: 10, y: 0 } });
+    const hidden = { ...layer, id: layerId("hidden-sketch-layer"), visible: false };
+    expect(pickLineEndpointMidpointLanding(doc([dependent, { ...sketch, layerId: hidden.id }], [layer, hidden]), dependent.id, 1)).toBeUndefined();
+  });
+
+  it("lands on a visible Arc half-arc-length midpoint and rejects hidden or ambiguous candidates", () => {
+    const arc = { type: "arc" as const, id: elementId("source-arc"), layerId: layer.id, center: { x: 0, y: 0 }, radius: 10, startAngle: 0, endAngle: Math.PI, direction: "counterclockwise" as const, style };
+    const midpoint = { x: 0, y: -10 };
+    const positionedDependent = { ...dependent, start: midpoint, end: { x: 30, y: 30 } };
+    const landing = pickLineEndpointMidpointLanding(doc([positionedDependent, arc]), dependent.id, 1);
+    expect(landing).toMatchObject({ sourceLineId: arc.id, source: { kind: "arc-element", elementId: arc.id }, endpoint: "start" });
+    expect(landing?.midpoint.x).toBeCloseTo(midpoint.x); expect(landing?.midpoint.y).toBeCloseTo(midpoint.y);
+    expect(pickLineEndpointMidpointLanding(doc([positionedDependent, { ...arc, id: elementId("hidden-arc"), layerId: layerId("hidden-arc-layer") }], [layer, { ...layer, id: layerId("hidden-arc-layer"), visible: false }]), dependent.id, 1)).toBeUndefined();
+    const duplicate = { ...arc, id: elementId("duplicate-arc") };
+    expect(pickLineEndpointMidpointLanding(doc([positionedDependent, arc, duplicate]), dependent.id, 1)).toBeUndefined();
+  });
+
+  it("lands on only an adjacent span of a visible open Spline with ordered stable node IDs", () => {
+    const spline = { type: "spline" as const, id: elementId("source-spline"), layerId: layer.id, nodes: [
+      { id: "s0", anchor: { x: 0, y: 0 }, continuity: "smooth" as const, outHandle: { dx: 0, dy: 8 } },
+      { id: "s1", anchor: { x: 20, y: 0 }, continuity: "smooth" as const, inHandle: { dx: 0, dy: 8 }, outHandle: { dx: 0, dy: -8 } },
+      { id: "s2", anchor: { x: 40, y: 0 }, continuity: "smooth" as const, inHandle: { dx: 0, dy: -8 } },
+    ], closed: false, style };
+    const midpoint = halfArcLengthMidpoint(splineSpanToCurve(spline, 0).curve)!;
+    const positionedDependent = { ...dependent, start: midpoint, end: { x: 30, y: 30 } };
+    expect(pickLineEndpointMidpointLanding(doc([positionedDependent, spline]), dependent.id, 1)).toMatchObject({ sourceLineId: spline.id, source: { kind: "spline-span", elementId: spline.id, startNodeId: "s0", endNodeId: "s1" }, midpoint });
+    expect(pickLineEndpointMidpointLanding(doc([positionedDependent, { ...spline, closed: true }]), dependent.id, 1)).toBeUndefined();
+    const hidden = { ...layer, id: layerId("hidden-spline-layer"), visible: false };
+    expect(pickLineEndpointMidpointLanding(doc([positionedDependent, { ...spline, layerId: hidden.id }], [layer, hidden]), dependent.id, 1)).toBeUndefined();
   });
 
   it("uses visually rotated endpoints and honors source and dependent flips", () => {
@@ -83,13 +124,45 @@ describe("native Line endpoint midpoint landing", () => {
     expect(flippedResult).toMatchObject({ endpoint: "start", midpoint: { x: 5, y: 0 }, distancePx: 0 });
   });
 
-  it("rejects exact ties, self, hidden sources, and degenerate lines", () => {
+  it("fails closed on cross-kind ties, ignores hidden duplicates, and is document-order deterministic", () => {
+    const positioned = { ...dependent, start: { x: 10, y: 0 } };
+    const path = { type: "path" as const, id: elementId("cross-kind-path"), layerId: layer.id, nodes: [{ id: "a", anchor: { x: 0, y: 0 }, join: "corner" as const }, { id: "b", anchor: { x: 20, y: 0 }, join: "corner" as const }], segments: [{ id: "segment", type: "line" as const, startNodeId: "a", endNodeId: "b" }], closed: false, style };
+    expect(pickLineEndpointMidpointLanding(doc([positioned, source, path]), dependent.id, 1)).toBeUndefined();
+    expect(pickLineEndpointMidpointLanding(doc([path, source, positioned]), dependent.id, 1)).toBeUndefined();
+    const hidden = { ...layer, id: layerId("hidden-cross-kind"), visible: false };
+    expect(pickLineEndpointMidpointLanding(doc([positioned, source, { ...path, layerId: hidden.id }], [layer, hidden]), dependent.id, 1)).toMatchObject({ sourceLineId: source.id, source: { kind: "line-element" } });
+  });
+
+  it("honors real-node priority over midpoints for Line and Path sources", () => {
+    const positioned = { ...dependent, start: { x: 10, y: 0 } };
+    const path = { type: "path" as const, id: elementId("priority-path"), layerId: layer.id, nodes: [{ id: "a", anchor: { x: 0, y: 0 }, join: "corner" as const }, { id: "b", anchor: { x: 20, y: 0 }, join: "corner" as const }], segments: [{ id: "segment", type: "line" as const, startNodeId: "a", endNodeId: "b" }], closed: false, style };
+    for (const candidate of [source, path]) {
+      expect(pickLineEndpointMidpointLanding(doc([positioned, candidate]), dependent.id, 1, "start", { x: 11, y: 0 })).toBeUndefined();
+      expect(pickLineEndpointMidpointLanding(doc([positioned, candidate]), dependent.id, 1, "start", { x: 10, y: 0 })).toMatchObject({ sourceLineId: candidate.id });
+    }
+  });
+
+  it("rejects exact same-kind ties, self, hidden sources, and degenerate lines", () => {
     const tied = { ...source, id: elementId("tied-source"), start: { x: 0, y: 2 }, end: { x: 20, y: 2 } };
     expect(pickLineEndpointMidpointLanding(doc([dependent, source, tied]), dependent.id, 1)).toBeUndefined();
     const hidden = { ...layer, id: layerId("hidden"), visible: false };
     expect(pickLineEndpointMidpointLanding(doc([dependent, { ...source, layerId: hidden.id }], [layer, hidden]), dependent.id, 1)).toBeUndefined();
     expect(pickLineEndpointMidpointLanding(doc([dependent, { ...source, start: source.end }]), dependent.id, 1)).toBeUndefined();
     expect(pickLineEndpointMidpointLanding(doc([dependent]), dependent.id, 1)).toBeUndefined();
+  });
+
+  it("generates delimiter-safe stable IDs across all source kinds", () => {
+    const sources = [
+      { kind: "line-element", elementId: elementId("source") },
+      { kind: "arc-element", elementId: elementId("source") },
+      { kind: "sketch-edge", elementId: elementId("source"), edgeId: "edge", startNodeId: "a", endNodeId: "b" },
+      { kind: "path-segment", elementId: elementId("source"), segmentId: "segment", startNodeId: "a", endNodeId: "b" },
+      { kind: "spline-span", elementId: elementId("source"), startNodeId: "a-b", endNodeId: "c" },
+    ] as const;
+    const ids = sources.map((candidate) => lineEndpointMidpointConstraintId(dependent.id, "start", candidate));
+    expect(new Set(ids).size).toBe(sources.length);
+    expect(lineEndpointMidpointConstraintId(dependent.id, "start", { kind: "spline-span", elementId: elementId("source"), startNodeId: "a-b", endNodeId: "c" })).toBe(ids[4]);
+    expect(ids[4]).not.toBe(lineEndpointMidpointConstraintId(dependent.id, "start", { kind: "spline-span", elementId: elementId("source"), startNodeId: "a", endNodeId: "b-c" }));
   });
 });
 
