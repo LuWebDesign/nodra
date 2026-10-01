@@ -113,6 +113,17 @@ describe("DexieProjectRepository", () => {
     expect(recovered.ok && recovered.revision.document).toMatchObject({ constraints: [relation], elements: [{ id: source.id }, { id: dependent.id }] });
   });
 
+  it("round-trips a Line endpoint relation to a stable Path segment midpoint", async () => {
+    db = await repository();
+    const base = document();
+    const path = { type: "path" as const, id: elementId("endpoint-path"), layerId: layerId("layer-1"), nodes: [{ id: "a", anchor: { x: 0, y: 0 }, join: "corner" as const }, { id: "b", anchor: { x: 10, y: 0 }, join: "corner" as const }], segments: [{ id: "stable-segment", type: "line" as const, startNodeId: "a", endNodeId: "b" }], closed: false, style: { stroke: "#000", strokeWidth: 1 } };
+    const dependent = { type: "line" as const, id: elementId("endpoint-dependent-path"), layerId: layerId("layer-1"), start: { x: 5, y: 0 }, end: { x: 15, y: 0 }, rotation: 0, style: path.style };
+    const relation = { id: "endpoint-path-mid", kind: "line-endpoint-midpoint" as const, references: [{ elementId: dependent.id, nodeId: "start" as const, endpoint: "start" as const }] as const, source: { kind: "path-segment" as const, elementId: path.id, segmentId: "stable-segment" } };
+    expect((await db.saveProject(metadata, { ...base, elements: [path, dependent], constraints: [relation] })).ok).toBe(true);
+    const recovered = await db.getProject(metadata.id);
+    expect(recovered.ok && recovered.revision.document).toMatchObject({ constraints: [relation], elements: [{ id: path.id, segments: [{ id: "stable-segment" }] }, { id: dependent.id }] });
+  });
+
   it("round-trips Path segment midpoint references and migrates schema-10 native Line", async () => {
     db = await repository();
     const base = document();

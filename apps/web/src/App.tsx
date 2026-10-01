@@ -1766,12 +1766,19 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
     if (!candidate.success) return geometry;
     const landing = pickLineEndpointMidpointLanding(candidate.document, lineId, zoomAtGesture, endpoint, priorityTarget);
     if (!landing) return geometry;
-    const constraintId = `line-endpoint-midpoint-${lineId}-${landing.endpoint}-${landing.sourceLineId}`;
+    const sourceReference = landing.source;
+    const sourceKey = sourceReference.kind === "path-segment" ? sourceReference.segmentId : "line";
+    const constraintId = `line-endpoint-midpoint-${lineId}-${landing.endpoint}-${landing.sourceLineId}-${sourceKey}`;
     return createGeometryWithDocumentConstraints(geometry, (_before, after) => {
       const dependent = after.elements.find((element) => element.id === landing.dependentLineId);
       const source = after.elements.find((element) => element.id === landing.sourceLineId);
-      if (dependent?.type !== "line" || source?.type !== "line" || after.constraints?.some((constraint) => constraint.id === constraintId)) return [];
-      return [{ id: constraintId, kind: "line-endpoint-midpoint", references: [{ elementId: dependent.id, nodeId: landing.endpoint, endpoint: landing.endpoint }], source: { kind: "line", elementId: source.id } }];
+      const validSource = sourceReference.kind === "path-segment"
+        ? source?.type === "path" && !source.closed && source.segments.some((segment) => segment.id === sourceReference.segmentId)
+        : source?.type === "line";
+      if (dependent?.type !== "line" || !validSource || after.constraints?.some((constraint) => constraint.id === constraintId)) return [];
+      return [{ id: constraintId, kind: "line-endpoint-midpoint", references: [{ elementId: dependent.id, nodeId: landing.endpoint, endpoint: landing.endpoint }], source: sourceReference.kind === "path-segment"
+        ? { kind: "path-segment", elementId: sourceReference.elementId, segmentId: sourceReference.segmentId }
+        : { kind: "line", elementId: sourceReference.elementId } }];
     });
   };
 

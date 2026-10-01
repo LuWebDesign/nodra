@@ -101,7 +101,11 @@ const withoutDanglingDocumentConstraints = (document: DocumentSnapshot, elements
       const dependent = constraint.references[0]!;
       const target = elementsById.get(dependent.elementId);
       const source = elementsById.get(constraint.source.elementId);
-      return target?.type === "line" && source?.type === "line";
+      if (target?.type !== "line") return false;
+      if (constraint.source.kind === "line") return source?.type === "line";
+      const sourceReference = constraint.source;
+      if (source?.type !== "path" || source.closed || !source.segments.some((segment) => segment.id === sourceReference.segmentId)) return false;
+      try { return halfArcLengthMidpoint(pathSegmentToCurve(source, sourceReference.segmentId).curve) !== undefined; } catch { return false; }
     }
     if (!("source" in constraint)) return true;
     const sourceReference = constraint.source;
@@ -260,12 +264,20 @@ const projectLineEndpointMidpoints = (document: DocumentSnapshot, elements: read
     const targetIndex = projected.findIndex((element) => element.id === dependentReference.elementId);
     const source = projected.find((element) => element.id === relation.source.elementId);
     const dependent = projected[targetIndex];
-    if (!source || source.type !== "line" || !dependent || dependent.type !== "line") return "Line endpoint midpoint references unsupported geometry";
+    if (!source || !dependent || dependent.type !== "line") return "Line endpoint midpoint references unsupported geometry";
     if (!document.layers.find((layer) => layer.id === source.layerId)?.visible) return "Line endpoint midpoint source must be visible";
-    let start: PointMm; let end: PointMm;
-    try { ({ start, end } = lineElementToCurve(source).curve); } catch { return "Line endpoint midpoint source is invalid"; }
-    if (![start.x, start.y, end.x, end.y].every(Number.isFinite) || start.x === end.x && start.y === end.y) return "Line endpoint midpoint source must be non-degenerate";
-    const midpoint = { x: start.x / 2 + end.x / 2, y: start.y / 2 + end.y / 2 };
+    let midpoint: PointMm;
+    if (relation.source.kind === "line") {
+      if (source.type !== "line") return "Line endpoint midpoint source must be a Line";
+      let start: PointMm; let end: PointMm;
+      try { ({ start, end } = lineElementToCurve(source).curve); } catch { return "Line endpoint midpoint source is invalid"; }
+      if (![start.x, start.y, end.x, end.y].every(Number.isFinite) || start.x === end.x && start.y === end.y) return "Line endpoint midpoint source must be non-degenerate";
+      midpoint = { x: start.x / 2 + end.x / 2, y: start.y / 2 + end.y / 2 };
+    } else {
+      if (source.type !== "path" || source.closed) return "Line endpoint midpoint Path source must be open";
+      try { midpoint = halfArcLengthMidpoint(pathSegmentToCurve(source, relation.source.segmentId).curve)!; } catch { return "Line endpoint midpoint Path segment is invalid"; }
+      if (!midpoint) return "Line endpoint midpoint Path segment is non-degenerate";
+    }
     const updated = setLineVisualEndpoint(dependent, dependentReference.endpoint, midpoint);
     if (!updated) return "Line endpoint midpoint dependent endpoint cannot be represented";
     projected[targetIndex] = updated;

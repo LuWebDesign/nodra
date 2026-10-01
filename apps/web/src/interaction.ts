@@ -12,11 +12,12 @@ export interface LineEndpointMidpointLanding {
   readonly dependentLineId: ElementId;
   readonly endpoint: "start" | "end";
   readonly sourceLineId: ElementId;
+  readonly source: Curve2DSource;
   readonly midpoint: PointMm;
   readonly distancePx: number;
 }
 
-/** Finds a unique native-Line midpoint landing after applying the proposed move. */
+/** Finds a unique visible native-Line or open-Path-segment midpoint landing after applying the proposed move. */
 export function pickLineEndpointMidpointLanding(document: DocumentSnapshot, dependentLineId: ElementId, zoom: number, endpoint?: "start" | "end", priorityTarget?: PointMm, tolerancePx = 8): LineEndpointMidpointLanding | undefined {
   if (![zoom, tolerancePx].every(Number.isFinite) || zoom <= 0 || tolerancePx < 0) throw new Error("line midpoint landing zoom and tolerance must be valid");
   if (priorityTarget && ![priorityTarget.x, priorityTarget.y].every(Number.isFinite)) return undefined;
@@ -29,18 +30,26 @@ export function pickLineEndpointMidpointLanding(document: DocumentSnapshot, depe
   if (![dependentCurve.start.x, dependentCurve.start.y, dependentCurve.end.x, dependentCurve.end.y].every(Number.isFinite)) return undefined;
   const endpoints = endpoint ? [endpoint] as const : ["start", "end"] as const;
   const candidates: LineEndpointMidpointLanding[] = [];
-  for (const source of document.elements) {
-    if (source.type !== "line" || source.id === dependent.id || !visible.has(source.layerId)) continue;
-    let sourceCurve: ReturnType<typeof lineElementToCurve>["curve"];
-    try { sourceCurve = lineElementToCurve(source).curve; } catch { continue; }
-    if (![sourceCurve.start.x, sourceCurve.start.y, sourceCurve.end.x, sourceCurve.end.y].every(Number.isFinite) || Math.hypot(sourceCurve.end.x - sourceCurve.start.x, sourceCurve.end.y - sourceCurve.start.y) <= 1e-9) continue;
-    const midpoint = { x: sourceCurve.start.x / 2 + sourceCurve.end.x / 2, y: sourceCurve.start.y / 2 + sourceCurve.end.y / 2 };
-    for (const name of endpoints) {
-      const point = dependentCurve[name]; const distancePx = Math.hypot(point.x - midpoint.x, point.y - midpoint.y) * zoom;
-      if (Number.isFinite(distancePx) && distancePx <= tolerancePx) candidates.push({ dependentLineId, endpoint: name, sourceLineId: source.id, midpoint, distancePx });
+  for (const sourceElement of document.elements) {
+    if (sourceElement.id === dependent.id || !visible.has(sourceElement.layerId)) continue;
+    let sources: ReturnType<typeof elementToCurves>;
+    try {
+      if (sourceElement.type === "line") sources = elementToCurves(sourceElement);
+      else if (sourceElement.type === "path" && !sourceElement.closed) sources = elementToCurves(sourceElement);
+      else continue;
+    } catch { continue; }
+    for (const sourced of sources) {
+      if (sourced.source.kind !== "line-element" && sourced.source.kind !== "path-segment") continue;
+      let midpoint: PointMm | undefined;
+      try { midpoint = halfArcLengthMidpoint(sourced.curve); } catch { continue; }
+      if (!midpoint || ![midpoint.x, midpoint.y].every(Number.isFinite)) continue;
+      for (const name of endpoints) {
+        const point = dependentCurve[name]; const distancePx = Math.hypot(point.x - midpoint.x, point.y - midpoint.y) * zoom;
+        if (Number.isFinite(distancePx) && distancePx <= tolerancePx) candidates.push({ dependentLineId, endpoint: name, sourceLineId: sourceElement.id, source: sourced.source, midpoint, distancePx });
+      }
     }
   }
-  candidates.sort((a, b) => a.distancePx - b.distancePx || `${a.endpoint}:${a.sourceLineId}`.localeCompare(`${b.endpoint}:${b.sourceLineId}`));
+  candidates.sort((a, b) => a.distancePx - b.distancePx || `${a.endpoint}:${a.sourceLineId}:${a.source.kind === "path-segment" ? a.source.segmentId : "line"}`.localeCompare(`${b.endpoint}:${b.sourceLineId}:${b.source.kind === "path-segment" ? b.source.segmentId : "line"}`));
   if (!candidates[0] || candidates[0].distancePx > tolerancePx || candidates[1]?.distancePx === candidates[0].distancePx) return undefined;
   const landing = candidates[0];
   if (landing && priorityTarget && (landing.midpoint.x !== priorityTarget.x || landing.midpoint.y !== priorityTarget.y)) return undefined;

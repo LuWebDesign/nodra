@@ -2,7 +2,7 @@ import { expect, test, type Locator, type Page } from "@playwright/test";
 
 type ScreenPoint = { x: number; y: number };
 type LinePoints = { start: ScreenPoint; end: ScreenPoint; midpoint: ScreenPoint };
-type StoredLineRelation = { id?: string; kind: string; references: Array<{ elementId: string }>; source?: { elementId: string } };
+type StoredLineRelation = { id?: string; kind: string; references: Array<{ elementId: string }>; source?: { kind?: string; elementId: string; segmentId?: string } };
 type StoredRevision = {
   projectId: string;
   revision: number;
@@ -51,8 +51,8 @@ async function drawNativeLine(page: Page, start: ScreenPoint, end: ScreenPoint, 
   await expect.poll(async () => await canvas.getAttribute("data-document-element-ids")).not.toBe(beforeIds);
 }
 
-async function waitForDurableRelation(page: Page, revision: number, sourceId: string, dependentId: string) {
-  await expect.poll(async () => page.evaluate(({ revision, sourceId, dependentId }) => new Promise<boolean>((resolve, reject) => {
+async function waitForDurableRelation(page: Page, revision: number, sourceId: string, dependentId: string, sourceKind: "line" | "path-segment" = "line") {
+  await expect.poll(async () => page.evaluate(({ revision, sourceId, dependentId, sourceKind }) => new Promise<boolean>((resolve, reject) => {
     const request = indexedDB.open("nodra-persistence");
     request.onerror = () => reject(request.error);
     request.onsuccess = () => {
@@ -67,7 +67,8 @@ async function waitForDurableRelation(page: Page, revision: number, sourceId: st
           const hasBothLines = elements.some((element) => element.id === sourceId) && elements.some((element) => element.id === dependentId);
           const relation = constraints.find((constraint) => constraint.kind === "line-endpoint-midpoint"
             && constraint.references.some((reference) => reference.elementId === dependentId)
-            && constraint.source?.elementId === sourceId);
+            && constraint.source?.elementId === sourceId
+            && (sourceKind === "line" ? constraint.source.kind !== "path-segment" : constraint.source.kind === "path-segment" && typeof constraint.source.segmentId === "string" && constraint.source.segmentId.length > 0));
           if (!hasBothLines) return [];
           return [{ row, hasRelation: relation !== undefined, relation: relation ?? null }];
         }).sort((a, b) => b.row.savedAt - a.row.savedAt || b.row.revision - a.row.revision);
@@ -77,7 +78,7 @@ async function waitForDurableRelation(page: Page, revision: number, sourceId: st
         resolve(durable);
       };
     };
-  }), { revision, sourceId, dependentId }), { timeout: 10000 }).toBe(true);
+  }), { revision, sourceId, dependentId, sourceKind }), { timeout: 10000 }).toBe(true);
 }
 
 
@@ -272,6 +273,102 @@ test("Forma endpoint drag creates a persistent driving midpoint relation", async
   await expect.poll(async () => {
     const [movedSource, movedDependent] = await Promise.all([screenPoints(source), screenPoints(dependent)]);
     return Math.hypot(movedDependent.start.x - movedSource.midpoint.x, movedDependent.start.y - movedSource.midpoint.y);
+  }).toBeLessThanOrEqual(8);
+});
+
+test("F4b-P Forma endpoint drag attaches an independent Line to a stable open-Path segment midpoint", async ({ page }) => {
+  await createProjectAndPiece(page, "F4b-P");
+  const bounds = await page.locator(".page").boundingBox();
+  expect(bounds).not.toBeNull();
+  const pathStart = { x: bounds!.x + 110, y: bounds!.y + 130 };
+  const pathEnd = { x: pathStart.x + 150, y: pathStart.y + 20 };
+  await page.getByRole("button", { name: "Pluma", exact: true }).click();
+  await page.mouse.click(pathStart.x, pathStart.y);
+  await page.mouse.click(pathEnd.x, pathEnd.y);
+  const pathElement = page.locator(".page-svg svg path[data-element-id]").first();
+  await expect(pathElement).toHaveCount(1);
+  await expect(pathElement).not.toHaveAttribute("d", /Z/);
+  const pathId = await pathElement.getAttribute("data-element-id");
+  expect(pathId).toBeTruthy();
+
+  const lineStart = { x: bounds!.x + 350, y: bounds!.y + 220 };
+  const lineEnd = { x: lineStart.x + 100, y: lineStart.y + 60 };
+  await drawNativeLine(page, lineStart, lineEnd, true);
+  const dependent = page.locator(".page-svg svg g > line[data-element-id]").first();
+  const dependentId = await dependent.getAttribute("data-element-id");
+  expect(dependentId).toBeTruthy();
+  const segmentMidpoint = await pathElement.evaluate((element) => {
+    const path = element as SVGPathElement;
+    const matrix = path.getScreenCTM();
+    if (!matrix) throw new Error("Path has no screen transform");
+    const point = path.getPointAtLength(path.getTotalLength() / 2);
+    const screen = new DOMPoint(point.x, point.y).matrixTransform(matrix);
+    return { x: screen.x, y: screen.y };
+  });
+  const dependentPoints = await screenPoints(dependent);
+  await page.getByRole("button", { name: "Forma", exact: true }).click();
+  await page.mouse.move(dependentPoints.start.x, dependentPoints.start.y);
+  await page.mouse.down();
+  await page.mouse.move(segmentMidpoint.x, segmentMidpoint.y, { steps: 8 });
+  await page.mouse.up();
+  await expect.poll(async () => {
+    const landed = await screenPoints(dependent);
+    return Math.hypot(landed.start.x - segmentMidpoint.x, landed.start.y - segmentMidpoint.y);
+  }).toBeLessThanOrEqual(8);
+
+  const canvas = page.locator(".page");
+  const revision = Number(await canvas.getAttribute("data-document-revision"));
+  await waitForDurableRelation(page, revision, pathId!, dependentId!, "path-segment");
+  const readSegmentId = async () => page.evaluate(({ pathId, dependentId }) => new Promise<string | null>((resolve, reject) => {
+    const request = indexedDB.open("nodra-persistence");
+    request.onerror = () => reject(request.error);
+    request.onsuccess = () => {
+      const db = request.result;
+      const read = db.transaction("revisions", "readonly").objectStore("revisions").getAll();
+      read.onerror = () => reject(read.error);
+      read.onsuccess = () => {
+        const rows = read.result as StoredRevision[];
+        const relations = rows.flatMap((row) => [...(row.document.constraints ?? []), ...(row.document.pages ?? []).flatMap((documentPage) => documentPage.constraints ?? [])])
+          .filter((relation) => relation.kind === "line-endpoint-midpoint" && relation.references.some((reference) => reference.elementId === dependentId) && relation.source?.kind === "path-segment" && relation.source.elementId === pathId);
+        db.close();
+        resolve(relations.at(-1)?.source?.segmentId ?? null);
+      };
+    };
+  }), { pathId, dependentId });
+  const segmentId = await readSegmentId();
+  expect(segmentId, "Durable relation must address a stable Path segment").toBeTruthy();
+
+  await page.reload();
+  const reloadedPath = page.locator(`.page-svg svg path[data-element-id="${pathId}"]`);
+  const reloadedDependent = page.locator(`.page-svg svg g > line[data-element-id="${dependentId}"]`);
+  await expect(reloadedPath).toHaveCount(1);
+  await expect(reloadedDependent).toHaveCount(1);
+  await expect.poll(readSegmentId).toBe(segmentId);
+  const pathScreenPoints = async () => reloadedPath.evaluate((element) => {
+    const path = element as SVGPathElement;
+    const matrix = path.getScreenCTM();
+    if (!matrix) throw new Error("Path has no screen transform");
+    const point = (fraction: number) => {
+      const local = path.getPointAtLength(path.getTotalLength() * fraction);
+      const screen = new DOMPoint(local.x, local.y).matrixTransform(matrix);
+      return { x: screen.x, y: screen.y };
+    };
+    return { start: point(0), end: point(1), midpoint: point(0.5), body: point(0.35) };
+  });
+  const beforeMove = await pathScreenPoints();
+  const hitPoint = beforeMove.body;
+  await page.getByRole("button", { name: "Seleccion", exact: true }).click();
+  await page.mouse.move(hitPoint.x, hitPoint.y);
+  await page.mouse.down();
+  await page.mouse.move(hitPoint.x + 35, hitPoint.y + 30, { steps: 8 });
+  await page.mouse.up();
+  await expect.poll(async () => {
+    const after = await pathScreenPoints();
+    return Math.hypot(after.start.x - beforeMove.start.x, after.start.y - beforeMove.start.y);
+  }).toBeGreaterThan(1);
+  await expect.poll(async () => {
+    const [movedPath, movedDependent] = await Promise.all([pathScreenPoints(), screenPoints(reloadedDependent)]);
+    return Math.hypot(movedDependent.start.x - movedPath.midpoint.x, movedDependent.start.y - movedPath.midpoint.y);
   }).toBeLessThanOrEqual(8);
 });
 

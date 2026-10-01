@@ -291,6 +291,14 @@ describe("native document validation", () => {
     expect(validateDocument({ ...base, layers: [{ ...base.layers[0]!, visible: false }], elements: [source, dependent], constraints: [relation] }).success).toBe(false);
     expect(validateDocument({ ...base, elements: [source, { ...dependent, type: "rectangle" }], constraints: [relation] }).success).toBe(false);
     expect(validateDocument({ ...base, elements: [{ ...source, end: source.start }, dependent], constraints: [relation] }).success).toBe(false);
+
+    const path = { type: "path" as const, id: elementId("source-path"), layerId: source.layerId, nodes: [{ id: "a", anchor: { x: 0, y: 0 }, join: "corner" as const }, { id: "b", anchor: { x: 10, y: 0 }, join: "corner" as const }], segments: [{ id: "stable-segment", type: "line" as const, startNodeId: "a", endNodeId: "b" }], closed: false, style };
+    const pathRelation = { ...relation, source: { kind: "path-segment" as const, elementId: path.id, segmentId: "stable-segment" } };
+    expect(validateDocument({ ...base, elements: [path, dependent], constraints: [pathRelation] }).success).toBe(true);
+    expect(validateDocument({ ...base, elements: [{ ...path, closed: true }, dependent], constraints: [pathRelation] }).success).toBe(false);
+    expect(validateDocument({ ...base, elements: [path, dependent], constraints: [{ ...pathRelation, source: { ...pathRelation.source, segmentId: "missing" } }] }).success).toBe(false);
+    expect(validateDocument({ ...base, elements: [{ ...path, nodes: path.nodes.map((node) => ({ ...node, anchor: { x: 0, y: 0 } })) }, dependent], constraints: [pathRelation] }).success).toBe(false);
+    expect(validateDocument({ ...base, layers: [{ ...base.layers[0]!, visible: false }], elements: [path, dependent], constraints: [pathRelation] }).success).toBe(false);
   });
 
   it("round-trips valid records", () => {

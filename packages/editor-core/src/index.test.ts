@@ -389,6 +389,25 @@ describe("editor core", () => {
     expect(deletedDependent.document.constraints).toEqual([]);
   });
 
+  it("projects native Line endpoints to open Path segment midpoints and cleans invalidated sources", () => {
+    const source: PathElement = { ...path, id: elementId("endpoint-path-source"), nodes: [{ id: "pa", anchor: { x: 0, y: 0 }, join: "corner" }, { id: "pb", anchor: { x: 10, y: 0 }, join: "corner" }, { id: "pc", anchor: { x: 20, y: 0 }, join: "corner" }], segments: [{ id: "stable-path-segment", type: "cubicBezier", startNodeId: "pa", endNodeId: "pb", control1: { x: 0, y: 10 }, control2: { x: 10, y: 10 } }, { id: "following-segment", type: "line", startNodeId: "pb", endNodeId: "pc" }] };
+    const dependent: LineElement = { type: "line", id: elementId("endpoint-path-dependent"), layerId: rectangle.layerId, start: { x: 20, y: 20 }, end: { x: 30, y: 20 }, rotation: 0, style: rectangle.style };
+    const relation = { id: "endpoint-path-midpoint", kind: "line-endpoint-midpoint" as const, references: [{ elementId: dependent.id, nodeId: "start" as const, endpoint: "start" as const }] as const, source: { kind: "path-segment" as const, elementId: source.id, segmentId: "stable-path-segment" } };
+    const initial = dispatch(createEditor({ ...document, elements: [source, dependent] }), addDocumentConstraint(relation));
+    const midpoint = halfArcLengthMidpoint(pathSegmentToCurve(source, "stable-path-segment").curve)!;
+    const endpoint = (state: typeof initial) => lineElementToCurve(state.document.elements.find((element): element is LineElement => element.id === dependent.id && element.type === "line")!).curve.start;
+    expect(endpoint(initial).x).toBeCloseTo(midpoint.x); expect(endpoint(initial).y).toBeCloseTo(midpoint.y);
+    const moved = dispatch(initial, moveElement(source.id, { x: 4, y: 6 }));
+    const movedPath = moved.document.elements.find((element): element is PathElement => element.id === source.id && element.type === "path")!;
+    const movedMidpoint = halfArcLengthMidpoint(pathSegmentToCurve(movedPath, "stable-path-segment").curve)!;
+    expect(endpoint(moved).x).toBeCloseTo(movedMidpoint.x); expect(endpoint(moved).y).toBeCloseTo(movedMidpoint.y);
+    expect(undo(moved).document).toEqual(initial.document); expect(redo(undo(moved)).document).toEqual(moved.document);
+    const deletedSegment = dispatch(moved, splitPathSegment(source.id, 0));
+    expect(deletedSegment.document.constraints).toEqual([]);
+    const closedPath = dispatch(moved, closePath(source.id));
+    expect(closedPath.document.constraints).toEqual([]);
+  });
+
   it("reprojects endpoint midpoint dependents after mixed native-Line and sketch moves", () => {
     const source: LineElement = { type: "line", id: elementId("mixed-endpoint-source"), layerId: rectangle.layerId, start: { x: 0, y: 0 }, end: { x: 10, y: 0 }, rotation: 0, style: rectangle.style };
     const dependent: LineElement = { ...source, id: elementId("mixed-endpoint-dependent"), start: { x: 20, y: 20 }, end: { x: 30, y: 20 } };

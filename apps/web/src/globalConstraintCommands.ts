@@ -91,7 +91,9 @@ const sourceIsVisible = (before: DocumentSnapshot, after: DocumentSnapshot, cons
   if (!source || !layer?.visible) return false;
   if (constraint.kind === "line-endpoint-midpoint") {
     const dependent = after.elements.find((element) => element.id === constraint.references[0]!.elementId);
-    return dependent?.type === "line" && source.type === "line";
+    if (dependent?.type !== "line") return false;
+    if (reference.kind === "line") return source.type === "line";
+    return reference.kind === "path-segment" && source.type === "path" && !source.closed && source.segments.some((segment) => segment.id === reference.segmentId);
   }
   if (reference.kind === "line") return source.type === "line";
   if (reference.kind === "arc") return source.type === "arc";

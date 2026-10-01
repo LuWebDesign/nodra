@@ -119,7 +119,7 @@ const sketchEdgeReference = z.object({ elementId: nonEmptyId, edgeId: nonEmptyId
 const sketchConstraintReference = z.union([sketchPointReference, sketchEdgeReference]);
 const sketchConstraint = z.object({ id: nonEmptyId, kind: z.enum(["horizontal", "vertical", "coincident", "parallel", "perpendicular", "equal", "distance-horizontal", "distance-vertical", "distance", "angle", "fixed", "midpoint"]), references: z.array(sketchConstraintReference).min(1).max(4), value: finite.positive().optional() }).strict();
 const nativeLineMidpointConstraint = z.object({ id: nonEmptyId, kind: z.literal("midpoint"), references: z.tuple([sketchPointReference]), source: z.discriminatedUnion("kind", [z.object({ kind: z.literal("line"), elementId: nonEmptyId }).strict(), z.object({ kind: z.literal("path-segment"), elementId: nonEmptyId, segmentId: nonEmptyId }).strict(), z.object({ kind: z.literal("spline-span"), elementId: nonEmptyId, startNodeId: nonEmptyId, endNodeId: nonEmptyId }).strict(), z.object({ kind: z.literal("arc"), elementId: nonEmptyId }).strict()]) }).strict();
-const lineEndpointMidpointConstraint = z.object({ id: nonEmptyId, kind: z.literal("line-endpoint-midpoint"), references: z.tuple([z.object({ elementId: nonEmptyId, nodeId: z.enum(["start", "end"]), endpoint: z.enum(["start", "end"]) }).strict()]), source: z.object({ kind: z.literal("line"), elementId: nonEmptyId }).strict() }).strict();
+const lineEndpointMidpointConstraint = z.object({ id: nonEmptyId, kind: z.literal("line-endpoint-midpoint"), references: z.tuple([z.object({ elementId: nonEmptyId, nodeId: z.enum(["start", "end"]), endpoint: z.enum(["start", "end"]) }).strict()]), source: z.discriminatedUnion("kind", [z.object({ kind: z.literal("line"), elementId: nonEmptyId }).strict(), z.object({ kind: z.literal("path-segment"), elementId: nonEmptyId, segmentId: nonEmptyId }).strict()]) }).strict();
 const documentConstraint = z.union([lineEndpointMidpointConstraint, nativeLineMidpointConstraint, sketchConstraint]);
 const sketch = z.object({ id: nonEmptyId, layerId: nonEmptyId, ...pieceOwnership, role: geometryRole, type: z.literal("sketch"), nodes: z.array(sketchNode).min(2), edges: z.array(sketchEdge).min(1), constraints: z.array(sketchConstraint).optional(), style, operation: operation.optional() }).strict().superRefine((value, ctx) => {
   const nodeIds = value.nodes.map((node) => node.id); const edgeIds = value.edges.map((edge) => edge.id);
@@ -312,8 +312,19 @@ export const validateDocumentConstraints = (elements: readonly z.infer<typeof el
       const source = elements.find((element) => element.id === constraint.source.elementId);
       const target = elements.find((element) => element.id === dependent.elementId);
       if (!target || target.type !== "line") ctx.addIssue({ code: "custom", message: "Endpoint midpoint dependent must identify a native Line", path: [...path, index, "references", 0] });
-      if (!source || source.type !== "line") ctx.addIssue({ code: "custom", message: "Endpoint midpoint source must identify a native Line", path: [...path, index, "source"] });
-      else if (!nativeLineHasFiniteDistinctVisualEndpoints(source)) ctx.addIssue({ code: "custom", message: "Endpoint midpoint source line must have finite, distinct visual endpoints", path: [...path, index, "source"] });
+      if (constraint.source.kind === "line") {
+        if (!source || source.type !== "line") ctx.addIssue({ code: "custom", message: "Endpoint midpoint source must identify a native Line", path: [...path, index, "source"] });
+        else if (!nativeLineHasFiniteDistinctVisualEndpoints(source)) ctx.addIssue({ code: "custom", message: "Endpoint midpoint source line must have finite, distinct visual endpoints", path: [...path, index, "source"] });
+      } else if (!source || source.type !== "path") ctx.addIssue({ code: "custom", message: "Endpoint midpoint source must identify an existing Path", path: [...path, index, "source"] });
+      else if (source.closed) ctx.addIssue({ code: "custom", message: "Endpoint midpoint Path source must be open", path: [...path, index, "source"] });
+      else {
+        const sourceReference = constraint.source;
+        const segment = source.segments.find((candidate) => candidate.id === sourceReference.segmentId);
+        const nodes = new Map(source.nodes.map((node) => [node.id, node.anchor]));
+        const start = segment ? nodes.get(segment.startNodeId) : undefined; const end = segment ? nodes.get(segment.endNodeId) : undefined;
+        if (!segment || !start || !end) ctx.addIssue({ code: "custom", message: "Endpoint midpoint Path segment does not exist", path: [...path, index, "source", "segmentId"] });
+        else if (!pathSegmentHasFiniteExecutableLength(segment, start, end)) ctx.addIssue({ code: "custom", message: "Endpoint midpoint Path segment must have finite, non-degenerate length", path: [...path, index, "source", "segmentId"] });
+      }
       if (source && target && source.id === target.id) ctx.addIssue({ code: "custom", message: "Endpoint midpoint source and dependent Lines must differ", path: [...path, index] });
       return;
     }
@@ -513,7 +524,7 @@ const documentSchema = z.object({ schemaVersion: z.literal(CURRENT_SCHEMA_VERSIO
     if (constraint.kind !== "line-endpoint-midpoint") return;
     const source = value.elements.find((element) => element.id === constraint.source.elementId);
     const layer = source && value.layers.find((candidate) => candidate.id === source.layerId);
-    if (layer && !layer.visible) ctx.addIssue({ code: "custom", message: "Endpoint midpoint source Line must be visible", path: ["constraints", index, "source"] });
+    if (layer && !layer.visible) ctx.addIssue({ code: "custom", message: "Endpoint midpoint source must be visible", path: ["constraints", index, "source"] });
   });
   validateConnections(value.elements, value.connections, ctx, ["connections"]);
   validateConnections(value.elements, value.positionalCoincidences ?? [], ctx, ["positionalCoincidences"], true);

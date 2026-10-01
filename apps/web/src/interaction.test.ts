@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createDocument, elementId, layerId, type DocumentSnapshot } from "@nodra/domain";
+import { createDocument, elementId, layerId, type DocumentSnapshot, type Element } from "@nodra/domain";
 import { validateDocument } from "@nodra/validation";
 import { canActivateRotation, circleGeometry, centerPageInCanvas, clientPointToCanvas, clientPointToPage, creationGuides, directionalGuide, resolveLineInference, hasNonCollinearPoints, hoveredSelectionCenter, INITIAL_ZOOM, isDrawingTool, marqueeSelection, MAX_ZOOM, MIN_ZOOM, movementExceedsThreshold, nodeAlignmentGuides, normalizeBounds, normalizeDrag, pagePointToScreen, screenDeltaToMm, screenPointToMm, viewportPointToCanvas, containsBounds, elementsContainedBy, pickDimensionTarget, pickElement, pickFormaElement, pickFormaNode, pickFormaSegment, pickHoverNode, pickCutIntervalPreview, pickCuttableSegment, pickNode, pickOpenEdgeMidpointHover, pickLineEndpointMidpointLanding, pointerDownIntent, selectedNodeAnchor, selectionCenter, selectionFrame, snapCreationPoint, snapMoveDelta, visibleEditablePathNodeIndexes, visibleNativeCircularCenters, zoomAtPoint } from "./interaction.js";
 import { geometryPatch, geometryValue } from "./propertyBar.js";
@@ -59,7 +59,7 @@ describe("native Line endpoint midpoint landing", () => {
   const style = { stroke: "#000", strokeWidth: 1 };
   const dependent = { type: "line" as const, id: elementId("dependent-line"), layerId: layer.id, start: { x: 10, y: 1 }, end: { x: 30, y: 1 }, rotation: 0, style };
   const source = { ...dependent, id: elementId("source-line"), start: { x: 0, y: 0 }, end: { x: 20, y: 0 } };
-  const doc = (elements = [dependent, source], layers = [layer]) => ({ ...createDocument("line-landing", layers), elements });
+  const doc = (elements: readonly Element[] = [dependent, source], layers = [layer]) => ({ ...createDocument("line-landing", layers), elements });
 
   it("selects the unique nearest endpoint/source pair within eight screen pixels", () => {
     expect(pickLineEndpointMidpointLanding(doc(), dependent.id, 1)).toMatchObject({ dependentLineId: dependent.id, endpoint: "start", sourceLineId: source.id, midpoint: { x: 10, y: 0 }, distancePx: 1 });
@@ -70,6 +70,14 @@ describe("native Line endpoint midpoint landing", () => {
     const candidate = doc([{ ...dependent, start: { x: 10, y: 1 } }, source, otherNode]);
     expect(pickLineEndpointMidpointLanding(candidate, dependent.id, 1, "start", { x: 10, y: 2 })).toBeUndefined();
     expect(pickLineEndpointMidpointLanding(candidate, dependent.id, 1, "start", undefined)).toMatchObject({ sourceLineId: source.id });
+  });
+
+  it("lands on a visible open Path segment midpoint with stable segment identity", () => {
+    const path = { type: "path" as const, id: elementId("source-path"), layerId: layer.id, nodes: [{ id: "a", anchor: { x: 0, y: 0 }, join: "corner" as const }, { id: "b", anchor: { x: 20, y: 0 }, join: "corner" as const }], segments: [{ id: "stable-segment", type: "line" as const, startNodeId: "a", endNodeId: "b" }], closed: false, style };
+    expect(pickLineEndpointMidpointLanding(doc([dependent, path]), dependent.id, 1)).toMatchObject({ sourceLineId: path.id, source: { kind: "path-segment", elementId: path.id, segmentId: "stable-segment" }, endpoint: "start", midpoint: { x: 10, y: 0 } });
+    expect(pickLineEndpointMidpointLanding(doc([dependent, { ...path, closed: true }]), dependent.id, 1)).toBeUndefined();
+    const hidden = { ...layer, id: layerId("hidden-path-layer"), visible: false };
+    expect(pickLineEndpointMidpointLanding(doc([dependent, { ...path, layerId: hidden.id }], [layer, hidden]), dependent.id, 1)).toBeUndefined();
   });
 
   it("uses visually rotated endpoints and honors source and dependent flips", () => {
