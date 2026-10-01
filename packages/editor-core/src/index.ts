@@ -103,6 +103,11 @@ const withoutDanglingDocumentConstraints = (document: DocumentSnapshot, elements
       const source = elementsById.get(constraint.source.elementId);
       if (target?.type !== "line") return false;
       if (constraint.source.kind === "line") return source?.type === "line";
+      if (constraint.source.kind === "sketch-edge") return source?.type === "sketch" && source.edges.some((edge) => edge.id === ("edgeId" in constraint.source ? constraint.source.edgeId : ""));
+      if (constraint.source.kind === "arc") {
+        if (source?.type !== "arc") return false;
+        try { return halfArcLengthMidpoint(arcElementToCurve(source).curve) !== undefined; } catch { return false; }
+      }
       const sourceReference = constraint.source;
       if (sourceReference.kind === "spline-span") {
         if (source?.type !== "spline" || source.closed) return false;
@@ -262,7 +267,7 @@ const changedIntersectOutput = (document: DocumentSnapshot, elements: readonly E
   const after = new Map(elements.map((element) => [element.id, element]));
   return document.featureTree?.features.find((feature) => feature.operation === "intersect" && feature.outputs.some((output) => stableJson(document.elements.find((element) => element.id === output.elementId)) !== stableJson(after.get(output.elementId))))?.id;
 };
-const projectLineEndpointMidpoints = (document: DocumentSnapshot, elements: readonly Element[]): readonly Element[] | string => {
+const projectLineEndpointMidpoints = (document: DocumentSnapshot, elements: readonly Element[], deferSketchEdge = false): readonly Element[] | string => {
   const relations = (document.constraints ?? []).filter((constraint) => constraint.kind === "line-endpoint-midpoint");
   if (!relations.length) return elements;
   const projected = [...elements];
@@ -279,6 +284,18 @@ const projectLineEndpointMidpoints = (document: DocumentSnapshot, elements: read
       let start: PointMm; let end: PointMm;
       try { ({ start, end } = lineElementToCurve(source).curve); } catch { return "Line endpoint midpoint source is invalid"; }
       if (![start.x, start.y, end.x, end.y].every(Number.isFinite) || start.x === end.x && start.y === end.y) return "Line endpoint midpoint source must be non-degenerate";
+      midpoint = { x: start.x / 2 + end.x / 2, y: start.y / 2 + end.y / 2 };
+    } else if (relation.source.kind === "arc") {
+      if (source.type !== "arc") return "Line endpoint midpoint source must be an Arc";
+      try { midpoint = halfArcLengthMidpoint(arcElementToCurve(source).curve)!; } catch { return "Line endpoint midpoint Arc is invalid"; }
+      if (!midpoint || ![midpoint.x, midpoint.y].every(Number.isFinite)) return "Line endpoint midpoint Arc is non-executable";
+    } else if (relation.source.kind === "sketch-edge") {
+      if (deferSketchEdge) continue;
+      if (source.type !== "sketch") return "Line endpoint midpoint source must be a Sketch";
+      const edge = source.edges.find((candidate) => candidate.id === ("edgeId" in relation.source ? relation.source.edgeId : ""));
+      const start = edge && source.nodes.find((node) => node.id === edge.startNodeId)?.point;
+      const end = edge && source.nodes.find((node) => node.id === edge.endNodeId)?.point;
+      if (!start || !end || ![start.x, start.y, end.x, end.y].every(Number.isFinite) || start.x === end.x && start.y === end.y) return "Line endpoint midpoint Sketch edge is invalid or degenerate";
       midpoint = { x: start.x / 2 + end.x / 2, y: start.y / 2 + end.y / 2 };
     } else if (relation.source.kind === "spline-span") {
       if (source.type !== "spline" || source.closed) return "Line endpoint midpoint Spline source must be open";
@@ -306,11 +323,12 @@ const replaceElements = (document: DocumentSnapshot, elements: readonly Element[
   const enforcedOutputEdit = changedIntersectOutput(document, enforced);
   if (enforcedOutputEdit) return { success: false, error: `Intersect output is derived and cannot be edited directly: ${enforcedOutputEdit}` };
   const cleaned = withoutDanglingDocumentConstraints(document, enforced);
-  const projected = projectLineEndpointMidpoints(cleaned, enforced);
+  const hasKernelDrivenSource = (cleaned.constraints ?? []).some((constraint) => constraint.kind === "midpoint" && "source" in constraint || constraint.kind === "line-endpoint-midpoint" && constraint.source.kind === "sketch-edge");
+  const projected = projectLineEndpointMidpoints(cleaned, enforced, hasKernelDrivenSource);
   if (typeof projected === "string") return { success: false, error: projected };
   const rebuilt = rebuildAffectedIntersectFeatures(document, projected, cleaned);
   if (!rebuilt.success) return rebuilt;
-  if ((rebuilt.document.constraints ?? []).some((constraint) => constraint.kind === "midpoint" && "source" in constraint)) {
+  if ((rebuilt.document.constraints ?? []).some((constraint) => constraint.kind === "midpoint" && "source" in constraint || constraint.kind === "line-endpoint-midpoint" && constraint.source.kind === "sketch-edge")) {
     const recomputed = recomputeSketchKernel(rebuilt.document);
     if (!recomputed.committed) return { success: false, error: "Document constraints are in conflict", diagnostics: kernelDiagnostics(recomputed) };
     const projectedAfterSolve = projectLineEndpointMidpoints(recomputed.document, recomputed.document.elements);
@@ -601,18 +619,22 @@ const sameDocumentConstraintSource = (first: DocumentConstraint, second: Documen
   if (first.source.kind !== second.source.kind || first.source.elementId !== second.source.elementId) return false;
   if (first.source.kind === "line" || first.source.kind === "arc") return true;
   if (first.source.kind === "path-segment") return second.source.kind === "path-segment" && first.source.segmentId === second.source.segmentId;
+  if (first.source.kind === "sketch-edge") return second.source.kind === "sketch-edge" && first.source.edgeId === second.source.edgeId;
   return second.source.kind === "spline-span" && first.source.startNodeId === second.source.startNodeId && first.source.endNodeId === second.source.endNodeId;
 };
 const documentConstraintsEqual = (first: DocumentConstraint, second: DocumentConstraint): boolean => first.id === second.id && first.kind === second.kind && ("value" in first ? first.value : undefined) === ("value" in second ? second.value : undefined) && first.references.length === second.references.length && first.references.every((reference, index) => constraintReferenceKey(reference) === (second.references[index] ? constraintReferenceKey(second.references[index]!) : undefined)) && sameDocumentConstraintSource(first, second);
 const replaceDocumentConstraints = (document: DocumentSnapshot, constraints: readonly DocumentConstraint[]): CommandResult => {
   const candidate = { ...document, revision: nextRevision(document.revision), ...(constraints.length || document.constraints ? { constraints: [...constraints] } : {}) };
-  const projected = projectLineEndpointMidpoints(candidate, candidate.elements);
+  const requiresKernel = constraints.some((constraint) => constraint.kind === "midpoint" || constraint.kind === "line-endpoint-midpoint" && constraint.source.kind === "sketch-edge");
+  const projected = projectLineEndpointMidpoints(candidate, candidate.elements, requiresKernel);
   if (typeof projected === "string") return { success: false, error: projected };
   const projectedDocument = { ...candidate, elements: projected };
-  if (!constraints.some((constraint) => constraint.kind === "midpoint")) return result(projectedDocument);
+  if (!requiresKernel) return result(projectedDocument);
   const recomputed = recomputeSketchKernel(projectedDocument);
   if (!recomputed.committed) return { success: false, error: "Document constraints are in conflict", diagnostics: kernelDiagnostics(recomputed) };
-  return result(recomputed.document);
+  const afterSolve = projectLineEndpointMidpoints(recomputed.document, recomputed.document.elements);
+  if (typeof afterSolve === "string") return { success: false, error: afterSolve };
+  return result(withElements({ ...recomputed.document, elements: afterSolve }, afterSolve));
 };
 
 export const addDocumentConstraint = (constraint: DocumentConstraint): EditorCommand => ({
