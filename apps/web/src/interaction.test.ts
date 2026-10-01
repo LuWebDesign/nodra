@@ -80,6 +80,13 @@ describe("native Line endpoint midpoint landing", () => {
     expect(pickLineEndpointMidpointLanding(doc([dependent, { ...path, layerId: hidden.id }], [layer, hidden]), dependent.id, 1)).toBeUndefined();
   });
 
+  it("lands on a stable Sketch edge, including an edge in a closed sketch", () => {
+    const sketch = { type: "sketch" as const, id: elementId("source-sketch"), layerId: layer.id, nodes: [{ id: "n0", point: { x: 0, y: 0 } }, { id: "n1", point: { x: 20, y: 0 } }, { id: "n2", point: { x: 20, y: 20 } }], edges: [{ id: "stable-edge", startNodeId: "n0", endNodeId: "n1" }, { id: "other-edge", startNodeId: "n1", endNodeId: "n2" }, { id: "closing-edge", startNodeId: "n2", endNodeId: "n0" }], style };
+    expect(pickLineEndpointMidpointLanding(doc([dependent, sketch]), dependent.id, 1)).toMatchObject({ sourceLineId: sketch.id, source: { kind: "sketch-edge", elementId: sketch.id, edgeId: "stable-edge" }, endpoint: "start", midpoint: { x: 10, y: 0 } });
+    const hidden = { ...layer, id: layerId("hidden-sketch-layer"), visible: false };
+    expect(pickLineEndpointMidpointLanding(doc([dependent, { ...sketch, layerId: hidden.id }], [layer, hidden]), dependent.id, 1)).toBeUndefined();
+  });
+
   it("lands on a visible Arc half-arc-length midpoint and rejects hidden or ambiguous candidates", () => {
     const arc = { type: "arc" as const, id: elementId("source-arc"), layerId: layer.id, center: { x: 0, y: 0 }, radius: 10, startAngle: 0, endAngle: Math.PI, direction: "counterclockwise" as const, style };
     const midpoint = { x: 0, y: -10 };

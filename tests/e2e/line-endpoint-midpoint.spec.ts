@@ -2,7 +2,7 @@ import { expect, test, type Locator, type Page } from "@playwright/test";
 
 type ScreenPoint = { x: number; y: number };
 type LinePoints = { start: ScreenPoint; end: ScreenPoint; midpoint: ScreenPoint };
-type StoredLineRelation = { id?: string; kind: string; references: Array<{ elementId: string }>; source?: { kind?: string; elementId: string; segmentId?: string; startNodeId?: string; endNodeId?: string } };
+type StoredLineRelation = { id?: string; kind: string; references: Array<{ elementId: string }>; source?: { kind?: string; elementId: string; segmentId?: string; startNodeId?: string; endNodeId?: string; edgeId?: string } };
 type StoredRevision = {
   projectId: string;
   revision: number;
@@ -51,7 +51,7 @@ async function drawNativeLine(page: Page, start: ScreenPoint, end: ScreenPoint, 
   await expect.poll(async () => await canvas.getAttribute("data-document-element-ids")).not.toBe(beforeIds);
 }
 
-async function waitForDurableRelation(page: Page, revision: number, sourceId: string, dependentId: string, sourceKind: "line" | "path-segment" | "spline-span" | "arc" = "line") {
+async function waitForDurableRelation(page: Page, revision: number, sourceId: string, dependentId: string, sourceKind: "line" | "path-segment" | "spline-span" | "arc" | "sketch-edge" = "line") {
   await expect.poll(async () => page.evaluate(({ revision, sourceId, dependentId, sourceKind }) => new Promise<boolean>((resolve, reject) => {
     const request = indexedDB.open("nodra-persistence");
     request.onerror = () => reject(request.error);
@@ -68,7 +68,7 @@ async function waitForDurableRelation(page: Page, revision: number, sourceId: st
           const relation = constraints.find((constraint) => constraint.kind === "line-endpoint-midpoint"
             && constraint.references.some((reference) => reference.elementId === dependentId)
             && constraint.source?.elementId === sourceId
-            && (sourceKind === "line" ? constraint.source.kind === "line" : sourceKind === "path-segment" ? constraint.source.kind === "path-segment" && typeof constraint.source.segmentId === "string" && constraint.source.segmentId.length > 0 : sourceKind === "spline-span" ? constraint.source.kind === "spline-span" && typeof constraint.source.startNodeId === "string" && typeof constraint.source.endNodeId === "string" : constraint.source.kind === "arc"));
+            && (sourceKind === "line" ? constraint.source.kind === "line" : sourceKind === "path-segment" ? constraint.source.kind === "path-segment" && typeof constraint.source.segmentId === "string" && constraint.source.segmentId.length > 0 : sourceKind === "spline-span" ? constraint.source.kind === "spline-span" && typeof constraint.source.startNodeId === "string" && typeof constraint.source.endNodeId === "string" : sourceKind === "sketch-edge" ? constraint.source.kind === "sketch-edge" && typeof constraint.source.edgeId === "string" && constraint.source.edgeId.length > 0 : constraint.source.kind === "arc"));
           if (!hasBothLines) return [];
           return [{ row, hasRelation: relation !== undefined, relation: relation ?? null }];
         }).sort((a, b) => b.row.savedAt - a.row.savedAt || b.row.revision - a.row.revision);
@@ -465,6 +465,86 @@ test("Escape cancels an uncommitted Forma endpoint drag without creating a relat
   const unchangedDependent = await screenPoints(dependent);
   expect(Math.hypot(unchangedDependent.start.x - dependentBefore.start.x, unchangedDependent.start.y - dependentBefore.start.y)).toBeLessThanOrEqual(1);
   expect(Math.hypot(unchangedDependent.start.x - movedSource.midpoint.x, unchangedDependent.start.y - movedSource.midpoint.y)).toBeGreaterThan(8);
+});
+
+test("F4b-K binds a native Line endpoint to a visible Sketch edge and follows edits after reload", async ({ page }) => {
+  await createProjectAndPiece(page, "F4b-K Sketch edge");
+  const canvas = page.locator(".page");
+  const bounds = await canvas.boundingBox();
+  expect(bounds).not.toBeNull();
+  const sourceStart = { x: bounds!.x + 120, y: bounds!.y + 120 };
+  const sourceEnd = { x: sourceStart.x + 140, y: sourceStart.y + 40 };
+  await page.getByRole("button", { name: "Línea", exact: true }).click();
+  await page.mouse.click(sourceStart.x, sourceStart.y);
+  await page.mouse.click(sourceEnd.x, sourceEnd.y);
+  const sketch = page.locator('.page-svg svg g[data-sketch-element="true"]');
+  await expect(sketch).toHaveCount(1);
+  const edge = sketch.locator('line[data-sketch-edge]');
+  await expect(edge).toHaveCount(1);
+  const sourceId = await sketch.getAttribute("data-element-id");
+  const edgeId = await edge.getAttribute("data-sketch-edge");
+  expect(sourceId).toBeTruthy();
+  expect(edgeId).toBeTruthy();
+  const sourcePoints = await screenPoints(edge);
+
+  const dependentStart = { x: bounds!.x + 350, y: bounds!.y + 220 };
+  await drawNativeLine(page, dependentStart, { x: dependentStart.x + 90, y: dependentStart.y + 50 }, true);
+  const dependent = page.locator(".page-svg svg g > line[data-element-id]").first();
+  const dependentId = await dependent.getAttribute("data-element-id");
+  expect(dependentId).toBeTruthy();
+  const before = await screenPoints(dependent);
+  await page.getByRole("button", { name: "Forma", exact: true }).click();
+  await page.mouse.move(before.start.x, before.start.y);
+  await page.mouse.down();
+  await page.mouse.move(sourcePoints.midpoint.x, sourcePoints.midpoint.y, { steps: 8 });
+  await page.mouse.up();
+  await expect.poll(async () => {
+    const landed = await screenPoints(dependent);
+    return Math.hypot(landed.start.x - sourcePoints.midpoint.x, landed.start.y - sourcePoints.midpoint.y);
+  }).toBeLessThanOrEqual(8);
+  const revision = Number(await canvas.getAttribute("data-document-revision"));
+  await waitForDurableRelation(page, revision, sourceId!, dependentId!, "sketch-edge");
+  const readEdgeId = async () => page.evaluate(({ sourceId, dependentId }) => new Promise<string | null>((resolve, reject) => {
+    const request = indexedDB.open("nodra-persistence");
+    request.onerror = () => reject(request.error);
+    request.onsuccess = () => {
+      const db = request.result;
+      const read = db.transaction("revisions", "readonly").objectStore("revisions").getAll();
+      read.onerror = () => reject(read.error);
+      read.onsuccess = () => {
+        const rows = read.result as StoredRevision[];
+        const relation = rows.flatMap((row) => [...(row.document.constraints ?? []), ...(row.document.pages ?? []).flatMap((documentPage) => documentPage.constraints ?? [])])
+          .find((item) => item.kind === "line-endpoint-midpoint" && item.references.some((reference) => reference.elementId === dependentId) && item.source?.kind === "sketch-edge" && item.source.elementId === sourceId);
+        db.close();
+        resolve(relation?.source?.edgeId ?? null);
+      };
+    };
+  }), { sourceId, dependentId });
+  expect(await readEdgeId()).toBe(edgeId);
+
+  await page.getByRole("button", { name: "Deshacer" }).click();
+  await expect.poll(async () => {
+    const reverted = await screenPoints(dependent);
+    return Math.hypot(reverted.start.x - before.start.x, reverted.start.y - before.start.y);
+  }).toBeLessThanOrEqual(1);
+  await page.getByRole("button", { name: "Rehacer" }).click();
+  await page.reload();
+  const reloadedSketch = page.locator(`.page-svg svg g[data-element-id="${sourceId}"]`);
+  const reloadedDependent = page.locator(`.page-svg svg g > line[data-element-id="${dependentId}"]`);
+  await expect(reloadedSketch).toHaveCount(1);
+  await expect(reloadedDependent).toHaveCount(1);
+  await expect.poll(readEdgeId).toBe(edgeId);
+  const reloadedEdge = reloadedSketch.locator(`line[data-sketch-edge="${edgeId}"]`);
+  const prior = await screenPoints(reloadedEdge);
+  await page.getByRole("button", { name: "Forma", exact: true }).click();
+  await page.mouse.move(prior.end.x, prior.end.y);
+  await page.mouse.down();
+  await page.mouse.move(prior.end.x + 30, prior.end.y + 25, { steps: 8 });
+  await page.mouse.up();
+  await expect.poll(async () => {
+    const [nextEdge, nextDependent] = await Promise.all([screenPoints(reloadedEdge), screenPoints(reloadedDependent)]);
+    return Math.hypot(nextDependent.start.x - nextEdge.midpoint.x, nextDependent.start.y - nextEdge.midpoint.y);
+  }).toBeLessThanOrEqual(8);
 });
 
 test("F4b-A binds a Line endpoint to a persisted native Arc midpoint and follows Arc movement after reload", async ({ page }) => {

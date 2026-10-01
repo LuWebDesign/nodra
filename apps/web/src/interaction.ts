@@ -36,11 +36,11 @@ export function pickLineEndpointMidpointLanding(document: DocumentSnapshot, depe
     try {
       if (sourceElement.type === "line") sources = elementToCurves(sourceElement);
       else if ((sourceElement.type === "path" || sourceElement.type === "spline") && !sourceElement.closed) sources = elementToCurves(sourceElement);
-      else if (sourceElement.type === "arc") sources = elementToCurves(sourceElement);
+      else if (sourceElement.type === "arc" || sourceElement.type === "sketch") sources = elementToCurves(sourceElement);
       else continue;
     } catch { continue; }
     for (const sourced of sources) {
-      if (sourced.source.kind !== "line-element" && sourced.source.kind !== "path-segment" && sourced.source.kind !== "spline-span" && sourced.source.kind !== "arc-element") continue;
+      if (sourced.source.kind !== "line-element" && sourced.source.kind !== "path-segment" && sourced.source.kind !== "spline-span" && sourced.source.kind !== "arc-element" && sourced.source.kind !== "sketch-edge") continue;
       let midpoint: PointMm | undefined;
       try { midpoint = halfArcLengthMidpoint(sourced.curve); } catch { continue; }
       if (!midpoint || ![midpoint.x, midpoint.y].every(Number.isFinite)) continue;
@@ -50,7 +50,7 @@ export function pickLineEndpointMidpointLanding(document: DocumentSnapshot, depe
       }
     }
   }
-  const sourceOrderKey = (landing: LineEndpointMidpointLanding): string => landing.source.kind === "path-segment" ? landing.source.segmentId : landing.source.kind === "spline-span" ? `${landing.source.startNodeId}:${landing.source.endNodeId}` : "line";
+  const sourceOrderKey = (landing: LineEndpointMidpointLanding): string => landing.source.kind === "path-segment" ? landing.source.segmentId : landing.source.kind === "spline-span" ? `${landing.source.startNodeId}:${landing.source.endNodeId}` : landing.source.kind === "sketch-edge" ? landing.source.edgeId : "line";
   candidates.sort((a, b) => a.distancePx - b.distancePx || `${a.endpoint}:${a.sourceLineId}:${sourceOrderKey(a)}`.localeCompare(`${b.endpoint}:${b.sourceLineId}:${sourceOrderKey(b)}`));
   if (!candidates[0] || candidates[0].distancePx > tolerancePx || candidates[1]?.distancePx === candidates[0].distancePx) return undefined;
   const landing = candidates[0];

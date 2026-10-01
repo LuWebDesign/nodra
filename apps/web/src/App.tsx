@@ -1767,12 +1767,14 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
     const landing = pickLineEndpointMidpointLanding(candidate.document, lineId, zoomAtGesture, endpoint, priorityTarget);
     if (!landing) return geometry;
     const sourceReference = landing.source;
-    const sourceKey = sourceReference.kind === "path-segment" ? sourceReference.segmentId : sourceReference.kind === "spline-span" ? `${sourceReference.startNodeId}-${sourceReference.endNodeId}` : sourceReference.kind === "arc-element" ? "arc" : "line";
+    const sourceKey = sourceReference.kind === "path-segment" ? sourceReference.segmentId : sourceReference.kind === "spline-span" ? `${sourceReference.startNodeId}-${sourceReference.endNodeId}` : sourceReference.kind === "sketch-edge" ? sourceReference.edgeId : sourceReference.kind === "arc-element" ? "arc" : "line";
     const constraintId = `line-endpoint-midpoint-${lineId}-${landing.endpoint}-${landing.sourceLineId}-${sourceKey}`;
     return createGeometryWithDocumentConstraints(geometry, (_before, after) => {
       const dependent = after.elements.find((element) => element.id === landing.dependentLineId);
       const source = after.elements.find((element) => element.id === landing.sourceLineId);
-      const validSource = sourceReference.kind === "arc-element"
+      const validSource = sourceReference.kind === "sketch-edge"
+        ? source?.type === "sketch" && source.edges.some((edge) => edge.id === sourceReference.edgeId)
+        : sourceReference.kind === "arc-element"
         ? source?.type === "arc"
         : sourceReference.kind === "path-segment"
         ? source?.type === "path" && !source.closed && source.segments.some((segment) => segment.id === sourceReference.segmentId)
@@ -1780,7 +1782,9 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
           ? source?.type === "spline" && !source.closed && source.nodes.some((node, index) => node.id === sourceReference.startNodeId && source.nodes[index + 1]?.id === sourceReference.endNodeId)
           : source?.type === "line";
       if (dependent?.type !== "line" || !validSource || after.constraints?.some((constraint) => constraint.id === constraintId)) return [];
-      return [{ id: constraintId, kind: "line-endpoint-midpoint", references: [{ elementId: dependent.id, nodeId: landing.endpoint, endpoint: landing.endpoint }], source: sourceReference.kind === "path-segment"
+      return [{ id: constraintId, kind: "line-endpoint-midpoint", references: [{ elementId: dependent.id, nodeId: landing.endpoint, endpoint: landing.endpoint }], source: sourceReference.kind === "sketch-edge"
+        ? { kind: "sketch-edge", elementId: sourceReference.elementId, edgeId: sourceReference.edgeId }
+        : sourceReference.kind === "path-segment"
         ? { kind: "path-segment", elementId: sourceReference.elementId, segmentId: sourceReference.segmentId }
         : sourceReference.kind === "spline-span"
           ? { kind: "spline-span", elementId: sourceReference.elementId, startNodeId: sourceReference.startNodeId, endNodeId: sourceReference.endNodeId }
