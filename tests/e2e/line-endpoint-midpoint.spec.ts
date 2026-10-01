@@ -61,19 +61,16 @@ async function waitForDurableRelation(page: Page, revision: number, sourceId: st
       read.onerror = () => reject(read.error);
       read.onsuccess = () => {
         const rows = read.result as StoredRevision[];
-        const candidates = rows.flatMap((row) => {
-          const elements = [...(row.document.elements ?? []), ...(row.document.pages ?? []).flatMap((documentPage) => documentPage.elements)];
-          const constraints = [...(row.document.constraints ?? []), ...(row.document.pages ?? []).flatMap((documentPage) => documentPage.constraints ?? [])];
-          const hasBothLines = elements.some((element) => element.id === sourceId) && elements.some((element) => element.id === dependentId);
-          const relation = constraints.find((constraint) => constraint.kind === "line-endpoint-midpoint"
-            && constraint.references.some((reference) => reference.elementId === dependentId)
-            && constraint.source?.elementId === sourceId
-            && (sourceKind === "line" ? constraint.source.kind === "line" : sourceKind === "path-segment" ? constraint.source.kind === "path-segment" && typeof constraint.source.segmentId === "string" && constraint.source.segmentId.length > 0 : sourceKind === "spline-span" ? constraint.source.kind === "spline-span" && typeof constraint.source.startNodeId === "string" && typeof constraint.source.endNodeId === "string" : sourceKind === "sketch-edge" ? constraint.source.kind === "sketch-edge" && typeof constraint.source.edgeId === "string" && constraint.source.edgeId.length > 0 : constraint.source.kind === "arc"));
-          if (!hasBothLines) return [];
-          return [{ row, hasRelation: relation !== undefined, relation: relation ?? null }];
-        }).sort((a, b) => b.row.savedAt - a.row.savedAt || b.row.revision - a.row.revision);
-        const projectRow = candidates.find(({ row }) => row.projectId === row.document.id);
-        const durable = projectRow !== undefined && projectRow.row.revision >= revision && projectRow.hasRelation;
+        const projectRow = rows.filter((row) => row.projectId === row.document.id)
+          .sort((a, b) => b.savedAt - a.savedAt || b.revision - a.revision)[0];
+        const elements = projectRow === undefined ? [] : [...(projectRow.document.elements ?? []), ...(projectRow.document.pages ?? []).flatMap((documentPage) => documentPage.elements)];
+        const constraints = projectRow === undefined ? [] : [...(projectRow.document.constraints ?? []), ...(projectRow.document.pages ?? []).flatMap((documentPage) => documentPage.constraints ?? [])];
+        const hasBothLines = elements.some((element) => element.id === sourceId) && elements.some((element) => element.id === dependentId);
+        const relation = constraints.find((constraint) => constraint.kind === "line-endpoint-midpoint"
+          && constraint.references.some((reference) => reference.elementId === dependentId)
+          && constraint.source?.elementId === sourceId
+          && (sourceKind === "line" ? constraint.source.kind === "line" : sourceKind === "path-segment" ? constraint.source.kind === "path-segment" && typeof constraint.source.segmentId === "string" && constraint.source.segmentId.length > 0 : sourceKind === "spline-span" ? constraint.source.kind === "spline-span" && typeof constraint.source.startNodeId === "string" && typeof constraint.source.endNodeId === "string" : sourceKind === "sketch-edge" ? constraint.source.kind === "sketch-edge" && typeof constraint.source.edgeId === "string" && constraint.source.edgeId.length > 0 : constraint.source.kind === "arc"));
+        const durable = projectRow !== undefined && projectRow.revision >= revision && hasBothLines && relation !== undefined;
         db.close();
         resolve(durable);
       };
@@ -215,12 +212,21 @@ test("whole-Line drag to its source center creates a driving midpoint relation",
   await page.mouse.down();
   await page.mouse.move(dependentBeforeMove.midpoint.x + 25, dependentBeforeMove.midpoint.y + 25, { steps: 6 });
   await page.mouse.up();
-  const unchangedDependent = await screenPoints(dependent);
-  expect(Math.hypot(unchangedDependent.end.x - dependentBeforeMove.end.x, unchangedDependent.end.y - dependentBeforeMove.end.y)).toBeGreaterThan(1);
-  expect(unchangedDependent.start).toEqual(dependentBeforeMove.start);
+  await expect.poll(async () => {
+    const moved = await screenPoints(dependent);
+    return Math.hypot(moved.end.x - dependentBeforeMove.end.x, moved.end.y - dependentBeforeMove.end.y) > 1
+      && moved.start.x === dependentBeforeMove.start.x
+      && moved.start.y === dependentBeforeMove.start.y;
+  }).toBe(true);
   const afterMoveRevision = Number(await canvas.getAttribute("data-document-revision"));
   await waitForDurableRelation(page, afterMoveRevision, sourceId!, dependentId!);
 });
+
+async function expectEndpointSnapsDuringDrag(page: Page, dependent: Locator, endpoint: "start" | "end", midpoint: ScreenPoint, dragTo: ScreenPoint, phase: string) {
+  await page.mouse.move(dragTo.x, dragTo.y, { steps: 8 });
+  const preview = await screenPoints(dependent);
+  expect(Math.hypot(preview[endpoint].x - midpoint.x, preview[endpoint].y - midpoint.y), `${phase}: endpoint should snap in drag preview`).toBeLessThanOrEqual(1);
+}
 
 async function dragEndpointToMidpoint(page: Page, source: Locator, dependent: Locator) {
   const sourcePoints = await screenPoints(source);
@@ -247,6 +253,189 @@ async function moveSourceWithSelect(page: Page, source: Locator) {
   const after = await screenPoints(source);
   expect(Math.hypot(after.start.x - before.start.x, after.start.y - before.start.y), "Source Line should move from a Select-mode body drag").toBeGreaterThan(1);
 }
+
+test("Forma endpoint near-miss snaps during preview and commits the source midpoint relation", async ({ page }) => {
+  const { canvas, source, dependent } = await drawSeparatedLines(page, "Forma near miss");
+  const sourceId = await source.getAttribute("data-element-id");
+  const dependentId = await dependent.getAttribute("data-element-id");
+  expect(sourceId).toBeTruthy();
+  expect(dependentId).toBeTruthy();
+  const sourcePoints = await screenPoints(source);
+  const before = await screenPoints(dependent);
+  const landing = { x: sourcePoints.midpoint.x + 5.5, y: sourcePoints.midpoint.y };
+  await page.getByRole("button", { name: "Forma", exact: true }).click();
+  await page.mouse.move(before.start.x, before.start.y);
+  await page.mouse.down();
+  await expectEndpointSnapsDuringDrag(page, dependent, "start", sourcePoints.midpoint, landing, "Forma");
+  await page.mouse.up();
+  await expect.poll(async () => {
+    const committed = await screenPoints(dependent);
+    return Math.hypot(committed.start.x - sourcePoints.midpoint.x, committed.start.y - sourcePoints.midpoint.y);
+  }).toBeLessThanOrEqual(1);
+  const committedIds = await canvas.getAttribute("data-document-element-ids");
+  const committedRevision = Number(await canvas.getAttribute("data-document-revision"));
+  await waitForDurableRelation(page, committedRevision, sourceId!, dependentId!);
+
+  await page.getByRole("button", { name: "Deshacer" }).click();
+  await expect.poll(async () => {
+    const undone = await screenPoints(dependent);
+    return Math.hypot(undone.start.x - before.start.x, undone.start.y - before.start.y)
+      + Math.hypot(undone.end.x - before.end.x, undone.end.y - before.end.y);
+  }).toBeLessThanOrEqual(1);
+  await page.getByRole("button", { name: "Rehacer" }).click();
+  await expect.poll(async () => {
+    const redone = await screenPoints(dependent);
+    return Math.hypot(redone.start.x - sourcePoints.midpoint.x, redone.start.y - sourcePoints.midpoint.y);
+  }).toBeLessThanOrEqual(1);
+  await expect(canvas).toHaveAttribute("data-document-element-ids", committedIds!);
+  const redoRevision = Number(await canvas.getAttribute("data-document-revision"));
+  await waitForDurableRelation(page, redoRevision, sourceId!, dependentId!);
+  await page.reload();
+  await expect(page.locator(".page")).toHaveAttribute("data-document-element-ids", committedIds!);
+  const reloadedSource = page.locator(`.page-svg svg g > line[data-element-id="${sourceId}"]`);
+  const reloadedDependent = page.locator(`.page-svg svg g > line[data-element-id="${dependentId}"]`);
+  await expect(reloadedSource).toHaveAttribute("data-element-id", sourceId!);
+  await expect(reloadedDependent).toHaveAttribute("data-element-id", dependentId!);
+  await expect.poll(async () => {
+    const [reloadedSourcePoints, reloadedDependentPoints] = await Promise.all([screenPoints(reloadedSource), screenPoints(reloadedDependent)]);
+    return Math.hypot(reloadedDependentPoints.start.x - reloadedSourcePoints.midpoint.x, reloadedDependentPoints.start.y - reloadedSourcePoints.midpoint.y);
+  }, { timeout: 5000 }).toBeLessThanOrEqual(1);
+  await moveSourceWithSelect(page, reloadedSource);
+  await expect.poll(async () => {
+    const [movedSource, movedDependent] = await Promise.all([screenPoints(reloadedSource), screenPoints(reloadedDependent)]);
+    return Math.hypot(movedDependent.start.x - movedSource.midpoint.x, movedDependent.start.y - movedSource.midpoint.y);
+  }).toBeLessThanOrEqual(1);
+});
+
+test("Select whole-Line near-miss snaps its uniquely nearest endpoint during preview and commits", async ({ page }) => {
+  const { canvas, source, dependent } = await drawSeparatedLines(page, "Select near miss");
+  const sourceId = await source.getAttribute("data-element-id");
+  const dependentId = await dependent.getAttribute("data-element-id");
+  expect(sourceId).toBeTruthy();
+  expect(dependentId).toBeTruthy();
+  const sourcePoints = await screenPoints(source);
+  const before = await screenPoints(dependent);
+  const landing = { x: sourcePoints.midpoint.x + 5.5, y: sourcePoints.midpoint.y };
+  const delta = { x: landing.x - before.start.x, y: landing.y - before.start.y };
+  const body = before.midpoint;
+  await page.getByRole("button", { name: "Seleccion", exact: true }).click();
+  await page.mouse.move(body.x, body.y);
+  await page.mouse.down();
+  await expectEndpointSnapsDuringDrag(page, dependent, "start", sourcePoints.midpoint, { x: body.x + delta.x, y: body.y + delta.y }, "Seleccion");
+  await page.mouse.up();
+  await expect.poll(async () => {
+    const committed = await screenPoints(dependent);
+    return Math.hypot(committed.start.x - sourcePoints.midpoint.x, committed.start.y - sourcePoints.midpoint.y);
+  }).toBeLessThanOrEqual(1);
+  const committedIds = await canvas.getAttribute("data-document-element-ids");
+  const committedRevision = Number(await canvas.getAttribute("data-document-revision"));
+  await waitForDurableRelation(page, committedRevision, sourceId!, dependentId!);
+
+  await page.getByRole("button", { name: "Deshacer" }).click();
+  await expect.poll(async () => {
+    const undone = await screenPoints(dependent);
+    return Math.hypot(undone.start.x - before.start.x, undone.start.y - before.start.y)
+      + Math.hypot(undone.end.x - before.end.x, undone.end.y - before.end.y);
+  }).toBeLessThanOrEqual(1);
+  await page.getByRole("button", { name: "Rehacer" }).click();
+  await expect.poll(async () => {
+    const redone = await screenPoints(dependent);
+    return Math.hypot(redone.start.x - sourcePoints.midpoint.x, redone.start.y - sourcePoints.midpoint.y);
+  }).toBeLessThanOrEqual(1);
+  await expect(canvas).toHaveAttribute("data-document-element-ids", committedIds!);
+  const redoRevision = Number(await canvas.getAttribute("data-document-revision"));
+  await waitForDurableRelation(page, redoRevision, sourceId!, dependentId!);
+  await page.reload();
+  await expect(page.locator(".page")).toHaveAttribute("data-document-element-ids", committedIds!);
+  const reloadedSource = page.locator(`.page-svg svg g > line[data-element-id="${sourceId}"]`);
+  const reloadedDependent = page.locator(`.page-svg svg g > line[data-element-id="${dependentId}"]`);
+  await expect(reloadedSource).toHaveAttribute("data-element-id", sourceId!);
+  await expect(reloadedDependent).toHaveAttribute("data-element-id", dependentId!);
+  await expect.poll(async () => {
+    const [reloadedSourcePoints, reloadedDependentPoints] = await Promise.all([screenPoints(reloadedSource), screenPoints(reloadedDependent)]);
+    return Math.hypot(reloadedDependentPoints.start.x - reloadedSourcePoints.midpoint.x, reloadedDependentPoints.start.y - reloadedSourcePoints.midpoint.y);
+  }, { timeout: 5000 }).toBeLessThanOrEqual(1);
+  await moveSourceWithSelect(page, reloadedSource);
+  await expect.poll(async () => {
+    const [movedSource, movedDependent] = await Promise.all([screenPoints(reloadedSource), screenPoints(reloadedDependent)]);
+    return Math.hypot(movedDependent.start.x - movedSource.midpoint.x, movedDependent.start.y - movedSource.midpoint.y);
+  }).toBeLessThanOrEqual(1);
+});
+
+test("Select whole-Line near-miss Escape cancels without persisting a midpoint relation", async ({ page }) => {
+  const { canvas, source, dependent } = await drawSeparatedLines(page, "Select near miss Escape");
+  const sourceId = await source.getAttribute("data-element-id");
+  const dependentId = await dependent.getAttribute("data-element-id");
+  expect(sourceId).toBeTruthy();
+  expect(dependentId).toBeTruthy();
+  const before = await screenPoints(dependent);
+  const sourcePoints = await screenPoints(source);
+  const revision = await canvas.getAttribute("data-document-revision");
+  const ids = await canvas.getAttribute("data-document-element-ids");
+  await expect.poll(async () => page.evaluate(({ sourceId, dependentId, revision }) => new Promise<boolean>((resolve, reject) => {
+    const request = indexedDB.open("nodra-persistence");
+    request.onerror = () => reject(request.error);
+    request.onsuccess = () => {
+      const db = request.result;
+      const read = db.transaction("revisions", "readonly").objectStore("revisions").getAll();
+      read.onerror = () => reject(read.error);
+      read.onsuccess = () => {
+        const row = (read.result as StoredRevision[]).filter((candidate) => candidate.projectId === candidate.document.id)
+          .sort((a, b) => b.savedAt - a.savedAt || b.revision - a.revision)[0];
+        const elements = row === undefined ? [] : [...(row.document.elements ?? []), ...(row.document.pages ?? []).flatMap((documentPage) => documentPage.elements)];
+        db.close();
+        resolve(row !== undefined && String(row.revision) === revision && elements.some((element) => element.id === sourceId) && elements.some((element) => element.id === dependentId));
+      };
+    };
+  }), { sourceId: sourceId!, dependentId: dependentId!, revision })).toBe(true);
+  const landing = { x: sourcePoints.midpoint.x + 5.5, y: sourcePoints.midpoint.y };
+  const delta = { x: landing.x - before.start.x, y: landing.y - before.start.y };
+  const body = before.midpoint;
+  await page.getByRole("button", { name: "Seleccion", exact: true }).click();
+  await page.mouse.move(body.x, body.y);
+  await page.mouse.down();
+  await expectEndpointSnapsDuringDrag(page, dependent, "start", sourcePoints.midpoint, { x: body.x + delta.x, y: body.y + delta.y }, "Seleccion Escape");
+  await page.keyboard.press("Escape");
+  await expect.poll(async () => {
+    const cancelled = await screenPoints(dependent);
+    return Math.hypot(cancelled.start.x - before.start.x, cancelled.start.y - before.start.y)
+      + Math.hypot(cancelled.end.x - before.end.x, cancelled.end.y - before.end.y);
+  }).toBeLessThanOrEqual(1);
+  await expect(canvas).toHaveAttribute("data-document-revision", revision!);
+  await expect(canvas).toHaveAttribute("data-document-element-ids", ids!);
+  await page.waitForTimeout(1200);
+  const unchangedSavedState = await page.evaluate(({ sourceId, dependentId, revision, ids }) => new Promise<boolean>((resolve, reject) => {
+    const request = indexedDB.open("nodra-persistence");
+    request.onerror = () => reject(request.error);
+    request.onsuccess = () => {
+      const db = request.result;
+      const read = db.transaction("revisions", "readonly").objectStore("revisions").getAll();
+      read.onerror = () => reject(read.error);
+      read.onsuccess = () => {
+        const row = (read.result as StoredRevision[]).filter((candidate) => candidate.projectId === candidate.document.id)
+          .sort((a, b) => b.savedAt - a.savedAt || b.revision - a.revision)[0];
+        const elements = row === undefined ? [] : [...(row.document.elements ?? []), ...(row.document.pages ?? []).flatMap((documentPage) => documentPage.elements)];
+        const relations = row === undefined ? [] : [...(row.document.constraints ?? []), ...(row.document.pages ?? []).flatMap((documentPage) => documentPage.constraints ?? [])];
+        const unchanged = row !== undefined && String(row.revision) === revision && elements.map((element) => element.id).sort().join(",") === ids?.split(",").sort().join(",")
+          && elements.some((element) => element.id === sourceId) && elements.some((element) => element.id === dependentId)
+          && !relations.some((relation) => relation.kind === "line-endpoint-midpoint" && relation.references.some((reference) => reference.elementId === dependentId) && relation.source?.elementId === sourceId);
+        db.close();
+        resolve(unchanged);
+      };
+    };
+  }), { sourceId: sourceId!, dependentId: dependentId!, revision, ids });
+  expect(unchangedSavedState).toBe(true);
+  const sourceBeforeMove = await screenPoints(source);
+  await moveSourceWithSelect(page, source);
+  await expect.poll(async () => {
+    const movedSource = await screenPoints(source);
+    return Math.hypot(movedSource.start.x - sourceBeforeMove.start.x, movedSource.start.y - sourceBeforeMove.start.y);
+  }).toBeGreaterThan(1);
+  const dependentAfterMove = await screenPoints(dependent);
+  expect(dependentAfterMove.start.x).toBeCloseTo(before.start.x, 0);
+  expect(dependentAfterMove.start.y).toBeCloseTo(before.start.y, 0);
+  expect(await dependent.getAttribute("data-element-id")).toBe(dependentId);
+});
 
 test("Forma endpoint drag creates a persistent driving midpoint relation", async ({ page }) => {
   const { canvas, source: initialSource, dependent: initialDependent } = await drawSeparatedLines(page, "Forma drag");

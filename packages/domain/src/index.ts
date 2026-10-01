@@ -370,7 +370,10 @@ export function projectFromDocument(project: ProjectSnapshot, document: Document
   });
   const pages = project.pages.map((candidate): PageSnapshot => {
     if (candidate.id !== page.id) return candidate;
-    const updated = { ...candidate, page: document.page, layers: document.layers, elements: [...preserved, ...owned], constraints: [...(candidate.constraints ?? []).filter((constraint) => constraint.references.some((reference) => !currentIds.has(reference.elementId)) || ("source" in constraint && !currentIds.has(constraint.source.elementId))), ...(document.constraints ?? [])], connections: [...(candidate.connections ?? []).filter((connection) => !currentIds.has(connection.first.elementId) || !currentIds.has(connection.second.elementId)), ...(document.connections ?? [])], positionalCoincidences: document.positionalCoincidences ?? [] };
+    const updated = { ...candidate, page: document.page, layers: document.layers, elements: [...preserved, ...owned], constraints: [...(candidate.constraints ?? []).filter((constraint) => {
+      const referencedIds = [...constraint.references.map((reference) => reference.elementId), ...("source" in constraint ? [constraint.source.elementId] : [])];
+      return referencedIds.some((id) => !currentIds.has(id)) && referencedIds.every((id) => currentIds.has(id) || preservedIds.has(id));
+    }), ...(document.constraints ?? [])], connections: [...(candidate.connections ?? []).filter((connection) => !currentIds.has(connection.first.elementId) || !currentIds.has(connection.second.elementId)), ...(document.connections ?? [])], positionalCoincidences: document.positionalCoincidences ?? [] };
     if (featureTree) return { ...updated, featureTree };
     delete updated.featureTree;
     return updated;
