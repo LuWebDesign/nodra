@@ -1,6 +1,7 @@
 import polygonClipping, { type MultiPolygon } from "polygon-clipping";
 import { hasBounds } from "@nodra/domain";
 import { arcElementToCurve, lineElementToCurve } from "./curve2d-adapters.js";
+export { setLineVisualEndpoint } from "./curve2d-adapters.js";
 import { closestParameter, curveBounds, pointAt } from "./curve2d.js";
 import { intersectCurves } from "./intersection-engine.js";
 

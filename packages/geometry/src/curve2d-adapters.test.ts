@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { elementId, layerId, type ArcElement, type CircleElement, type EllipseElement, type PathElement, type RectangleElement, type SketchElement, type SplineElement } from "@nodra/domain";
-import { arcElementToCurve, circleElementToCurve, deriveCurvePieces, elementToContour, elementToCurves, ellipseElementToCurve, halfArcLengthMidpoint, lineElementToCurve, pathSegmentToCurve, rectangleElementToCurves, rotatedLineEndpoints, sketchEdgeToCurve, splineSpanToCurve } from "./index.js";
+import { arcElementToCurve, circleElementToCurve, deriveCurvePieces, elementToContour, elementToCurves, ellipseElementToCurve, halfArcLengthMidpoint, lineElementToCurve, setLineVisualEndpoint, pathSegmentToCurve, rectangleElementToCurves, rotatedLineEndpoints, sketchEdgeToCurve, splineSpanToCurve } from "./index.js";
 
 const style = { stroke: "#000", strokeWidth: 1 };
 const layer = layerId("layer");
@@ -40,6 +40,42 @@ describe("Curve2D source adapters", () => {
     const diagonalCurve = lineElementToCurve(diagonal).curve;
     expect(diagonalCurve.start.x).toBeCloseTo(3); expect(diagonalCurve.start.y).toBeCloseTo(-1);
     expect(diagonalCurve.end.x).toBeCloseTo(1); expect(diagonalCurve.end.y).toBeCloseTo(3);
+  });
+
+  it("sets either visible Line endpoint while preserving the opposite and native attributes", () => {
+    for (const endpoint of ["start", "end"] as const) {
+      const source = { ...line(Math.PI / 3), flipX: true, flipY: true, style: { stroke: "red", strokeWidth: 2 } };
+      const before = lineElementToCurve(source).curve;
+      const target = { x: 30, y: -12 };
+      const changed = setLineVisualEndpoint(source, endpoint, target)!;
+      const after = lineElementToCurve(changed).curve;
+      const moved = endpoint === "start" ? after.start : after.end;
+      const preserved = endpoint === "start" ? after.end : after.start;
+      const expectedPreserved = endpoint === "start" ? before.end : before.start;
+      expect(moved.x).toBeCloseTo(target.x); expect(moved.y).toBeCloseTo(target.y);
+      expect(preserved.x).toBeCloseTo(expectedPreserved.x); expect(preserved.y).toBeCloseTo(expectedPreserved.y);
+      expect(changed).toMatchObject({ id: source.id, rotation: source.rotation, flipX: true, flipY: true, style: source.style });
+    }
+  });
+
+  it("handles midpoint targets and degenerate source segments", () => {
+    const source = line();
+    const midpointTarget = setLineVisualEndpoint(source, "start", { x: 5, y: 0 })!;
+    expect(lineElementToCurve(midpointTarget).curve).toEqual({ type: "line", start: { x: 5, y: 0 }, end: { x: 10, y: 0 } });
+    const degenerate = { ...source, end: source.start };
+    const recovered = setLineVisualEndpoint(degenerate, "end", { x: 4, y: 3 })!;
+    expect(lineElementToCurve(recovered).curve.end.x).toBeCloseTo(4);
+    expect(lineElementToCurve(recovered).curve.end.y).toBeCloseTo(3);
+  });
+
+  it("fails closed for non-finite or unrepresentable endpoint targets and source geometry", () => {
+    expect(setLineVisualEndpoint(line(), "start", { x: Number.NaN, y: 0 })).toBeUndefined();
+    expect(setLineVisualEndpoint(line(Math.PI / 4), "end", { x: 1e308, y: 1e308 })).toBeUndefined();
+    const unrepresentable = { ...line(Math.PI / 2), start: { x: 1.7e308, y: -1e308 }, end: { x: 1.7e308, y: 1e308 } };
+    expect(() => lineElementToCurve(unrepresentable)).toThrow("numeric range");
+    for (const flips of [{ flipX: true }, { flipY: true }]) {
+      expect(setLineVisualEndpoint({ ...unrepresentable, ...flips }, "start", { x: 0, y: 0 })).toBeUndefined();
+    }
   });
 
   it("resolves sketch geometry by stable IDs while retaining source order as metadata", () => {

@@ -38,8 +38,11 @@ test("confirmed Line midpoint snap persists atomically and ignores body hover", 
   const body = await nativeSource.boundingBox();
   expect(body).not.toBeNull();
   const farBody = { x: body!.x + body!.width * 0.2, y: midpoint.y };
+  const midpointMarker = page.locator("[data-open-edge-midpoint-hover]");
   await page.mouse.move(farBody.x, farBody.y);
-  await expect(page.locator("[data-open-edge-midpoint-hover]")).toBeVisible();
+  await expect(midpointMarker).toHaveCount(0);
+  await page.mouse.move(midpoint.x, midpoint.y);
+  await expect(midpointMarker).toBeVisible();
   await page.mouse.click(farBody.x, farBody.y);
   await page.mouse.click(farBody.x + 55, farBody.y + 45);
   const globalRelations = page.getByRole("list", { name: "Relaciones globales" });

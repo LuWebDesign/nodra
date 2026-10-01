@@ -142,6 +142,33 @@ describe("native document validation", () => {
     expect(validateProject({ ...project, pieces: "broken" }).success).toBe(false);
   });
 
+  it("validates Arc-backed Line endpoint midpoint relations and rejects missing or non-executable sources", () => {
+    const base = createDocument("arc-endpoint-midpoint", [{ id: layerId("layer-1"), name: "Design", visible: true, order: 0 }]);
+    const style = { stroke: "#000", strokeWidth: 1 };
+    const arc = { type: "arc" as const, id: "arc-source", layerId: "layer-1", center: { x: 0, y: 0 }, radius: 10, startAngle: 0, endAngle: Math.PI, direction: "counterclockwise" as const, style };
+    const line = { type: "line" as const, id: "dependent-line", layerId: "layer-1", start: { x: 0, y: 10 }, end: { x: 20, y: 10 }, rotation: 0, style };
+    const relation = { id: "arc-endpoint", kind: "line-endpoint-midpoint" as const, references: [{ elementId: line.id, nodeId: "start" as const, endpoint: "start" as const }] as const, source: { kind: "arc" as const, elementId: arc.id } };
+    expect(validateDocument({ ...base, elements: [arc, line], constraints: [relation] }).success).toBe(true);
+    expect(validateDocument({ ...base, elements: [line], constraints: [relation] }).success).toBe(false);
+    expect(validateDocument({ ...base, elements: [{ ...arc, center: { x: 1e308, y: 1e308 }, radius: 1e308 }, line], constraints: [relation] }).success).toBe(false);
+    expect(validateDocument({ ...base, elements: [{ ...arc, endAngle: arc.startAngle }, line], constraints: [relation] }).success).toBe(false);
+    expect(validateDocument({ ...base, elements: [{ ...arc, endAngle: 2 * Math.PI }, line], constraints: [relation] }).success).toBe(false);
+  });
+
+  it("validates stable Sketch-edge Line endpoint midpoint sources and rejects invalid sources", () => {
+    const base = createDocument("sketch-endpoint-midpoint", [{ id: layerId("layer-1"), name: "Design", visible: true, order: 0 }]);
+    const style = { stroke: "#000", strokeWidth: 1 };
+    const source = { type: "sketch" as const, id: "sketch-source", layerId: "layer-1", nodes: [{ id: "a", point: { x: 0, y: 0 } }, { id: "b", point: { x: 10, y: 0 } }, { id: "c", point: { x: 10, y: 10 } }], edges: [{ id: "stable-edge", startNodeId: "a", endNodeId: "b" }, { id: "bc", startNodeId: "b", endNodeId: "c" }, { id: "ca", startNodeId: "c", endNodeId: "a" }], style };
+    const dependent = { type: "line" as const, id: "dependent", layerId: "layer-1", start: { x: 5, y: 1 }, end: { x: 20, y: 1 }, rotation: 0, style };
+    const relation = { id: "edge-endpoint", kind: "line-endpoint-midpoint" as const, references: [{ elementId: dependent.id, nodeId: "start" as const, endpoint: "start" as const }] as const, source: { kind: "sketch-edge" as const, elementId: source.id, edgeId: "stable-edge" } };
+    expect(validateDocument({ ...base, elements: [source, dependent], constraints: [relation] }).success).toBe(true);
+    expect(validateDocument({ ...base, elements: [source, dependent], constraints: [{ ...relation, source: { ...relation.source, edgeId: "missing" } }] }).success).toBe(false);
+    expect(validateDocument({ ...base, layers: [{ ...base.layers[0]!, visible: false }], elements: [source, dependent], constraints: [relation] }).success).toBe(false);
+    const degenerate = { ...source, nodes: source.nodes.map((node) => node.id === "b" ? { ...node, point: { x: 0, y: 0 } } : node) };
+    expect(validateDocument({ ...base, elements: [degenerate, dependent], constraints: [relation] }).success).toBe(false);
+    expect(validateDocument({ ...base, elements: [source], constraints: [relation] }).success).toBe(false);
+  });
+
   it("validates stable open Path segment midpoint sources and migrates v10 unchanged", () => {
     const base = createDocument("path-midpoint", [{ id: layerId("layer-1"), name: "Design", visible: true, order: 0 }]);
     const path = { type: "path" as const, id: "path", layerId: "layer-1", nodes: [{ id: "a", anchor: { x: 0, y: 0 }, join: "corner" as const }, { id: "b", anchor: { x: 10, y: 0 }, join: "corner" as const }], segments: [{ id: "stable-edge", type: "line" as const, startNodeId: "a", endNodeId: "b" }], closed: false, style: { stroke: "#000", strokeWidth: 1 } };
@@ -274,6 +301,42 @@ describe("native document validation", () => {
     const project = createProject(base);
     expect(validateProject({ ...project, pages: [{ ...project.pages[0], elements: [source, output], featureTree: { version: 1, features: [feature] } }] }).success).toBe(true);
     expect(validateProject({ ...project, pages: [{ ...project.pages[0], elements: [source, output], featureTree: { version: 1, features: [{ ...feature, outputs: [{ elementId: "missing" }] }] } }] }).success).toBe(false);
+  });
+
+  it("validates native Line endpoint midpoint relations without admitting chains or duplicates", () => {
+    const base = createDocument("line-endpoint-midpoint", [{ id: layerId("layer-1"), name: "Design", visible: true, order: 0 }]);
+    const style = { stroke: "#000", strokeWidth: 1 };
+    const source = { type: "line" as const, id: elementId("source"), layerId: layerId("layer-1"), start: { x: 0, y: 0 }, end: { x: 10, y: 0 }, rotation: 0, style };
+    const dependent = { ...source, id: elementId("dependent"), start: { x: 20, y: 20 }, end: { x: 30, y: 20 } };
+    const relation = { id: "endpoint-mid", kind: "line-endpoint-midpoint" as const, references: [{ elementId: dependent.id, nodeId: "start" as const, endpoint: "start" as const }], source: { kind: "line" as const, elementId: source.id } };
+    expect(validateDocument({ ...base, elements: [source, dependent], constraints: [relation] }).success).toBe(true);
+    expect(validateDocument({ ...base, elements: [source, dependent], constraints: [relation, { ...relation, id: "duplicate" }] }).success).toBe(false);
+    expect(validateDocument({ ...base, elements: [dependent], constraints: [{ ...relation, source: { kind: "line", elementId: dependent.id } }] }).success).toBe(false);
+    const secondDependent = { ...dependent, id: elementId("second-dependent") };
+    const chain = { ...relation, id: "chain", source: { kind: "line" as const, elementId: dependent.id }, references: [{ elementId: secondDependent.id, nodeId: "end" as const, endpoint: "end" as const }] as const };
+    expect(validateDocument({ ...base, elements: [source, dependent, secondDependent], constraints: [relation, chain] }).success).toBe(false);
+    expect(validateDocument({ ...base, layers: [{ ...base.layers[0]!, visible: false }], elements: [source, dependent], constraints: [relation] }).success).toBe(false);
+    expect(validateDocument({ ...base, elements: [source, { ...dependent, type: "rectangle" }], constraints: [relation] }).success).toBe(false);
+    expect(validateDocument({ ...base, elements: [{ ...source, end: source.start }, dependent], constraints: [relation] }).success).toBe(false);
+
+    const path = { type: "path" as const, id: elementId("source-path"), layerId: source.layerId, nodes: [{ id: "a", anchor: { x: 0, y: 0 }, join: "corner" as const }, { id: "b", anchor: { x: 10, y: 0 }, join: "corner" as const }], segments: [{ id: "stable-segment", type: "line" as const, startNodeId: "a", endNodeId: "b" }], closed: false, style };
+    const pathRelation = { ...relation, source: { kind: "path-segment" as const, elementId: path.id, segmentId: "stable-segment" } };
+    expect(validateDocument({ ...base, elements: [path, dependent], constraints: [pathRelation] }).success).toBe(true);
+    expect(validateDocument({ ...base, elements: [{ ...path, closed: true }, dependent], constraints: [pathRelation] }).success).toBe(false);
+    expect(validateDocument({ ...base, elements: [path, dependent], constraints: [{ ...pathRelation, source: { ...pathRelation.source, segmentId: "missing" } }] }).success).toBe(false);
+    expect(validateDocument({ ...base, elements: [{ ...path, nodes: path.nodes.map((node) => ({ ...node, anchor: { x: 0, y: 0 } })) }, dependent], constraints: [pathRelation] }).success).toBe(false);
+    expect(validateDocument({ ...base, layers: [{ ...base.layers[0]!, visible: false }], elements: [path, dependent], constraints: [pathRelation] }).success).toBe(false);
+
+    const spline = { type: "spline" as const, id: elementId("source-spline"), layerId: source.layerId, nodes: [
+      { id: "s0", anchor: { x: 0, y: 0 }, continuity: "smooth" as const, outHandle: { dx: 0, dy: 5 } },
+      { id: "s1", anchor: { x: 10, y: 0 }, continuity: "smooth" as const, inHandle: { dx: 0, dy: 5 } },
+      { id: "s2", anchor: { x: 20, y: 0 }, continuity: "smooth" as const },
+    ], closed: false, style };
+    const splineRelation = { ...relation, source: { kind: "spline-span" as const, elementId: spline.id, startNodeId: "s0", endNodeId: "s1" } };
+    expect(validateDocument({ ...base, elements: [spline, dependent], constraints: [splineRelation] }).success).toBe(true);
+    expect(validateDocument({ ...base, elements: [{ ...spline, closed: true }, dependent], constraints: [splineRelation] }).success).toBe(false);
+    expect(validateDocument({ ...base, elements: [spline, dependent], constraints: [{ ...splineRelation, source: { ...splineRelation.source, startNodeId: "s1", endNodeId: "s0" } }] }).success).toBe(false);
+    expect(validateDocument({ ...base, elements: [spline, dependent], constraints: [{ ...splineRelation, source: { ...splineRelation.source, endNodeId: "missing" } }] }).success).toBe(false);
   });
 
   it("round-trips valid records", () => {

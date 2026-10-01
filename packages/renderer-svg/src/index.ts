@@ -10,6 +10,7 @@ export type RenderMode = "editor" | "export";
 
 export interface RenderOptions {
   readonly mode?: RenderMode;
+  readonly hoveredSketchEdge?: { readonly elementId: string; readonly edgeId: string };
 }
 
 export interface SvgRenderer {
@@ -93,11 +94,28 @@ function renderConstraintGlyph(constraint: SketchConstraint & { readonly owner: 
     else if (references.length === 3 && dependent && references[0]!.elementId === sketchId) anchor = dependent;
   }
   if (!anchor) return "";
+  if ((constraint.kind === "horizontal" || constraint.kind === "vertical") && references.length === 2) {
+    const first = point(references[0]!); const second = point(references[1]!);
+    if (first && second) {
+      const start = mmToScreen(first, viewport); const end = mmToScreen(second, viewport);
+      let dx = end.x - start.x; let dy = end.y - start.y;
+      if (dx < 0 || (dx === 0 && dy < 0)) { dx = -dx; dy = -dy; }
+      const length = Math.hypot(dx, dy);
+      if (length > 0) {
+        let nx = -dy / length; let ny = dx / length;
+        // Pick a canonical side: above horizontal edges, right of vertical edges,
+        // and the equivalent deterministic side for supported sloped references.
+        if (ny > 0 || (Math.abs(ny) < 1e-9 && nx < 0)) { nx = -nx; ny = -ny; }
+        const offset = 14;
+        anchor = { x: anchor.x + nx * offset / viewport.zoom, y: anchor.y + ny * offset / viewport.zoom };
+      }
+    }
+  }
   const screen = mmToScreen(anchor, viewport); const label = constraint.kind === "perpendicular" ? "⊥" : constraint.kind === "midpoint" ? "M" : constraint.kind === "horizontal" ? "H" : "V";
   return `<g data-constraint-id="${escapeAttribute(constraint.id)}" data-constraint-kind="${escapeAttribute(constraint.kind)}" data-constraint-owner="${escapeAttribute(constraint.owner)}" transform="translate(${number(screen.x)} ${number(screen.y)})" font-size="12" text-anchor="middle" dominant-baseline="central" pointer-events="none"><circle r="8" fill="#fff" stroke="#2563eb" stroke-width="1" /><text fill="#2563eb" stroke="none">${label}</text></g>`;
 }
 
-function renderElement(element: Element, viewport: Viewport, document: DocumentSnapshot, sketchConstraintStates: ReadonlyMap<string, ConstraintState>, mode: RenderMode): string {
+function renderElement(element: Element, viewport: Viewport, document: DocumentSnapshot, sketchConstraintStates: ReadonlyMap<string, ConstraintState>, mode: RenderMode, hoveredSketchEdge?: RenderOptions["hoveredSketchEdge"]): string {
   if (element.type === "arc") return renderArc(element, viewport);
   const screen = (point: { x: number; y: number }) => mmToScreen(point, viewport);
   if (element.type === "dimension") {
@@ -139,13 +157,13 @@ function renderElement(element: Element, viewport: Viewport, document: DocumentS
     const fill = escapeAttribute(element.style.fill ?? element.style.stroke);
     const constraintStatus = mode === "editor" ? sketchConstraintStates.get(element.id) ?? constraintStateForElement(document, element.id).state : undefined;
     const constraintStroke = constraintStatus === "fully-defined" ? "#111827" : constraintStatus === "conflict" || constraintStatus === "invalid" ? "#ef4444" : constraintStatus === "overdefined" ? "#f59e0b" : "#2563eb";
-    const sketchAttributes = mode === "editor" ? visualAttributes(element).replace(`stroke="${escapeAttribute(element.style.stroke)}"`, `stroke="${constraintStroke}"`) : visualAttributes(element);
+    const sketchAttributes = mode === "editor" ? `${visualAttributes(element).replace(`stroke="${escapeAttribute(element.style.stroke)}"`, `stroke="${constraintStroke}"`)} data-sketch-element="true" data-sketch-state="${constraintStatus ?? "underdefined"}"` : visualAttributes(element);
     const profile = buildSketchProfile(element);
         const loops = new Map(profile.loops.map((loop) => [loop.id, loop]));
     const contours = profile.regions.flatMap((region) => [region.outerLoopId, ...region.holeLoopIds]).map((loopId) => loops.get(loopId)?.points ?? []).filter((contour) => contour.length > 0).map((contour) => contour.map((point, index) => { const current = screen(point); return `${index === 0 ? "M" : "L"}${number(current.x)} ${number(current.y)}`; }).join(" ") + " Z").join(" ");
     const faces = contours && element.role !== "construction" ? `<path data-sketch-fill="true" d="${escapeAttribute(contours)}" fill="${fill}" fill-opacity="${DEFAULT_FILL_OPACITY}" stroke="none" fill-rule="evenodd" />` : "";
-    const lines = element.edges.map((edge) => { const start = nodes.get(edge.startNodeId); const end = nodes.get(edge.endNodeId); return start && end ? `<line x1="${number(start.x)}" y1="${number(start.y)}" x2="${number(end.x)}" y2="${number(end.y)}"${edge.role === "construction" ? ` stroke-dasharray="6 4"` : ""} />` : ""; }).join("");
-    const constraints = mode === "editor" ? [...(element.constraints ?? []).map((constraint) => ({ ...constraint, owner: element.id })), ...(document.constraints ?? []).filter((constraint) => constraint.references[0]?.elementId === element.id).map((constraint) => ({ ...constraint, owner: constraint.references[0]!.elementId }))] : [];
+    const lines = element.edges.map((edge) => { const start = nodes.get(edge.startNodeId); const end = nodes.get(edge.endNodeId); const isHovered = mode === "editor" && constraintStatus === "underdefined" && hoveredSketchEdge?.elementId === element.id && hoveredSketchEdge.edgeId === edge.id; return start && end ? `<line${mode === "editor" ? ` data-sketch-edge="${escapeAttribute(edge.id)}"${isHovered ? ` data-sketch-hovered="true"` : ""}` : ""} x1="${number(start.x)}" y1="${number(start.y)}" x2="${number(end.x)}" y2="${number(end.y)}"${edge.role === "construction" ? ` stroke-dasharray="6 4"` : ""} />` : ""; }).join("");
+    const constraints = mode === "editor" ? [...(element.constraints ?? []).map((constraint) => ({ ...constraint, owner: element.id })), ...(document.constraints ?? []).flatMap((constraint) => constraint.kind === "line-endpoint-midpoint" || constraint.references[0]?.elementId !== element.id ? [] : [{ ...constraint, owner: constraint.references[0]!.elementId }])] : [];
     const glyphs = constraints.map((constraint) => renderConstraintGlyph(constraint, document, viewport, element.id)).join("");
     return `<g data-element-id="${escapeAttribute(element.id)}" ${sketchAttributes}>${faces}${lines}${glyphs}</g>`;
   }
@@ -236,13 +254,20 @@ export function renderSvg(document: unknown, viewport: unknown, options: unknown
   let requestedMode: unknown;
   try {
     const plainOptions = typeof options === "object" && options !== null && !Array.isArray(options) && (Object.getPrototypeOf(options) === Object.prototype || Object.getPrototypeOf(options) === null);
-    if (!plainOptions || Reflect.ownKeys(options).some((key) => key !== "mode")) return { success: false, reason: "invalid", error: "render options must contain only a render mode", issues: ["render options must contain only a render mode"] };
+    if (!plainOptions || Reflect.ownKeys(options).some((key) => key !== "mode" && key !== "hoveredSketchEdge")) return { success: false, reason: "invalid", error: "render options contain an unsupported property", issues: ["render options contain an unsupported property"] };
     requestedMode = Reflect.get(options, "mode");
   } catch {
     return { success: false, reason: "invalid", error: "render options could not be read", issues: ["render options could not be read"] };
   }
   if (requestedMode !== undefined && requestedMode !== "editor" && requestedMode !== "export") return { success: false, reason: "invalid", error: "render options.mode must be editor or export", issues: ["render options.mode must be editor or export"] };
   const mode: RenderMode = requestedMode ?? "editor";
+  let hoveredSketchEdge: RenderOptions["hoveredSketchEdge"];
+  try {
+    hoveredSketchEdge = Reflect.get(options, "hoveredSketchEdge") as RenderOptions["hoveredSketchEdge"];
+  } catch {
+    return { success: false, reason: "invalid", error: "render options could not be read", issues: ["render options could not be read"] };
+  }
+  if (hoveredSketchEdge !== undefined && (typeof hoveredSketchEdge !== "object" || hoveredSketchEdge === null || typeof hoveredSketchEdge.elementId !== "string" || typeof hoveredSketchEdge.edgeId !== "string" || mode !== "editor")) return { success: false, reason: "invalid", error: "render options.hoveredSketchEdge must identify an editor sketch edge", issues: ["render options.hoveredSketchEdge must identify an editor sketch edge"] };
   const checked = validateDocument(document);
   if (!checked.success) {
     const candidate = typeof document === "object" && document !== null ? document as { schemaVersion?: unknown; elements?: unknown } : undefined;
@@ -281,7 +306,7 @@ export function renderSvg(document: unknown, viewport: unknown, options: unknown
       sketchConstraintStates.set(sketch.id, state);
     });
   }
-  const contents = elements.map((element) => element.type === "dimension" ? renderDimension(element, checkedViewport.data, renderDocument.elements) : renderElement(element, checkedViewport.data, renderDocument, sketchConstraintStates, mode)).join("");
+  const contents = elements.map((element) => element.type === "dimension" ? renderDimension(element, checkedViewport.data, renderDocument.elements) : renderElement(element, checkedViewport.data, renderDocument, sketchConstraintStates, mode, hoveredSketchEdge)).join("");
   return { success: true, svg: `<svg xmlns="http://www.w3.org/2000/svg" data-units="mm" width="${number(checked.data.page.width)}" height="${number(checked.data.page.height)}" viewBox="0 0 ${number(checked.data.page.width)} ${number(checked.data.page.height)}"><g>${contents}</g></svg>`, renderedElementIds: elements.map((element) => element.id) };
 }
 

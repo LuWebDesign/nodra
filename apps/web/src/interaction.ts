@@ -1,5 +1,5 @@
 import type { DocumentSnapshot, Element, ElementId, LineElement, PathElement, PathSegment, PointMm } from "@nodra/domain";
-import { boundsOf, boundsOfElements, closestParameter, connectableNodeAddress, contourSegmentAt, contourVertexNodes, dimensionGeometry, elementCenter, elementSegmentAt, hitTest, pathGeometryNodes, pointAt, cuttableSegments, splitCuttableSegments, pathSegmentAt, realGeometryNodes, elementToCurves, halfArcLengthMidpoint, intersectCurves, partitionCurveByInterval, selectRemovableCurveInterval, selectSourcedCurveInterval, GEOMETRY_EPSILON, type Bounds, type ContourSegmentHit, type ContourVertexNode, type CurveFragment, type Curve2DSource, type PathGeometryNode, type RealGeometryNode, type PathSegmentHit, type SketchProfileResult } from "@nodra/geometry";
+import { boundsOf, boundsOfElements, closestParameter, connectableNodeAddress, contourSegmentAt, contourVertexNodes, dimensionGeometry, elementCenter, elementSegmentAt, hitTest, pathGeometryNodes, pointAt, cuttableSegments, splitCuttableSegments, pathSegmentAt, realGeometryNodes, elementToCurves, halfArcLengthMidpoint, intersectCurves, partitionCurveByInterval, selectRemovableCurveInterval, selectSourcedCurveInterval, lineElementToCurve, GEOMETRY_EPSILON, type Bounds, type ContourSegmentHit, type ContourVertexNode, type CurveFragment, type Curve2DSource, type PathGeometryNode, type RealGeometryNode, type PathSegmentHit, type SketchProfileResult } from "@nodra/geometry";
 
 export interface DragGeometry { readonly position: PointMm; readonly size: { readonly width: number; readonly height: number } }
 
@@ -8,7 +8,66 @@ export interface OpenEdgeMidpointHover {
   readonly source: Curve2DSource;
 }
 
-/** Picks the nearest visible open-edge body and returns its calculated half-arc-length point. */
+export interface LineEndpointMidpointLanding {
+  readonly dependentLineId: ElementId;
+  readonly endpoint: "start" | "end";
+  readonly sourceLineId: ElementId;
+  readonly source: Curve2DSource;
+  readonly midpoint: PointMm;
+  readonly distancePx: number;
+}
+
+/** Creates a stable, unambiguous identity for a newly derived endpoint relation. */
+export function lineEndpointMidpointConstraintId(dependentLineId: ElementId, endpoint: "start" | "end", source: Curve2DSource): string {
+  const identity = source.kind === "path-segment" ? [source.kind, source.elementId, source.segmentId]
+    : source.kind === "spline-span" ? [source.kind, source.elementId, source.startNodeId, source.endNodeId]
+      : source.kind === "sketch-edge" ? [source.kind, source.elementId, source.edgeId]
+        : [source.kind, source.elementId];
+  return JSON.stringify(["line-endpoint-midpoint", dependentLineId, endpoint, ...identity]);
+}
+
+/** Finds a unique visible native-Line, open-Path-segment, or open-Spline-span midpoint landing after applying the proposed move. */
+export function pickLineEndpointMidpointLanding(document: DocumentSnapshot, dependentLineId: ElementId, zoom: number, endpoint?: "start" | "end", priorityTarget?: PointMm, tolerancePx = 8): LineEndpointMidpointLanding | undefined {
+  if (![zoom, tolerancePx].every(Number.isFinite) || zoom <= 0 || tolerancePx < 0) throw new Error("line midpoint landing zoom and tolerance must be valid");
+  if (priorityTarget && ![priorityTarget.x, priorityTarget.y].every(Number.isFinite)) return undefined;
+  const dependent = document.elements.find((element): element is LineElement => element.id === dependentLineId && element.type === "line");
+  if (!dependent) return undefined;
+  const visible = new Set(document.layers.filter((layer) => layer.visible).map((layer) => layer.id));
+  if (!visible.has(dependent.layerId)) return undefined;
+  let dependentCurve: ReturnType<typeof lineElementToCurve>["curve"];
+  try { dependentCurve = lineElementToCurve(dependent).curve; } catch { return undefined; }
+  if (![dependentCurve.start.x, dependentCurve.start.y, dependentCurve.end.x, dependentCurve.end.y].every(Number.isFinite)) return undefined;
+  const endpoints = endpoint ? [endpoint] as const : ["start", "end"] as const;
+  const candidates: LineEndpointMidpointLanding[] = [];
+  for (const sourceElement of document.elements) {
+    if (sourceElement.id === dependent.id || !visible.has(sourceElement.layerId)) continue;
+    let sources: ReturnType<typeof elementToCurves>;
+    try {
+      if (sourceElement.type === "line") sources = elementToCurves(sourceElement);
+      else if ((sourceElement.type === "path" || sourceElement.type === "spline") && !sourceElement.closed) sources = elementToCurves(sourceElement);
+      else if (sourceElement.type === "arc" || sourceElement.type === "sketch") sources = elementToCurves(sourceElement);
+      else continue;
+    } catch { continue; }
+    for (const sourced of sources) {
+      if (sourced.source.kind !== "line-element" && sourced.source.kind !== "path-segment" && sourced.source.kind !== "spline-span" && sourced.source.kind !== "arc-element" && sourced.source.kind !== "sketch-edge") continue;
+      let midpoint: PointMm | undefined;
+      try { midpoint = halfArcLengthMidpoint(sourced.curve); } catch { continue; }
+      if (!midpoint || ![midpoint.x, midpoint.y].every(Number.isFinite)) continue;
+      for (const name of endpoints) {
+        const point = dependentCurve[name]; const distancePx = Math.hypot(point.x - midpoint.x, point.y - midpoint.y) * zoom;
+        if (Number.isFinite(distancePx) && distancePx <= tolerancePx) candidates.push({ dependentLineId, endpoint: name, sourceLineId: sourceElement.id, source: sourced.source, midpoint, distancePx });
+      }
+    }
+  }
+  const sourceOrderKey = (landing: LineEndpointMidpointLanding): string => landing.source.kind === "path-segment" ? landing.source.segmentId : landing.source.kind === "spline-span" ? `${landing.source.startNodeId}:${landing.source.endNodeId}` : landing.source.kind === "sketch-edge" ? landing.source.edgeId : "line";
+  candidates.sort((a, b) => a.distancePx - b.distancePx || `${a.endpoint}:${a.sourceLineId}:${sourceOrderKey(a)}`.localeCompare(`${b.endpoint}:${b.sourceLineId}:${sourceOrderKey(b)}`));
+  if (!candidates[0] || candidates[0].distancePx > tolerancePx || candidates[1]?.distancePx === candidates[0].distancePx) return undefined;
+  const landing = candidates[0];
+  if (landing && priorityTarget && (landing.midpoint.x !== priorityTarget.x || landing.midpoint.y !== priorityTarget.y)) return undefined;
+  return landing;
+}
+
+/** Picks the nearest calculated midpoint within a screen-pixel radius. */
 export function pickOpenEdgeMidpointHover(document: DocumentSnapshot, pointer: PointMm, zoom: number, tolerancePx = 8): OpenEdgeMidpointHover | undefined {
   if (![pointer.x, pointer.y, zoom, tolerancePx].every(Number.isFinite) || zoom <= 0 || tolerancePx < 0) throw new Error("open edge midpoint coordinates, zoom, and tolerance must be valid");
   const visibleLayers = new Set(document.layers.filter((layer) => layer.visible).map((layer) => layer.id));
@@ -22,12 +81,10 @@ export function pickOpenEdgeMidpointHover(document: DocumentSnapshot, pointer: P
       const source = sourced.source;
       if (!(source.kind === "sketch-edge" || source.kind === "line-element" || source.kind === "path-segment" || source.kind === "spline-span" || source.kind === "arc-element")) continue;
       try {
-        const parameter = closestParameter(sourced.curve, pointer);
-        const closest = pointAt(sourced.curve, parameter);
-        const distance = Math.hypot(pointer.x - closest.x, pointer.y - closest.y);
-        if (!Number.isFinite(distance) || distance * zoom > tolerancePx) continue;
         const midpoint = halfArcLengthMidpoint(sourced.curve);
         if (!midpoint) continue;
+        const distance = Math.hypot(pointer.x - midpoint.x, pointer.y - midpoint.y);
+        if (!Number.isFinite(distance) || distance * zoom > tolerancePx) continue;
         const key = source.kind === "sketch-edge" ? `${source.kind}:${source.elementId}:${source.edgeId}`
           : source.kind === "path-segment" ? `${source.kind}:${source.elementId}:${source.segmentId}`
             : source.kind === "spline-span" ? `${source.kind}:${source.elementId}:${source.startNodeId}:${source.endNodeId}`
@@ -578,8 +635,8 @@ export function hasNonCollinearPoints(points: readonly PointMm[], epsilon = 1e-9
 export type NodeFeedbackTool = "select" | "forma" | "pen" | "spline" | "rectangle" | "circle" | "line" | "arc" | "cut" | "dimension" | "radius";
 export type HoverNode = NodeHit | FormaNodeHit;
 
-/** Snaps a Forma node drag to another visible real node within screen tolerance. */
-export function snapFormaNodePoint(document: DocumentSnapshot, point: PointMm, zoom: number, moving: { readonly elementId: ElementId; readonly nodeIndex?: number }, tolerancePx = 8): PointMm {
+/** Returns the real-node target that wins Forma's existing snap precedence. */
+export function formaNodeSnapTarget(document: DocumentSnapshot, point: PointMm, zoom: number, moving: { readonly elementId: ElementId; readonly nodeIndex?: number }, tolerancePx = 8): PointMm | undefined {
   if (![point.x, point.y, zoom, tolerancePx].every(Number.isFinite) || zoom <= 0 || tolerancePx < 0) throw new Error("Forma snap coordinates and tolerance must be valid");
   const visible = new Set(document.layers.filter((layer) => layer.visible).map((layer) => layer.id));
   let best: { point: PointMm; distance: number; order: string } | undefined;
@@ -589,7 +646,12 @@ export function snapFormaNodePoint(document: DocumentSnapshot, point: PointMm, z
     const order = element.id + ":" + nodeIndex;
     if (distance <= tolerancePx && (!best || distance < best.distance || distance === best.distance && order < best.order)) best = { point: node.point, distance, order };
   }
-  return best?.point ?? point;
+  return best?.point;
+}
+
+/** Snaps a Forma node drag to another visible real node within screen tolerance. */
+export function snapFormaNodePoint(document: DocumentSnapshot, point: PointMm, zoom: number, moving: { readonly elementId: ElementId; readonly nodeIndex?: number }, tolerancePx = 8): PointMm {
+  return formaNodeSnapTarget(document, point, zoom, moving, tolerancePx) ?? point;
 }
 
 /** Finds the node feedback target supported by a tool without changing its hit semantics. */
