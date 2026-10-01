@@ -89,6 +89,10 @@ const sourceIsVisible = (before: DocumentSnapshot, after: DocumentSnapshot, cons
   const source = before.elements.find((element) => element.id === reference.elementId);
   const layer = source && before.layers.find((candidate) => candidate.id === source.layerId);
   if (!source || !layer?.visible) return false;
+  if (constraint.kind === "line-endpoint-midpoint") {
+    const dependent = after.elements.find((element) => element.id === constraint.references[0]!.elementId);
+    return dependent?.type === "line" && source.type === "line";
+  }
   if (reference.kind === "line") return source.type === "line";
   if (reference.kind === "arc") return source.type === "arc";
   if (reference.kind === "path-segment") return source.type === "path" && source.segments.some((segment) => segment.id === reference.segmentId);
@@ -115,7 +119,9 @@ export const createGeometryWithDocumentConstraints = (
     let current = geometry.document;
     for (const constraint of constraints) {
       if (!sourceIsVisible(before, geometry.document, constraint)) return { success: false, error: "Document constraint source is missing or hidden" };
-      const applied = addSolvedDocumentConstraint(constraint).apply(current);
+      const applied = constraint.kind === "line-endpoint-midpoint"
+        ? addDocumentConstraint(constraint).apply(current)
+        : addSolvedDocumentConstraint(constraint).apply(current);
       if (!applied.success) return applied;
       current = applied.document;
     }

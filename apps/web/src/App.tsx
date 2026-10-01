@@ -9,7 +9,7 @@ import { createPersistenceQueue, loadCollapsedPages, loadLastOpenedProject, load
 import { selectRecoveredProject } from "./appRecovery.js";
 import { addSolvedDocumentConstraint, createGeometryWithDocumentConstraints, documentConstraintDiagnosticId, supportsGlobalConstraintKind, updateSolvedDocumentConstraint } from "./globalConstraintCommands.js";
 import { renderSketchProfileSvg, renderSvg } from "@nodra/renderer-svg";
-import { canActivateRotation, centerPageInCanvas, clientPointToCanvas, clientPointToPage, cubicPlacementControls, formaNodeKey, hoveredSelectionCenter, isDrawingTool, marqueeSelection, movementExceedsThreshold, normalizeBounds, normalizeDrag, pagePointToCanvas, pathGuides, pickDimensionTarget, pickElement, pickFormaElement, pickFormaNode, pickFormaSegment, pickHoverNode, pickCutIntervalPreview, pickCuttableSegment, pickNode, pickPathNode, pickPathSegment, pickOpenEdgeMidpointHover, pointerDownIntent, visibleEditablePathNodeIndexes, screenDeltaToMm, screenPointToMm, selectedNodeAnchor, selectedPathAnchorIds, alignmentGuides, snapCreationPoint, snapFormaNodePoint, snapMoveDelta, viewportPointToCanvas, zoomAtPoint, type AlignmentGuide, type ContourNodeHit, type CutIntervalPreview, type DimensionTarget, type FormaNodeHit, type HoverNode, type NodeHit, type OpenEdgeMidpointHover, type PathNodeHit, type SnapGuide, type TransformMode, type CreationSnap } from "./interaction.js";
+import { canActivateRotation, centerPageInCanvas, clientPointToCanvas, clientPointToPage, cubicPlacementControls, formaNodeKey, formaNodeSnapTarget, hoveredSelectionCenter, isDrawingTool, marqueeSelection, movementExceedsThreshold, normalizeBounds, normalizeDrag, pagePointToCanvas, pathGuides, pickDimensionTarget, pickElement, pickFormaElement, pickFormaNode, pickFormaSegment, pickHoverNode, pickCutIntervalPreview, pickCuttableSegment, pickNode, pickPathNode, pickPathSegment, pickOpenEdgeMidpointHover, pickLineEndpointMidpointLanding, pointerDownIntent, visibleEditablePathNodeIndexes, screenDeltaToMm, screenPointToMm, selectedNodeAnchor, selectedPathAnchorIds, alignmentGuides, snapCreationPoint, snapFormaNodePoint, snapMoveDelta, viewportPointToCanvas, zoomAtPoint, type AlignmentGuide, type ContourNodeHit, type CutIntervalPreview, type DimensionTarget, type FormaNodeHit, type HoverNode, type NodeHit, type OpenEdgeMidpointHover, type PathNodeHit, type SnapGuide, type TransformMode, type CreationSnap } from "./interaction.js";
 import { aspectSize, formatMm, geometryValue, rotationDegreesValue, rotationPatch, type GeometryField, type PropertyElement, type RotatableElement } from "./propertyBar.js";
 import { projectWithSketchAssociation, resolveActivePieceId, sessionForSketchEditor, shouldAutosaveProject, shouldPersistEditorSnapshot, useDocumentStore, usePersistenceStore, useSavePolicyStore, useSelectionStore, useUiStore, useViewportStore, type Tool } from "./stores.js";
     import { createSketchSession, hasSketchSessionChanges, isSketchScopedDocumentChange, isSketchSessionHistoryLocked, reduceSketchSession, type SketchSessionState } from "@nodra/editor-core";
@@ -1291,6 +1291,9 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
   };
 
   const onCanvasPointerDown = (event: PointerEvent<HTMLDivElement>) => {
+     if (tool === "line") event.preventDefault();
+     else if (tool === "select" && event.button === 0 && !interaction.current
+       && !(event.target as HTMLElement).closest("input, textarea, select, button, form, [contenteditable='true']")) event.preventDefault();
      setOpenEdgeMidpointHover(undefined);
      // Commit before handling the next canvas target. This makes pointer-down
      // the authoritative boundary for a draft instead of relying on blur order.
@@ -1757,6 +1760,21 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
     setPenDraftPoint(undefined);
   };
 
+  const lineMidpointMoveCommand = (geometry: EditorCommand, lineId: ElementId, zoomAtGesture: number, endpoint?: "start" | "end", priorityTarget?: PointMm): EditorCommand => {
+    const base = editorRef.current.gesture?.base ?? editorRef.current.document;
+    const candidate = geometry.apply(base);
+    if (!candidate.success) return geometry;
+    const landing = pickLineEndpointMidpointLanding(candidate.document, lineId, zoomAtGesture, endpoint, priorityTarget);
+    if (!landing) return geometry;
+    const constraintId = `line-endpoint-midpoint-${lineId}-${landing.endpoint}-${landing.sourceLineId}`;
+    return createGeometryWithDocumentConstraints(geometry, (_before, after) => {
+      const dependent = after.elements.find((element) => element.id === landing.dependentLineId);
+      const source = after.elements.find((element) => element.id === landing.sourceLineId);
+      if (dependent?.type !== "line" || source?.type !== "line" || after.constraints?.some((constraint) => constraint.id === constraintId)) return [];
+      return [{ id: constraintId, kind: "line-endpoint-midpoint", references: [{ elementId: dependent.id, nodeId: landing.endpoint, endpoint: landing.endpoint }], source: { kind: "line", elementId: source.id } }];
+    });
+  };
+
   const onCanvasPointerMove = (event: PointerEvent<HTMLDivElement>) => {
        setCursorPoint(canvasPointAt(event));
       setDocumentCursorPoint(pointAt(event));
@@ -1842,7 +1860,14 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
       setAlignmentGuideState(alignmentGuides(editorRef.current.gesture?.base ?? editorRef.current.document, active.ids, rawDelta, zoom, 8));
       if (rawDelta.x === 0 && rawDelta.y === 0) return;
       active.dragged = true;
-      setEditorState(previewGestureFromBase(editorRef.current, moveElements(active.ids, snapped.delta)));
+      const base = editorRef.current.gesture?.base ?? editorRef.current.document;
+      const selectedLine = active.ids.length === 1 ? base.elements.find((element) => element.id === active.ids![0] && element.type === "line") : undefined;
+      const lineIsDependent = selectedLine && base.constraints?.some((constraint) => constraint.kind === "line-endpoint-midpoint" && constraint.references[0]?.elementId === selectedLine.id);
+      const geometry = moveElements(active.ids, snapped.delta);
+      const command = selectedLine && !lineIsDependent
+        ? lineMidpointMoveCommand(geometry, selectedLine.id, zoom, active.anchor?.elementId === selectedLine.id ? active.anchor.nodeIndex === 0 ? "start" : active.anchor.nodeIndex === 2 ? "end" : undefined : undefined, snapped.guide?.target)
+        : geometry;
+      setEditorState(previewGestureFromBase(editorRef.current, command));
       return;
     }
      if (active.kind === "spline-node" && active.splineId && active.splineNodeId) {
@@ -1870,10 +1895,17 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
       return;
     }
     if (active.kind === "contour-node" && active.formaNode) {
-      const point = snapFormaNodePoint(editorRef.current.document, pointAt(event), zoom, active.formaNode);
+      const rawPoint = pointAt(event);
+      const base = editorRef.current.gesture?.base ?? editorRef.current.document;
+      const point = snapFormaNodePoint(base, rawPoint, zoom, active.formaNode);
       if (!active.startClient || !movementExceedsThreshold(active.startClient, { x: event.clientX, y: event.clientY })) return;
       active.dragged = true;
-      const command = active.formaNode.contourNode ? updateContourNode(active.formaNode.elementId, active.formaNode.contourNode, point) : updateElementNode(active.formaNode.elementId, active.formaNode.nodeIndex ?? -1, point);
+      const nativeLine = base.elements.find((element) => element.id === active.formaNode!.elementId && element.type === "line");
+      const endpoint = active.formaNode.nodeIndex === 0 ? "start" : active.formaNode.nodeIndex === 2 ? "end" : undefined;
+      const geometry = active.formaNode.contourNode ? updateContourNode(active.formaNode.elementId, active.formaNode.contourNode, point) : updateElementNode(active.formaNode.elementId, active.formaNode.nodeIndex ?? -1, point);
+      const command = nativeLine && endpoint
+        ? lineMidpointMoveCommand(geometry, nativeLine.id, zoom, endpoint, formaNodeSnapTarget(base, rawPoint, zoom, active.formaNode))
+        : geometry;
       setEditorState(previewGestureFromBase(editorRef.current, command));
       return;
     }

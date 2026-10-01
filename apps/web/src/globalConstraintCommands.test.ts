@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createDocument, elementId, layerId, type DocumentConstraint, type SketchElement } from "@nodra/domain";
-import { createEditor, createElement, createSketchLine, dispatch, redo, undo, type EditorCommand } from "@nodra/editor-core";
+import { createEditor, createElement, createSketchLine, dispatch, moveElement, redo, undo, type EditorCommand } from "@nodra/editor-core";
 import { constraintResidualsForDocument } from "@nodra/constraints";
 import {
   addSolvedDocumentConstraint,
@@ -226,7 +226,23 @@ describe("global constraint commands", () => {
         expect(redo(undo(committed)).document).toEqual(committed.document);
       });
 
-      it("accepts and solves a global midpoint driven by a native line", () => {
+      it("adds a native Line endpoint midpoint relation atomically with a move and undoes both", () => {
+    const dependent = { type: "line" as const, id: elementId("dependent-line"), layerId: layer.id, start: { x: 1, y: 0 }, end: { x: 1, y: 10 }, rotation: 0, style };
+    const source = { ...dependent, id: elementId("source-line"), start: { x: 0, y: 0 }, end: { x: 10, y: 0 } };
+    const initial = createEditor({ ...createDocument("atomic-line-endpoint-midpoint", [layer]), elements: [dependent, source] });
+    const relation: DocumentConstraint = { id: "line-midpoint", kind: "line-endpoint-midpoint", references: [{ elementId: dependent.id, nodeId: "start", endpoint: "start" }], source: { kind: "line", elementId: source.id } };
+    const command = createGeometryWithDocumentConstraints(moveElement(dependent.id, { x: 4, y: 0 }), () => [relation]);
+
+    const committed = dispatch(initial, command);
+
+    expect(committed.document.constraints).toEqual([relation]);
+    expect(committed.document.elements.find((element) => element.id === dependent.id)).toMatchObject({ start: { x: 5, y: 0 }, end: { x: 5, y: 10 } });
+    expect(committed.document.revision).toBe(1);
+    expect(committed.undo).toHaveLength(1);
+    expect(undo(committed).document).toEqual(initial.document);
+  });
+
+  it("accepts and solves a global midpoint driven by a native line", () => {
     const dependent = sketch("dependent", 4, 3);
     const line = { type: "line" as const, id: elementId("native-source"), layerId: layer.id, start: { x: 0, y: 0 }, end: { x: 10, y: 0 }, rotation: 0, style };
     const constraint: DocumentConstraint = { id: "native-midpoint", kind: "midpoint", references: [{ elementId: dependent.id, nodeId: dependent.nodes[0]!.id }], source: { kind: "line", elementId: line.id } };

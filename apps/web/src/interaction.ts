@@ -1,11 +1,50 @@
 import type { DocumentSnapshot, Element, ElementId, LineElement, PathElement, PathSegment, PointMm } from "@nodra/domain";
-import { boundsOf, boundsOfElements, closestParameter, connectableNodeAddress, contourSegmentAt, contourVertexNodes, dimensionGeometry, elementCenter, elementSegmentAt, hitTest, pathGeometryNodes, pointAt, cuttableSegments, splitCuttableSegments, pathSegmentAt, realGeometryNodes, elementToCurves, halfArcLengthMidpoint, intersectCurves, partitionCurveByInterval, selectRemovableCurveInterval, selectSourcedCurveInterval, GEOMETRY_EPSILON, type Bounds, type ContourSegmentHit, type ContourVertexNode, type CurveFragment, type Curve2DSource, type PathGeometryNode, type RealGeometryNode, type PathSegmentHit, type SketchProfileResult } from "@nodra/geometry";
+import { boundsOf, boundsOfElements, closestParameter, connectableNodeAddress, contourSegmentAt, contourVertexNodes, dimensionGeometry, elementCenter, elementSegmentAt, hitTest, pathGeometryNodes, pointAt, cuttableSegments, splitCuttableSegments, pathSegmentAt, realGeometryNodes, elementToCurves, halfArcLengthMidpoint, intersectCurves, partitionCurveByInterval, selectRemovableCurveInterval, selectSourcedCurveInterval, lineElementToCurve, GEOMETRY_EPSILON, type Bounds, type ContourSegmentHit, type ContourVertexNode, type CurveFragment, type Curve2DSource, type PathGeometryNode, type RealGeometryNode, type PathSegmentHit, type SketchProfileResult } from "@nodra/geometry";
 
 export interface DragGeometry { readonly position: PointMm; readonly size: { readonly width: number; readonly height: number } }
 
 export interface OpenEdgeMidpointHover {
   readonly point: PointMm;
   readonly source: Curve2DSource;
+}
+
+export interface LineEndpointMidpointLanding {
+  readonly dependentLineId: ElementId;
+  readonly endpoint: "start" | "end";
+  readonly sourceLineId: ElementId;
+  readonly midpoint: PointMm;
+  readonly distancePx: number;
+}
+
+/** Finds a unique native-Line midpoint landing after applying the proposed move. */
+export function pickLineEndpointMidpointLanding(document: DocumentSnapshot, dependentLineId: ElementId, zoom: number, endpoint?: "start" | "end", priorityTarget?: PointMm, tolerancePx = 8): LineEndpointMidpointLanding | undefined {
+  if (![zoom, tolerancePx].every(Number.isFinite) || zoom <= 0 || tolerancePx < 0) throw new Error("line midpoint landing zoom and tolerance must be valid");
+  if (priorityTarget && ![priorityTarget.x, priorityTarget.y].every(Number.isFinite)) return undefined;
+  const dependent = document.elements.find((element): element is LineElement => element.id === dependentLineId && element.type === "line");
+  if (!dependent) return undefined;
+  const visible = new Set(document.layers.filter((layer) => layer.visible).map((layer) => layer.id));
+  if (!visible.has(dependent.layerId)) return undefined;
+  let dependentCurve: ReturnType<typeof lineElementToCurve>["curve"];
+  try { dependentCurve = lineElementToCurve(dependent).curve; } catch { return undefined; }
+  if (![dependentCurve.start.x, dependentCurve.start.y, dependentCurve.end.x, dependentCurve.end.y].every(Number.isFinite)) return undefined;
+  const endpoints = endpoint ? [endpoint] as const : ["start", "end"] as const;
+  const candidates: LineEndpointMidpointLanding[] = [];
+  for (const source of document.elements) {
+    if (source.type !== "line" || source.id === dependent.id || !visible.has(source.layerId)) continue;
+    let sourceCurve: ReturnType<typeof lineElementToCurve>["curve"];
+    try { sourceCurve = lineElementToCurve(source).curve; } catch { continue; }
+    if (![sourceCurve.start.x, sourceCurve.start.y, sourceCurve.end.x, sourceCurve.end.y].every(Number.isFinite) || Math.hypot(sourceCurve.end.x - sourceCurve.start.x, sourceCurve.end.y - sourceCurve.start.y) <= 1e-9) continue;
+    const midpoint = { x: sourceCurve.start.x / 2 + sourceCurve.end.x / 2, y: sourceCurve.start.y / 2 + sourceCurve.end.y / 2 };
+    for (const name of endpoints) {
+      const point = dependentCurve[name]; const distancePx = Math.hypot(point.x - midpoint.x, point.y - midpoint.y) * zoom;
+      if (Number.isFinite(distancePx) && distancePx <= tolerancePx) candidates.push({ dependentLineId, endpoint: name, sourceLineId: source.id, midpoint, distancePx });
+    }
+  }
+  candidates.sort((a, b) => a.distancePx - b.distancePx || `${a.endpoint}:${a.sourceLineId}`.localeCompare(`${b.endpoint}:${b.sourceLineId}`));
+  if (!candidates[0] || candidates[0].distancePx > tolerancePx || candidates[1]?.distancePx === candidates[0].distancePx) return undefined;
+  const landing = candidates[0];
+  if (landing && priorityTarget && (landing.midpoint.x !== priorityTarget.x || landing.midpoint.y !== priorityTarget.y)) return undefined;
+  return landing;
 }
 
 /** Picks the nearest calculated midpoint within a screen-pixel radius. */
@@ -576,8 +615,8 @@ export function hasNonCollinearPoints(points: readonly PointMm[], epsilon = 1e-9
 export type NodeFeedbackTool = "select" | "forma" | "pen" | "spline" | "rectangle" | "circle" | "line" | "arc" | "cut" | "dimension" | "radius";
 export type HoverNode = NodeHit | FormaNodeHit;
 
-/** Snaps a Forma node drag to another visible real node within screen tolerance. */
-export function snapFormaNodePoint(document: DocumentSnapshot, point: PointMm, zoom: number, moving: { readonly elementId: ElementId; readonly nodeIndex?: number }, tolerancePx = 8): PointMm {
+/** Returns the real-node target that wins Forma's existing snap precedence. */
+export function formaNodeSnapTarget(document: DocumentSnapshot, point: PointMm, zoom: number, moving: { readonly elementId: ElementId; readonly nodeIndex?: number }, tolerancePx = 8): PointMm | undefined {
   if (![point.x, point.y, zoom, tolerancePx].every(Number.isFinite) || zoom <= 0 || tolerancePx < 0) throw new Error("Forma snap coordinates and tolerance must be valid");
   const visible = new Set(document.layers.filter((layer) => layer.visible).map((layer) => layer.id));
   let best: { point: PointMm; distance: number; order: string } | undefined;
@@ -587,7 +626,12 @@ export function snapFormaNodePoint(document: DocumentSnapshot, point: PointMm, z
     const order = element.id + ":" + nodeIndex;
     if (distance <= tolerancePx && (!best || distance < best.distance || distance === best.distance && order < best.order)) best = { point: node.point, distance, order };
   }
-  return best?.point ?? point;
+  return best?.point;
+}
+
+/** Snaps a Forma node drag to another visible real node within screen tolerance. */
+export function snapFormaNodePoint(document: DocumentSnapshot, point: PointMm, zoom: number, moving: { readonly elementId: ElementId; readonly nodeIndex?: number }, tolerancePx = 8): PointMm {
+  return formaNodeSnapTarget(document, point, zoom, moving, tolerancePx) ?? point;
 }
 
 /** Finds the node feedback target supported by a tool without changing its hit semantics. */
