@@ -119,7 +119,7 @@ const sketchEdgeReference = z.object({ elementId: nonEmptyId, edgeId: nonEmptyId
 const sketchConstraintReference = z.union([sketchPointReference, sketchEdgeReference]);
 const sketchConstraint = z.object({ id: nonEmptyId, kind: z.enum(["horizontal", "vertical", "coincident", "parallel", "perpendicular", "equal", "distance-horizontal", "distance-vertical", "distance", "angle", "fixed", "midpoint"]), references: z.array(sketchConstraintReference).min(1).max(4), value: finite.positive().optional() }).strict();
 const nativeLineMidpointConstraint = z.object({ id: nonEmptyId, kind: z.literal("midpoint"), references: z.tuple([sketchPointReference]), source: z.discriminatedUnion("kind", [z.object({ kind: z.literal("line"), elementId: nonEmptyId }).strict(), z.object({ kind: z.literal("path-segment"), elementId: nonEmptyId, segmentId: nonEmptyId }).strict(), z.object({ kind: z.literal("spline-span"), elementId: nonEmptyId, startNodeId: nonEmptyId, endNodeId: nonEmptyId }).strict(), z.object({ kind: z.literal("arc"), elementId: nonEmptyId }).strict()]) }).strict();
-const lineEndpointMidpointConstraint = z.object({ id: nonEmptyId, kind: z.literal("line-endpoint-midpoint"), references: z.tuple([z.object({ elementId: nonEmptyId, nodeId: z.enum(["start", "end"]), endpoint: z.enum(["start", "end"]) }).strict()]), source: z.discriminatedUnion("kind", [z.object({ kind: z.literal("line"), elementId: nonEmptyId }).strict(), z.object({ kind: z.literal("path-segment"), elementId: nonEmptyId, segmentId: nonEmptyId }).strict()]) }).strict();
+const lineEndpointMidpointConstraint = z.object({ id: nonEmptyId, kind: z.literal("line-endpoint-midpoint"), references: z.tuple([z.object({ elementId: nonEmptyId, nodeId: z.enum(["start", "end"]), endpoint: z.enum(["start", "end"]) }).strict()]), source: z.discriminatedUnion("kind", [z.object({ kind: z.literal("line"), elementId: nonEmptyId }).strict(), z.object({ kind: z.literal("path-segment"), elementId: nonEmptyId, segmentId: nonEmptyId }).strict(), z.object({ kind: z.literal("spline-span"), elementId: nonEmptyId, startNodeId: nonEmptyId, endNodeId: nonEmptyId }).strict(), z.object({ kind: z.literal("arc"), elementId: nonEmptyId }).strict(), z.object({ kind: z.literal("sketch-edge"), elementId: nonEmptyId, edgeId: nonEmptyId }).strict()]) }).strict();
 const documentConstraint = z.union([lineEndpointMidpointConstraint, nativeLineMidpointConstraint, sketchConstraint]);
 const sketch = z.object({ id: nonEmptyId, layerId: nonEmptyId, ...pieceOwnership, role: geometryRole, type: z.literal("sketch"), nodes: z.array(sketchNode).min(2), edges: z.array(sketchEdge).min(1), constraints: z.array(sketchConstraint).optional(), style, operation: operation.optional() }).strict().superRefine((value, ctx) => {
   const nodeIds = value.nodes.map((node) => node.id); const edgeIds = value.edges.map((edge) => edge.id);
@@ -315,6 +315,36 @@ export const validateDocumentConstraints = (elements: readonly z.infer<typeof el
       if (constraint.source.kind === "line") {
         if (!source || source.type !== "line") ctx.addIssue({ code: "custom", message: "Endpoint midpoint source must identify a native Line", path: [...path, index, "source"] });
         else if (!nativeLineHasFiniteDistinctVisualEndpoints(source)) ctx.addIssue({ code: "custom", message: "Endpoint midpoint source line must have finite, distinct visual endpoints", path: [...path, index, "source"] });
+      } else if (constraint.source.kind === "arc") {
+        if (!source || source.type !== "arc") ctx.addIssue({ code: "custom", message: "Endpoint midpoint source must identify an existing partial Arc", path: [...path, index, "source"] });
+        else if (!arcHasFiniteExecutableMidpoint(source)) ctx.addIssue({ code: "custom", message: "Endpoint midpoint Arc must have a finite, executable partial sweep and midpoint", path: [...path, index, "source"] });
+      } else if (constraint.source.kind === "spline-span") {
+        if (!source || source.type !== "spline") ctx.addIssue({ code: "custom", message: "Endpoint midpoint source must identify an existing Spline", path: [...path, index, "source"] });
+        else if (source.closed) ctx.addIssue({ code: "custom", message: "Endpoint midpoint Spline source must be open", path: [...path, index, "source"] });
+        else {
+          const { startNodeId, endNodeId } = constraint.source;
+          const startIndex = source.nodes.findIndex((node) => node.id === startNodeId);
+          const endIndex = source.nodes.findIndex((node) => node.id === endNodeId);
+          if (startIndex < 0 || endIndex < 0) ctx.addIssue({ code: "custom", message: "Endpoint midpoint Spline span nodes must exist", path: [...path, index, "source"] });
+          else if (endIndex !== startIndex + 1) ctx.addIssue({ code: "custom", message: "Endpoint midpoint Spline span nodes must be adjacent in traversal order", path: [...path, index, "source"] });
+          else {
+            const start = source.nodes[startIndex]!; const end = source.nodes[endIndex]!;
+            const control1 = { x: start.anchor.x + (start.outHandle?.dx ?? 0), y: start.anchor.y + (start.outHandle?.dy ?? 0) };
+            const control2 = { x: end.anchor.x + (end.inHandle?.dx ?? 0), y: end.anchor.y + (end.inHandle?.dy ?? 0) };
+            const degenerate = start.anchor.x === control1.x && start.anchor.y === control1.y && control1.x === control2.x && control1.y === control2.y && control2.x === end.anchor.x && control2.y === end.anchor.y;
+            if (!cubicHasFiniteExecutableLength(start.anchor, control1, control2, end.anchor)) ctx.addIssue({ code: "custom", message: "Endpoint midpoint Spline span must have finite executable length", path: [...path, index, "source"] });
+            else if (degenerate) ctx.addIssue({ code: "custom", message: "Endpoint midpoint Spline span must not be degenerate", path: [...path, index, "source"] });
+          }
+        }
+      } else if (constraint.source.kind === "sketch-edge") {
+        if (!source || source.type !== "sketch") ctx.addIssue({ code: "custom", message: "Endpoint midpoint source must identify an existing Sketch", path: [...path, index, "source"] });
+        else {
+          const edge = source.edges.find((candidate) => candidate.id === ("edgeId" in constraint.source ? constraint.source.edgeId : ""));
+          const start = edge && source.nodes.find((candidate) => candidate.id === edge.startNodeId)?.point;
+          const end = edge && source.nodes.find((candidate) => candidate.id === edge.endNodeId)?.point;
+          if (!edge || !start || !end) ctx.addIssue({ code: "custom", message: "Endpoint midpoint Sketch edge does not exist", path: [...path, index, "source", "edgeId"] });
+          else if (![start.x, start.y, end.x, end.y].every(Number.isFinite) || start.x === end.x && start.y === end.y) ctx.addIssue({ code: "custom", message: "Endpoint midpoint Sketch edge must have finite, distinct endpoints", path: [...path, index, "source", "edgeId"] });
+        }
       } else if (!source || source.type !== "path") ctx.addIssue({ code: "custom", message: "Endpoint midpoint source must identify an existing Path", path: [...path, index, "source"] });
       else if (source.closed) ctx.addIssue({ code: "custom", message: "Endpoint midpoint Path source must be open", path: [...path, index, "source"] });
       else {
