@@ -3,7 +3,7 @@ import { createDocument, elementId, layerId, type DocumentSnapshot, type Element
 import { validateDocument } from "@nodra/validation";
 import { canActivateRotation, circleGeometry, centerPageInCanvas, clientPointToCanvas, clientPointToPage, creationGuides, directionalGuide, resolveLineInference, hasNonCollinearPoints, hoveredSelectionCenter, INITIAL_ZOOM, isDrawingTool, marqueeSelection, MAX_ZOOM, MIN_ZOOM, movementExceedsThreshold, nodeAlignmentGuides, normalizeBounds, normalizeDrag, pagePointToScreen, screenDeltaToMm, screenPointToMm, viewportPointToCanvas, containsBounds, elementsContainedBy, pickDimensionTarget, pickElement, pickFormaElement, pickFormaNode, pickFormaSegment, pickHoverNode, pickCutIntervalPreview, pickCuttableSegment, pickNode, pickOpenEdgeMidpointHover, pickLineEndpointMidpointLanding, pointerDownIntent, selectedNodeAnchor, selectionCenter, selectionFrame, snapCreationPoint, snapMoveDelta, visibleEditablePathNodeIndexes, visibleNativeCircularCenters, zoomAtPoint } from "./interaction.js";
 import { geometryPatch, geometryValue } from "./propertyBar.js";
-import { dimensionKindForNodes, dimensionOffsetForPlacement, pointMidpoint, sketchProfileResult } from "@nodra/geometry";
+import { dimensionKindForNodes, dimensionOffsetForPlacement, halfArcLengthMidpoint, pointMidpoint, sketchProfileResult, splineSpanToCurve } from "@nodra/geometry";
 
 describe("open-edge midpoint hover picking", () => {
   const layer = { id: layerId("mid-hover"), name: "Visible", visible: true, order: 0 };
@@ -78,6 +78,20 @@ describe("native Line endpoint midpoint landing", () => {
     expect(pickLineEndpointMidpointLanding(doc([dependent, { ...path, closed: true }]), dependent.id, 1)).toBeUndefined();
     const hidden = { ...layer, id: layerId("hidden-path-layer"), visible: false };
     expect(pickLineEndpointMidpointLanding(doc([dependent, { ...path, layerId: hidden.id }], [layer, hidden]), dependent.id, 1)).toBeUndefined();
+  });
+
+  it("lands on only an adjacent span of a visible open Spline with ordered stable node IDs", () => {
+    const spline = { type: "spline" as const, id: elementId("source-spline"), layerId: layer.id, nodes: [
+      { id: "s0", anchor: { x: 0, y: 0 }, continuity: "smooth" as const, outHandle: { dx: 0, dy: 8 } },
+      { id: "s1", anchor: { x: 20, y: 0 }, continuity: "smooth" as const, inHandle: { dx: 0, dy: 8 }, outHandle: { dx: 0, dy: -8 } },
+      { id: "s2", anchor: { x: 40, y: 0 }, continuity: "smooth" as const, inHandle: { dx: 0, dy: -8 } },
+    ], closed: false, style };
+    const midpoint = halfArcLengthMidpoint(splineSpanToCurve(spline, 0).curve)!;
+    const positionedDependent = { ...dependent, start: midpoint, end: { x: 30, y: 30 } };
+    expect(pickLineEndpointMidpointLanding(doc([positionedDependent, spline]), dependent.id, 1)).toMatchObject({ sourceLineId: spline.id, source: { kind: "spline-span", elementId: spline.id, startNodeId: "s0", endNodeId: "s1" }, midpoint });
+    expect(pickLineEndpointMidpointLanding(doc([positionedDependent, { ...spline, closed: true }]), dependent.id, 1)).toBeUndefined();
+    const hidden = { ...layer, id: layerId("hidden-spline-layer"), visible: false };
+    expect(pickLineEndpointMidpointLanding(doc([positionedDependent, { ...spline, layerId: hidden.id }], [layer, hidden]), dependent.id, 1)).toBeUndefined();
   });
 
   it("uses visually rotated endpoints and honors source and dependent flips", () => {

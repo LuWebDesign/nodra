@@ -93,7 +93,8 @@ const sourceIsVisible = (before: DocumentSnapshot, after: DocumentSnapshot, cons
     const dependent = after.elements.find((element) => element.id === constraint.references[0]!.elementId);
     if (dependent?.type !== "line") return false;
     if (reference.kind === "line") return source.type === "line";
-    return reference.kind === "path-segment" && source.type === "path" && !source.closed && source.segments.some((segment) => segment.id === reference.segmentId);
+    if (reference.kind === "path-segment") return source.type === "path" && !source.closed && source.segments.some((segment) => segment.id === reference.segmentId);
+    return reference.kind === "spline-span" && source.type === "spline" && !source.closed && source.nodes.some((node, index) => node.id === reference.startNodeId && source.nodes[index + 1]?.id === reference.endNodeId);
   }
   if (reference.kind === "line") return source.type === "line";
   if (reference.kind === "arc") return source.type === "arc";

@@ -299,6 +299,17 @@ describe("native document validation", () => {
     expect(validateDocument({ ...base, elements: [path, dependent], constraints: [{ ...pathRelation, source: { ...pathRelation.source, segmentId: "missing" } }] }).success).toBe(false);
     expect(validateDocument({ ...base, elements: [{ ...path, nodes: path.nodes.map((node) => ({ ...node, anchor: { x: 0, y: 0 } })) }, dependent], constraints: [pathRelation] }).success).toBe(false);
     expect(validateDocument({ ...base, layers: [{ ...base.layers[0]!, visible: false }], elements: [path, dependent], constraints: [pathRelation] }).success).toBe(false);
+
+    const spline = { type: "spline" as const, id: elementId("source-spline"), layerId: source.layerId, nodes: [
+      { id: "s0", anchor: { x: 0, y: 0 }, continuity: "smooth" as const, outHandle: { dx: 0, dy: 5 } },
+      { id: "s1", anchor: { x: 10, y: 0 }, continuity: "smooth" as const, inHandle: { dx: 0, dy: 5 } },
+      { id: "s2", anchor: { x: 20, y: 0 }, continuity: "smooth" as const },
+    ], closed: false, style };
+    const splineRelation = { ...relation, source: { kind: "spline-span" as const, elementId: spline.id, startNodeId: "s0", endNodeId: "s1" } };
+    expect(validateDocument({ ...base, elements: [spline, dependent], constraints: [splineRelation] }).success).toBe(true);
+    expect(validateDocument({ ...base, elements: [{ ...spline, closed: true }, dependent], constraints: [splineRelation] }).success).toBe(false);
+    expect(validateDocument({ ...base, elements: [spline, dependent], constraints: [{ ...splineRelation, source: { ...splineRelation.source, startNodeId: "s1", endNodeId: "s0" } }] }).success).toBe(false);
+    expect(validateDocument({ ...base, elements: [spline, dependent], constraints: [{ ...splineRelation, source: { ...splineRelation.source, endNodeId: "missing" } }] }).success).toBe(false);
   });
 
   it("round-trips valid records", () => {

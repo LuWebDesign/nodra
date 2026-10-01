@@ -2,7 +2,7 @@ import { expect, test, type Locator, type Page } from "@playwright/test";
 
 type ScreenPoint = { x: number; y: number };
 type LinePoints = { start: ScreenPoint; end: ScreenPoint; midpoint: ScreenPoint };
-type StoredLineRelation = { id?: string; kind: string; references: Array<{ elementId: string }>; source?: { kind?: string; elementId: string; segmentId?: string } };
+type StoredLineRelation = { id?: string; kind: string; references: Array<{ elementId: string }>; source?: { kind?: string; elementId: string; segmentId?: string; startNodeId?: string; endNodeId?: string } };
 type StoredRevision = {
   projectId: string;
   revision: number;
@@ -51,7 +51,7 @@ async function drawNativeLine(page: Page, start: ScreenPoint, end: ScreenPoint, 
   await expect.poll(async () => await canvas.getAttribute("data-document-element-ids")).not.toBe(beforeIds);
 }
 
-async function waitForDurableRelation(page: Page, revision: number, sourceId: string, dependentId: string, sourceKind: "line" | "path-segment" = "line") {
+async function waitForDurableRelation(page: Page, revision: number, sourceId: string, dependentId: string, sourceKind: "line" | "path-segment" | "spline-span" = "line") {
   await expect.poll(async () => page.evaluate(({ revision, sourceId, dependentId, sourceKind }) => new Promise<boolean>((resolve, reject) => {
     const request = indexedDB.open("nodra-persistence");
     request.onerror = () => reject(request.error);
@@ -68,7 +68,7 @@ async function waitForDurableRelation(page: Page, revision: number, sourceId: st
           const relation = constraints.find((constraint) => constraint.kind === "line-endpoint-midpoint"
             && constraint.references.some((reference) => reference.elementId === dependentId)
             && constraint.source?.elementId === sourceId
-            && (sourceKind === "line" ? constraint.source.kind !== "path-segment" : constraint.source.kind === "path-segment" && typeof constraint.source.segmentId === "string" && constraint.source.segmentId.length > 0));
+            && (sourceKind === "line" ? constraint.source.kind === "line" : sourceKind === "path-segment" ? constraint.source.kind === "path-segment" && typeof constraint.source.segmentId === "string" && constraint.source.segmentId.length > 0 : constraint.source.kind === "spline-span" && typeof constraint.source.startNodeId === "string" && typeof constraint.source.endNodeId === "string"));
           if (!hasBothLines) return [];
           return [{ row, hasRelation: relation !== undefined, relation: relation ?? null }];
         }).sort((a, b) => b.row.savedAt - a.row.savedAt || b.row.revision - a.row.revision);
@@ -370,6 +370,77 @@ test("F4b-P Forma endpoint drag attaches an independent Line to a stable open-Pa
     const [movedPath, movedDependent] = await Promise.all([pathScreenPoints(), screenPoints(reloadedDependent)]);
     return Math.hypot(movedDependent.start.x - movedPath.midpoint.x, movedDependent.start.y - movedPath.midpoint.y);
   }).toBeLessThanOrEqual(8);
+});
+
+test("F4b-S Forma endpoint drag persists an ordered Spline span and follows source movement after reload", async ({ page }) => {
+  await createProjectAndPiece(page, "F4b-S");
+  const bounds = await page.locator(".page").boundingBox();
+  expect(bounds).not.toBeNull();
+  const splineStart = { x: bounds!.x + 110, y: bounds!.y + 130 };
+  const splineEnd = { x: splineStart.x + 150, y: splineStart.y + 20 };
+  await page.getByRole("button", { name: "Spline", exact: true }).click();
+  await page.mouse.click(splineStart.x, splineStart.y);
+  await page.mouse.click(splineEnd.x, splineEnd.y);
+  const splineElement = page.locator(".page-svg svg path[data-element-id]").first();
+  await expect(splineElement).toHaveCount(1);
+  const splineId = await splineElement.getAttribute("data-element-id");
+  expect(splineId).toBeTruthy();
+  const midpoint = await splineElement.evaluate((element) => {
+    const path = element as SVGPathElement;
+    const matrix = path.getScreenCTM();
+    if (!matrix) throw new Error("Spline has no screen transform");
+    const point = path.getPointAtLength(path.getTotalLength() / 2);
+    const screen = new DOMPoint(point.x, point.y).matrixTransform(matrix);
+    return { x: screen.x, y: screen.y };
+  });
+  const lineStart = { x: bounds!.x + 350, y: bounds!.y + 220 };
+  await drawNativeLine(page, lineStart, { x: lineStart.x + 100, y: lineStart.y + 60 }, true);
+  const dependent = page.locator(".page-svg svg g > line[data-element-id]").first();
+  const dependentId = await dependent.getAttribute("data-element-id");
+  expect(dependentId).toBeTruthy();
+  const before = await screenPoints(dependent);
+  await page.getByRole("button", { name: "Forma", exact: true }).click();
+  await page.mouse.move(before.start.x, before.start.y);
+  await page.mouse.down();
+  await page.mouse.move(midpoint.x, midpoint.y, { steps: 8 });
+  await page.mouse.up();
+  await expect.poll(async () => {
+    const landed = await screenPoints(dependent);
+    return Math.hypot(landed.start.x - midpoint.x, landed.start.y - midpoint.y);
+  }).toBeLessThanOrEqual(8);
+  const revision = Number(await page.locator(".page").getAttribute("data-document-revision"));
+  await waitForDurableRelation(page, revision, splineId!, dependentId!, "spline-span");
+  await page.getByRole("button", { name: "Deshacer" }).click();
+  await expect.poll(async () => {
+    const undone = await screenPoints(dependent);
+    return Math.hypot(undone.start.x - before.start.x, undone.start.y - before.start.y);
+  }).toBeLessThanOrEqual(1);
+  await page.getByRole("button", { name: "Rehacer" }).click();
+  await expect.poll(async () => {
+    const redone = await screenPoints(dependent);
+    return Math.hypot(redone.start.x - midpoint.x, redone.start.y - midpoint.y);
+  }).toBeLessThanOrEqual(8);
+  await page.reload();
+  const reloadedSpline = page.locator(`.page-svg svg path[data-element-id="${splineId}"]`);
+  const reloadedDependent = page.locator(`.page-svg svg g > line[data-element-id="${dependentId}"]`);
+  await expect(reloadedSpline).toHaveCount(1);
+  await expect(reloadedDependent).toHaveCount(1);
+  const splineMidpoint = async () => reloadedSpline.evaluate((element) => {
+    const path = element as SVGPathElement; const matrix = path.getScreenCTM();
+    if (!matrix) throw new Error("Spline has no screen transform");
+    const point = path.getPointAtLength(path.getTotalLength() / 2); const screen = new DOMPoint(point.x, point.y).matrixTransform(matrix);
+    return { x: screen.x, y: screen.y };
+  });
+  const beforeMove = await splineMidpoint();
+  await page.getByRole("button", { name: "Seleccion", exact: true }).click();
+  await page.mouse.move(beforeMove.x, beforeMove.y + 10);
+  await page.mouse.down();
+  await page.mouse.move(beforeMove.x + 30, beforeMove.y + 35, { steps: 8 });
+  await page.mouse.up();
+  await expect.poll(async () => {
+    const [nextMidpoint, line] = await Promise.all([splineMidpoint(), screenPoints(reloadedDependent)]);
+    return Math.hypot(nextMidpoint.x - beforeMove.x, nextMidpoint.y - beforeMove.y) > 1 && Math.hypot(line.start.x - nextMidpoint.x, line.start.y - nextMidpoint.y) <= 8;
+  }).toBe(true);
 });
 
 test("Escape cancels an uncommitted Forma endpoint drag without creating a relation", async ({ page }) => {

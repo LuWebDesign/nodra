@@ -1767,18 +1767,22 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
     const landing = pickLineEndpointMidpointLanding(candidate.document, lineId, zoomAtGesture, endpoint, priorityTarget);
     if (!landing) return geometry;
     const sourceReference = landing.source;
-    const sourceKey = sourceReference.kind === "path-segment" ? sourceReference.segmentId : "line";
+    const sourceKey = sourceReference.kind === "path-segment" ? sourceReference.segmentId : sourceReference.kind === "spline-span" ? `${sourceReference.startNodeId}-${sourceReference.endNodeId}` : "line";
     const constraintId = `line-endpoint-midpoint-${lineId}-${landing.endpoint}-${landing.sourceLineId}-${sourceKey}`;
     return createGeometryWithDocumentConstraints(geometry, (_before, after) => {
       const dependent = after.elements.find((element) => element.id === landing.dependentLineId);
       const source = after.elements.find((element) => element.id === landing.sourceLineId);
       const validSource = sourceReference.kind === "path-segment"
         ? source?.type === "path" && !source.closed && source.segments.some((segment) => segment.id === sourceReference.segmentId)
-        : source?.type === "line";
+        : sourceReference.kind === "spline-span"
+          ? source?.type === "spline" && !source.closed && source.nodes.some((node, index) => node.id === sourceReference.startNodeId && source.nodes[index + 1]?.id === sourceReference.endNodeId)
+          : source?.type === "line";
       if (dependent?.type !== "line" || !validSource || after.constraints?.some((constraint) => constraint.id === constraintId)) return [];
       return [{ id: constraintId, kind: "line-endpoint-midpoint", references: [{ elementId: dependent.id, nodeId: landing.endpoint, endpoint: landing.endpoint }], source: sourceReference.kind === "path-segment"
         ? { kind: "path-segment", elementId: sourceReference.elementId, segmentId: sourceReference.segmentId }
-        : { kind: "line", elementId: sourceReference.elementId } }];
+        : sourceReference.kind === "spline-span"
+          ? { kind: "spline-span", elementId: sourceReference.elementId, startNodeId: sourceReference.startNodeId, endNodeId: sourceReference.endNodeId }
+          : { kind: "line", elementId: sourceReference.elementId } }];
     });
   };
 

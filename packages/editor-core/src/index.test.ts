@@ -474,6 +474,27 @@ describe("editor core", () => {
     expect(undo(deleted).document).toEqual(initial.document);
   });
 
+  it("projects native Line endpoints from stable Spline spans and removes invalidated relations atomically", () => {
+    const source: SplineElement = { ...spline, id: elementId("endpoint-spline-source"), nodes: [{ id: "s0", anchor: { x: 0, y: 0 }, continuity: "smooth", outHandle: { dx: 0, dy: 5 } }, { id: "s1", anchor: { x: 10, y: 0 }, continuity: "smooth", inHandle: { dx: 0, dy: 5 } }, { id: "s2", anchor: { x: 20, y: 0 }, continuity: "smooth" }] };
+    const dependent: LineElement = { type: "line", id: elementId("endpoint-spline-dependent"), layerId: rectangle.layerId, start: { x: 2, y: 2 }, end: { x: 20, y: 20 }, rotation: 0, style: rectangle.style };
+    const constraint = { id: "endpoint-spline-midpoint", kind: "line-endpoint-midpoint" as const, references: [{ elementId: dependent.id, nodeId: "start" as const, endpoint: "start" as const }] as const, source: { kind: "spline-span" as const, elementId: source.id, startNodeId: "s0", endNodeId: "s1" } };
+    const initial = dispatch(createEditor({ ...document, schemaVersion: 13, elements: [source, dependent] }), addDocumentConstraint(constraint));
+    const projectedLine = (state: typeof initial) => state.document.elements.find((element): element is LineElement => element.id === dependent.id && element.type === "line")!;
+    const initialMidpoint = halfArcLengthMidpoint(splineSpanToCurve(source, 0).curve)!;
+    expect(projectedLine(initial).start.x).toBeCloseTo(initialMidpoint.x, 10);
+    expect(projectedLine(initial).start.y).toBeCloseTo(initialMidpoint.y, 10);
+    const moved = dispatch(initial, updateSplineNode(source.id, "s1", { x: 12, y: 3 }));
+    expect(moved.document.constraints).toEqual([constraint]);
+    const movedSource = moved.document.elements.find((element): element is SplineElement => element.id === source.id && element.type === "spline")!;
+    const movedMidpoint = halfArcLengthMidpoint(splineSpanToCurve(movedSource, 0).curve)!;
+    expect(projectedLine(moved).start.x).toBeCloseTo(movedMidpoint.x, 10);
+    expect(projectedLine(moved).start.y).toBeCloseTo(movedMidpoint.y, 10);
+    expect(undo(moved).document).toEqual(initial.document);
+    const inserted = dispatch(initial, replaceSplineElement({ ...source, nodes: [source.nodes[0]!, { id: "between", anchor: { x: 5, y: 1 }, continuity: "smooth" }, ...source.nodes.slice(1)] }));
+    expect(inserted.document.constraints).toEqual([]);
+    expect(inserted.document.elements.find((element): element is LineElement => element.id === dependent.id && element.type === "line")?.start).toEqual(projectedLine(initial).start);
+  });
+
   it("projects spline-span midpoint dependencies by ordered node IDs and fails closed on topology changes", () => {
     const source: SplineElement = { ...spline, id: elementId("spline-span-source"), nodes: [{ id: "s0", anchor: { x: 0, y: 0 }, continuity: "smooth", outHandle: { dx: 0, dy: 5 } }, { id: "s1", anchor: { x: 10, y: 0 }, continuity: "smooth", inHandle: { dx: 0, dy: 5 } }, { id: "s2", anchor: { x: 20, y: 0 }, continuity: "smooth" }] };
     const dependent = createSketchLine(elementId("spline-span-dependent"), rectangle.layerId, rectangle.style, { x: 5, y: 5 }, { x: 5, y: 15 });

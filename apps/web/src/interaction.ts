@@ -17,7 +17,7 @@ export interface LineEndpointMidpointLanding {
   readonly distancePx: number;
 }
 
-/** Finds a unique visible native-Line or open-Path-segment midpoint landing after applying the proposed move. */
+/** Finds a unique visible native-Line, open-Path-segment, or open-Spline-span midpoint landing after applying the proposed move. */
 export function pickLineEndpointMidpointLanding(document: DocumentSnapshot, dependentLineId: ElementId, zoom: number, endpoint?: "start" | "end", priorityTarget?: PointMm, tolerancePx = 8): LineEndpointMidpointLanding | undefined {
   if (![zoom, tolerancePx].every(Number.isFinite) || zoom <= 0 || tolerancePx < 0) throw new Error("line midpoint landing zoom and tolerance must be valid");
   if (priorityTarget && ![priorityTarget.x, priorityTarget.y].every(Number.isFinite)) return undefined;
@@ -35,11 +35,11 @@ export function pickLineEndpointMidpointLanding(document: DocumentSnapshot, depe
     let sources: ReturnType<typeof elementToCurves>;
     try {
       if (sourceElement.type === "line") sources = elementToCurves(sourceElement);
-      else if (sourceElement.type === "path" && !sourceElement.closed) sources = elementToCurves(sourceElement);
+      else if ((sourceElement.type === "path" || sourceElement.type === "spline") && !sourceElement.closed) sources = elementToCurves(sourceElement);
       else continue;
     } catch { continue; }
     for (const sourced of sources) {
-      if (sourced.source.kind !== "line-element" && sourced.source.kind !== "path-segment") continue;
+      if (sourced.source.kind !== "line-element" && sourced.source.kind !== "path-segment" && sourced.source.kind !== "spline-span") continue;
       let midpoint: PointMm | undefined;
       try { midpoint = halfArcLengthMidpoint(sourced.curve); } catch { continue; }
       if (!midpoint || ![midpoint.x, midpoint.y].every(Number.isFinite)) continue;
@@ -49,7 +49,8 @@ export function pickLineEndpointMidpointLanding(document: DocumentSnapshot, depe
       }
     }
   }
-  candidates.sort((a, b) => a.distancePx - b.distancePx || `${a.endpoint}:${a.sourceLineId}:${a.source.kind === "path-segment" ? a.source.segmentId : "line"}`.localeCompare(`${b.endpoint}:${b.sourceLineId}:${b.source.kind === "path-segment" ? b.source.segmentId : "line"}`));
+  const sourceOrderKey = (landing: LineEndpointMidpointLanding): string => landing.source.kind === "path-segment" ? landing.source.segmentId : landing.source.kind === "spline-span" ? `${landing.source.startNodeId}:${landing.source.endNodeId}` : "line";
+  candidates.sort((a, b) => a.distancePx - b.distancePx || `${a.endpoint}:${a.sourceLineId}:${sourceOrderKey(a)}`.localeCompare(`${b.endpoint}:${b.sourceLineId}:${sourceOrderKey(b)}`));
   if (!candidates[0] || candidates[0].distancePx > tolerancePx || candidates[1]?.distancePx === candidates[0].distancePx) return undefined;
   const landing = candidates[0];
   if (landing && priorityTarget && (landing.midpoint.x !== priorityTarget.x || landing.midpoint.y !== priorityTarget.y)) return undefined;

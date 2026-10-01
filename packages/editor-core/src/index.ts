@@ -104,7 +104,13 @@ const withoutDanglingDocumentConstraints = (document: DocumentSnapshot, elements
       if (target?.type !== "line") return false;
       if (constraint.source.kind === "line") return source?.type === "line";
       const sourceReference = constraint.source;
-      if (source?.type !== "path" || source.closed || !source.segments.some((segment) => segment.id === sourceReference.segmentId)) return false;
+      if (sourceReference.kind === "spline-span") {
+        if (source?.type !== "spline" || source.closed) return false;
+        const { startNodeId, endNodeId } = sourceReference;
+        const index = source.nodes.findIndex((node, candidate) => node.id === startNodeId && source.nodes[candidate + 1]?.id === endNodeId);
+        try { return index >= 0 && halfArcLengthMidpoint(splineSpanToCurve(source, index).curve) !== undefined; } catch { return false; }
+      }
+      if (sourceReference.kind !== "path-segment" || source?.type !== "path" || source.closed || !source.segments.some((segment) => segment.id === sourceReference.segmentId)) return false;
       try { return halfArcLengthMidpoint(pathSegmentToCurve(source, sourceReference.segmentId).curve) !== undefined; } catch { return false; }
     }
     if (!("source" in constraint)) return true;
@@ -119,8 +125,9 @@ const withoutDanglingDocumentConstraints = (document: DocumentSnapshot, elements
       if (source?.type !== "path" || source.closed || !source.segments.some((segment) => segment.id === sourceReference.segmentId)) return false;
       try { return halfArcLengthMidpoint(pathSegmentToCurve(source, sourceReference.segmentId).curve) !== undefined; } catch { return false; }
     }
-    if (source?.type !== "spline" || source.closed || new Set(source.nodes.map((node) => node.id)).size !== source.nodes.length) return false;
-    const index = source.nodes.findIndex((node, candidate) => node.id === sourceReference.startNodeId && source.nodes[candidate + 1]?.id === sourceReference.endNodeId);
+    if (sourceReference.kind !== "spline-span" || source?.type !== "spline" || source.closed || new Set(source.nodes.map((node) => node.id)).size !== source.nodes.length) return false;
+    const { startNodeId, endNodeId } = sourceReference;
+    const index = source.nodes.findIndex((node, candidate) => node.id === startNodeId && source.nodes[candidate + 1]?.id === endNodeId);
     try { return index >= 0 && halfArcLengthMidpoint(splineSpanToCurve(source, index).curve) !== undefined; } catch { return false; }
   };
   const constraints = document.constraints.filter((constraint) => constraint.kind === "line-endpoint-midpoint"
@@ -273,6 +280,13 @@ const projectLineEndpointMidpoints = (document: DocumentSnapshot, elements: read
       try { ({ start, end } = lineElementToCurve(source).curve); } catch { return "Line endpoint midpoint source is invalid"; }
       if (![start.x, start.y, end.x, end.y].every(Number.isFinite) || start.x === end.x && start.y === end.y) return "Line endpoint midpoint source must be non-degenerate";
       midpoint = { x: start.x / 2 + end.x / 2, y: start.y / 2 + end.y / 2 };
+    } else if (relation.source.kind === "spline-span") {
+      if (source.type !== "spline" || source.closed) return "Line endpoint midpoint Spline source must be open";
+      const { startNodeId, endNodeId } = relation.source;
+      const spanIndex = source.nodes.findIndex((node, index) => node.id === startNodeId && source.nodes[index + 1]?.id === endNodeId);
+      if (spanIndex < 0) return "Line endpoint midpoint Spline span must remain adjacent in traversal order";
+      try { midpoint = halfArcLengthMidpoint(splineSpanToCurve(source, spanIndex).curve)!; } catch { return "Line endpoint midpoint Spline span is invalid"; }
+      if (!midpoint) return "Line endpoint midpoint Spline span is non-degenerate";
     } else {
       if (source.type !== "path" || source.closed) return "Line endpoint midpoint Path source must be open";
       try { midpoint = halfArcLengthMidpoint(pathSegmentToCurve(source, relation.source.segmentId).curve)!; } catch { return "Line endpoint midpoint Path segment is invalid"; }
