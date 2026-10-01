@@ -9,7 +9,7 @@ import { createPersistenceQueue, loadCollapsedPages, loadLastOpenedProject, load
 import { selectRecoveredProject } from "./appRecovery.js";
 import { addSolvedDocumentConstraint, createGeometryWithDocumentConstraints, documentConstraintDiagnosticId, supportsGlobalConstraintKind, updateSolvedDocumentConstraint } from "./globalConstraintCommands.js";
 import { renderSketchProfileSvg, renderSvg } from "@nodra/renderer-svg";
-import { canActivateRotation, centerPageInCanvas, clientPointToCanvas, clientPointToPage, cubicPlacementControls, formaNodeKey, formaNodeSnapTarget, hoveredSelectionCenter, isDrawingTool, marqueeSelection, movementExceedsThreshold, normalizeBounds, normalizeDrag, pagePointToCanvas, pathGuides, pickDimensionTarget, pickElement, pickFormaElement, pickFormaNode, pickFormaSegment, pickHoverNode, pickCutIntervalPreview, pickCuttableSegment, pickNode, pickPathNode, pickPathSegment, pickOpenEdgeMidpointHover, pickLineEndpointMidpointLanding, pointerDownIntent, visibleEditablePathNodeIndexes, screenDeltaToMm, screenPointToMm, selectedNodeAnchor, selectedPathAnchorIds, alignmentGuides, snapCreationPoint, snapFormaNodePoint, snapMoveDelta, viewportPointToCanvas, zoomAtPoint, type AlignmentGuide, type ContourNodeHit, type CutIntervalPreview, type DimensionTarget, type FormaNodeHit, type HoverNode, type NodeHit, type OpenEdgeMidpointHover, type PathNodeHit, type SnapGuide, type TransformMode, type CreationSnap } from "./interaction.js";
+import { canActivateRotation, centerPageInCanvas, clientPointToCanvas, clientPointToPage, cubicPlacementControls, formaNodeKey, formaNodeSnapTarget, hoveredSelectionCenter, isDrawingTool, marqueeSelection, movementExceedsThreshold, normalizeBounds, normalizeDrag, pagePointToCanvas, pathGuides, pickDimensionTarget, pickElement, pickFormaElement, pickFormaNode, pickFormaSegment, pickHoverNode, pickCutIntervalPreview, pickCuttableSegment, pickNode, pickPathNode, pickPathSegment, pickOpenEdgeMidpointHover, pickLineEndpointMidpointLanding, lineEndpointMidpointConstraintId, pointerDownIntent, visibleEditablePathNodeIndexes, screenDeltaToMm, screenPointToMm, selectedNodeAnchor, selectedPathAnchorIds, alignmentGuides, snapCreationPoint, snapFormaNodePoint, snapMoveDelta, viewportPointToCanvas, zoomAtPoint, type AlignmentGuide, type ContourNodeHit, type CutIntervalPreview, type DimensionTarget, type FormaNodeHit, type HoverNode, type NodeHit, type OpenEdgeMidpointHover, type PathNodeHit, type SnapGuide, type TransformMode, type CreationSnap } from "./interaction.js";
 import { aspectSize, formatMm, geometryValue, rotationDegreesValue, rotationPatch, type GeometryField, type PropertyElement, type RotatableElement } from "./propertyBar.js";
 import { projectWithSketchAssociation, resolveActivePieceId, sessionForSketchEditor, shouldAutosaveProject, shouldPersistEditorSnapshot, useDocumentStore, usePersistenceStore, useSavePolicyStore, useSelectionStore, useUiStore, useViewportStore, type Tool } from "./stores.js";
     import { createSketchSession, hasSketchSessionChanges, isSketchScopedDocumentChange, isSketchSessionHistoryLocked, reduceSketchSession, type SketchSessionState } from "@nodra/editor-core";
@@ -1762,13 +1762,13 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
 
   const lineMidpointMoveCommand = (geometry: EditorCommand, lineId: ElementId, zoomAtGesture: number, endpoint?: "start" | "end", priorityTarget?: PointMm): EditorCommand => {
     const base = editorRef.current.gesture?.base ?? editorRef.current.document;
+    if (base.constraints?.some((constraint) => constraint.kind === "line-endpoint-midpoint" && constraint.references[0]?.elementId === lineId)) return geometry;
     const candidate = geometry.apply(base);
     if (!candidate.success) return geometry;
     const landing = pickLineEndpointMidpointLanding(candidate.document, lineId, zoomAtGesture, endpoint, priorityTarget);
     if (!landing) return geometry;
     const sourceReference = landing.source;
-    const sourceKey = sourceReference.kind === "path-segment" ? sourceReference.segmentId : sourceReference.kind === "spline-span" ? `${sourceReference.startNodeId}-${sourceReference.endNodeId}` : sourceReference.kind === "sketch-edge" ? sourceReference.edgeId : sourceReference.kind === "arc-element" ? "arc" : "line";
-    const constraintId = `line-endpoint-midpoint-${lineId}-${landing.endpoint}-${landing.sourceLineId}-${sourceKey}`;
+    const constraintId = lineEndpointMidpointConstraintId(lineId, landing.endpoint, sourceReference);
     return createGeometryWithDocumentConstraints(geometry, (_before, after) => {
       const dependent = after.elements.find((element) => element.id === landing.dependentLineId);
       const source = after.elements.find((element) => element.id === landing.sourceLineId);

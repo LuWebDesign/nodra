@@ -209,6 +209,17 @@ test("whole-Line drag to its source center creates a driving midpoint relation",
   }).toBeLessThanOrEqual(8);
   const sourceAfterMove = await screenPoints(source);
   expect(Math.hypot(sourceAfterMove.start.x - sourceBeforeMove.start.x, sourceAfterMove.start.y - sourceBeforeMove.start.y)).toBeGreaterThan(1);
+
+  const dependentBeforeMove = await screenPoints(dependent);
+  await page.mouse.move(dependentBeforeMove.midpoint.x, dependentBeforeMove.midpoint.y);
+  await page.mouse.down();
+  await page.mouse.move(dependentBeforeMove.midpoint.x + 25, dependentBeforeMove.midpoint.y + 25, { steps: 6 });
+  await page.mouse.up();
+  const unchangedDependent = await screenPoints(dependent);
+  expect(Math.hypot(unchangedDependent.end.x - dependentBeforeMove.end.x, unchangedDependent.end.y - dependentBeforeMove.end.y)).toBeGreaterThan(1);
+  expect(unchangedDependent.start).toEqual(dependentBeforeMove.start);
+  const afterMoveRevision = Number(await canvas.getAttribute("data-document-revision"));
+  await waitForDurableRelation(page, afterMoveRevision, sourceId!, dependentId!);
 });
 
 async function dragEndpointToMidpoint(page: Page, source: Locator, dependent: Locator) {
@@ -433,14 +444,18 @@ test("F4b-S Forma endpoint drag persists an ordered Spline span and follows sour
   });
   const beforeMove = await splineMidpoint();
   await page.getByRole("button", { name: "Seleccion", exact: true }).click();
-  await page.mouse.move(beforeMove.x, beforeMove.y + 10);
+  await page.mouse.move(beforeMove.x, beforeMove.y);
   await page.mouse.down();
   await page.mouse.move(beforeMove.x + 30, beforeMove.y + 35, { steps: 8 });
   await page.mouse.up();
   await expect.poll(async () => {
+    const nextMidpoint = await splineMidpoint();
+    return Math.hypot(nextMidpoint.x - beforeMove.x, nextMidpoint.y - beforeMove.y);
+  }, { timeout: 5000 }).toBeGreaterThan(1);
+  await expect.poll(async () => {
     const [nextMidpoint, line] = await Promise.all([splineMidpoint(), screenPoints(reloadedDependent)]);
-    return Math.hypot(nextMidpoint.x - beforeMove.x, nextMidpoint.y - beforeMove.y) > 1 && Math.hypot(line.start.x - nextMidpoint.x, line.start.y - nextMidpoint.y) <= 8;
-  }).toBe(true);
+    return Math.hypot(line.start.x - nextMidpoint.x, line.start.y - nextMidpoint.y);
+  }, { timeout: 5000 }).toBeLessThanOrEqual(8);
 });
 
 test("Escape cancels an uncommitted Forma endpoint drag without creating a relation", async ({ page }) => {
