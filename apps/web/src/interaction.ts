@@ -17,6 +17,15 @@ export interface LineEndpointMidpointLanding {
   readonly distancePx: number;
 }
 
+/** Creates a stable, unambiguous identity for a newly derived endpoint relation. */
+export function lineEndpointMidpointConstraintId(dependentLineId: ElementId, endpoint: "start" | "end", source: Curve2DSource): string {
+  const identity = source.kind === "path-segment" ? [source.kind, source.elementId, source.segmentId]
+    : source.kind === "spline-span" ? [source.kind, source.elementId, source.startNodeId, source.endNodeId]
+      : source.kind === "sketch-edge" ? [source.kind, source.elementId, source.edgeId]
+        : [source.kind, source.elementId];
+  return JSON.stringify(["line-endpoint-midpoint", dependentLineId, endpoint, ...identity]);
+}
+
 /** Finds a unique visible native-Line, open-Path-segment, or open-Spline-span midpoint landing after applying the proposed move. */
 export function pickLineEndpointMidpointLanding(document: DocumentSnapshot, dependentLineId: ElementId, zoom: number, endpoint?: "start" | "end", priorityTarget?: PointMm, tolerancePx = 8): LineEndpointMidpointLanding | undefined {
   if (![zoom, tolerancePx].every(Number.isFinite) || zoom <= 0 || tolerancePx < 0) throw new Error("line midpoint landing zoom and tolerance must be valid");
