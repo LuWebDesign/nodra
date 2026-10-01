@@ -389,6 +389,25 @@ describe("editor core", () => {
     expect(deletedDependent.document.constraints).toEqual([]);
   });
 
+  it("projects Line endpoints to Arc half-arc-length midpoints and invalidates deleted sources", () => {
+    const source: ArcElement = { ...arc, id: elementId("endpoint-arc-source"), center: { x: 10, y: 10 }, radius: 8, startAngle: 0, endAngle: Math.PI, direction: "counterclockwise" };
+    const dependent: LineElement = { type: "line", id: elementId("endpoint-arc-dependent"), layerId: rectangle.layerId, start: { x: 40, y: 30 }, end: { x: 55, y: 30 }, rotation: 0, style: rectangle.style };
+    const relation = { id: "endpoint-arc-midpoint", kind: "line-endpoint-midpoint" as const, references: [{ elementId: dependent.id, nodeId: "start" as const, endpoint: "start" as const }] as const, source: { kind: "arc" as const, elementId: source.id } };
+    const initial = dispatch(createEditor({ ...document, elements: [source, dependent] }), addDocumentConstraint(relation));
+    const originalArcMidpoint = halfArcLengthMidpoint(arcElementToCurve(source).curve)!;
+    const endpoint = (state: typeof initial) => lineElementToCurve(state.document.elements.find((element): element is LineElement => element.id === dependent.id && element.type === "line")!).curve.start;
+    expect(endpoint(initial).x).toBeCloseTo(originalArcMidpoint.x); expect(endpoint(initial).y).toBeCloseTo(originalArcMidpoint.y);
+    const moved = dispatch(initial, moveElement(source.id, { x: 4, y: 6 }));
+    const movedArc = moved.document.elements.find((element): element is ArcElement => element.id === source.id && element.type === "arc")!;
+    const movedMidpoint = halfArcLengthMidpoint(arcElementToCurve(movedArc).curve)!;
+    expect(endpoint(moved).x).toBeCloseTo(movedMidpoint.x); expect(endpoint(moved).y).toBeCloseTo(movedMidpoint.y);
+    expect(moved.document.constraints).toEqual([relation]);
+    expect(undo(moved).document).toEqual(initial.document); expect(redo(undo(moved)).document).toEqual(moved.document);
+    const deleted = dispatch(moved, deleteElement(source.id));
+    expect(deleted.document.constraints).toEqual([]);
+    expect(undo(deleted).document).toEqual(moved.document);
+  });
+
   it("projects native Line endpoints to open Path segment midpoints and cleans invalidated sources", () => {
     const source: PathElement = { ...path, id: elementId("endpoint-path-source"), nodes: [{ id: "pa", anchor: { x: 0, y: 0 }, join: "corner" }, { id: "pb", anchor: { x: 10, y: 0 }, join: "corner" }, { id: "pc", anchor: { x: 20, y: 0 }, join: "corner" }], segments: [{ id: "stable-path-segment", type: "cubicBezier", startNodeId: "pa", endNodeId: "pb", control1: { x: 0, y: 10 }, control2: { x: 10, y: 10 } }, { id: "following-segment", type: "line", startNodeId: "pb", endNodeId: "pc" }] };
     const dependent: LineElement = { type: "line", id: elementId("endpoint-path-dependent"), layerId: rectangle.layerId, start: { x: 20, y: 20 }, end: { x: 30, y: 20 }, rotation: 0, style: rectangle.style };

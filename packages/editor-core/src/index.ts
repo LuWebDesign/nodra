@@ -103,6 +103,10 @@ const withoutDanglingDocumentConstraints = (document: DocumentSnapshot, elements
       const source = elementsById.get(constraint.source.elementId);
       if (target?.type !== "line") return false;
       if (constraint.source.kind === "line") return source?.type === "line";
+      if (constraint.source.kind === "arc") {
+        if (source?.type !== "arc") return false;
+        try { return halfArcLengthMidpoint(arcElementToCurve(source).curve) !== undefined; } catch { return false; }
+      }
       const sourceReference = constraint.source;
       if (sourceReference.kind === "spline-span") {
         if (source?.type !== "spline" || source.closed) return false;
@@ -280,6 +284,10 @@ const projectLineEndpointMidpoints = (document: DocumentSnapshot, elements: read
       try { ({ start, end } = lineElementToCurve(source).curve); } catch { return "Line endpoint midpoint source is invalid"; }
       if (![start.x, start.y, end.x, end.y].every(Number.isFinite) || start.x === end.x && start.y === end.y) return "Line endpoint midpoint source must be non-degenerate";
       midpoint = { x: start.x / 2 + end.x / 2, y: start.y / 2 + end.y / 2 };
+    } else if (relation.source.kind === "arc") {
+      if (source.type !== "arc") return "Line endpoint midpoint source must be an Arc";
+      try { midpoint = halfArcLengthMidpoint(arcElementToCurve(source).curve)!; } catch { return "Line endpoint midpoint Arc is invalid"; }
+      if (!midpoint || ![midpoint.x, midpoint.y].every(Number.isFinite)) return "Line endpoint midpoint Arc is non-executable";
     } else if (relation.source.kind === "spline-span") {
       if (source.type !== "spline" || source.closed) return "Line endpoint midpoint Spline source must be open";
       const { startNodeId, endNodeId } = relation.source;

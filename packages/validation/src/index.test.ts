@@ -142,6 +142,19 @@ describe("native document validation", () => {
     expect(validateProject({ ...project, pieces: "broken" }).success).toBe(false);
   });
 
+  it("validates Arc-backed Line endpoint midpoint relations and rejects missing or non-executable sources", () => {
+    const base = createDocument("arc-endpoint-midpoint", [{ id: layerId("layer-1"), name: "Design", visible: true, order: 0 }]);
+    const style = { stroke: "#000", strokeWidth: 1 };
+    const arc = { type: "arc" as const, id: "arc-source", layerId: "layer-1", center: { x: 0, y: 0 }, radius: 10, startAngle: 0, endAngle: Math.PI, direction: "counterclockwise" as const, style };
+    const line = { type: "line" as const, id: "dependent-line", layerId: "layer-1", start: { x: 0, y: 10 }, end: { x: 20, y: 10 }, rotation: 0, style };
+    const relation = { id: "arc-endpoint", kind: "line-endpoint-midpoint" as const, references: [{ elementId: line.id, nodeId: "start" as const, endpoint: "start" as const }] as const, source: { kind: "arc" as const, elementId: arc.id } };
+    expect(validateDocument({ ...base, elements: [arc, line], constraints: [relation] }).success).toBe(true);
+    expect(validateDocument({ ...base, elements: [line], constraints: [relation] }).success).toBe(false);
+    expect(validateDocument({ ...base, elements: [{ ...arc, center: { x: 1e308, y: 1e308 }, radius: 1e308 }, line], constraints: [relation] }).success).toBe(false);
+    expect(validateDocument({ ...base, elements: [{ ...arc, endAngle: arc.startAngle }, line], constraints: [relation] }).success).toBe(false);
+    expect(validateDocument({ ...base, elements: [{ ...arc, endAngle: 2 * Math.PI }, line], constraints: [relation] }).success).toBe(false);
+  });
+
   it("validates stable open Path segment midpoint sources and migrates v10 unchanged", () => {
     const base = createDocument("path-midpoint", [{ id: layerId("layer-1"), name: "Design", visible: true, order: 0 }]);
     const path = { type: "path" as const, id: "path", layerId: "layer-1", nodes: [{ id: "a", anchor: { x: 0, y: 0 }, join: "corner" as const }, { id: "b", anchor: { x: 10, y: 0 }, join: "corner" as const }], segments: [{ id: "stable-edge", type: "line" as const, startNodeId: "a", endNodeId: "b" }], closed: false, style: { stroke: "#000", strokeWidth: 1 } };

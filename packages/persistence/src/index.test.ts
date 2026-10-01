@@ -113,6 +113,18 @@ describe("DexieProjectRepository", () => {
     expect(recovered.ok && recovered.revision.document).toMatchObject({ constraints: [relation], elements: [{ id: source.id }, { id: dependent.id }] });
   });
 
+  it("round-trips a Line endpoint relation to a stable Arc midpoint", async () => {
+    db = await repository();
+    const base = document();
+    const style = { stroke: "#000", strokeWidth: 1 };
+    const arc = { type: "arc" as const, id: elementId("endpoint-arc"), layerId: layerId("layer-1"), center: { x: 0, y: 0 }, radius: 10, startAngle: 0, endAngle: Math.PI, direction: "counterclockwise" as const, style };
+    const dependent = { type: "line" as const, id: elementId("endpoint-arc-dependent"), layerId: layerId("layer-1"), start: { x: 0, y: 10 }, end: { x: 10, y: 10 }, rotation: 0, style };
+    const relation = { id: "endpoint-arc-mid", kind: "line-endpoint-midpoint" as const, references: [{ elementId: dependent.id, nodeId: "start" as const, endpoint: "start" as const }] as const, source: { kind: "arc" as const, elementId: arc.id } };
+    expect((await db.saveProject(metadata, { ...base, elements: [arc, dependent], constraints: [relation] })).ok).toBe(true);
+    const recovered = await db.getProject(metadata.id);
+    expect(recovered).toMatchObject({ ok: true, revision: { document: { constraints: [relation], elements: [{ id: arc.id, type: "arc" }, { id: dependent.id, type: "line" }] } } });
+  });
+
   it("round-trips a Line endpoint relation to a stable Path segment midpoint", async () => {
     db = await repository();
     const base = document();

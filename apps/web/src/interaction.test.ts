@@ -80,6 +80,18 @@ describe("native Line endpoint midpoint landing", () => {
     expect(pickLineEndpointMidpointLanding(doc([dependent, { ...path, layerId: hidden.id }], [layer, hidden]), dependent.id, 1)).toBeUndefined();
   });
 
+  it("lands on a visible Arc half-arc-length midpoint and rejects hidden or ambiguous candidates", () => {
+    const arc = { type: "arc" as const, id: elementId("source-arc"), layerId: layer.id, center: { x: 0, y: 0 }, radius: 10, startAngle: 0, endAngle: Math.PI, direction: "counterclockwise" as const, style };
+    const midpoint = { x: 0, y: -10 };
+    const positionedDependent = { ...dependent, start: midpoint, end: { x: 30, y: 30 } };
+    const landing = pickLineEndpointMidpointLanding(doc([positionedDependent, arc]), dependent.id, 1);
+    expect(landing).toMatchObject({ sourceLineId: arc.id, source: { kind: "arc-element", elementId: arc.id }, endpoint: "start" });
+    expect(landing?.midpoint.x).toBeCloseTo(midpoint.x); expect(landing?.midpoint.y).toBeCloseTo(midpoint.y);
+    expect(pickLineEndpointMidpointLanding(doc([positionedDependent, { ...arc, id: elementId("hidden-arc"), layerId: layerId("hidden-arc-layer") }], [layer, { ...layer, id: layerId("hidden-arc-layer"), visible: false }]), dependent.id, 1)).toBeUndefined();
+    const duplicate = { ...arc, id: elementId("duplicate-arc") };
+    expect(pickLineEndpointMidpointLanding(doc([positionedDependent, arc, duplicate]), dependent.id, 1)).toBeUndefined();
+  });
+
   it("lands on only an adjacent span of a visible open Spline with ordered stable node IDs", () => {
     const spline = { type: "spline" as const, id: elementId("source-spline"), layerId: layer.id, nodes: [
       { id: "s0", anchor: { x: 0, y: 0 }, continuity: "smooth" as const, outHandle: { dx: 0, dy: 8 } },

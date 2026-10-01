@@ -51,7 +51,7 @@ async function drawNativeLine(page: Page, start: ScreenPoint, end: ScreenPoint, 
   await expect.poll(async () => await canvas.getAttribute("data-document-element-ids")).not.toBe(beforeIds);
 }
 
-async function waitForDurableRelation(page: Page, revision: number, sourceId: string, dependentId: string, sourceKind: "line" | "path-segment" | "spline-span" = "line") {
+async function waitForDurableRelation(page: Page, revision: number, sourceId: string, dependentId: string, sourceKind: "line" | "path-segment" | "spline-span" | "arc" = "line") {
   await expect.poll(async () => page.evaluate(({ revision, sourceId, dependentId, sourceKind }) => new Promise<boolean>((resolve, reject) => {
     const request = indexedDB.open("nodra-persistence");
     request.onerror = () => reject(request.error);
@@ -68,7 +68,7 @@ async function waitForDurableRelation(page: Page, revision: number, sourceId: st
           const relation = constraints.find((constraint) => constraint.kind === "line-endpoint-midpoint"
             && constraint.references.some((reference) => reference.elementId === dependentId)
             && constraint.source?.elementId === sourceId
-            && (sourceKind === "line" ? constraint.source.kind === "line" : sourceKind === "path-segment" ? constraint.source.kind === "path-segment" && typeof constraint.source.segmentId === "string" && constraint.source.segmentId.length > 0 : constraint.source.kind === "spline-span" && typeof constraint.source.startNodeId === "string" && typeof constraint.source.endNodeId === "string"));
+            && (sourceKind === "line" ? constraint.source.kind === "line" : sourceKind === "path-segment" ? constraint.source.kind === "path-segment" && typeof constraint.source.segmentId === "string" && constraint.source.segmentId.length > 0 : sourceKind === "spline-span" ? constraint.source.kind === "spline-span" && typeof constraint.source.startNodeId === "string" && typeof constraint.source.endNodeId === "string" : constraint.source.kind === "arc"));
           if (!hasBothLines) return [];
           return [{ row, hasRelation: relation !== undefined, relation: relation ?? null }];
         }).sort((a, b) => b.row.savedAt - a.row.savedAt || b.row.revision - a.row.revision);
@@ -465,4 +465,87 @@ test("Escape cancels an uncommitted Forma endpoint drag without creating a relat
   const unchangedDependent = await screenPoints(dependent);
   expect(Math.hypot(unchangedDependent.start.x - dependentBefore.start.x, unchangedDependent.start.y - dependentBefore.start.y)).toBeLessThanOrEqual(1);
   expect(Math.hypot(unchangedDependent.start.x - movedSource.midpoint.x, unchangedDependent.start.y - movedSource.midpoint.y)).toBeGreaterThan(8);
+});
+
+test("F4b-A binds a Line endpoint to a persisted native Arc midpoint and follows Arc movement after reload", async ({ page }) => {
+  await createProjectAndPiece(page, "F4b-A Arc lifecycle");
+  const canvas = page.locator(".page");
+  const bounds = await canvas.boundingBox();
+  expect(bounds).not.toBeNull();
+  const start = { x: bounds!.x + 140, y: bounds!.y + 220 };
+  const end = { x: start.x + 140, y: start.y };
+  const through = { x: start.x + 70, y: start.y - 70 };
+  await page.getByRole("button", { name: "Arco", exact: true }).click();
+  await page.mouse.click(start.x, start.y);
+  await page.mouse.click(end.x, end.y);
+  await page.mouse.move(through.x, through.y);
+  await expect(page.locator(".creation-pending-overlay path")).toBeVisible();
+  await page.mouse.click(through.x, through.y);
+  const arc = page.locator(".page-svg svg path[data-element-id]").first();
+  await expect(arc).toHaveCount(1);
+  const arcId = await arc.getAttribute("data-element-id");
+  expect(arcId).toBeTruthy();
+  const arcPointAt = (fraction: number) => arc.evaluate((element, fraction) => {
+    const path = element as SVGPathElement;
+    const matrix = path.getScreenCTM();
+    if (!matrix) throw new Error("Arc has no screen transform");
+    const local = path.getPointAtLength(path.getTotalLength() * fraction);
+    const point = new DOMPoint(local.x, local.y).matrixTransform(matrix);
+    return { x: point.x, y: point.y };
+  }, fraction);
+  const midpoint = await arcPointAt(0.5);
+  const dependentStart = { x: bounds!.x + 150, y: bounds!.y + 160 };
+  await drawNativeLine(page, dependentStart, { x: dependentStart.x + 35, y: dependentStart.y + 20 }, true);
+  const dependent = page.locator(".page-svg svg g > line[data-element-id]").first();
+  const dependentId = await dependent.getAttribute("data-element-id");
+  expect(dependentId).toBeTruthy();
+  const before = await screenPoints(dependent);
+  await page.getByRole("button", { name: "Forma", exact: true }).click();
+  await page.mouse.move(before.start.x, before.start.y);
+  await page.mouse.down();
+  await page.mouse.move(midpoint.x, midpoint.y, { steps: 8 });
+  await page.mouse.up();
+  await expect.poll(async () => {
+    const endpoint = (await screenPoints(dependent)).start;
+    return Math.hypot(endpoint.x - midpoint.x, endpoint.y - midpoint.y);
+  }).toBeLessThanOrEqual(8);
+  const committedRevision = Number(await canvas.getAttribute("data-document-revision"));
+  await waitForDurableRelation(page, committedRevision, arcId!, dependentId!, "arc");
+  await page.getByRole("button", { name: "Deshacer" }).click();
+  await expect.poll(async () => {
+    const endpoint = (await screenPoints(dependent)).start;
+    return Math.hypot(endpoint.x - before.start.x, endpoint.y - before.start.y);
+  }).toBeLessThanOrEqual(1);
+  await page.getByRole("button", { name: "Rehacer" }).click();
+  await page.reload();
+  const reloadedArc = page.locator(`.page-svg svg path[data-element-id="${arcId}"]`);
+  const reloadedDependent = page.locator(`.page-svg svg g > line[data-element-id="${dependentId}"]`);
+  await expect(reloadedArc).toHaveCount(1);
+  await expect(reloadedDependent).toHaveCount(1);
+  const reloadedArcPointAt = (fraction: number) => reloadedArc.evaluate((element, fraction) => {
+    const path = element as SVGPathElement;
+    const matrix = path.getScreenCTM();
+    if (!matrix) throw new Error("Arc has no screen transform");
+    const local = path.getPointAtLength(path.getTotalLength() * fraction);
+    const point = new DOMPoint(local.x, local.y).matrixTransform(matrix);
+    return { x: point.x, y: point.y };
+  }, fraction);
+  await expect.poll(async () => {
+    const [arcMidpoint, line] = await Promise.all([reloadedArcPointAt(0.5), screenPoints(reloadedDependent)]);
+    return Math.hypot(line.start.x - arcMidpoint.x, line.start.y - arcMidpoint.y);
+  }).toBeLessThanOrEqual(8);
+  const beforeMove = await reloadedArcPointAt(0.3);
+  await page.getByRole("button", { name: "Seleccion", exact: true }).click();
+  await page.mouse.move(beforeMove.x, beforeMove.y);
+  await page.mouse.down();
+  await page.mouse.move(beforeMove.x + 28, beforeMove.y + 24, { steps: 8 });
+  await page.mouse.up();
+  await expect.poll(async () => {
+    const after = await reloadedArcPointAt(0.3);
+    return Math.hypot(after.x - beforeMove.x, after.y - beforeMove.y);
+  }).toBeGreaterThan(1);
+  await expect.poll(async () => {
+    const [arcMidpoint, line] = await Promise.all([reloadedArcPointAt(0.5), screenPoints(reloadedDependent)]);
+    return Math.hypot(line.start.x - arcMidpoint.x, line.start.y - arcMidpoint.y);
+  }).toBeLessThanOrEqual(8);
 });

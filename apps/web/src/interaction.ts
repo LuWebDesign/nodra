@@ -36,10 +36,11 @@ export function pickLineEndpointMidpointLanding(document: DocumentSnapshot, depe
     try {
       if (sourceElement.type === "line") sources = elementToCurves(sourceElement);
       else if ((sourceElement.type === "path" || sourceElement.type === "spline") && !sourceElement.closed) sources = elementToCurves(sourceElement);
+      else if (sourceElement.type === "arc") sources = elementToCurves(sourceElement);
       else continue;
     } catch { continue; }
     for (const sourced of sources) {
-      if (sourced.source.kind !== "line-element" && sourced.source.kind !== "path-segment" && sourced.source.kind !== "spline-span") continue;
+      if (sourced.source.kind !== "line-element" && sourced.source.kind !== "path-segment" && sourced.source.kind !== "spline-span" && sourced.source.kind !== "arc-element") continue;
       let midpoint: PointMm | undefined;
       try { midpoint = halfArcLengthMidpoint(sourced.curve); } catch { continue; }
       if (!midpoint || ![midpoint.x, midpoint.y].every(Number.isFinite)) continue;
