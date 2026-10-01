@@ -134,7 +134,42 @@ describe("domain contracts", () => {
         expect(synced.pages[0]?.elements).toEqual([otherPieceElement]);
       });
 
-      it("clears positional coincidences when importing a document that omits them", () => {
+      it("preserves other-piece constraints but prunes constraints that reference deleted active-piece elements", () => {
+    const layer = { id: layerId("design"), name: "Design", visible: true, order: 0 } as const;
+    const activeLine = { type: "line" as const, id: elementId("active-line"), layerId: layer.id, start: { x: 0, y: 0 }, end: { x: 10, y: 0 }, rotation: 0, style: { stroke: "#000", strokeWidth: 0.2 } };
+    const otherLine = { ...activeLine, id: elementId("other-line"), pieceId: pieceId("piece-2") };
+    const source = { ...createDocument("cross-piece-constraints", [layer]), elements: [activeLine, otherLine], constraints: [
+      { id: "other-piece-midpoint", kind: "midpoint" as const, references: [{ elementId: otherLine.id, nodeId: "start" as const }] as const, source: { kind: "line" as const, elementId: otherLine.id } },
+      { id: "mixed-midpoint", kind: "midpoint" as const, references: [{ elementId: activeLine.id, nodeId: "end" as const }] as const, source: { kind: "line" as const, elementId: otherLine.id } },
+    ] };
+    const project = createProject(source);
+    const withOtherPiece = { ...project, pieces: [...project.pieces, { ...project.pieces[0]!, id: pieceId("piece-2"), name: "Pieza 2" }] };
+
+    const bridged = projectFromDocument(withOtherPiece, { ...source, constraints: [], elements: [], revision: revision(1) });
+
+    expect(bridged.pages[0]?.elements).toEqual([otherLine]);
+    expect(bridged.pages[0]?.constraints).toEqual([source.constraints[0]]);
+  });
+
+  it("does not retain deleted lines or their endpoint-midpoint relation when bridging a document", () => {
+    const layer = { id: layerId("design"), name: "Design", visible: true, order: 0 } as const;
+    const first = { type: "line" as const, id: elementId("midpoint-endpoint"), layerId: layer.id, start: { x: 0, y: 0 }, end: { x: 10, y: 0 }, rotation: 0, style: { stroke: "#000", strokeWidth: 0.2 } };
+    const second = { ...first, id: elementId("midpoint-source"), start: { x: 5, y: 0 }, end: { x: 5, y: 10 } };
+    const source = { ...createDocument("deleted-midpoint-lines", [layer]), elements: [first, second], constraints: [{
+      id: "endpoint-midpoint",
+      kind: "line-endpoint-midpoint" as const,
+      references: [{ elementId: first.id, nodeId: "end" as const, endpoint: "end" as const }] as const,
+      source: { kind: "line" as const, elementId: second.id },
+    }] };
+    const project = createProject(source);
+
+    const bridged = projectFromDocument(project, { ...source, constraints: [], elements: [], revision: revision(1) });
+
+    expect(bridged.pages[0]?.elements).toEqual([]);
+    expect(bridged.pages[0]?.constraints).toEqual([]);
+  });
+
+  it("clears positional coincidences when importing a document that omits them", () => {
     const layer = { id: layerId("design"), name: "Design", visible: true, order: 0 } as const;
     const source = createDocument("doc-1", [layer]);
     const project = createProject({ ...source, positionalCoincidences: [{ id: "old", first: { elementId: elementId("a"), node: { kind: "line", name: "start" } }, second: { elementId: elementId("b"), node: { kind: "line", name: "start" } } }] });
