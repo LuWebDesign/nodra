@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { createDocument, elementId, featureId, layerId, type ArcElement, type DimensionElement, type Element, type EllipseElement, type CircleElement, type LineElement, type GlyphElement, type PathElement, type PointMm, type RectangleElement, type SketchElement, type SplineElement, type TextElement } from "@nodra/domain";
 import { addCircleConstraint, addDocumentConstraint, deleteDocumentConstraint, addSketchConstraint, addSketchSegmentRelation, addToSelection, appendSketchEdge, appendSplineNode, beginGesture, cancelGesture, clearSelection, closePath, closeSplineElement, commitGesture, createEditor, createElement, createIntersectFeature, dimensionDrivingCapability, rebuildParametricFeatures, addPositionalConnection, addPositionalCoincidence, deletePositionalCoincidence, createPathCubicNode, replaceSplineElement, createSketchLine, cutContourSegment, cutLineAtPoint, cutPathSegment, cutSegment, cutSketchEdge, splitPathLineAt, deleteContourNodes, deleteElement, deleteElementNodes, deletePathNodes, deleteSketchConstraint, dispatch, duplicateElements, flipElements, insertContourNode, invalidDimensionIdsForShapeOperation, moveElement, moveElements, movePathNode, movePathHandle, openPath, previewGesture, previewGestureFromBase, redo, reversePath, removeFromSelection, reorderLayer, resizeElement, resizeElementToDimensions, resizeElements, resizeElementsToDimensions, rotateElement, rotateElementsAroundCenter, select, selectForPointerDown, setDimensionDriving, updateCircleConstraint, deleteCircleConstraint, solveCircle, setLayerVisibility, setPathJoin, shapeOperation, splitPathSegment, toggleSelection, topologyEditForPathSegmentReplacement, topologyReferenceKey, undo, updateContourNode, updateDimensionValue, updateElement, updateElementNode, updateElementStyles, updateSketchConstraint, updateDocumentConstraint, updateSplineHandle, updateSplineNode, setGeometryRole, type AutomaticSketchRelationCandidate } from "./index.js";
-import { arcElementToCurve, boundsOfElements, halfArcLengthMidpoint, pathSegmentToCurve, splineSpanToCurve, realGeometryNodes } from "@nodra/geometry";
+import { arcElementToCurve, boundsOfElements, halfArcLengthMidpoint, lineElementToCurve, pathSegmentToCurve, splineSpanToCurve, realGeometryNodes } from "@nodra/geometry";
+import { recomputeSketchKernel } from "./sketchKernel.js";
 import type { Direction } from "@nodra/geometry";
 import { appendLinePoint } from "./index.js";
 
@@ -357,6 +358,103 @@ describe("editor core", () => {
     expect(redo(undo(state)).document).toEqual(state.document);
   });
 
+  it("projects a native Line endpoint to a different Line source midpoint with undo and redo", () => {
+    const source: LineElement = { type: "line", id: elementId("endpoint-mid-source"), layerId: rectangle.layerId, start: { x: 0, y: 0 }, end: { x: 10, y: 0 }, rotation: 0, style: rectangle.style };
+    const dependent: LineElement = { ...source, id: elementId("endpoint-mid-dependent"), start: { x: 20, y: 20 }, end: { x: 30, y: 20 }, rotation: Math.PI / 4, flipX: true };
+    const relation = { id: "line-endpoint-mid", kind: "line-endpoint-midpoint" as const, references: [{ elementId: dependent.id, nodeId: "start" as const, endpoint: "start" as const }] as const, source: { kind: "line" as const, elementId: source.id } };
+    const originalVisual = lineElementToCurve(dependent).curve;
+    const initial = dispatch(createEditor({ ...document, elements: [source, dependent] }), addDocumentConstraint(relation));
+    const kernelResult = recomputeSketchKernel(initial.document);
+    expect(kernelResult.committed).toBe(true);
+    expect(kernelResult.changed).toBe(false);
+    const projected = initial.document.elements.find((element): element is LineElement => element.id === dependent.id && element.type === "line")!;
+    expect(lineElementToCurve(projected).curve.start.x).toBeCloseTo(5);
+    expect(lineElementToCurve(projected).curve.start.y).toBeCloseTo(0);
+    expect(lineElementToCurve(projected).curve.end).toEqual(originalVisual.end);
+    expect(projected).toMatchObject({ id: dependent.id, rotation: dependent.rotation, flipX: true });
+
+    const moved = dispatch(initial, moveElement(source.id, { x: 4, y: 6 }));
+    const movedDependent = moved.document.elements.find((element): element is LineElement => element.id === dependent.id && element.type === "line")!;
+    expect(lineElementToCurve(movedDependent).curve.start.x).toBeCloseTo(9);
+    expect(lineElementToCurve(movedDependent).curve.start.y).toBeCloseTo(6);
+    expect(lineElementToCurve(movedDependent).curve.end).toEqual(originalVisual.end);
+    expect(moved.document.constraints).toEqual([relation]);
+    expect(undo(moved).document).toEqual(initial.document);
+    expect(redo(undo(moved)).document).toEqual(moved.document);
+
+    const deletedSource = dispatch(moved, deleteElement(source.id));
+    expect(deletedSource.document.constraints).toEqual([]);
+    expect(undo(deletedSource).document).toEqual(moved.document);
+    const deletedDependent = dispatch(moved, deleteElement(dependent.id));
+    expect(deletedDependent.document.constraints).toEqual([]);
+  });
+
+  it("projects Line endpoints to Arc half-arc-length midpoints and invalidates deleted sources", () => {
+    const source: ArcElement = { ...arc, id: elementId("endpoint-arc-source"), center: { x: 10, y: 10 }, radius: 8, startAngle: 0, endAngle: Math.PI, direction: "counterclockwise" };
+    const dependent: LineElement = { type: "line", id: elementId("endpoint-arc-dependent"), layerId: rectangle.layerId, start: { x: 40, y: 30 }, end: { x: 55, y: 30 }, rotation: 0, style: rectangle.style };
+    const relation = { id: "endpoint-arc-midpoint", kind: "line-endpoint-midpoint" as const, references: [{ elementId: dependent.id, nodeId: "start" as const, endpoint: "start" as const }] as const, source: { kind: "arc" as const, elementId: source.id } };
+    const initial = dispatch(createEditor({ ...document, elements: [source, dependent] }), addDocumentConstraint(relation));
+    const originalArcMidpoint = halfArcLengthMidpoint(arcElementToCurve(source).curve)!;
+    const endpoint = (state: typeof initial) => lineElementToCurve(state.document.elements.find((element): element is LineElement => element.id === dependent.id && element.type === "line")!).curve.start;
+    expect(endpoint(initial).x).toBeCloseTo(originalArcMidpoint.x); expect(endpoint(initial).y).toBeCloseTo(originalArcMidpoint.y);
+    const moved = dispatch(initial, moveElement(source.id, { x: 4, y: 6 }));
+    const movedArc = moved.document.elements.find((element): element is ArcElement => element.id === source.id && element.type === "arc")!;
+    const movedMidpoint = halfArcLengthMidpoint(arcElementToCurve(movedArc).curve)!;
+    expect(endpoint(moved).x).toBeCloseTo(movedMidpoint.x); expect(endpoint(moved).y).toBeCloseTo(movedMidpoint.y);
+    expect(moved.document.constraints).toEqual([relation]);
+    expect(undo(moved).document).toEqual(initial.document); expect(redo(undo(moved)).document).toEqual(moved.document);
+    const deleted = dispatch(moved, deleteElement(source.id));
+    expect(deleted.document.constraints).toEqual([]);
+    expect(undo(deleted).document).toEqual(moved.document);
+  });
+
+  it("projects native Line endpoints to open Path segment midpoints and cleans invalidated sources", () => {
+    const source: PathElement = { ...path, id: elementId("endpoint-path-source"), nodes: [{ id: "pa", anchor: { x: 0, y: 0 }, join: "corner" }, { id: "pb", anchor: { x: 10, y: 0 }, join: "corner" }, { id: "pc", anchor: { x: 20, y: 0 }, join: "corner" }], segments: [{ id: "stable-path-segment", type: "cubicBezier", startNodeId: "pa", endNodeId: "pb", control1: { x: 0, y: 10 }, control2: { x: 10, y: 10 } }, { id: "following-segment", type: "line", startNodeId: "pb", endNodeId: "pc" }] };
+    const dependent: LineElement = { type: "line", id: elementId("endpoint-path-dependent"), layerId: rectangle.layerId, start: { x: 20, y: 20 }, end: { x: 30, y: 20 }, rotation: 0, style: rectangle.style };
+    const relation = { id: "endpoint-path-midpoint", kind: "line-endpoint-midpoint" as const, references: [{ elementId: dependent.id, nodeId: "start" as const, endpoint: "start" as const }] as const, source: { kind: "path-segment" as const, elementId: source.id, segmentId: "stable-path-segment" } };
+    const initial = dispatch(createEditor({ ...document, elements: [source, dependent] }), addDocumentConstraint(relation));
+    const midpoint = halfArcLengthMidpoint(pathSegmentToCurve(source, "stable-path-segment").curve)!;
+    const endpoint = (state: typeof initial) => lineElementToCurve(state.document.elements.find((element): element is LineElement => element.id === dependent.id && element.type === "line")!).curve.start;
+    expect(endpoint(initial).x).toBeCloseTo(midpoint.x); expect(endpoint(initial).y).toBeCloseTo(midpoint.y);
+    const moved = dispatch(initial, moveElement(source.id, { x: 4, y: 6 }));
+    const movedPath = moved.document.elements.find((element): element is PathElement => element.id === source.id && element.type === "path")!;
+    const movedMidpoint = halfArcLengthMidpoint(pathSegmentToCurve(movedPath, "stable-path-segment").curve)!;
+    expect(endpoint(moved).x).toBeCloseTo(movedMidpoint.x); expect(endpoint(moved).y).toBeCloseTo(movedMidpoint.y);
+    expect(undo(moved).document).toEqual(initial.document); expect(redo(undo(moved)).document).toEqual(moved.document);
+    const deletedSegment = dispatch(moved, splitPathSegment(source.id, 0));
+    expect(deletedSegment.document.constraints).toEqual([]);
+    const closedPath = dispatch(moved, closePath(source.id));
+    expect(closedPath.document.constraints).toEqual([]);
+  });
+
+  it("reprojects endpoint midpoint dependents after mixed native-Line and sketch moves", () => {
+    const source: LineElement = { type: "line", id: elementId("mixed-endpoint-source"), layerId: rectangle.layerId, start: { x: 0, y: 0 }, end: { x: 10, y: 0 }, rotation: 0, style: rectangle.style };
+    const dependent: LineElement = { ...source, id: elementId("mixed-endpoint-dependent"), start: { x: 20, y: 20 }, end: { x: 30, y: 20 } };
+    const sketch = createSketchLine(elementId("mixed-endpoint-sketch"), rectangle.layerId, rectangle.style, { x: 0, y: 40 }, { x: 10, y: 40 });
+    const relation = { id: "mixed-endpoint-mid", kind: "line-endpoint-midpoint" as const, references: [{ elementId: dependent.id, nodeId: "start" as const, endpoint: "start" as const }] as const, source: { kind: "line" as const, elementId: source.id } };
+    const initial = dispatch(createEditor({ ...document, elements: [source, dependent, sketch] }), addDocumentConstraint(relation));
+    const moved = dispatch(initial, moveElements([source.id, sketch.id], { x: 4, y: 6 }));
+    const movedSource = moved.document.elements.find((element): element is LineElement => element.id === source.id && element.type === "line")!;
+    const movedDependent = moved.document.elements.find((element): element is LineElement => element.id === dependent.id && element.type === "line")!;
+    expect(lineElementToCurve(movedSource).curve).toEqual({ type: "line", start: { x: 4, y: 6 }, end: { x: 14, y: 6 } });
+    expect(lineElementToCurve(movedDependent).curve.start).toMatchObject({ x: 9, y: 6 });
+    expect(moved.document.constraints).toEqual([relation]);
+    expect(undo(moved).document).toEqual(initial.document);
+    expect(redo(undo(moved)).document).toEqual(moved.document);
+  });
+
+  it("rejects same-Line and chained endpoint midpoint relations through command validation", () => {
+    const first: LineElement = { type: "line", id: elementId("endpoint-chain-first"), layerId: rectangle.layerId, start: { x: 0, y: 0 }, end: { x: 10, y: 0 }, rotation: 0, style: rectangle.style };
+    const second: LineElement = { ...first, id: elementId("endpoint-chain-second"), start: { x: 20, y: 0 }, end: { x: 30, y: 0 } };
+    const third: LineElement = { ...first, id: elementId("endpoint-chain-third"), start: { x: 40, y: 0 }, end: { x: 50, y: 0 } };
+    const firstRelation = { id: "endpoint-first", kind: "line-endpoint-midpoint" as const, references: [{ elementId: second.id, nodeId: "start" as const, endpoint: "start" as const }] as const, source: { kind: "line" as const, elementId: first.id } };
+    const initial = createEditor({ ...document, elements: [first, second, third] });
+    expect(dispatch(initial, addDocumentConstraint({ ...firstRelation, source: { kind: "line", elementId: second.id } })).document.constraints).toBeUndefined();
+    const withFirst = dispatch(initial, addDocumentConstraint(firstRelation));
+    const chain = { ...firstRelation, id: "endpoint-chain", references: [{ elementId: third.id, nodeId: "end" as const, endpoint: "end" as const }] as const, source: { kind: "line" as const, elementId: second.id } };
+    expect(dispatch(withFirst, addDocumentConstraint(chain))).toBe(withFirst);
+  });
+
   it("projects Path midpoint dependents by stable segment ID and cleans invalid sources atomically", () => {
     const source: PathElement = { ...path, nodes: [{ id: "pa", anchor: { x: 0, y: 0 }, join: "corner" }, { id: "pb", anchor: { x: 10, y: 0 }, join: "corner" }], segments: [{ id: "path-mid-segment", type: "cubicBezier", startNodeId: "pa", endNodeId: "pb", control1: { x: 0, y: 10 }, control2: { x: 10, y: 10 } }] };
     const dependent = createSketchLine(elementId("path-midpoint-dependent"), rectangle.layerId, rectangle.style, { x: 5, y: 5 }, { x: 5, y: 15 });
@@ -393,6 +491,27 @@ describe("editor core", () => {
     const deleted = dispatch(initial, deleteElement(source.id));
     expect(deleted.document.constraints).toEqual([]);
     expect(undo(deleted).document).toEqual(initial.document);
+  });
+
+  it("projects native Line endpoints from stable Spline spans and removes invalidated relations atomically", () => {
+    const source: SplineElement = { ...spline, id: elementId("endpoint-spline-source"), nodes: [{ id: "s0", anchor: { x: 0, y: 0 }, continuity: "smooth", outHandle: { dx: 0, dy: 5 } }, { id: "s1", anchor: { x: 10, y: 0 }, continuity: "smooth", inHandle: { dx: 0, dy: 5 } }, { id: "s2", anchor: { x: 20, y: 0 }, continuity: "smooth" }] };
+    const dependent: LineElement = { type: "line", id: elementId("endpoint-spline-dependent"), layerId: rectangle.layerId, start: { x: 2, y: 2 }, end: { x: 20, y: 20 }, rotation: 0, style: rectangle.style };
+    const constraint = { id: "endpoint-spline-midpoint", kind: "line-endpoint-midpoint" as const, references: [{ elementId: dependent.id, nodeId: "start" as const, endpoint: "start" as const }] as const, source: { kind: "spline-span" as const, elementId: source.id, startNodeId: "s0", endNodeId: "s1" } };
+    const initial = dispatch(createEditor({ ...document, schemaVersion: 13, elements: [source, dependent] }), addDocumentConstraint(constraint));
+    const projectedLine = (state: typeof initial) => state.document.elements.find((element): element is LineElement => element.id === dependent.id && element.type === "line")!;
+    const initialMidpoint = halfArcLengthMidpoint(splineSpanToCurve(source, 0).curve)!;
+    expect(projectedLine(initial).start.x).toBeCloseTo(initialMidpoint.x, 10);
+    expect(projectedLine(initial).start.y).toBeCloseTo(initialMidpoint.y, 10);
+    const moved = dispatch(initial, updateSplineNode(source.id, "s1", { x: 12, y: 3 }));
+    expect(moved.document.constraints).toEqual([constraint]);
+    const movedSource = moved.document.elements.find((element): element is SplineElement => element.id === source.id && element.type === "spline")!;
+    const movedMidpoint = halfArcLengthMidpoint(splineSpanToCurve(movedSource, 0).curve)!;
+    expect(projectedLine(moved).start.x).toBeCloseTo(movedMidpoint.x, 10);
+    expect(projectedLine(moved).start.y).toBeCloseTo(movedMidpoint.y, 10);
+    expect(undo(moved).document).toEqual(initial.document);
+    const inserted = dispatch(initial, replaceSplineElement({ ...source, nodes: [source.nodes[0]!, { id: "between", anchor: { x: 5, y: 1 }, continuity: "smooth" }, ...source.nodes.slice(1)] }));
+    expect(inserted.document.constraints).toEqual([]);
+    expect(inserted.document.elements.find((element): element is LineElement => element.id === dependent.id && element.type === "line")?.start).toEqual(projectedLine(initial).start);
   });
 
   it("projects spline-span midpoint dependencies by ordered node IDs and fails closed on topology changes", () => {
@@ -712,6 +831,51 @@ describe("editor core", () => {
     expect(deleted.document.constraints).toEqual([]);
     expect((deleted.document.elements[0] as SketchElement).nodes[0]?.point).toEqual({ x: 30, y: 0 });
     expect(undo(deleted).document).toEqual(initial.document);
+  });
+
+  it("projects a Line endpoint from a Sketch edge only after the kernel and restores source relations through topology history", () => {
+    const source: SketchElement = { type: "sketch", id: elementId("endpoint-edge-source"), layerId: layerId("default"), nodes: [{ id: "edge-start", point: { x: 0, y: 0 } }, { id: "edge-end", point: { x: 10, y: 0 } }], edges: [{ id: "stable-edge", startNodeId: "edge-start", endNodeId: "edge-end" }], constraints: [{ id: "source-horizontal", kind: "horizontal", references: [{ elementId: elementId("endpoint-edge-source"), nodeId: "edge-start" }, { elementId: elementId("endpoint-edge-source"), nodeId: "edge-end" }] }], style: rectangle.style };
+    const dependent: LineElement = { type: "line", id: elementId("endpoint-edge-dependent"), layerId: layerId("default"), start: { x: 5, y: 2 }, end: { x: 30, y: 0 }, rotation: 0, style: rectangle.style };
+    const relation = { id: "endpoint-edge-relation", kind: "line-endpoint-midpoint" as const, references: [{ elementId: dependent.id, nodeId: "start" as const, endpoint: "start" as const }] as const, source: { kind: "sketch-edge" as const, elementId: source.id, edgeId: source.edges[0]!.id } };
+    const beforeCommand = createEditor({ ...document, elements: [dependent, source] });
+    const invalid = dispatch(beforeCommand, addDocumentConstraint({ ...relation, source: { ...relation.source, edgeId: "missing-edge" } }));
+    expect(invalid).toBe(beforeCommand);
+    expect(invalid.undo).toHaveLength(0);
+    const initial = dispatch(beforeCommand, addDocumentConstraint(relation));
+    expect((initial.document.elements.find((element) => element.id === dependent.id) as LineElement).start).toEqual({ x: 5, y: 0 });
+    expect(initial.undo).toHaveLength(1);
+
+    const moved = dispatch(initial, updateElementNode(source.id, 1, { x: 20, y: 10 }));
+    const solvedSource = moved.document.elements.find((element): element is SketchElement => element.id === source.id && element.type === "sketch")!;
+    const solvedEdge = solvedSource.edges.find((edge) => edge.id === relation.source.edgeId)!;
+    const solvedStart = solvedSource.nodes.find((node) => node.id === solvedEdge.startNodeId)!.point;
+    const solvedEnd = solvedSource.nodes.find((node) => node.id === solvedEdge.endNodeId)!.point;
+    expect((moved.document.elements.find((element) => element.id === dependent.id) as LineElement).start).toEqual({ x: (solvedStart.x + solvedEnd.x) / 2, y: (solvedStart.y + solvedEnd.y) / 2 });
+    expect(moved.document.constraints).toEqual([relation]);
+    expect(undo(moved).document).toEqual(initial.document);
+    expect(redo(undo(moved)).document).toEqual(moved.document);
+
+    const split = dispatch(initial, cutSketchEdge(source.id, 0, { x: 5, y: 0 }));
+    expect(split.document.constraints).toEqual([]);
+    expect(undo(split).document).toEqual(initial.document);
+    const deleted = dispatch(initial, cutSketchEdge(source.id, 0));
+    expect(deleted.document.constraints).toEqual([]);
+    expect(undo(deleted).document).toEqual(initial.document);
+  });
+
+  it("removes only the Sketch-edge relation invalidated by a split and preserves its other source", () => {
+    const source: SketchElement = { type: "sketch", id: elementId("endpoint-edge-multiple-source"), layerId: layerId("default"), nodes: [{ id: "a", point: { x: 0, y: 0 } }, { id: "b", point: { x: 10, y: 0 } }, { id: "c", point: { x: 20, y: 0 } }, { id: "d", point: { x: 20, y: 10 } }], edges: [{ id: "first-edge", startNodeId: "a", endNodeId: "b" }, { id: "second-edge", startNodeId: "c", endNodeId: "d" }], style: rectangle.style };
+    const dependent: LineElement = { type: "line", id: elementId("endpoint-edge-multiple-dependent"), layerId: layerId("default"), start: { x: 5, y: 0 }, end: { x: 20, y: 5 }, rotation: 0, style: rectangle.style };
+    const firstRelation = { id: "endpoint-edge-first", kind: "line-endpoint-midpoint" as const, references: [{ elementId: dependent.id, nodeId: "start" as const, endpoint: "start" as const }] as const, source: { kind: "sketch-edge" as const, elementId: source.id, edgeId: "first-edge" } };
+    const secondRelation = { id: "endpoint-edge-second", kind: "line-endpoint-midpoint" as const, references: [{ elementId: dependent.id, nodeId: "end" as const, endpoint: "end" as const }] as const, source: { kind: "sketch-edge" as const, elementId: source.id, edgeId: "second-edge" } };
+    const before = createEditor({ ...document, elements: [source, dependent] });
+    const first = dispatch(before, addDocumentConstraint(firstRelation));
+    const initial = dispatch(first, addDocumentConstraint(secondRelation));
+    const split = dispatch(initial, cutSketchEdge(source.id, 0, { x: 5, y: 0 }));
+    expect(split.document.constraints).toEqual([secondRelation]);
+    expect((split.document.elements.find((element) => element.id === dependent.id) as LineElement).end).toEqual({ x: 20, y: 5 });
+    expect(undo(split).document).toEqual(initial.document);
+    expect(redo(undo(split)).document).toEqual(split.document);
   });
 
   it("keeps a midpoint dependent on a moved source endpoint and restores the relation on undo", () => {

@@ -113,8 +113,9 @@ export type SketchConstraintReference = SketchPointReference | SketchEdgeReferen
 export interface SketchConstraint { readonly id: string; readonly kind: SketchConstraintKind; readonly references: readonly [SketchConstraintReference, ...SketchConstraintReference[]]; readonly value?: number }
 export interface SketchElement extends ElementBase { readonly type: "sketch"; readonly id: ElementId; readonly layerId: LayerId; readonly nodes: readonly SketchNode[]; readonly edges: readonly SketchEdge[]; readonly constraints?: readonly SketchConstraint[]; readonly style: VisualStyle; readonly operation?: OperationMetadata }
 /** Page-level parametric constraint; references may span multiple sketch elements. */
-export type DocumentConstraint = SketchConstraint | NativeLineMidpointConstraint;
+export type DocumentConstraint = SketchConstraint | NativeLineMidpointConstraint | LineEndpointMidpointConstraint;
 export interface NativeLineMidpointConstraint { readonly id: string; readonly kind: "midpoint"; readonly references: readonly [SketchPointReference]; readonly source: { readonly kind: "line"; readonly elementId: ElementId } | { readonly kind: "path-segment"; readonly elementId: ElementId; readonly segmentId: string } | { readonly kind: "spline-span"; readonly elementId: ElementId; readonly startNodeId: string; readonly endNodeId: string } | { readonly kind: "arc"; readonly elementId: ElementId }; readonly value?: never }
+export interface LineEndpointMidpointConstraint { readonly id: string; readonly kind: "line-endpoint-midpoint"; readonly references: readonly [{ readonly elementId: ElementId; readonly nodeId: "start" | "end"; readonly endpoint: "start" | "end" }]; readonly source: { readonly kind: "line"; readonly elementId: ElementId } | { readonly kind: "path-segment"; readonly elementId: ElementId; readonly segmentId: string } | { readonly kind: "spline-span"; readonly elementId: ElementId; readonly startNodeId: string; readonly endNodeId: string } | { readonly kind: "arc"; readonly elementId: ElementId } | { readonly kind: "sketch-edge"; readonly elementId: ElementId; readonly edgeId: string }; readonly value?: never }
 export type DimensionKind = "aligned" | "horizontal" | "vertical" | "angular" | "radius" | "diameter";
 export type DimensionReference =
   | { readonly kind: "node"; readonly elementId: ElementId; readonly nodeIndex: number; readonly nodeId?: string }
@@ -346,7 +347,7 @@ export function documentFromProject(project: ProjectSnapshot, pageIdValue = proj
   const piece = pieceForPage(project, page, project.activePieceId);
   const elements = piece ? elementsForPiece(project, page, piece.id) : page.elements;
   const ids = new Set(elements.map((element) => element.id));
-  const constraints = page.constraints?.filter((constraint) => constraint.references.every((reference) => ids.has(reference.elementId)));
+  const constraints = page.constraints?.filter((constraint) => constraint.references.every((reference) => ids.has(reference.elementId)) && (!("source" in constraint) || ids.has(constraint.source.elementId)));
   const connections = (page.connections ?? []).filter((connection) => ids.has(connection.first.elementId) && ids.has(connection.second.elementId));
   const positionalCoincidences = page.positionalCoincidences?.filter((relation) => ids.has(relation.first.elementId) && ids.has(relation.second.elementId));
   const featureTree = page.featureTree === undefined ? undefined : { ...page.featureTree, features: page.featureTree.features.filter((feature) => [...feature.sources, ...feature.outputs].every((reference) => ids.has(reference.elementId))) };
@@ -369,7 +370,7 @@ export function projectFromDocument(project: ProjectSnapshot, document: Document
   });
   const pages = project.pages.map((candidate): PageSnapshot => {
     if (candidate.id !== page.id) return candidate;
-    const updated = { ...candidate, page: document.page, layers: document.layers, elements: [...preserved, ...owned], constraints: [...(candidate.constraints ?? []).filter((constraint) => constraint.references.some((reference) => !currentIds.has(reference.elementId))), ...(document.constraints ?? [])], connections: [...(candidate.connections ?? []).filter((connection) => !currentIds.has(connection.first.elementId) || !currentIds.has(connection.second.elementId)), ...(document.connections ?? [])], positionalCoincidences: document.positionalCoincidences ?? [] };
+    const updated = { ...candidate, page: document.page, layers: document.layers, elements: [...preserved, ...owned], constraints: [...(candidate.constraints ?? []).filter((constraint) => constraint.references.some((reference) => !currentIds.has(reference.elementId)) || ("source" in constraint && !currentIds.has(constraint.source.elementId))), ...(document.constraints ?? [])], connections: [...(candidate.connections ?? []).filter((connection) => !currentIds.has(connection.first.elementId) || !currentIds.has(connection.second.elementId)), ...(document.connections ?? [])], positionalCoincidences: document.positionalCoincidences ?? [] };
     if (featureTree) return { ...updated, featureTree };
     delete updated.featureTree;
     return updated;

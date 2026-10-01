@@ -68,6 +68,32 @@ export function lineElementToCurve(element: LineElement): SourcedCurve2D<LineCur
   };
 }
 
+/** Sets one visible endpoint without changing its opposite; returns undefined for invalid or unrepresentable geometry. */
+export function setLineVisualEndpoint(element: LineElement, endpoint: "start" | "end", target: PointMm): LineElement | undefined {
+  const values = [element.start.x, element.start.y, element.end.x, element.end.y, element.rotation, target.x, target.y];
+  if (!values.every(Number.isFinite)) return undefined;
+  try {
+    const current = lineElementToCurve(element).curve;
+    const fixed = endpoint === "start" ? current.end : current.start;
+    const midpoint = { x: fixed.x / 2 + target.x / 2, y: fixed.y / 2 + target.y / 2 };
+    const dx = (target.x - fixed.x) / 2; const dy = (target.y - fixed.y) / 2;
+    const cosine = Math.cos(element.rotation); const sine = Math.sin(element.rotation);
+    const local = { x: dx * cosine + dy * sine, y: -dx * sine + dy * cosine };
+    const x = local.x * (element.flipX === true ? -1 : 1);
+    const y = local.y * (element.flipY === true ? -1 : 1);
+    const start = checkedPoint({ x: midpoint.x + (endpoint === "start" ? x : -x), y: midpoint.y + (endpoint === "start" ? y : -y) });
+    const end = checkedPoint({ x: midpoint.x + (endpoint === "end" ? x : -x), y: midpoint.y + (endpoint === "end" ? y : -y) });
+    const result = { ...element, start, end };
+    const verified = lineElementToCurve(result).curve;
+    const moved = endpoint === "start" ? verified.start : verified.end;
+    const preserved = endpoint === "start" ? verified.end : verified.start;
+    if (![moved.x, moved.y, preserved.x, preserved.y].every(Number.isFinite) || Math.hypot(moved.x - target.x, moved.y - target.y) > 1e-8 || Math.hypot(preserved.x - fixed.x, preserved.y - fixed.y) > 1e-8) return undefined;
+    return result;
+  } catch {
+    return undefined;
+  }
+}
+
 /** Resolves a sketch edge by stable ID; array position is provenance metadata only. */
 export function sketchEdgeToCurve(sketch: SketchElement, edgeId: string): SourcedCurve2D<LineCurve2D> {
   assertUniqueIds(sketch.edges, "Sketch edges"); assertUniqueIds(sketch.nodes, "Sketch nodes");
