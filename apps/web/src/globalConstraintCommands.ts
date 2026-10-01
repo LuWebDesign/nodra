@@ -93,14 +93,18 @@ const sourceIsVisible = (before: DocumentSnapshot, after: DocumentSnapshot, cons
     const dependent = after.elements.find((element) => element.id === constraint.references[0]!.elementId);
     if (dependent?.type !== "line") return false;
     if (reference.kind === "line") return source.type === "line";
+    if (reference.kind === "sketch-edge") return source.type === "sketch" && source.edges.some((edge) => edge.id === reference.edgeId);
     if (reference.kind === "arc") return source.type === "arc";
     if (reference.kind === "path-segment") return source.type === "path" && !source.closed && source.segments.some((segment) => segment.id === reference.segmentId);
-    return reference.kind === "spline-span" && source.type === "spline" && !source.closed && source.nodes.some((node, index) => node.id === reference.startNodeId && source.nodes[index + 1]?.id === reference.endNodeId);
+    if (reference.kind === "spline-span") return source.type === "spline" && !source.closed && source.nodes.some((node, index) => node.id === reference.startNodeId && source.nodes[index + 1]?.id === reference.endNodeId);
+    return false;
   }
   if (reference.kind === "line") return source.type === "line";
   if (reference.kind === "arc") return source.type === "arc";
   if (reference.kind === "path-segment") return source.type === "path" && source.segments.some((segment) => segment.id === reference.segmentId);
-  return source.type === "spline" && source.nodes.some((node, index) => node.id === reference.startNodeId && source.nodes[index + 1]?.id === reference.endNodeId);
+  if (reference.kind === "spline-span") return source.type === "spline" && source.nodes.some((node, index) => node.id === reference.startNodeId && source.nodes[index + 1]?.id === reference.endNodeId);
+  if (reference.kind === "sketch-edge") return source.type === "sketch" && source.edges.some((edge) => edge.id === reference.edgeId);
+  return false;
 };
 
 /** Applies geometry and its dependent midpoint relations as one atomic editor command. */

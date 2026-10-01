@@ -17,6 +17,15 @@ export interface LineEndpointMidpointLanding {
   readonly distancePx: number;
 }
 
+/** Creates a stable, unambiguous identity for a newly derived endpoint relation. */
+export function lineEndpointMidpointConstraintId(dependentLineId: ElementId, endpoint: "start" | "end", source: Curve2DSource): string {
+  const identity = source.kind === "path-segment" ? [source.kind, source.elementId, source.segmentId]
+    : source.kind === "spline-span" ? [source.kind, source.elementId, source.startNodeId, source.endNodeId]
+      : source.kind === "sketch-edge" ? [source.kind, source.elementId, source.edgeId]
+        : [source.kind, source.elementId];
+  return JSON.stringify(["line-endpoint-midpoint", dependentLineId, endpoint, ...identity]);
+}
+
 /** Finds a unique visible native-Line, open-Path-segment, or open-Spline-span midpoint landing after applying the proposed move. */
 export function pickLineEndpointMidpointLanding(document: DocumentSnapshot, dependentLineId: ElementId, zoom: number, endpoint?: "start" | "end", priorityTarget?: PointMm, tolerancePx = 8): LineEndpointMidpointLanding | undefined {
   if (![zoom, tolerancePx].every(Number.isFinite) || zoom <= 0 || tolerancePx < 0) throw new Error("line midpoint landing zoom and tolerance must be valid");
@@ -36,11 +45,11 @@ export function pickLineEndpointMidpointLanding(document: DocumentSnapshot, depe
     try {
       if (sourceElement.type === "line") sources = elementToCurves(sourceElement);
       else if ((sourceElement.type === "path" || sourceElement.type === "spline") && !sourceElement.closed) sources = elementToCurves(sourceElement);
-      else if (sourceElement.type === "arc") sources = elementToCurves(sourceElement);
+      else if (sourceElement.type === "arc" || sourceElement.type === "sketch") sources = elementToCurves(sourceElement);
       else continue;
     } catch { continue; }
     for (const sourced of sources) {
-      if (sourced.source.kind !== "line-element" && sourced.source.kind !== "path-segment" && sourced.source.kind !== "spline-span" && sourced.source.kind !== "arc-element") continue;
+      if (sourced.source.kind !== "line-element" && sourced.source.kind !== "path-segment" && sourced.source.kind !== "spline-span" && sourced.source.kind !== "arc-element" && sourced.source.kind !== "sketch-edge") continue;
       let midpoint: PointMm | undefined;
       try { midpoint = halfArcLengthMidpoint(sourced.curve); } catch { continue; }
       if (!midpoint || ![midpoint.x, midpoint.y].every(Number.isFinite)) continue;
@@ -50,7 +59,7 @@ export function pickLineEndpointMidpointLanding(document: DocumentSnapshot, depe
       }
     }
   }
-  const sourceOrderKey = (landing: LineEndpointMidpointLanding): string => landing.source.kind === "path-segment" ? landing.source.segmentId : landing.source.kind === "spline-span" ? `${landing.source.startNodeId}:${landing.source.endNodeId}` : "line";
+  const sourceOrderKey = (landing: LineEndpointMidpointLanding): string => landing.source.kind === "path-segment" ? landing.source.segmentId : landing.source.kind === "spline-span" ? `${landing.source.startNodeId}:${landing.source.endNodeId}` : landing.source.kind === "sketch-edge" ? landing.source.edgeId : "line";
   candidates.sort((a, b) => a.distancePx - b.distancePx || `${a.endpoint}:${a.sourceLineId}:${sourceOrderKey(a)}`.localeCompare(`${b.endpoint}:${b.sourceLineId}:${sourceOrderKey(b)}`));
   if (!candidates[0] || candidates[0].distancePx > tolerancePx || candidates[1]?.distancePx === candidates[0].distancePx) return undefined;
   const landing = candidates[0];
