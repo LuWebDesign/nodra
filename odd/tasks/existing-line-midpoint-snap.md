@@ -1,0 +1,20 @@
+# Snap existing sketch Line endpoints to visible midpoints
+
+## Goal
+Make an already-created Line-tool sketch endpoint magnetically snap to the uniquely nearest visible curve midpoint when dragged in Forma, and make the nearest endpoint of a Line-tool sketch edge snap when its Sketch body is dragged in Selección. The snap should be an explicit candidate like endpoint-node snapping and persist a valid relation through the editor's Sketch Kernel path.
+
+## Evidence and constraints
+- User manually confirmed the production behavior is missing: midpoint snap works when creating a Line from a midpoint, but not when moving an existing Line endpoint toward a midpoint. Endpoint-to-endpoint node snapping works. Expected in both Forma and Selección.
+- User confirmed both Lines were drawn by two clicks with the Línea tool, so each is a sketch edge; previous native-Line tests were not a reproduction of this workflow.
+- Read-only trace now confirms the Sketch-edge cause: two-click Línea creation persists a sketch-node → stable sketch-edge midpoint `DocumentConstraint`; the domain model, validation, solver, and Sketch Kernel already support projecting that dependency. Forma sketch-node updates and Selección sketch-body moves do not call the creation midpoint relation path, which is only wired for new geometry/native-Line moves.
+- The existing native-Line browser tests do not reproduce the user's gesture. In Selección, the user confirms dragging the body of a Sketch containing a two-click Línea edge.
+- The earlier conclusion that the behavior worked was wrong. Existing browser cases did not match the user's production workflow sufficiently; do not use them as proof until they reproduce the exact missing snap candidate.
+- Preserve real-node priority, visible-layer filtering, screen-pixel tolerance, stable edge/node identities, unique-nearest/tie fail-closed behavior, Sketch Kernel/command boundary, and one-gesture history/persistence.
+
+## Tasks
+- [x] S1: Added a focused browser spec that creates source/dependent Sketch edges with two clicks, then drags the existing endpoint in Forma or Sketch body in Selección toward the midpoint. RED evidence on merged main: typecheck passed; fixture passed; both gestures failed in preview with the endpoint still 5.5 screen pixels from the midpoint. This is the expected missing Sketch-edge move snap, not setup failure.
+- [x] S2: `interaction.ts` now selects the unique nearest visible Sketch-edge arc-length midpoint for stable dependent `nodeId`s, using an 8-screen-pixel tolerance, excluding hidden/self sources and already constrained nodes, preserving a real-node `priorityTarget`, and failing closed on near-equal ties. Forma passes only the dragged node; Selección is scoped to one Sketch edge and passes its two stable endpoints. `App.tsx` derives the existing stable midpoint `DocumentConstraint` and wraps move geometry + relation in `createGeometryWithDocumentConstraints`/Sketch Kernel. No model, solver, persistence, or schema edits.
+- [x] S3: Verified preview/commit/undo/redo/cancel, source-following, focused tests, behavior matrix, and all ordered root gates. Focused `tests/e2e/existing-sketch-edge-midpoint-move.spec.ts` passed 3/3, including Forma snap, Escape cancellation with no persisted midpoint relation, and independent source movement after cancel; interaction tests passed 88/88. Root gates passed in order: lint, typecheck, unit tests (40 files / 877 tests), E2E (108 passed / 1 skipped), and build. The build reports a non-blocking 1,114.61 kB JavaScript chunk warning (500 kB threshold). Read-only review found no confirmed correctness issue. The cancellation test deliberately checks absence of the durable relation rather than requiring a new persistence revision to be absent, since the autosave can finish persisting the setup after the canceled gesture without changing the document's revision or relation state.
+
+## Delivery
+No new commit/push/PR authorization has been given for this follow-up. Ask before delivery. Do not merge. Work only in `C:/dev/nodra-midpoint-feedback` on `fix/existing-line-midpoint-snap`, based on merged main `ab9a2bc`.

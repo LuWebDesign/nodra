@@ -1,9 +1,30 @@
 import { describe, expect, it } from "vitest";
 import { createDocument, elementId, layerId, type DocumentSnapshot, type Element } from "@nodra/domain";
 import { validateDocument } from "@nodra/validation";
-import { canActivateRotation, circleGeometry, centerPageInCanvas, clientPointToCanvas, clientPointToPage, creationGuides, directionalGuide, resolveLineInference, hasNonCollinearPoints, hoveredSelectionCenter, INITIAL_ZOOM, isDrawingTool, marqueeSelection, MAX_ZOOM, MIN_ZOOM, movementExceedsThreshold, nodeAlignmentGuides, normalizeBounds, normalizeDrag, pagePointToScreen, screenDeltaToMm, screenPointToMm, viewportPointToCanvas, containsBounds, elementsContainedBy, pickDimensionTarget, pickElement, pickFormaElement, pickFormaNode, pickFormaSegment, pickHoverNode, pickCutIntervalPreview, pickCuttableSegment, pickNode, pickOpenEdgeMidpointHover, pickLineEndpointMidpointLanding, lineEndpointMidpointConstraintId, pointerDownIntent, selectedNodeAnchor, selectionCenter, selectionFrame, snapCreationPoint, snapMoveDelta, visibleEditablePathNodeIndexes, visibleNativeCircularCenters, zoomAtPoint } from "./interaction.js";
+import { canActivateRotation, circleGeometry, centerPageInCanvas, clientPointToCanvas, clientPointToPage, creationGuides, directionalGuide, resolveLineInference, hasNonCollinearPoints, hoveredSelectionCenter, INITIAL_ZOOM, isDrawingTool, marqueeSelection, MAX_ZOOM, MIN_ZOOM, movementExceedsThreshold, nodeAlignmentGuides, normalizeBounds, normalizeDrag, pagePointToScreen, screenDeltaToMm, screenPointToMm, viewportPointToCanvas, containsBounds, elementsContainedBy, pickDimensionTarget, pickElement, pickFormaElement, pickFormaNode, pickFormaSegment, pickHoverNode, pickCutIntervalPreview, pickCuttableSegment, pickNode, pickOpenEdgeMidpointHover, pickLineEndpointMidpointLanding, pickSketchEndpointMidpointLanding, lineEndpointMidpointConstraintId, pointerDownIntent, selectedNodeAnchor, selectionCenter, selectionFrame, snapCreationPoint, snapMoveDelta, visibleEditablePathNodeIndexes, visibleNativeCircularCenters, zoomAtPoint } from "./interaction.js";
 import { geometryPatch, geometryValue } from "./propertyBar.js";
 import { dimensionKindForNodes, dimensionOffsetForPlacement, halfArcLengthMidpoint, pointMidpoint, sketchProfileResult, splineSpanToCurve } from "@nodra/geometry";
+
+describe("Sketch endpoint midpoint landing", () => {
+  const visible = { id: layerId("sketch-midpoint-visible"), name: "Visible", visible: true, order: 0 };
+  const hidden = { id: layerId("sketch-midpoint-hidden"), name: "Hidden", visible: false, order: 1 };
+  const style = { stroke: "#000", strokeWidth: 1 };
+  const dependent = { type: "sketch" as const, id: elementId("sketch-midpoint-dependent"), layerId: visible.id, nodes: [{ id: "a", point: { x: 10, y: 1 } }, { id: "b", point: { x: 20, y: 1 } }], edges: [{ id: "dependent-edge", startNodeId: "a", endNodeId: "b" }], style };
+  const source = { type: "sketch" as const, id: elementId("sketch-midpoint-source"), layerId: visible.id, nodes: [{ id: "s0", point: { x: 0, y: 0 } }, { id: "s1", point: { x: 20, y: 0 } }], edges: [{ id: "stable-source-edge", startNodeId: "s0", endNodeId: "s1" }], style };
+  const doc = (elements: readonly Element[], layers = [visible, hidden]) => ({ ...createDocument("sketch-midpoint-doc", layers), elements });
+
+  it("picks the unique nearest visible edge midpoint using stable IDs and excludes hidden sources", () => {
+    const result = pickSketchEndpointMidpointLanding(doc([dependent, source, { ...source, id: elementId("hidden-source"), layerId: hidden.id }]), dependent.id, ["a"], 1);
+    expect(result).toMatchObject({ dependentSketchId: dependent.id, nodeId: "a", sourceSketchId: source.id, edgeId: "stable-source-edge", midpoint: { x: 10, y: 0 }, distancePx: 1 });
+  });
+
+  it("fails closed on exact nearest ties and preserves an existing real-node target", () => {
+    const tied = { ...source, id: elementId("tied-source"), nodes: [{ id: "t0", point: { x: 0, y: 2 } }, { id: "t1", point: { x: 20, y: 2 } }], edges: [{ id: "tied-source-edge", startNodeId: "t0", endNodeId: "t1" }] };
+    expect(pickSketchEndpointMidpointLanding(doc([dependent, source, tied]), dependent.id, ["a"], 1)).toBeUndefined();
+    expect(pickSketchEndpointMidpointLanding(doc([dependent, source]), dependent.id, ["a"], 1, { x: 11, y: 0 })).toBeUndefined();
+    expect(pickSketchEndpointMidpointLanding(doc([dependent, source]), dependent.id, ["a"], 1, { x: 10, y: 0 })).toMatchObject({ edgeId: "stable-source-edge" });
+  });
+});
 
 describe("open-edge midpoint hover picking", () => {
   const layer = { id: layerId("mid-hover"), name: "Visible", visible: true, order: 0 };

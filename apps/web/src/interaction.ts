@@ -17,6 +17,59 @@ export interface LineEndpointMidpointLanding {
   readonly distancePx: number;
 }
 
+export interface SketchEndpointMidpointLanding {
+  readonly dependentSketchId: ElementId;
+  readonly nodeId: string;
+  readonly sourceSketchId: ElementId;
+  readonly edgeId: string;
+  readonly startNodeId: string;
+  readonly endNodeId: string;
+  readonly midpoint: PointMm;
+  readonly distancePx: number;
+}
+
+/** Picks one unique nearest visible Sketch-edge midpoint for the proposed stable node IDs. */
+export function pickSketchEndpointMidpointLanding(document: DocumentSnapshot, dependentSketchId: ElementId, nodeIds: readonly string[], zoom: number, priorityTarget?: PointMm, tolerancePx = 8): SketchEndpointMidpointLanding | undefined {
+  if (![zoom, tolerancePx].every(Number.isFinite) || zoom <= 0 || tolerancePx < 0) throw new Error("Sketch midpoint zoom and tolerance must be valid");
+  if (priorityTarget && ![priorityTarget.x, priorityTarget.y].every(Number.isFinite)) return undefined;
+  const dependent = document.elements.find((element): element is Extract<Element, { type: "sketch" }> => element.id === dependentSketchId && element.type === "sketch");
+  if (!dependent || !document.layers.find((layer) => layer.id === dependent.layerId)?.visible || nodeIds.length === 0 || new Set(nodeIds).size !== nodeIds.length) return undefined;
+  const moving = nodeIds.flatMap((nodeId) => {
+    const node = dependent.nodes.find((candidate) => candidate.id === nodeId);
+    const alreadyConstrained = (document.constraints ?? []).some((constraint) => {
+      const reference = constraint.references[0];
+      return constraint.kind === "midpoint" && reference?.elementId === dependentSketchId && "nodeId" in reference && reference.nodeId === nodeId;
+    });
+    return node && !alreadyConstrained ? [{ nodeId, point: node.point }] : [];
+  });
+  if (moving.length !== nodeIds.length) return undefined;
+  const visible = new Set(document.layers.filter((layer) => layer.visible).map((layer) => layer.id));
+  const candidates: SketchEndpointMidpointLanding[] = [];
+  for (const source of document.elements) {
+    if (source.type !== "sketch" || source.id === dependentSketchId || !visible.has(source.layerId)) continue;
+    let curves: ReturnType<typeof elementToCurves>;
+    try { curves = elementToCurves(source); } catch { continue; }
+    for (const curve of curves) {
+      const curveSource = curve.source;
+      if (curveSource.kind !== "sketch-edge") continue;
+      const edge = source.edges.find((candidate) => candidate.id === curveSource.edgeId);
+      if (!edge) continue;
+      let midpoint: PointMm | undefined;
+      try { midpoint = halfArcLengthMidpoint(curve.curve); } catch { continue; }
+      if (!midpoint || ![midpoint.x, midpoint.y].every(Number.isFinite)) continue;
+      for (const node of moving) {
+        const distancePx = Math.hypot(node.point.x - midpoint.x, node.point.y - midpoint.y) * zoom;
+        if (Number.isFinite(distancePx) && distancePx <= tolerancePx) candidates.push({ dependentSketchId, nodeId: node.nodeId, sourceSketchId: source.id, edgeId: edge.id, startNodeId: edge.startNodeId, endNodeId: edge.endNodeId, midpoint, distancePx });
+      }
+    }
+  }
+  candidates.sort((a, b) => a.distancePx - b.distancePx || `${a.nodeId}:${a.sourceSketchId}:${a.edgeId}`.localeCompare(`${b.nodeId}:${b.sourceSketchId}:${b.edgeId}`));
+  const nearest = candidates[0];
+  if (!nearest || candidates[1] && Math.abs(candidates[1].distancePx - nearest.distancePx) <= 1e-9) return undefined;
+  if (priorityTarget && (nearest.midpoint.x !== priorityTarget.x || nearest.midpoint.y !== priorityTarget.y)) return undefined;
+  return nearest;
+}
+
 /** Creates a stable, unambiguous identity for a newly derived endpoint relation. */
 export function lineEndpointMidpointConstraintId(dependentLineId: ElementId, endpoint: "start" | "end", source: Curve2DSource): string {
   const identity = source.kind === "path-segment" ? [source.kind, source.elementId, source.segmentId]
