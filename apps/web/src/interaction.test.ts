@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createDocument, elementId, layerId, type DocumentSnapshot, type Element } from "@nodra/domain";
 import { validateDocument } from "@nodra/validation";
-import { canActivateRotation, circleGeometry, centerPageInCanvas, clientPointToCanvas, clientPointToPage, creationGuides, directionalGuide, resolveLineInference, hasNonCollinearPoints, hoveredSelectionCenter, INITIAL_ZOOM, isDrawingTool, marqueeSelection, MAX_ZOOM, MIN_ZOOM, movementExceedsThreshold, nodeAlignmentGuides, normalizeBounds, normalizeDrag, pagePointToScreen, screenDeltaToMm, screenPointToMm, viewportPointToCanvas, containsBounds, elementsContainedBy, pickDimensionTarget, pickElement, pickFormaElement, pickFormaNode, pickFormaSegment, pickHoverNode, pickCutIntervalPreview, pickCuttableSegment, pickNode, pickOpenEdgeMidpointHover, pickLineEndpointMidpointLanding, pickSketchEndpointMidpointLanding, lineEndpointMidpointConstraintId, pointerDownIntent, selectedNodeAnchor, selectionCenter, selectionFrame, snapCreationPoint, snapMoveDelta, visibleEditablePathNodeIndexes, visibleNativeCircularCenters, zoomAtPoint } from "./interaction.js";
+import { canActivateRotation, circleGeometry, centerPageInCanvas, clientPointToCanvas, clientPointToPage, creationGuides, directionalGuide, resolveLineInference, hasNonCollinearPoints, hoveredSelectionCenter, INITIAL_ZOOM, isDrawingTool, marqueeSelection, MAX_ZOOM, MIN_ZOOM, movementExceedsThreshold, nodeAlignmentGuides, normalizeBounds, normalizeDrag, pagePointToScreen, screenDeltaToMm, screenPointToMm, viewportPointToCanvas, containsBounds, elementsContainedBy, pickDimensionTarget, pickElement, pickFormaElement, pickFormaNode, pickFormaSegment, pickHoverNode, pickCutIntervalPreview, pickCuttableSegment, pickNode, pickOpenEdgeMidpointHover, pickLineEndpointMidpointLanding, pickSketchEndpointMidpointLanding, pickSketchEndpointNodeLanding, lineEndpointMidpointConstraintId, pointerDownIntent, selectedNodeAnchor, selectionCenter, selectionFrame, snapCreationPoint, snapMoveDelta, visibleEditablePathNodeIndexes, visibleNativeCircularCenters, zoomAtPoint } from "./interaction.js";
 import { geometryPatch, geometryValue } from "./propertyBar.js";
 import { dimensionKindForNodes, dimensionOffsetForPlacement, halfArcLengthMidpoint, pointMidpoint, sketchProfileResult, splineSpanToCurve } from "@nodra/geometry";
 
@@ -23,6 +23,18 @@ describe("Sketch endpoint midpoint landing", () => {
     expect(pickSketchEndpointMidpointLanding(doc([dependent, source, tied]), dependent.id, ["a"], 1)).toBeUndefined();
     expect(pickSketchEndpointMidpointLanding(doc([dependent, source]), dependent.id, ["a"], 1, { x: 11, y: 0 })).toBeUndefined();
     expect(pickSketchEndpointMidpointLanding(doc([dependent, source]), dependent.id, ["a"], 1, { x: 10, y: 0 })).toMatchObject({ edgeId: "stable-source-edge" });
+  });
+});
+
+describe("Sketch endpoint node landing identity", () => {
+  it("returns stable cross-sketch node references only for one visible exact target", () => {
+    const layer = { id: layerId("node-land"), name: "Visible", visible: true, order: 0 };
+    const dependent = { type: "sketch" as const, id: elementId("node-dependent"), layerId: layer.id, nodes: [{ id: "moving", point: { x: 1, y: 0 } }], edges: [], style: { stroke: "#000", strokeWidth: 1 } };
+    const source = { ...dependent, id: elementId("node-source"), nodes: [{ id: "stable-target", point: { x: 10, y: 20 } }] };
+    const document = { ...createDocument("node-landing", [layer]), elements: [dependent, source] };
+    expect(pickSketchEndpointNodeLanding(document, dependent.id, "moving", { x: 10, y: 20 })).toEqual({ dependentSketchId: dependent.id, nodeId: "moving", sourceSketchId: source.id, sourceNodeId: "stable-target" });
+    expect(pickSketchEndpointNodeLanding(document, dependent.id, "missing", { x: 10, y: 20 })).toBeUndefined();
+    expect(pickSketchEndpointNodeLanding({ ...document, elements: [dependent, source, { ...source, id: elementId("duplicate-target") }] }, dependent.id, "moving", { x: 10, y: 20 })).toBeUndefined();
   });
 });
 
