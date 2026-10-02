@@ -9,7 +9,7 @@ Make confirmed endpoint-to-endpoint snaps durable like existing endpoint-to-midp
 - Use stable Sketch node references and the existing solver-backed document `coincident` constraint, matching the midpoint relation's persistence/undo contract. Use same-Sketch shared node topology where the Line tool already reuses a node.
 - Do not change endpoint snap tolerance/priority, center/midpoint inference, other drawing tools, or the distinct deliberate-drag native-Line gesture unless evidence shows a necessary shared path.
 - Preserve Sketch Kernel/editor-core ownership, one transaction per gesture, Escape cancellation, existing constraints, and project persistence. No schema or persistence-layer changes expected.
-- Work in `C:/dev/nodra-midpoint-feedback`, branch `fix/existing-line-midpoint-snap`. The previous midpoint work is already pushed as `f1b0c47` + `7746b6f`. No commit/push/PR authorization has been given for this follow-up; no merge.
+- Work in `C:/dev/nodra-midpoint-feedback`, branch `fix/existing-line-midpoint-snap`. The previous midpoint work is already pushed as `f1b0c47` + `7746b6f`. User authorized commit and push for this follow-up; no PR or merge is authorized.
 
 ## Tasks
 - [x] E1: Added four browser regressions with exact source/dependent Sketch edge node references and endpoint geometry checks before durable relation checks. RED observed: all four routes—new Sketch edge, appended edge, Forma endpoint drag, and Selección body drag—landed within 1 px of the source endpoint, then failed only because no persisted `coincident` DocumentConstraint existed. Setup fixture passed.
@@ -18,4 +18,4 @@ Make confirmed endpoint-to-endpoint snaps durable like existing endpoint-to-midp
 - [x] E4: Triage found no reproducible endpoint-change regression in the existing `line-linked-delete-reload.spec.ts` case: its isolated rerun passed; original full-run trace was unavailable, so the transient cause remains unknown. Reconciled node/midpoint overlap with existing interaction tests and implementation: distinct midpoint target is suppressed by real-node priority, exact-coordinate overlap may preserve both relations; behavior matrix documents this.
 
 ## Delivery
-Keep implementation uncommitted and unpublished until the user explicitly authorizes delivery. No PR or merge is authorized.
+Implementation committed as `f5986cf` (`feat(sketch): persist endpoint snap relations`). User authorized pushing this branch; no PR or merge is authorized.
