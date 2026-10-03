@@ -9,7 +9,7 @@ import { createPersistenceQueue, loadCollapsedPages, loadLastOpenedProject, load
 import { selectRecoveredProject } from "./appRecovery.js";
 import { addSolvedDocumentConstraint, createGeometryWithDocumentConstraints, documentConstraintDiagnosticId, supportsGlobalConstraintKind, updateSolvedDocumentConstraint } from "./globalConstraintCommands.js";
 import { renderSketchProfileSvg, renderSvg } from "@nodra/renderer-svg";
-import { canActivateRotation, centerPageInCanvas, clientPointToCanvas, clientPointToPage, cubicPlacementControls, formaNodeKey, formaNodeSnapTarget, hoveredSelectionCenter, isDrawingTool, marqueeSelection, movementExceedsThreshold, normalizeBounds, normalizeDrag, pagePointToCanvas, pathGuides, pickDimensionTarget, pickElement, pickFormaElement, pickFormaNode, pickFormaSegment, pickHoverNode, pickCutIntervalPreview, pickCuttableSegment, pickNode, pickPathNode, pickPathSegment, pickOpenEdgeMidpointHover, pickLineEndpointMidpointLanding, lineEndpointMidpointConstraintId, pointerDownIntent, visibleEditablePathNodeIndexes, screenDeltaToMm, screenPointToMm, selectedNodeAnchor, selectedPathAnchorIds, alignmentGuides, snapCreationPoint, snapFormaNodePoint, snapMoveDelta, viewportPointToCanvas, zoomAtPoint, type AlignmentGuide, type ContourNodeHit, type CutIntervalPreview, type DimensionTarget, type FormaNodeHit, type HoverNode, type NodeHit, type OpenEdgeMidpointHover, type PathNodeHit, type SnapGuide, type TransformMode, type CreationSnap } from "./interaction.js";
+import { canActivateRotation, centerPageInCanvas, clientPointToCanvas, clientPointToPage, cubicPlacementControls, formaNodeKey, formaNodeSnapTarget, hoveredSelectionCenter, isDrawingTool, marqueeSelection, movementExceedsThreshold, normalizeBounds, normalizeDrag, pagePointToCanvas, pathGuides, pickDimensionTarget, pickElement, pickFormaElement, pickFormaNode, pickFormaSegment, pickHoverNode, pickCutIntervalPreview, pickCuttableSegment, pickNode, pickPathNode, pickPathSegment, pickOpenEdgeMidpointHover, pickLineEndpointMidpointLanding, pickSketchEndpointMidpointLanding, lineEndpointMidpointConstraintId, pointerDownIntent, visibleEditablePathNodeIndexes, screenDeltaToMm, screenPointToMm, selectedNodeAnchor, selectedPathAnchorIds, alignmentGuides, snapCreationPoint, snapFormaNodePoint, snapMoveDelta, viewportPointToCanvas, zoomAtPoint, type AlignmentGuide, type ContourNodeHit, type CutIntervalPreview, type DimensionTarget, type FormaNodeHit, type HoverNode, type NodeHit, type OpenEdgeMidpointHover, type PathNodeHit, type SnapGuide, type TransformMode, type CreationSnap } from "./interaction.js";
 import { aspectSize, formatMm, geometryValue, rotationDegreesValue, rotationPatch, type GeometryField, type PropertyElement, type RotatableElement } from "./propertyBar.js";
 import { projectWithSketchAssociation, resolveActivePieceId, sessionForSketchEditor, shouldAutosaveProject, shouldPersistEditorSnapshot, useDocumentStore, usePersistenceStore, useSavePolicyStore, useSelectionStore, useUiStore, useViewportStore, type Tool } from "./stores.js";
     import { createSketchSession, hasSketchSessionChanges, isSketchScopedDocumentChange, isSketchSessionHistoryLocked, reduceSketchSession, type SketchSessionState } from "@nodra/editor-core";
@@ -1760,6 +1760,21 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
     setPenDraftPoint(undefined);
   };
 
+  const sketchMidpointMoveCommand = (geometry: EditorCommand, sketchId: ElementId, nodeIds: readonly string[], zoomAtGesture: number, priorityTarget?: PointMm): EditorCommand => {
+    const base = editorRef.current.gesture?.base ?? editorRef.current.document;
+    const candidate = geometry.apply(base);
+    if (!candidate.success) return geometry;
+    const landing = pickSketchEndpointMidpointLanding(candidate.document, sketchId, nodeIds, zoomAtGesture, priorityTarget);
+    if (!landing) return geometry;
+    const relation = midpointDocumentConstraint({ kind: "sketch-edge", elementId: landing.sourceSketchId, edgeId: landing.edgeId, startNodeId: landing.startNodeId, endNodeId: landing.endNodeId }, sketchId, landing.nodeId);
+    return createGeometryWithDocumentConstraints(geometry, (_before, after) => {
+      const dependent = after.elements.find((element): element is Extract<Element, { type: "sketch" }> => element.id === sketchId && element.type === "sketch");
+      const source = after.elements.find((element): element is Extract<Element, { type: "sketch" }> => element.id === landing.sourceSketchId && element.type === "sketch");
+      if (!dependent?.nodes.some((item) => item.id === landing.nodeId) || !source?.edges.some((item) => item.id === landing.edgeId)) return [];
+      return [relation];
+    });
+  };
+
   const lineMidpointMoveCommand = (geometry: EditorCommand, lineId: ElementId, zoomAtGesture: number, endpoint?: "start" | "end", priorityTarget?: PointMm): EditorCommand => {
     const base = editorRef.current.gesture?.base ?? editorRef.current.document;
     if (base.constraints?.some((constraint) => constraint.kind === "line-endpoint-midpoint" && constraint.references[0]?.elementId === lineId)) return geometry;
@@ -1881,11 +1896,15 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
       active.dragged = true;
       const base = editorRef.current.gesture?.base ?? editorRef.current.document;
       const selectedLine = active.ids.length === 1 ? base.elements.find((element) => element.id === active.ids![0] && element.type === "line") : undefined;
+      const selectedSketch = active.ids.length === 1 ? base.elements.find((element): element is Extract<Element, { type: "sketch" }> => element.id === active.ids![0] && element.type === "sketch") : undefined;
+      const sketchEdge = selectedSketch?.edges.length === 1 ? selectedSketch.edges[0] : undefined;
       const lineIsDependent = selectedLine && base.constraints?.some((constraint) => constraint.kind === "line-endpoint-midpoint" && constraint.references[0]?.elementId === selectedLine.id);
       const geometry = moveElements(active.ids, snapped.delta);
-      const command = selectedLine && !lineIsDependent
-        ? lineMidpointMoveCommand(geometry, selectedLine.id, zoom, active.anchor?.elementId === selectedLine.id ? active.anchor.nodeIndex === 0 ? "start" : active.anchor.nodeIndex === 2 ? "end" : undefined : undefined, snapped.guide?.target)
-        : geometry;
+      const command = selectedSketch && sketchEdge
+        ? sketchMidpointMoveCommand(geometry, selectedSketch.id, [sketchEdge.startNodeId, sketchEdge.endNodeId], zoom, snapped.guide?.target)
+        : selectedLine && !lineIsDependent
+          ? lineMidpointMoveCommand(geometry, selectedLine.id, zoom, active.anchor?.elementId === selectedLine.id ? active.anchor.nodeIndex === 0 ? "start" : active.anchor.nodeIndex === 2 ? "end" : undefined : undefined, snapped.guide?.target)
+          : geometry;
       setEditorState(previewGestureFromBase(editorRef.current, command));
       return;
     }
@@ -1920,11 +1939,16 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
       if (!active.startClient || !movementExceedsThreshold(active.startClient, { x: event.clientX, y: event.clientY })) return;
       active.dragged = true;
       const nativeLine = base.elements.find((element) => element.id === active.formaNode!.elementId && element.type === "line");
+      const sketch = base.elements.find((element): element is Extract<Element, { type: "sketch" }> => element.id === active.formaNode!.elementId && element.type === "sketch");
       const endpoint = active.formaNode.nodeIndex === 0 ? "start" : active.formaNode.nodeIndex === 2 ? "end" : undefined;
       const geometry = active.formaNode.contourNode ? updateContourNode(active.formaNode.elementId, active.formaNode.contourNode, point) : updateElementNode(active.formaNode.elementId, active.formaNode.nodeIndex ?? -1, point);
-      const command = nativeLine && endpoint
-        ? lineMidpointMoveCommand(geometry, nativeLine.id, zoom, endpoint, formaNodeSnapTarget(base, rawPoint, zoom, active.formaNode))
-        : geometry;
+      const priorityTarget = formaNodeSnapTarget(base, rawPoint, zoom, active.formaNode);
+      const sketchNodeId = sketch?.nodes[active.formaNode.nodeIndex ?? -1]?.id;
+      const command = sketch && sketchNodeId
+        ? sketchMidpointMoveCommand(geometry, sketch.id, [sketchNodeId], zoom, priorityTarget)
+        : nativeLine && endpoint
+          ? lineMidpointMoveCommand(geometry, nativeLine.id, zoom, endpoint, priorityTarget)
+          : geometry;
       setEditorState(previewGestureFromBase(editorRef.current, command));
       return;
     }
