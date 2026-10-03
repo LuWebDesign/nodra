@@ -9,7 +9,7 @@ import { createPersistenceQueue, loadCollapsedPages, loadLastOpenedProject, load
 import { selectRecoveredProject } from "./appRecovery.js";
 import { addSolvedDocumentConstraint, createGeometryWithDocumentConstraints, documentConstraintDiagnosticId, supportsGlobalConstraintKind, updateSolvedDocumentConstraint } from "./globalConstraintCommands.js";
 import { renderSketchProfileSvg, renderSvg } from "@nodra/renderer-svg";
-import { canActivateRotation, centerPageInCanvas, clientPointToCanvas, clientPointToPage, cubicPlacementControls, formaNodeKey, formaNodeSnapTarget, hoveredSelectionCenter, isDrawingTool, marqueeSelection, movementExceedsThreshold, normalizeBounds, normalizeDrag, pagePointToCanvas, pathGuides, pickDimensionTarget, pickElement, pickFormaElement, pickFormaNode, pickFormaSegment, pickHoverNode, pickCutIntervalPreview, pickCuttableSegment, pickNode, pickPathNode, pickPathSegment, pickOpenEdgeMidpointHover, pickLineEndpointMidpointLanding, pickSketchEndpointMidpointLanding, lineEndpointMidpointConstraintId, pointerDownIntent, visibleEditablePathNodeIndexes, screenDeltaToMm, screenPointToMm, selectedNodeAnchor, selectedPathAnchorIds, alignmentGuides, snapCreationPoint, snapFormaNodePoint, snapMoveDelta, viewportPointToCanvas, zoomAtPoint, type AlignmentGuide, type ContourNodeHit, type CutIntervalPreview, type DimensionTarget, type FormaNodeHit, type HoverNode, type NodeHit, type OpenEdgeMidpointHover, type PathNodeHit, type SnapGuide, type TransformMode, type CreationSnap } from "./interaction.js";
+import { canActivateRotation, centerPageInCanvas, clientPointToCanvas, clientPointToPage, cubicPlacementControls, formaNodeKey, formaNodeSnapTarget, hoveredSelectionCenter, isDrawingTool, marqueeSelection, movementExceedsThreshold, normalizeBounds, normalizeDrag, pagePointToCanvas, pathGuides, pickDimensionTarget, pickElement, pickFormaElement, pickFormaNode, pickFormaSegment, pickHoverNode, pickCutIntervalPreview, pickCuttableSegment, pickNode, pickPathNode, pickPathSegment, pickOpenEdgeMidpointHover, pickLineEndpointMidpointLanding, pickSketchEndpointMidpointLanding, pickSketchEndpointNodeLanding, lineEndpointMidpointConstraintId, pointerDownIntent, visibleEditablePathNodeIndexes, screenDeltaToMm, screenPointToMm, selectedNodeAnchor, selectedPathAnchorIds, alignmentGuides, snapCreationPoint, snapFormaNodePoint, snapMoveDelta, viewportPointToCanvas, zoomAtPoint, type AlignmentGuide, type ContourNodeHit, type CutIntervalPreview, type DimensionTarget, type FormaNodeHit, type HoverNode, type NodeHit, type OpenEdgeMidpointHover, type PathNodeHit, type SnapGuide, type TransformMode, type CreationSnap } from "./interaction.js";
 import { aspectSize, formatMm, geometryValue, rotationDegreesValue, rotationPatch, type GeometryField, type PropertyElement, type RotatableElement } from "./propertyBar.js";
 import { projectWithSketchAssociation, resolveActivePieceId, sessionForSketchEditor, shouldAutosaveProject, shouldPersistEditorSnapshot, useDocumentStore, usePersistenceStore, useSavePolicyStore, useSelectionStore, useUiStore, useViewportStore, type Tool } from "./stores.js";
     import { createSketchSession, hasSketchSessionChanges, isSketchScopedDocumentChange, isSketchSessionHistoryLocked, reduceSketchSession, type SketchSessionState } from "@nodra/editor-core";
@@ -67,6 +67,7 @@ const creationConnections = (element: Element, snaps: readonly (CreationSnap | u
   if (!sourceAddress || !snap.address || snap.node.elementId === element.id) return [];
   return [{ id: `connection-${crypto.randomUUID()}`, first: { elementId: element.id, node: sourceAddress }, second: { elementId: snap.node.elementId, node: snap.address } }];
 });
+const sketchCoincidenceConstraint = (firstElementId: ElementId, firstNodeId: string, secondElementId: ElementId, secondNodeId: string): DocumentConstraint => ({ id: `coincident-${crypto.randomUUID()}`, kind: "coincident", references: [{ elementId: firstElementId, nodeId: firstNodeId }, { elementId: secondElementId, nodeId: secondNodeId }] });
 const midpointDocumentConstraint = (source: Curve2DSource, elementId: ElementId, nodeId: string): DocumentConstraint => {
   const dependent = { elementId, nodeId };
   const id = `midpoint-${crypto.randomUUID()}`;
@@ -136,7 +137,7 @@ type ActiveInteraction = {
   splineHandle?: "in" | "out";
   pressedAt?: number;
 };
-type CreationDraft = { readonly tool: "rectangle" | "circle" | "line" | "arc"; readonly points: readonly PointMm[]; readonly pointer: PointMm; readonly snaps?: readonly (CreationSnap | undefined)[]; readonly elementId?: ElementId; readonly currentNodeId?: string; readonly startMidpointSource?: Curve2DSource };
+type CreationDraft = { readonly tool: "rectangle" | "circle" | "line" | "arc"; readonly points: readonly PointMm[]; readonly pointer: PointMm; readonly snaps?: readonly (CreationSnap | undefined)[]; readonly elementId?: ElementId; readonly currentNodeId?: string; readonly startMidpointSource?: Curve2DSource; readonly sketchNodeSnaps?: readonly ({ readonly elementId: ElementId; readonly nodeId: string } | undefined)[] };
 
 type FormaNodeOverlay =
   | { readonly kind: "contour"; readonly key: string; readonly elementId: ElementId; readonly point: PointMm; readonly contour: ContourNodeHit }
@@ -1394,7 +1395,7 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
         const snappedSketchNode = candidateSource?.type === "sketch" && candidate?.nodeId ? { elementId: candidateSource.id, nodeId: candidate.nodeId } : undefined;
         const matchingCandidateSnap = candidate && candidateSnap && candidateSnap.node && candidateSnap.node.elementId === candidate.sourceIds[0] && candidateNode?.nodeId === candidate.nodeId && candidateSnap.address && (candidateSnap.address.kind === "sketch" || candidateSnap.address.kind === "path" || candidateSnap.address.kind === "spline") && candidateSnap.address.nodeId === candidate.nodeId ? candidateSnap : undefined;
         if (!draft) {
-          const nextDraft = { tool, points: [creationPoint], pointer: creationPoint, snaps: [matchingCandidateSnap], ...(candidate?.kind === "midpoint" && candidate.midpointSource ? { startMidpointSource: candidate.midpointSource } : {}), ...(snappedSketchNode ? { elementId: snappedSketchNode.elementId, currentNodeId: snappedSketchNode.nodeId } : {}) } as const;
+          const nextDraft = { tool, points: [creationPoint], pointer: creationPoint, snaps: [matchingCandidateSnap], sketchNodeSnaps: [snappedSketchNode], ...(candidate?.kind === "midpoint" && candidate.midpointSource ? { startMidpointSource: candidate.midpointSource } : {}), ...(snappedSketchNode ? { elementId: snappedSketchNode.elementId, currentNodeId: snappedSketchNode.nodeId } : {}) } as const;
          creationDraftRef.current = nextDraft;
          setCreationDraft(nextDraft);
          lineInferenceRef.current = undefined;
@@ -1402,15 +1403,20 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
           const sketch = createSketchLine(id(), layerId(editorRef.current.document.layers[0]?.id ?? "layer-1"), { ...defaultStyle, strokeWidth: 1.5 }, draft.points[0]!, creationPoint, { kind: candidate?.kind === "axis" ? candidate.axis ?? "none" : "none" });
           const geometryCommand = createElement(sketch, creationConnections(sketch, [...(draft.snaps ?? []), matchingCandidateSnap]));
           const midpointSources = [draft.startMidpointSource, candidate?.kind === "midpoint" ? candidate.midpointSource : undefined] as const;
-          const command = midpointSources.some(Boolean) ? createGeometryWithDocumentConstraints(geometryCommand, (_before, after) => {
+          const snappedSketchNodes = [draft.sketchNodeSnaps?.[0], snappedSketchNode] as const;
+          const command = midpointSources.some(Boolean) || snappedSketchNodes.some(Boolean) ? createGeometryWithDocumentConstraints(geometryCommand, (_before, after) => {
             const created = after.elements.find((element): element is Extract<Element, { type: "sketch" }> => element.id === sketch.id && element.type === "sketch");
             if (!created) throw new Error("Created sketch is unavailable for midpoint constraints");
-            return midpointSources.flatMap((source, index) => {
+            const derived = midpointSources.flatMap((source, index) => {
               const node = created.nodes[index === 0 ? 0 : 1];
               if (!source) return [];
               if (!node) throw new Error("Created sketch midpoint node is unavailable");
               return [midpointDocumentConstraint(source, created.id, node.id)];
-            });
+            }).concat(snappedSketchNodes.flatMap((hit, index) => {
+              const node = created.nodes[index];
+              return hit && node && hit.elementId !== created.id ? [sketchCoincidenceConstraint(created.id, node.id, hit.elementId, hit.nodeId)] : [];
+            }));
+            return derived;
           }) : geometryCommand;
           const next = dispatch(editorRef.current, command);
           if (next === editorRef.current) return;
@@ -1428,7 +1434,12 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
                 setCreationPending(undefined);
                 enterSketchSession(sketch.id, selectedNext);
               } else {
-                if (activePiece) commitNewSketch(selectedNext, sketch.id, activePiece.id);
+                if (activePiece) {
+                  commitNewSketch(selectedNext, sketch.id, activePiece.id);
+                  const committedProject = useDocumentStore.getState().project;
+                  setProject(projectFromDocument(committedProject, selectedNext.document));
+                  setEditor(selectedNext, { syncProject: false });
+                }
               }
        } else if (draft.elementId && draft.currentNodeId) {
           const targetNodeId = snappedSketchNode?.elementId === draft.elementId ? snappedSketchNode.nodeId : undefined;
@@ -1438,13 +1449,15 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
           const midpointSource = candidate?.kind === "midpoint" ? candidate.midpointSource : undefined;
           const localMidpoint = midpointSource?.kind === "sketch-edge" && midpointSource.elementId === draft.elementId ? { kind: "midpoint" as const, references: [{ elementId: draft.elementId, edgeId: midpointSource.edgeId }] as const } : undefined;
           const geometryCommand = appendSketchEdge(draft.elementId, draft.currentNodeId, creationPoint, targetNodeId, localMidpoint, localMidpoint ? undefined : relation);
-          const command = midpointSource && !localMidpoint ? createGeometryWithDocumentConstraints(geometryCommand, (before, after) => {
+          const externalSketchNode = snappedSketchNode && snappedSketchNode.elementId !== draft.elementId ? snappedSketchNode : undefined;
+          const command = midpointSource && !localMidpoint || externalSketchNode ? createGeometryWithDocumentConstraints(geometryCommand, (before, after) => {
             const prior = before.elements.find((element): element is Extract<Element, { type: "sketch" }> => element.id === draft.elementId && element.type === "sketch");
             const appended = after.elements.find((element): element is Extract<Element, { type: "sketch" }> => element.id === draft.elementId && element.type === "sketch");
             const edge = appended?.edges.find((item) => !prior?.edges.some((existing) => existing.id === item.id));
             const node = edge && appended?.nodes.find((item) => item.id === edge.endNodeId);
-            if (!node) throw new Error("Appended sketch midpoint node is unavailable");
-            return [midpointDocumentConstraint(midpointSource, draft.elementId!, node.id)];
+            if (!node) throw new Error("Appended sketch endpoint is unavailable");
+            const constraints = midpointSource && !localMidpoint ? [midpointDocumentConstraint(midpointSource, draft.elementId!, node.id)] : [];
+            return externalSketchNode ? [...constraints, sketchCoincidenceConstraint(draft.elementId!, node.id, externalSketchNode.elementId, externalSketchNode.nodeId)] : constraints;
           }) : geometryCommand;
           const next = dispatch(editorRef.current, command);
           if (next === editorRef.current) {
@@ -1463,7 +1476,7 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
           const currentNodeId = targetNodeId ?? appendedEdge?.endNodeId ?? draft.currentNodeId;
           const persistedEnd = appendedEdge ? sketch?.nodes.find((node) => node.id === appendedEdge.endNodeId)?.point : undefined;
           const nextPoint = targetNodeId ? sketch?.nodes.find((node) => node.id === targetNodeId)?.point ?? creationPoint : persistedEnd ?? creationPoint;
-          const nextDraft = { ...draft, points: [...draft.points, nextPoint], pointer: nextPoint, currentNodeId };
+          const nextDraft = { ...draft, points: [...draft.points, nextPoint], pointer: nextPoint, currentNodeId, sketchNodeSnaps: [...(draft.sketchNodeSnaps ?? []), snappedSketchNode] };
          creationDraftRef.current = nextDraft;
          setCreationDraft(nextDraft);
          setEditorState(select(next, [draft.elementId]));
@@ -1764,14 +1777,21 @@ const mark = globalThis.document.createElementNS("http://www.w3.org/2000/svg", "
     const base = editorRef.current.gesture?.base ?? editorRef.current.document;
     const candidate = geometry.apply(base);
     if (!candidate.success) return geometry;
-    const landing = pickSketchEndpointMidpointLanding(candidate.document, sketchId, nodeIds, zoomAtGesture, priorityTarget);
-    if (!landing) return geometry;
-    const relation = midpointDocumentConstraint({ kind: "sketch-edge", elementId: landing.sourceSketchId, edgeId: landing.edgeId, startNodeId: landing.startNodeId, endNodeId: landing.endNodeId }, sketchId, landing.nodeId);
+    const midpointLanding = pickSketchEndpointMidpointLanding(candidate.document, sketchId, nodeIds, zoomAtGesture, priorityTarget);
+    const nodeLanding = priorityTarget ? nodeIds.map((nodeId) => pickSketchEndpointNodeLanding(candidate.document, sketchId, nodeId, priorityTarget)).find(Boolean) : undefined;
+    if (!midpointLanding && !nodeLanding) return geometry;
     return createGeometryWithDocumentConstraints(geometry, (_before, after) => {
-      const dependent = after.elements.find((element): element is Extract<Element, { type: "sketch" }> => element.id === sketchId && element.type === "sketch");
-      const source = after.elements.find((element): element is Extract<Element, { type: "sketch" }> => element.id === landing.sourceSketchId && element.type === "sketch");
-      if (!dependent?.nodes.some((item) => item.id === landing.nodeId) || !source?.edges.some((item) => item.id === landing.edgeId)) return [];
-      return [relation];
+      const constraints: DocumentConstraint[] = [];
+      if (midpointLanding) {
+        const dependent = after.elements.find((element): element is Extract<Element, { type: "sketch" }> => element.id === sketchId && element.type === "sketch");
+        const source = after.elements.find((element): element is Extract<Element, { type: "sketch" }> => element.id === midpointLanding.sourceSketchId && element.type === "sketch");
+        if (dependent?.nodes.some((item) => item.id === midpointLanding.nodeId) && source?.edges.some((item) => item.id === midpointLanding.edgeId)) constraints.push(midpointDocumentConstraint({ kind: "sketch-edge", elementId: source.id, edgeId: midpointLanding.edgeId, startNodeId: midpointLanding.startNodeId, endNodeId: midpointLanding.endNodeId }, sketchId, midpointLanding.nodeId));
+      }
+      if (nodeLanding) {
+        const source = after.elements.find((element): element is Extract<Element, { type: "sketch" }> => element.id === nodeLanding.sourceSketchId && element.type === "sketch");
+        if (source?.nodes.some((item) => item.id === nodeLanding.sourceNodeId)) constraints.push(sketchCoincidenceConstraint(sketchId, nodeLanding.nodeId, source.id, nodeLanding.sourceNodeId));
+      }
+      return constraints;
     });
   };
 

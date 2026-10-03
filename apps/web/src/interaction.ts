@@ -17,6 +17,23 @@ export interface LineEndpointMidpointLanding {
   readonly distancePx: number;
 }
 
+export interface SketchEndpointNodeLanding {
+  readonly dependentSketchId: ElementId;
+  readonly nodeId: string;
+  readonly sourceSketchId: ElementId;
+  readonly sourceNodeId: string;
+}
+
+/** Resolves an already-selected real-node snap target to stable Sketch node identities. */
+export function pickSketchEndpointNodeLanding(document: DocumentSnapshot, dependentSketchId: ElementId, nodeId: string, target: PointMm): SketchEndpointNodeLanding | undefined {
+  const dependent = document.elements.find((element): element is Extract<Element, { type: "sketch" }> => element.id === dependentSketchId && element.type === "sketch");
+  if (!dependent || !dependent.nodes.some((node) => node.id === nodeId)) return undefined;
+  const matches = document.elements.flatMap((element) => element.type === "sketch" && element.id !== dependentSketchId
+    && document.layers.find((layer) => layer.id === element.layerId)?.visible
+    ? element.nodes.filter((node) => node.point.x === target.x && node.point.y === target.y).map((node) => ({ dependentSketchId, nodeId, sourceSketchId: element.id, sourceNodeId: node.id })) : []);
+  return matches.length === 1 ? matches[0] : undefined;
+}
+
 export interface SketchEndpointMidpointLanding {
   readonly dependentSketchId: ElementId;
   readonly nodeId: string;
