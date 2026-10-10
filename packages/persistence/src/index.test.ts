@@ -76,6 +76,21 @@ describe("DexieProjectRepository", () => {
     expect(recovered.ok && recovered.revision.document).toMatchObject({ elements: [{ nodes: sketch.nodes, constraints: sketch.constraints }] });
   });
 
+  it("round-trips explicit document-level line relations through the repository", async () => {
+    db = await repository();
+    const base = document();
+    const first = { type: "sketch" as const, id: elementId("relation-first"), layerId: layerId("layer-1"), nodes: [{ id: "a", point: { x: 0, y: 0 } }, { id: "b", point: { x: 10, y: 0 } }], edges: [{ id: "first-edge", startNodeId: "a", endNodeId: "b" }], style: { stroke: "#000", strokeWidth: 1 } };
+    const second = { type: "sketch" as const, id: elementId("relation-second"), layerId: layerId("layer-1"), nodes: [{ id: "c", point: { x: 0, y: 10 } }, { id: "d", point: { x: 3, y: 14 } }], edges: [{ id: "second-edge", startNodeId: "c", endNodeId: "d" }], style: first.style };
+    const parallel = { id: "persisted-parallel", kind: "parallel" as const, references: [{ elementId: first.id, edgeId: "first-edge" }, { elementId: second.id, edgeId: "second-edge" }] as const };
+    const equal = { id: "persisted-equal", kind: "equal" as const, references: parallel.references };
+    const source = { ...base, elements: [first, second], constraints: [parallel, equal], revision: revision(1) };
+
+    expect((await db.saveProject(metadata, source)).ok).toBe(true);
+    const recovered = await db.getProject(metadata.id);
+    expect(recovered.ok && recovered.revision.document).toMatchObject({ constraints: [parallel, equal] });
+    expect(recovered.ok && (recovered.revision.document as typeof source).constraints).toEqual([parallel, equal]);
+  });
+
   it("round-trips explicit connections through the repository", async () => {
     db = await repository();
     const base = document();

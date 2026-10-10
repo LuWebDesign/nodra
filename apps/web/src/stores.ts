@@ -32,7 +32,12 @@ export const projectWithSketchAssociation = (project: ProjectSnapshot, document:
   const reference = { pageId: project.activePageId, sketchId };
   const ownsRequestedSketch = piece.sketches.some((existing) => existing.pageId === reference.pageId && existing.sketchId === reference.sketchId);
   if (piece.sketches.length > 0 && !ownsRequestedSketch) {
-    return { ...project, pages: project.pages.map((page) => ({ ...page, elements: page.elements.map((element) => element.id === sketchId ? { ...element, pieceId: piece.id } : element) })) };
+    const synced = projectFromDocument(project, document);
+    return {
+      ...synced,
+      pages: synced.pages.map((page) => ({ ...page, elements: page.elements.map((element) => element.id === sketchId ? { ...element, pieceId: piece.id } : element) })),
+      pieces: synced.pieces.map((candidate) => candidate.id === piece.id ? { ...candidate, state: piece.state, sketches: piece.sketches } : candidate),
+    };
   }
   const synced = projectFromDocument(project, document);
   const existingReferences = piece.sketches.length > 0 ? piece.sketches : synced.pieces.find((candidate) => candidate.id === piece.id)?.sketches ?? [];

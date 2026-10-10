@@ -449,6 +449,22 @@ describe("editor core", () => {
         expect(state.undo).toHaveLength(1);
       });
 
+      it("keeps a persisted parallel edge relation through endpoint edit, undo, and redo", () => {
+        const first = createSketchLine(elementId("history-parallel-first"), layerId("default"), rectangle.style, { x: 0, y: 0 }, { x: 10, y: 0 });
+        const second = createSketchLine(elementId("history-parallel-second"), layerId("default"), rectangle.style, { x: 0, y: 10 }, { x: 3, y: 14 });
+        const relation = { id: "history-parallel", kind: "parallel" as const, references: [{ elementId: first.id, edgeId: first.edges[0]!.id }, { elementId: second.id, edgeId: second.edges[0]!.id }] as const };
+        const related = dispatch(createEditor({ ...document, elements: [first, second] }), addSketchSegmentRelation(relation));
+        const baseline = related.document;
+
+        const edited = dispatch(related, updateElementNode(first.id, 1, { x: 12, y: 0 }));
+        expect(edited).not.toBe(related);
+        expect((edited.document.elements.find((element) => element.id === first.id) as SketchElement).nodes.find((node) => node.id === first.nodes[1]!.id)?.point).toEqual({ x: 12, y: 0 });
+        expect(edited.document.constraints).toEqual([relation]);
+        expect(undo(edited).document).toEqual(baseline);
+        expect(redo(undo(edited)).document).toEqual(edited.document);
+        expect(edited.document.constraints).toEqual([{ id: relation.id, kind: relation.kind, references: relation.references }]);
+      });
+
       it("preserves existing page constraints and dimensions when adding another external relation", () => {
         const first = createSketchLine(elementId("merge-remap-first"), layerId("default"), rectangle.style, { x: 0, y: 0 }, { x: 10, y: 0 });
         const second = createSketchLine(elementId("merge-remap-second"), layerId("default"), rectangle.style, { x: 0, y: 10 }, { x: 7, y: 14 });

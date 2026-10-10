@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { elementId, layerId } from "@nodra/domain";
 import { beginGesture, commitGesture, createElement, deleteElement, dispatch, previewGestureFromBase } from "@nodra/editor-core";
 import { resolveActivePieceId, sessionForSketchEditor, shouldAutosaveProject, shouldPersistEditorSnapshot, useDocumentStore, usePersistenceStore } from "./stores.js";
+import { addSolvedDocumentConstraint } from "./globalConstraintCommands.js";
 
 describe("document store persistence boundary", () => {
   beforeEach(() => { useDocumentStore.setState(useDocumentStore.getInitialState(), true); usePersistenceStore.setState(usePersistenceStore.getInitialState(), true); });
@@ -49,6 +50,50 @@ describe("document store persistence boundary", () => {
     expect(sketch.edges[0]).not.toHaveProperty("role");
     expect(next.project.pieces[0]).toMatchObject({ state: "underdefined", sketches: [{ pageId: "page-1", sketchId: "sketch-1" }] });
 
+  });
+
+  it("preserves accepted document line relations when associating another sketch with the piece", () => {
+    const initial = useDocumentStore.getState();
+    const basePiece = initial.project.pieces[0]!;
+    const otherPiece = { ...basePiece, id: "unrelated-piece" as never, name: "Unrelated", state: "underdefined" as const, sketches: [{ pageId: "unrelated-page" as never, sketchId: elementId("unrelated-sketch") }] };
+    const unrelatedSketch = { type: "sketch" as const, id: elementId("unrelated-sketch"), layerId: layerId("layer-1"), pieceId: otherPiece.id, nodes: [{ id: "u", point: { x: 1, y: 1 } }, { id: "v", point: { x: 4, y: 1 } }], edges: [{ id: "uv", startNodeId: "u", endNodeId: "v" }], constraints: [{ id: "unrelated-horizontal", kind: "horizontal" as const, references: [{ elementId: elementId("unrelated-sketch"), nodeId: "u" }, { elementId: elementId("unrelated-sketch"), nodeId: "v" }] as const }], style: { stroke: "#000", strokeWidth: 1 } };
+    const unrelatedPage = { ...initial.project.pages[0]!, id: "unrelated-page" as never, name: "Unrelated", elements: [unrelatedSketch] };
+    const expandedProject = { ...initial.project, pieces: [...initial.project.pieces, otherPiece], pages: [...initial.project.pages, unrelatedPage] };
+    useDocumentStore.getState().setProject(expandedProject);
+    const state = useDocumentStore.getState();
+    const beforeUnrelatedPage = structuredClone(state.project.pages[1]);
+    const beforeUnrelatedPiece = structuredClone(state.project.pieces[1]);
+    const piece = state.project.pieces[0]!;
+    const first = { type: "sketch" as const, id: elementId("first-sketch"), layerId: layerId("layer-1"), nodes: [{ id: "a", point: { x: 0, y: 0 } }, { id: "b", point: { x: 10, y: 0 } }], edges: [{ id: "ab", startNodeId: "a", endNodeId: "b" }], constraints: [], style: { stroke: "#000", strokeWidth: 1 } };
+    const second = { type: "sketch" as const, id: elementId("second-sketch"), layerId: layerId("layer-1"), nodes: [{ id: "c", point: { x: 0, y: 20 } }, { id: "d", point: { x: 10, y: 20 } }], edges: [{ id: "cd", startNodeId: "c", endNodeId: "d" }], constraints: [], style: { stroke: "#000", strokeWidth: 1 } };
+    const firstCreated = dispatch(state.editor, createElement(first));
+    const priorRelation = { id: "first-horizontal", kind: "horizontal" as const, references: [{ elementId: first.id, nodeId: "a" }, { elementId: first.id, nodeId: "b" }] as const };
+    const firstCommitted = dispatch(firstCreated, addSolvedDocumentConstraint(priorRelation));
+    state.commitNewSketch(firstCommitted, first.id, piece.id);
+    const secondCreated = dispatch(firstCommitted, createElement(second));
+    const relation = { id: "line-parallel", kind: "parallel" as const, references: [{ elementId: first.id, edgeId: "ab" }, { elementId: second.id, edgeId: "cd" }] as const };
+    const accepted = dispatch(secondCreated, addSolvedDocumentConstraint(relation));
+
+    useDocumentStore.getState().commitNewSketch(accepted, second.id, piece.id);
+
+    const next = useDocumentStore.getState();
+    expect(next.project.pages[0]?.constraints).toEqual([priorRelation, relation]);
+    expect(next.project.revision).toBe(4);
+    expect(next.project.pieces[0]).toMatchObject({ state: "underdefined", sketches: [{ pageId: "page-1", sketchId: first.id }] });
+    expect(next.project.pages[0]?.elements.find((element) => element.id === second.id)).toMatchObject({ pieceId: piece.id });
+    expect(next.project.pages[1]).toEqual(beforeUnrelatedPage);
+    expect(next.project.pieces[1]).toEqual(beforeUnrelatedPiece);
+  });
+
+  it("leaves the exact project untouched when the requested sketch is missing", () => {
+    const state = useDocumentStore.getState();
+    const originalProject = state.project;
+    const originalEditor = state.editor;
+
+    state.commitNewSketch(state.editor, elementId("missing-sketch"));
+
+    expect(useDocumentStore.getState().project).toBe(originalProject);
+    expect(useDocumentStore.getState().editor).toBe(originalEditor);
   });
 
   it("associates ordinary sketch creation with the default piece", () => {
