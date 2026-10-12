@@ -30,7 +30,7 @@ describe("SVG renderer boundary", () => {
     const rendered = renderSvg(source, { zoom: 1, panMm: { x: 0, y: 0 } });
     expect(rendered.success).toBe(true);
     if (rendered.success) {
-      expect(rendered.svg).toContain('data-constraint-id="horizontal&quot;&lt;&amp;" data-constraint-kind="horizontal" data-constraint-owner="constraint-sketch"');
+      expect(rendered.svg).toContain('data-constraint-id="horizontal&quot;&lt;&amp;" data-constraint-occurrence-id="horizontal&quot;&lt;&amp;:constraint-sketch:ab" data-constraint-edge-id="ab"');
       expect(rendered.svg).toContain(">H</text>"); expect(rendered.svg).toContain(">V</text>"); expect(rendered.svg).toContain(">⊥</text>"); expect(rendered.svg).toContain(">M</text>");
       expect(rendered.svg).toContain('pointer-events="none"');
       const moved = renderSvg(withElements(createDocument("constraint-glyphs", [layer]), [sketch(nodes.map((node) => node.id === "b" ? { ...node, point: { x: 20, y: 0 } } : node), [...edges].reverse())]), { zoom: 1, panMm: { x: 0, y: 0 } });
@@ -56,15 +56,29 @@ describe("SVG renderer boundary", () => {
   });
   it("renders parallel and equal relation glyphs from stable edge references on the target edge", () => {
     const id = elementId("relation-glyph-sketch");
-    const sketch = { type: "sketch" as const, id, layerId: layer.id, nodes: [{ id: "a", point: { x: 0, y: 0 } }, { id: "b", point: { x: 10, y: 0 } }, { id: "c", point: { x: 20, y: 5 } }, { id: "d", point: { x: 30, y: 5 } }], edges: [{ id: "ab", startNodeId: "a", endNodeId: "b" }, { id: "cd", startNodeId: "c", endNodeId: "d" }], constraints: [{ id: "parallel-glyph", kind: "parallel" as const, references: [{ elementId: id, edgeId: "ab" }, { elementId: id, edgeId: "cd" }] }, { id: "equal-glyph", kind: "equal" as const, references: [{ elementId: id, edgeId: "ab" }, { elementId: id, edgeId: "cd" }] }] as const, style };
-    const result = renderSvg(withElements(createDocument("relation-glyphs", [layer]), [sketch]), { zoom: 1, panMm: { x: 0, y: 0 } });
+    const sketch = { type: "sketch" as const, id, layerId: layer.id, nodes: [{ id: "a", point: { x: 0, y: 0 } }, { id: "b", point: { x: 10, y: 0 } }, { id: "c", point: { x: 20, y: 5 } }, { id: "d", point: { x: 30, y: 5 } }, { id: "e", point: { x: 40, y: 0 } }, { id: "f", point: { x: 50, y: 0 } }], edges: [{ id: "ab", startNodeId: "a", endNodeId: "b" }, { id: "cd", startNodeId: "c", endNodeId: "d" }, { id: "ef", startNodeId: "e", endNodeId: "f" }], constraints: [{ id: "unrelated-horizontal", kind: "horizontal" as const, references: [{ elementId: id, nodeId: "e" }, { elementId: id, nodeId: "f" }] }, { id: "parallel-glyph", kind: "parallel" as const, references: [{ elementId: id, edgeId: "ab" }, { elementId: id, edgeId: "cd" }] }, { id: "equal-glyph", kind: "equal" as const, references: [{ elementId: id, edgeId: "ab" }, { elementId: id, edgeId: "cd" }] }] as const, style };
+    const source = withElements(createDocument("relation-glyphs", [layer]), [sketch]);
+    const result = renderSvg(source, { zoom: 1, panMm: { x: 0, y: 0 } });
+    const repeated = renderSvg(source, { zoom: 1, panMm: { x: 0, y: 0 } });
+    expect(repeated).toEqual(result);
     expect(result.success).toBe(true);
     if (result.success) {
       expect(result.svg).toContain('data-constraint-id="parallel-glyph"');
       expect(result.svg).toContain('data-constraint-id="equal-glyph"');
       expect(result.svg).toContain(">∥</text>");
       expect(result.svg).toContain(">=</text>");
-      expect(result.svg.match(/data-constraint-id="(?:parallel|equal)-glyph"[^>]*transform="translate\(25 5\)"/g)).toHaveLength(2);
+      expect(result.svg.match(/data-constraint-id="(?:parallel|equal)-glyph"/g)).toHaveLength(4);
+      expect(result.svg.match(/data-constraint-occurrence-id="(?:parallel|equal)-glyph:[^"]+"/g)).toHaveLength(4);
+      expect(result.svg).toContain('data-constraint-occurrence-id="parallel-glyph:relation-glyph-sketch:ab"');
+      expect(result.svg).toContain('data-constraint-occurrence-id="parallel-glyph:relation-glyph-sketch:cd"');
+      expect(result.svg).toContain('data-constraint-occurrence-id="equal-glyph:relation-glyph-sketch:ab"');
+      expect(result.svg).toContain('data-constraint-occurrence-id="equal-glyph:relation-glyph-sketch:cd"');
+      expect(result.svg).toContain('data-constraint-edge-id="ab"');
+      expect(result.svg).toContain('data-constraint-edge-id="cd"');
+      expect(result.svg).toContain('data-constraint-id="parallel-glyph" data-constraint-occurrence-id="parallel-glyph:relation-glyph-sketch:ab" data-constraint-edge-id="ab" data-constraint-kind="parallel" data-constraint-owner="relation-glyph-sketch" transform="translate(5 -17)"');
+      expect(result.svg).toContain('data-constraint-id="equal-glyph" data-constraint-occurrence-id="equal-glyph:relation-glyph-sketch:ab" data-constraint-edge-id="ab" data-constraint-kind="equal" data-constraint-owner="relation-glyph-sketch" transform="translate(5 -35)"');
+      expect(result.svg).toContain('data-constraint-id="parallel-glyph" data-constraint-occurrence-id="parallel-glyph:relation-glyph-sketch:cd" data-constraint-edge-id="cd" data-constraint-kind="parallel" data-constraint-owner="relation-glyph-sketch" transform="translate(25 -12)"');
+      expect(result.svg).toContain('data-constraint-id="equal-glyph" data-constraint-occurrence-id="equal-glyph:relation-glyph-sketch:cd" data-constraint-edge-id="cd" data-constraint-kind="equal" data-constraint-owner="relation-glyph-sketch" transform="translate(25 -30)"');
       const legacy = { ...sketch, constraints: [{ id: "legacy-parallel", kind: "parallel" as const, references: [{ elementId: id, nodeId: "a" }, { elementId: id, nodeId: "b" }, { elementId: id, nodeId: "c" }, { elementId: id, nodeId: "d" }] }, { id: "legacy-equal", kind: "equal" as const, references: [{ elementId: id, nodeId: "a" }, { elementId: id, nodeId: "b" }, { elementId: id, nodeId: "c" }, { elementId: id, nodeId: "d" }] }] as const };
       const legacyResult = renderSvg(withElements(createDocument("legacy-relation-glyphs", [layer]), [legacy]), { zoom: 1, panMm: { x: 0, y: 0 } });
       expect(legacyResult.success && legacyResult.svg).toContain('data-constraint-id="legacy-parallel"');
@@ -72,7 +86,22 @@ describe("SVG renderer boundary", () => {
     }
   });
 
-  it("renders a cross-sketch document constraint only on its first referenced sketch", () => {
+  it("deduplicates repeated participants and keeps degenerate-edge labels finite", () => {
+    const id = elementId("degenerate-relations");
+    const sketch = { type: "sketch" as const, id, layerId: layer.id, nodes: [{ id: "a", point: { x: 4, y: 4 } }, { id: "b", point: { x: 4, y: 4 } }, { id: "c", point: { x: 12, y: 4 } }, { id: "d", point: { x: 20, y: 12 } }], edges: [{ id: "zero", startNodeId: "a", endNodeId: "b" }, { id: "normal", startNodeId: "c", endNodeId: "d" }], constraints: [{ id: "degenerate-equal", kind: "equal" as const, references: [{ elementId: id, edgeId: "zero" }, { elementId: id, edgeId: "normal" }] }] as const, style };
+    const result = renderSvg(withElements(createDocument("degenerate-relations", [layer]), [sketch]), { zoom: 2, panMm: { x: 3, y: 2 } });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.svg.match(/data-constraint-id="degenerate-equal"/g)).toHaveLength(2);
+      expect(result.svg).toContain('data-constraint-occurrence-id="degenerate-equal:degenerate-relations:zero"');
+      expect(result.svg).toContain('data-constraint-occurrence-id="degenerate-equal:degenerate-relations:normal"');
+      expect(result.svg).toContain('data-constraint-edge-id="normal" data-constraint-kind="equal" data-constraint-owner="degenerate-relations" transform="translate(38.020815 -0.020815)"');
+      expect(result.svg).toMatch(/transform="translate\([0-9.-]+ [0-9.-]+\)"/);
+      expect(result.svg).not.toMatch(/NaN|Infinity/);
+    }
+  });
+
+  it("renders cross-sketch relation occurrences beside each visible participant edge", () => {
     const firstId = elementId("first-sketch");
     const secondId = elementId("second-sketch");
     const first = { type: "sketch" as const, id: firstId, layerId: layer.id, nodes: [{ id: "a", point: { x: 0, y: 0 } }, { id: "b", point: { x: 10, y: 0 } }], edges: [{ id: "ab", startNodeId: "a", endNodeId: "b" }], style };
@@ -84,27 +113,32 @@ describe("SVG renderer boundary", () => {
       { id: "cross-equal", kind: "equal" as const, references: [{ elementId: firstId, edgeId: "ab" }, { elementId: secondId, edgeId: "cd" }] as const },
     ];
     const source = { ...withElements(createDocument("cross-constraint", [layer, visibleLayer]), [first, second]), constraints };
-    const rendered = renderSvg(source, { zoom: 1, panMm: { x: 0, y: 0 } });
+    const rendered = renderSvg(source, { zoom: 2, panMm: { x: 3, y: 4 } });
     expect(rendered.success).toBe(true);
     if (rendered.success) {
-      const perpendicularGlyph = /<g data-constraint-id="cross-perpendicular" data-constraint-kind="perpendicular" data-constraint-owner="first-sketch"[^>]*><circle[^>]*><text[^>]*>⊥<\/text><\/g>/;
-      expect(rendered.svg.match(/data-constraint-id="cross-perpendicular"/g)).toHaveLength(1);
+      const perpendicularGlyph = /<g data-constraint-id="cross-perpendicular" data-constraint-occurrence-id="cross-perpendicular:first-sketch:ab" data-constraint-edge-id="ab" data-constraint-kind="perpendicular" data-constraint-owner="first-sketch"[^>]*transform="translate\(4 -25\)"[^>]*><circle[^>]*><text[^>]*>⊥<\/text><\/g>/;
+      expect(rendered.svg.match(/data-constraint-id="cross-perpendicular"/g)).toHaveLength(2);
       expect(rendered.svg).toMatch(perpendicularGlyph);
       for (const [id, kind, label] of [["cross-parallel", "parallel", "∥"], ["cross-equal", "equal", "="]] as const) {
-        const glyph = new RegExp(`<g data-constraint-id="${id}" data-constraint-kind="${kind}" data-constraint-owner="first-sketch" transform="translate\\(20 5\\)"[^>]*><circle[^>]*><text[^>]*>${label}</text></g>`);
-        expect(rendered.svg.match(new RegExp(`data-constraint-id="${id}"`, "g"))).toHaveLength(1);
+        const offset = kind === "parallel" ? -43 : -61;
+        const glyph = new RegExp(`<g data-constraint-id="${id}" data-constraint-occurrence-id="${id}:first-sketch:ab" data-constraint-edge-id="ab" data-constraint-kind="${kind}" data-constraint-owner="first-sketch" transform="translate\\(4 ${offset}\\)"[^>]*><circle[^>]*><text[^>]*>${label}</text></g>`);
+        expect(rendered.svg.match(new RegExp(`data-constraint-id="${id}"`, "g"))).toHaveLength(2);
         expect(rendered.svg).toMatch(glyph);
       }
-      const exported = renderSvg(source, { zoom: 1, panMm: { x: 0, y: 0 } }, { mode: "export" });
+      expect(rendered.svg).toContain('data-constraint-occurrence-id="cross-perpendicular:second-sketch:cd" data-constraint-edge-id="cd"');
+      expect(rendered.svg).toContain('transform="translate(51 2)"');
+      expect(rendered.svg).toContain('transform="translate(69 2)"');
+      expect(rendered.svg).toContain('transform="translate(87 2)"');
+      const exported = renderSvg(source, { zoom: 2, panMm: { x: 3, y: 4 } }, { mode: "export" });
       expect(exported.success && exported.svg).not.toContain("data-constraint-id");
     }
     const hiddenOwner = { ...source, layers: [{ ...layer, visible: false }, visibleLayer] };
     const hiddenResult = renderSvg(hiddenOwner, { zoom: 1, panMm: { x: 0, y: 0 } });
-    expect(hiddenResult.success && hiddenResult.svg).not.toContain("cross-perpendicular");
-    expect(hiddenResult.success && hiddenResult.svg).not.toContain("cross-parallel");
-    expect(hiddenResult.success && hiddenResult.svg).not.toContain("cross-equal");
+    expect(hiddenResult.success && hiddenResult.svg).toContain("cross-perpendicular");
+    expect(hiddenResult.success && hiddenResult.svg).toContain("cross-parallel");
+    expect(hiddenResult.success && hiddenResult.svg).toContain("cross-equal");
     const restored = renderSvg(source, { zoom: 1, panMm: { x: 0, y: 0 } });
-    expect(restored.success && restored.svg.match(/data-constraint-id="cross-(?:perpendicular|parallel|equal)"/g)).toHaveLength(3);
+    expect(restored.success && restored.svg.match(/data-constraint-id="cross-(?:perpendicular|parallel|equal)"/g)).toHaveLength(6);
   });
 
   it("renders supported primitives using mm geometry converted through the viewport", () => {

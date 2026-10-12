@@ -68,25 +68,29 @@ async function createRelatedSketches(page: Page, relation: typeof cases[number])
 
 async function checkGlyph(page: Page, relation: typeof cases[number], firstId: string, secondId: string, expectedConstraintId?: string) {
   const glyph = page.locator(`.page-svg svg g[data-constraint-kind="${relation.kind}"]`);
-  await expect(glyph).toHaveCount(1);
-  await expect(glyph).toHaveAttribute("data-constraint-owner", firstId);
-  const constraintId = await glyph.getAttribute("data-constraint-id");
+  await expect(glyph).toHaveCount(2);
+  await expect(glyph.nth(0)).toHaveAttribute("data-constraint-owner", firstId);
+  await expect(glyph.nth(1)).toHaveAttribute("data-constraint-owner", secondId);
+  const constraintId = await glyph.first().getAttribute("data-constraint-id");
   expect(constraintId).toBeTruthy();
   if (expectedConstraintId !== undefined) expect(constraintId).toBe(expectedConstraintId);
-  await expect(glyph.locator(":scope > text")).toHaveText(relation.glyph);
-  const measured = await glyph.evaluate((element, targetId) => {
+  await expect(glyph.locator(":scope > text")).toHaveText([relation.glyph, relation.glyph]);
+  const measured = await glyph.evaluateAll((elements, targetIds) => elements.map((element, index) => {
     const rect = element.getBoundingClientRect();
     const transform = element.getAttribute("transform") ?? "";
-    const target = document.querySelector(`.page-svg svg g[data-element-id="${targetId}"] > line`);
+    const target = document.querySelector(`.page-svg svg g[data-element-id="${targetIds[index]}"] > line`);
     if (!(target instanceof SVGLineElement)) throw new Error("Target sketch edge missing");
     const midpoint = new DOMPoint((Number(target.getAttribute("x1")) + Number(target.getAttribute("x2"))) / 2, (Number(target.getAttribute("y1")) + Number(target.getAttribute("y2"))) / 2).matrixTransform(target.getScreenCTM()!);
     return { x: rect.x, y: rect.y, width: rect.width, height: rect.height, transform, midpoint: { x: midpoint.x, y: midpoint.y } };
-  }, secondId);
-  expect(measured.width).toBeGreaterThan(0);
-  expect(measured.height).toBeGreaterThan(0);
-  expect(measured.transform).toMatch(/^translate\(/);
-  expect(Math.hypot(measured.x + measured.width / 2 - measured.midpoint.x, measured.y + measured.height / 2 - measured.midpoint.y)).toBeLessThan(4);
-  return glyph;
+  }), [firstId, secondId]);
+  for (const item of measured) {
+    expect(item.width).toBeGreaterThan(0);
+    expect(item.height).toBeGreaterThan(0);
+    expect(item.transform).toMatch(/^translate\(/);
+    expect(Math.hypot(item.x + item.width / 2 - item.midpoint.x, item.y + item.height / 2 - item.midpoint.y)).toBeGreaterThan(item.height / 2 + 2);
+  }
+  expect(Math.hypot(measured[0]!.x - measured[1]!.x, measured[0]!.y - measured[1]!.y)).toBeGreaterThan(10);
+  return glyph.first();
 }
 
 for (const relation of cases) {
@@ -97,6 +101,9 @@ for (const relation of cases) {
     const glyph = await checkGlyph(page, relation, refs.firstId, refs.secondId);
     const constraintId = await glyph.getAttribute("data-constraint-id");
     expect(constraintId).toBeTruthy();
+    const occurrenceIds = await page.locator(`.page-svg svg g[data-constraint-kind="${relation.kind}"]`).evaluateAll((items) => items.map((item) => item.getAttribute("data-constraint-occurrence-id")));
+    expect(occurrenceIds).toHaveLength(2);
+    expect(new Set(occurrenceIds).size).toBe(2);
     await page.screenshot({ path: testInfo.outputPath(`${relation.kind}-created.png`), fullPage: true });
 
     await page.getByRole("button", { name: "Deshacer" }).click();
@@ -104,6 +111,7 @@ for (const relation of cases) {
     await expect(page.getByRole("list", { name: "Relaciones globales" })).toHaveCount(0);
     await page.getByRole("button", { name: "Rehacer" }).click();
     await checkGlyph(page, relation, refs.firstId, refs.secondId, constraintId!);
+    await expect.poll(() => page.locator(`.page-svg svg g[data-constraint-kind="${relation.kind}"]`).evaluateAll((items) => items.map((item) => item.getAttribute("data-constraint-occurrence-id")))).toEqual(occurrenceIds);
     await expect(page.getByRole("list", { name: "Relaciones globales" })).toContainText(relation.kind === "equal" ? "Igual" : relation.label);
 
     // Observe a stable committed UI revision before reload. This proves recovery on reload, not
@@ -119,6 +127,7 @@ for (const relation of cases) {
     const reloadedSketches = page.locator(`.page-svg svg g[data-element-id="${refs.firstId}"], .page-svg svg g[data-element-id="${refs.secondId}"]`);
     await expect(reloadedSketches).toHaveCount(2);
     await checkGlyph(page, relation, refs.firstId, refs.secondId, constraintId!);
+    await expect.poll(() => page.locator(`.page-svg svg g[data-constraint-kind="${relation.kind}"]`).evaluateAll((items) => items.map((item) => item.getAttribute("data-constraint-occurrence-id")))).toEqual(occurrenceIds);
     await page.getByRole("button", { name: "Forma" }).click();
     const reloadedSource = page.locator(`.page-svg svg g[data-element-id="${refs.firstId}"] > line`);
     const sourceBounds = await reloadedSource.boundingBox();
@@ -138,7 +147,7 @@ for (const relation of cases) {
       await page.mouse.move(node!.x + node!.width / 2 + 24, node!.y + node!.height / 2 + 13, { steps: 4 });
       await page.mouse.up();
       await expect.poll(() => sourceLine.evaluate((line) => [line.getAttribute("x1"), line.getAttribute("y1"), line.getAttribute("x2"), line.getAttribute("y2")])).not.toEqual(before);
-      await expect(page.locator(`.page-svg svg g[data-constraint-kind="parallel"]`)).toHaveCount(1);
+      await expect(page.locator(`.page-svg svg g[data-constraint-kind="parallel"]`)).toHaveCount(2);
       await checkGlyph(page, relation, refs.firstId, refs.secondId, constraintId!);
       await page.screenshot({ path: testInfo.outputPath("parallel-edited.png"), fullPage: true });
     }
